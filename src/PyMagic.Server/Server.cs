@@ -106,6 +106,7 @@ public sealed class Server
             else Notify(method, args);
         }
         catch (RpcException e) when (id != null) { Fail(id, e.Code, e.Message); }
+        catch (ServiceException e) when (id != null) { Fail(id, -32803, e.Message); }
         catch (Exception e) when (id != null) { Fail(id, -32603, e.Message); }
         catch (Exception e) { Log($"error in {method}: {e}"); }
     }
@@ -128,6 +129,12 @@ public sealed class Server
                 return _service.Definition(UriOf(p), PositionOf(p));
             case "textDocument/completion":
                 return new { isIncomplete = false, items = _service.Completion(UriOf(p), PositionOf(p)) };
+            case "textDocument/references":
+                return _service.References(UriOf(p), PositionOf(p), p!["context"]?["includeDeclaration"]?.GetValue<bool>() ?? true);
+            case "textDocument/prepareRename":
+                return _service.PrepareRename(UriOf(p), PositionOf(p));
+            case "textDocument/rename":
+                return _service.Rename(UriOf(p), PositionOf(p), p!["newName"]!.GetValue<string>());
             case "textDocument/documentSymbol":
                 return _service.DocumentSymbols(UriOf(p));
             default:
@@ -162,6 +169,8 @@ public sealed class Server
                 definitionProvider = true,
                 completionProvider = new { triggerCharacters = new[] { "." } },
                 documentSymbolProvider = true,
+                referencesProvider = true,
+                renameProvider = new { prepareProvider = true },
             },
             serverInfo = new { name = "PyMagic", version = "0.1" },
         };

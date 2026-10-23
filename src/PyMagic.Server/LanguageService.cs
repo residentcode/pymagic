@@ -10,7 +10,7 @@ namespace PyMagic.Server;
 /// queries with LSP-shaped results. A <see cref="Workspace"/> is rebuilt lazily after edits (modules are immutable,
 /// and the evaluator caches by node), so a query always sees a consistent snapshot of all open buffers.
 /// </summary>
-public sealed class LanguageService
+public sealed partial class LanguageService
 {
     sealed record Doc(string Uri, string? Path, string ModuleName, bool IsPackage, string Text, int Version);
 
@@ -19,11 +19,12 @@ public sealed class LanguageService
         public required Workspace Workspace { get; init; }
         public required Dictionary<string, ModuleInfo> ByUri { get; init; }
         public required Dictionary<ModuleInfo, string> UriOf { get; init; }
+        public required List<ModuleInfo> Project { get; init; }
     }
 
     readonly Dictionary<string, Doc> _docs = new();
     readonly Dictionary<ModuleInfo, LineMap> _lineMaps = new(ReferenceEqualityComparer.Instance);
-    Snapshot? _snapshot;
+    Snapshot? _snapshot, _full;
 
     public List<string> SourceRoots { get; } = new();
     public List<string> LibraryRoots { get; } = new();
@@ -41,7 +42,7 @@ public sealed class LanguageService
     public void Change(string uri, string text, int version) => Set(uri, text, version);
     public void Close(string uri)
     {
-        if (_docs.Remove(uri)) _snapshot = null;
+        if (_docs.Remove(uri)) _snapshot = _full = null;
     }
 
     void Set(string uri, string text, int version)
@@ -49,7 +50,7 @@ public sealed class LanguageService
         string? path = PathOfUri(uri);
         var (name, isPackage) = ModuleNameOf(path);
         _docs[uri] = new Doc(uri, path, name, isPackage, text, version);
-        _snapshot = null;
+        _snapshot = _full = null;
     }
 
     static string? PathOfUri(string uri)
@@ -78,9 +79,39 @@ public sealed class LanguageService
         return (stem, isPackage);
     }
 
-    Snapshot Current()
+    Snapshot Current() => _snapshot ??= BuildSnapshot(false);
+
+    /// <summary>Open buffers plus every .py file under the source roots (for project-wide queries such as find usages and rename).</summary>
+    Snapshot Full() => _full ??= BuildSnapshot(true);
+
+    static readonly HashSet<string> SkippedDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
-        if (_snapshot != null) return _snapshot;
+        ".git", "__pycache__", "node_modules", ".venv", "venv", "env", ".tox", ".mypy_cache", "bin", "obj", "site-packages",
+    };
+
+    IEnumerable<string> ProjectFiles()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var root in SourceRoots)
+        {
+            if (!Directory.Exists(root)) continue;
+            var stack = new Stack<string>();
+            stack.Push(root);
+            while (stack.Count > 0)
+            {
+                string dir = stack.Pop();
+                IEnumerable<string> files, subdirs;
+                try { files = Directory.EnumerateFiles(dir, "*.py").ToList(); subdirs = Directory.EnumerateDirectories(dir).ToList(); }
+                catch (IOException) { continue; }
+                catch (UnauthorizedAccessException) { continue; }
+                foreach (var f in files) if (seen.Add(System.IO.Path.GetFullPath(f))) yield return f;
+                foreach (var d in subdirs) if (!SkippedDirectories.Contains(System.IO.Path.GetFileName(d))) stack.Push(d);
+            }
+        }
+    }
+
+    Snapshot BuildSnapshot(bool includeProject)
+    {
         var ws = new Workspace(new WorkspaceOptions
         {
             SourceRoots = SourceRoots.ToArray(),
@@ -96,7 +127,23 @@ public sealed class LanguageService
             byUri[d.Uri] = m;
             uriOf[m] = d.Uri;
         }
-        return _snapshot = new Snapshot { Workspace = ws, ByUri = byUri, UriOf = uriOf };
+        var project = new List<ModuleInfo>(byUri.Values);
+        if (includeProject)
+        {
+            var openPaths = new HashSet<string>(_docs.Values.Where(d => d.Path != null).Select(d => System.IO.Path.GetFullPath(d.Path!)),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var path in ProjectFiles())
+            {
+                if (openPaths.Contains(System.IO.Path.GetFullPath(path))) continue;
+                string text;
+                try { text = File.ReadAllText(path); } catch (IOException) { continue; }
+                var (name, isPackage) = ModuleNameOf(path);
+                var m = ws.AddModule(name, text, isPackage);
+                uriOf[m] = UriOfPath(path);
+                project.Add(m);
+            }
+        }
+        return new Snapshot { Workspace = ws, ByUri = byUri, UriOf = uriOf, Project = project };
     }
 
     LineMap Lines(ModuleInfo m)
@@ -110,6 +157,7 @@ public sealed class LanguageService
     string? UriOfModule(ModuleInfo m)
     {
         if (Current().UriOf.TryGetValue(m, out var u)) return u;
+        if (_full != null && _full.UriOf.TryGetValue(m, out u)) return u;
         return m.Path != null ? UriOfPath(m.Path) : null;
     }
 

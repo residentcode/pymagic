@@ -142,6 +142,52 @@ function registerProviders() {
     },
   });
 
+  monaco.languages.registerReferenceProvider('python', {
+    async provideReferences(model, position, context) {
+      const uri = serverUri.get(model);
+      if (!uri) return [];
+      const locs: { uri: string; range: LspRange }[] = (await lsp.request('textDocument/references', {
+        textDocument: { uri }, position: toPos(position), context: { includeDeclaration: context.includeDeclaration },
+      })) ?? [];
+      const result: monaco.languages.Location[] = [];
+      for (const l of locs) {
+        const target = await modelForUri(l.uri);
+        if (target) result.push({ uri: target.uri, range: toRange(l.range) });
+      }
+      return result;
+    },
+  });
+
+  monaco.languages.registerRenameProvider('python', {
+    async resolveRenameLocation(model, position) {
+      const uri = serverUri.get(model);
+      if (!uri) return { range: new monaco.Range(1, 1, 1, 1), text: '', rejectReason: 'not a workspace file' };
+      try {
+        const r = await lsp.request('textDocument/prepareRename', { textDocument: { uri }, position: toPos(position) });
+        if (!r) return { range: new monaco.Range(1, 1, 1, 1), text: '', rejectReason: 'Nothing to rename here.' };
+        return { range: toRange(r.range), text: r.placeholder };
+      } catch (e: any) {
+        return { range: new monaco.Range(1, 1, 1, 1), text: '', rejectReason: e.message };
+      }
+    },
+    async provideRenameEdits(model, position, newName) {
+      const uri = serverUri.get(model);
+      if (!uri) return { edits: [] };
+      try {
+        const edit = await lsp.request('textDocument/rename', { textDocument: { uri }, position: toPos(position), newName });
+        const edits: monaco.languages.IWorkspaceTextEdit[] = [];
+        for (const [target, list] of Object.entries<any[]>(edit.changes)) {
+          const m = await modelForUri(target);
+          if (!m) continue;
+          for (const e of list) edits.push({ resource: m.uri, versionId: undefined, textEdit: { range: toRange(e.range), text: e.newText } });
+        }
+        return { edits };
+      } catch (e: any) {
+        return { edits: [], rejectReason: e.message };
+      }
+    },
+  });
+
   const convert = (s: any): monaco.languages.DocumentSymbol => ({
     name: s.name,
     detail: s.detail ?? '',

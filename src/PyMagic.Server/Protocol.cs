@@ -27,3 +27,10 @@ public static class SymbolKind
         Variable = 13, Constant = 14, TypeParameter = 26;
 }
 public sealed record DocumentSymbol(string Name, int Kind, Range Range, Range SelectionRange, string? Detail, List<DocumentSymbol> Children);
+
+public sealed record TextEdit(Range Range, string NewText);
+public sealed record WorkspaceEdit(Dictionary<string, List<TextEdit>> Changes);
+public sealed record PrepareRenameResult(Range Range, string Placeholder);
+
+/// <summary>A request the server understood but cannot satisfy (for example renaming a library symbol).</summary>
+public sealed class ServiceException(string message) : Exception(message);
