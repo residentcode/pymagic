@@ -55,6 +55,38 @@ public static class Program
         return 0;
     }
 
+    /// <summary>Runs the flow analysis over every file; prints timing, counts per message kind and a few examples of each.</summary>
+    static int FlowCorpus(string dir)
+    {
+        var counts = new Dictionary<string, int>();
+        var examples = new Dictionary<string, List<string>>();
+        int files = 0, crashes = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var f in Directory.EnumerateFiles(dir, "*.py", SearchOption.AllDirectories))
+        {
+            string text;
+            try { text = File.ReadAllText(f); } catch { continue; }
+            files++;
+            try
+            {
+                var r = PyMagic.Core.Syntax.Parser.Parse(text);
+                var sem = PyMagic.Core.Semantics.SemanticModel.Build(r.Module);
+                foreach (var d in new PyMagic.Core.Flow.FlowModel(sem).Analyse())
+                {
+                    string kind = d.Message.StartsWith("Local variable") ? (d.Message.Contains("might") ? "maybe-unbound" : "definitely-unbound") : d.Message;
+                    counts[kind] = counts.GetValueOrDefault(kind) + 1;
+                    if (!examples.TryGetValue(kind, out var list)) examples[kind] = list = new();
+                    if (list.Count < 12 && files % 7 == 0 || list.Count < 4)
+                        list.Add($"{Path.GetFileName(f)}:{text.Take(d.Start).Count(c => c == '\n') + 1} {d.Message}");
+                }
+            }
+            catch (Exception e) { crashes++; Console.WriteLine($"CRASH {f}: {e.GetType().Name} {e.Message}\n{e.StackTrace?.Split('\n').FirstOrDefault()}"); }
+        }
+        foreach (var kv in counts) { Console.WriteLine($"{kv.Value,6}  {kv.Key}"); foreach (var e in examples[kv.Key]) Console.WriteLine("          " + e); }
+        Console.WriteLine($"{files} files, {crashes} crashes, {sw.Elapsed.TotalSeconds:F1}s");
+        return 0;
+    }
+
     /// <summary>Builds the semantic model for every file and lists the most common unresolved names (binder sanity check).</summary>
     static int SemanticCorpus(string dir)
     {
@@ -90,6 +122,7 @@ public static class Program
     {
         if (args.Length == 2 && args[0] == "corpus") return Corpus(args[1]);
         if (args.Length == 2 && args[0] == "semantic") return SemanticCorpus(args[1]);
+        if (args.Length == 2 && args[0] == "flow") return FlowCorpus(args[1]);
         int pass = 0, fail = 0;
         foreach (var type in Assembly.GetExecutingAssembly().GetTypes().Where(t => t.IsClass && t.Name.EndsWith("Tests")))
         {

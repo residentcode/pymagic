@@ -1,4 +1,4 @@
-# PyMagic
+﻿# PyMagic
 
 An independent Python IDE engine, modelled on the *behaviour* of PyCharm's Python front-end
 (documented from analysis of the shipped product). No JetBrains code is copied; the engine is
@@ -29,8 +29,9 @@ The test project is a plain console runner because this machine's NuGet only has
 1. **Lexer** - indent/dedent, brackets, continuations, strings (PEP 701 f-strings), numbers. *Done.*
 2. **Parser** - recursive descent, statement-level error recovery, soft keywords (`match`, `case`, `type`) resolved by speculative parse, AST with source ranges. *Done; parses all 1037 stdlib files and 404 site-packages files with zero diagnostics.* Still open: f-string interior as expression nodes, store-context validation, finer error messages.
 3. **Scopes + name tables** - module/class/function/lambda/comprehension/PEP 695 type-parameter scopes, `global`/`nonlocal`, class-scope visibility, walrus-in-comprehension, match captures, star imports, builtins. Every name use is a `Reference` (read/write/delete) linked to a `Symbol` with its declarations. *Done; builds on the whole stdlib with no crashes, the only unresolved names are runtime-injected ones.* Still open: `__all__`, `try/except ImportError` fallbacks, conditional-definition awareness (needs the control-flow graph).
-4. Control-flow graph, reaching definitions, resolve of names/attributes.
-5. Type model + evaluator: unions, generics, protocols, callables, `TypeEvalContext`-style caches.
-6. Typeshed + stub packages + `py.typed` import resolution.
-7. Narrowing, dataclass/enum/namedtuple/TypedDict providers.
-8. LSP server, then Monaco UI.
+4. **Control-flow graph + reaching definitions** - one CFG per scope built in evaluation order (branches, loops with `break`/`continue`/`else`, `try`/`except`/`else`/`finally` with the finally block built for both the normal and the exceptional path, `match`, short-circuit `and`/`or`/ternary with separate true/false exits, constant conditions, `del`, `except ... as e` unbinding). Forward bit-set dataflow gives, per use of a local, the bindings that may reach it and whether it may still be unbound. Produces unreachable-code and "referenced before assignment" findings; the whole stdlib (1037 files) analyses in about 2.5 s. *Done.* Still open: `NoReturn` calls (needs types), `with` blocks that swallow exceptions, `break`/`return` running through `finally`, and attribute/member resolution.
+5. Resolve of attributes and calls.
+6. Type model + evaluator: unions, generics, protocols, callables, `TypeEvalContext`-style caches.
+7. Typeshed + stub packages + `py.typed` import resolution.
+8. Narrowing, dataclass/enum/namedtuple/TypedDict providers.
+9. LSP server, then Monaco UI.

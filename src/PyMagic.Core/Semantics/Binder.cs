@@ -433,7 +433,7 @@ internal sealed class Binder
             if (!builtin && (access & Access.Read) != 0 && !_scope.ModuleScope.HasStarImport)
                 Diag(n, $"Unresolved reference '{n.Name}'");
         }
-        var r = new Reference(n, sym, builtin, access);
+        var r = new Reference(n, sym, builtin, access) { UseScope = _scope };
         _refs[n] = r;
         sym?.References.Add(r);
     }

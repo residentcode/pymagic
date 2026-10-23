@@ -38,7 +38,11 @@ public sealed class Symbol
 }
 
 /// <summary>A use of a name: the NameExpr, what it resolved to (null when unresolved or builtin), and how it is accessed.</summary>
-public sealed record Reference(NameExpr Node, Symbol? Symbol, bool IsBuiltin, Access Access);
+public sealed record Reference(NameExpr Node, Symbol? Symbol, bool IsBuiltin, Access Access)
+{
+    /// <summary>The scope the use occurs in (a comprehension scope for uses inside a comprehension, etc.).</summary>
+    public Scope? UseScope { get; init; }
+}
 
 public sealed class Scope
 {
