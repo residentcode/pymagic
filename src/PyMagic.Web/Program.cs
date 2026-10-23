@@ -13,6 +13,7 @@ string? typeshed = Workspace.DefaultTypeshedPath;
 string? www = null;
 int port = 5180;
 var libs = new List<string>();
+string? python = null;
 for (int i = 0; i < args.Length - 1; i++)
 {
     switch (args[i])
@@ -22,6 +23,7 @@ for (int i = 0; i < args.Length - 1; i++)
         case "--lib": libs.Add(args[++i]); break;
         case "--www": www = Path.GetFullPath(args[++i]); break;
         case "--port": port = int.Parse(args[++i]); break;
+        case "--python": python = args[++i]; break;
     }
 }
 root = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -163,5 +165,76 @@ app.Map("/lsp", async (HttpContext ctx) =>
     await sender;
 });
 
+
+// ---- running and debugging ---------------------------------------------------------------------------------------
+
+app.MapGet("/api/interpreter", () =>
+{
+    try
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo(python ?? Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python", "--version")
+        { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        string text = (p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd()).Trim();
+        p.WaitForExit(5000);
+        return Results.Text(text.Length > 0 ? text : "unknown interpreter");
+    }
+    catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { return Results.Text(""); }
+});
+
+app.Map("/run", async (HttpContext ctx) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+    var outbox = new BlockingCollection<string>();
+    using var session = new RunSession(msg => { if (!outbox.IsAddingCompleted) try { outbox.Add(msg.ToJsonString()); } catch (InvalidOperationException) { } }) { Python = python };
+
+    var sender = Task.Run(async () =>
+    {
+        foreach (var text in outbox.GetConsumingEnumerable())
+        {
+            if (ws.State != WebSocketState.Open) break;
+            try { await ws.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, CancellationToken.None); }
+            catch (WebSocketException) { break; }
+        }
+    });
+
+    var buffer = new byte[64 * 1024];
+    try
+    {
+        while (ws.State == WebSocketState.Open)
+        {
+            using var ms = new MemoryStream();
+            WebSocketReceiveResult r;
+            do
+            {
+                r = await ws.ReceiveAsync(buffer, CancellationToken.None);
+                if (r.MessageType == WebSocketMessageType.Close) goto done;
+                ms.Write(buffer, 0, r.Count);
+            } while (!r.EndOfMessage);
+
+            var msg = JsonNode.Parse(ms.ToArray());
+            if (msg == null) continue;
+            if (msg["type"]?.GetValue<string>() == "start")
+            {
+                var bps = new Dictionary<string, List<int>>();
+                if (msg["breakpoints"] is JsonObject bo)
+                    foreach (var (file, lines) in bo)
+                        bps[file] = (lines as JsonArray)?.Select(l => l!.GetValue<int>()).ToList() ?? new List<int>();
+                var args = (msg["args"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
+                string file0 = msg["file"]!.GetValue<string>();
+                ResolveInRoot(file0);   // refuses paths outside the workspace
+                session.Start(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
+            }
+            else session.Handle(msg);
+        }
+    }
+    catch (WebSocketException) { }
+    catch (UnauthorizedAccessException) { }
+    done:
+    session.Dispose();
+    outbox.CompleteAdding();
+    await sender;
+});
 Console.WriteLine($"PyMagic on http://127.0.0.1:{port}/   workspace: {root}   typeshed: {typeshed ?? "(bundled stubs)"}");
 app.Run();

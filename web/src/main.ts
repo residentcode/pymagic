@@ -1,5 +1,6 @@
 import * as monaco from 'monaco-editor';
 import { LspClient } from './lsp';
+import { setupRun } from './run';
 
 (self as any).MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
 
@@ -63,6 +64,7 @@ async function loadModel(rel: string, key: string): Promise<monaco.editor.ITextM
   serverUri.set(model, uri);
   relPathOf.set(key, rel);
   savedText.set(rel, text);
+  runHooks?.onModelCreated(rel, model);
 
   lsp.notify('textDocument/didOpen', {
     textDocument: { uri, languageId: 'python', version: model.getVersionId(), text },
@@ -252,6 +254,7 @@ lsp.on('textDocument/publishDiagnostics', (p) => {
 // ---------------------------------------------------------------- UI
 
 let editor: monaco.editor.IStandaloneCodeEditor;
+let runHooks: { onModelCreated(rel: string, model: monaco.editor.ITextModel): void } | null = null;
 let currentRel = '';
 
 function refreshDirty() {
@@ -301,8 +304,26 @@ async function main() {
     minimap: { enabled: false },
     quickSuggestions: { other: true, comments: false, strings: false },
     scrollBeyondLastLine: false,
+    glyphMargin: true,
   });
   (window as any).pymagic = { editor, monaco, openFile };
+  runHooks = setupRun({
+    editor,
+    root: info.root,
+    modelFor: ensureModel,
+    relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')),
+    openFile,
+    saveAll: async () => {
+      for (const [key, model] of models) {
+        const rel = relPathOf.get(key);
+        if (rel && model.getValue() !== savedText.get(rel)) {
+          const res = await fetch('/api/file?path=' + encodeURIComponent(rel), { method: 'PUT', body: model.getValue() });
+          if (res.ok) savedText.set(rel, model.getValue());
+        }
+      }
+      refreshDirty();
+    },
+  });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void save());
   editor.onDidChangeCursorPosition((e) => { $('cursor').textContent = `Ln ${e.position.lineNumber}, Col ${e.position.column}`; });
 

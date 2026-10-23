@@ -12,4 +12,8 @@
     <ProjectReference Include="..\PyMagic.Core\PyMagic.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Run\pm_debug.py" LogicalName="pm_debug.py" />
+  </ItemGroup>
+
 </Project>
