@@ -6,4 +6,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Stubs\*.pyi" LogicalName="Stubs/%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>
+
