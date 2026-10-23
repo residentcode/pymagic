@@ -111,13 +111,23 @@ public sealed record TryStmt(IReadOnlyList<Stmt> Body, IReadOnlyList<ExceptHandl
 public sealed record WithItem(Expr Context, Expr? Target) : Node;
 public sealed record WithStmt(IReadOnlyList<WithItem> Items, IReadOnlyList<Stmt> Body, bool IsAsync) : Stmt;
 
+/// <summary>NameStart is the offset of the function's name token (Start may point at a decorator).</summary>
 public sealed record FunctionDef(string Name, IReadOnlyList<TypeParam> TypeParams, IReadOnlyList<Parameter> Params,
-    Expr? Returns, IReadOnlyList<Stmt> Body, IReadOnlyList<Expr> Decorators, bool IsAsync) : Stmt;
+    Expr? Returns, IReadOnlyList<Stmt> Body, IReadOnlyList<Expr> Decorators, bool IsAsync) : Stmt
+{
+    public int NameStart { get; init; }
+}
 public sealed record ClassDef(string Name, IReadOnlyList<TypeParam> TypeParams, IReadOnlyList<Argument> Bases,
-    IReadOnlyList<Stmt> Body, IReadOnlyList<Expr> Decorators) : Stmt;
+    IReadOnlyList<Stmt> Body, IReadOnlyList<Expr> Decorators) : Stmt
+{
+    public int NameStart { get; init; }
+}
 
 public sealed record MatchStmt(Expr Subject, IReadOnlyList<MatchCase> Cases) : Stmt;
-public sealed record TypeAliasStmt(string Name, IReadOnlyList<TypeParam> TypeParams, Expr Value) : Stmt;
+public sealed record TypeAliasStmt(string Name, IReadOnlyList<TypeParam> TypeParams, Expr Value) : Stmt
+{
+    public int NameStart { get; init; }
+}
 
 public sealed record Module(IReadOnlyList<Stmt> Body) : Node;
 

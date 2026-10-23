@@ -15,7 +15,8 @@ written from scratch in C#.
 ## Layout
 
 ```
-src/PyMagic.Core/Syntax   Token, Lexer, Ast, Parser
+src/PyMagic.Core/Syntax     Token, Lexer, Ast, AstChildren, Parser
+src/PyMagic.Core/Semantics  Scope, Symbol, Reference, Binder, SemanticModel, Builtins
 tests/PyMagic.Tests       dependency-free test runner:  dotnet run --project tests/PyMagic.Tests
                           corpus check:  dotnet tests/PyMagic.Tests/bin/Debug/net9.0/PyMagic.Tests.dll corpus <dir>
 ```
@@ -27,7 +28,7 @@ The test project is a plain console runner because this machine's NuGet only has
 
 1. **Lexer** - indent/dedent, brackets, continuations, strings (PEP 701 f-strings), numbers. *Done.*
 2. **Parser** - recursive descent, statement-level error recovery, soft keywords (`match`, `case`, `type`) resolved by speculative parse, AST with source ranges. *Done; parses all 1037 stdlib files and 404 site-packages files with zero diagnostics.* Still open: f-string interior as expression nodes, store-context validation, finer error messages.
-3. Scopes + name tables (`global`/`nonlocal`, comprehensions, class scope rules).
+3. **Scopes + name tables** - module/class/function/lambda/comprehension/PEP 695 type-parameter scopes, `global`/`nonlocal`, class-scope visibility, walrus-in-comprehension, match captures, star imports, builtins. Every name use is a `Reference` (read/write/delete) linked to a `Symbol` with its declarations. *Done; builds on the whole stdlib with no crashes, the only unresolved names are runtime-injected ones.* Still open: `__all__`, `try/except ImportError` fallbacks, conditional-definition awareness (needs the control-flow graph).
 4. Control-flow graph, reaching definitions, resolve of names/attributes.
 5. Type model + evaluator: unions, generics, protocols, callables, `TypeEvalContext`-style caches.
 6. Typeshed + stub packages + `py.typed` import resolution.

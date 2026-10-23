@@ -542,6 +542,7 @@ public sealed class Parser
     Stmt ParseFuncDef(List<Expr> decorators, bool isAsync, int start)
     {
         ExpectKw("def");
+        int nameStart = Cur.Start;
         string name = ExpectName();
         var tps = IsOp("[") ? ParseTypeParams() : new List<TypeParam>();
         ExpectOp("(");
@@ -549,18 +550,19 @@ public sealed class Parser
         ExpectOp(")");
         Expr? returns = AcceptOp("->") ? ParseTest() : null;
         var body = ParseBlock();
-        return At(new FunctionDef(name, tps, ps, returns, body, decorators, isAsync), start);
+        return At(new FunctionDef(name, tps, ps, returns, body, decorators, isAsync) { NameStart = nameStart }, start);
     }
 
     Stmt ParseClassDef(List<Expr> decorators, int start)
     {
         ExpectKw("class");
+        int nameStart = Cur.Start;
         string name = ExpectName();
         var tps = IsOp("[") ? ParseTypeParams() : new List<TypeParam>();
         var bases = new List<Argument>();
         if (AcceptOp("(")) { bases = ParseArguments(); ExpectOp(")"); }
         var body = ParseBlock();
-        return At(new ClassDef(name, tps, bases, body, decorators), start);
+        return At(new ClassDef(name, tps, bases, body, decorators) { NameStart = nameStart }, start);
     }
 
     List<TypeParam> ParseTypeParams()
@@ -588,11 +590,12 @@ public sealed class Parser
     {
         int s = Cur.Start;
         Advance(); // 'type'
+        int nameStart = Cur.Start;
         string name = ExpectName();
         var tps = IsOp("[") ? ParseTypeParams() : new List<TypeParam>();
         ExpectOp("=");
         var value = ParseTest();
-        return At(new TypeAliasStmt(name, tps, value), s);
+        return At(new TypeAliasStmt(name, tps, value) { NameStart = nameStart }, s);
     }
 
     // ------------------------------------------------------------ parameters

@@ -55,9 +55,41 @@ public static class Program
         return 0;
     }
 
+    /// <summary>Builds the semantic model for every file and lists the most common unresolved names (binder sanity check).</summary>
+    static int SemanticCorpus(string dir)
+    {
+        var counts = new Dictionary<string, int>();
+        var examples = new Dictionary<string, string>();
+        int files = 0, crashes = 0, total = 0;
+        foreach (var f in Directory.EnumerateFiles(dir, "*.py", SearchOption.AllDirectories))
+        {
+            string text;
+            try { text = File.ReadAllText(f); } catch { continue; }
+            files++;
+            try
+            {
+                var r = PyMagic.Core.Syntax.Parser.Parse(text);
+                var m = PyMagic.Core.Semantics.SemanticModel.Build(r.Module);
+                foreach (var d in m.Diagnostics)
+                {
+                    total++;
+                    counts[d.Message] = counts.GetValueOrDefault(d.Message) + 1;
+                    if (!examples.ContainsKey(d.Message))
+                        examples[d.Message] = $"{f}:{text.Take(d.Start).Count(c => c == '\n') + 1}";
+                }
+            }
+            catch (Exception e) { crashes++; Console.WriteLine($"CRASH {f}: {e.GetType().Name} {e.Message}"); }
+        }
+        foreach (var kv in counts.OrderByDescending(k => k.Value).Take(30))
+            Console.WriteLine($"{kv.Value,5}  {kv.Key}   e.g. {examples[kv.Key]}");
+        Console.WriteLine($"{files} files, {crashes} crashes, {total} diagnostics, {counts.Count} distinct");
+        return 0;
+    }
+
     public static int Main(string[] args)
     {
         if (args.Length == 2 && args[0] == "corpus") return Corpus(args[1]);
+        if (args.Length == 2 && args[0] == "semantic") return SemanticCorpus(args[1]);
         int pass = 0, fail = 0;
         foreach (var type in Assembly.GetExecutingAssembly().GetTypes().Where(t => t.IsClass && t.Name.EndsWith("Tests")))
         {
