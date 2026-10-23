@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PyMagic.Core\PyMagic.Core.csproj" />
+    <ProjectReference Include="..\..\src\PyMagic.Server\PyMagic.Server.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
