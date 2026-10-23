@@ -188,6 +188,36 @@ function registerProviders() {
     },
   });
 
+  monaco.languages.registerCodeActionProvider('python', {
+    async provideCodeActions(model, range) {
+      const uri = serverUri.get(model);
+      if (!uri) return { actions: [], dispose() {} };
+      // the server recomputes diagnostics from its own copy, so send it the text the cursor is in
+      lsp.notify('textDocument/didChange', {
+        textDocument: { uri, version: model.getVersionId() },
+        contentChanges: [{ text: model.getValue() }],
+      });
+      const lspRange = {
+        start: { line: range.startLineNumber - 1, character: range.startColumn - 1 },
+        end: { line: range.endLineNumber - 1, character: range.endColumn - 1 },
+      };
+      const found: any[] = (await lsp.request('textDocument/codeAction', {
+        textDocument: { uri }, range: lspRange, context: { diagnostics: [] },
+      })) ?? [];
+      const actions: monaco.languages.CodeAction[] = [];
+      for (const a of found) {
+        const edits: monaco.languages.IWorkspaceTextEdit[] = [];
+        for (const [target, list] of Object.entries<any[]>(a.edit.changes)) {
+          const m = await modelForUri(target);
+          if (!m) continue;
+          for (const e of list) edits.push({ resource: m.uri, versionId: undefined, textEdit: { range: toRange(e.range), text: e.newText } });
+        }
+        actions.push({ title: a.title, kind: a.kind, isPreferred: a.isPreferred, edit: { edits } });
+      }
+      return { actions, dispose() {} };
+    },
+  });
+
   const convert = (s: any): monaco.languages.DocumentSymbol => ({
     name: s.name,
     detail: s.detail ?? '',

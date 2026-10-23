@@ -168,21 +168,36 @@ public sealed partial class LanguageService
         var m = ModuleFor(uri);
         if (m == null) return Array.Empty<LspDiagnostic>();
         var lines = Lines(m);
-        var result = new List<LspDiagnostic>();
+        return Collect(m, Current().Workspace.Evaluator)
+            .Select(x => new LspDiagnostic(lines.RangeOf(x.D.Start, x.D.Start + Math.Max(x.D.Length, 1)), x.Severity, x.D.Message,
+                Tags: x.Tags, Code: x.Code))
+            .ToList();
+    }
 
-        void Add(Diagnostic d, int severity, int[]? tags = null)
-            => result.Add(new LspDiagnostic(lines.RangeOf(d.Start, d.Start + Math.Max(d.Length, 1)), severity, d.Message, Tags: tags));
+    sealed record Diag(Diagnostic D, int Severity, int[]? Tags, string? Code);
 
-        foreach (var d in m.SyntaxErrors) Add(d, Severity.Error);
-        if (m.SyntaxErrors.Count == 0 || true)
-        {
-            foreach (var d in m.Semantics.Diagnostics) Add(d, Severity.Warning);
-            foreach (var d in m.Flow.Analyse())
-                if (d.Message == "Unreachable code") Add(d, Severity.Hint, new[] { DiagnosticTag.Unnecessary });
-                else Add(d, Severity.Warning);
-            foreach (var d in Current().Workspace.Evaluator.Inspect(m, ReportTypeMismatches)) Add(d, Severity.Warning);
-        }
-        return result;
+    static string? Classify(string message) =>
+        message.StartsWith("Unresolved reference") ? "unresolved-reference"
+        : message.StartsWith("Cannot find reference") ? "missing-attribute"
+        : message == "Unreachable code" ? "unreachable"
+        : message.StartsWith("Local variable") ? "unbound-local"
+        : null;
+
+    /// <summary>Every finding for a module with its severity and a stable code the quick fixes key on.</summary>
+    List<Diag> Collect(ModuleInfo m, TypeEvaluator ev)
+    {
+        var r = new List<Diag>();
+        foreach (var d in m.SyntaxErrors) r.Add(new Diag(d, Severity.Error, null, "syntax-error"));
+        foreach (var d in m.Semantics.Diagnostics) r.Add(new Diag(d, Severity.Warning, null, Classify(d.Message)));
+        foreach (var d in m.Flow.Analyse())
+            r.Add(d.Message == "Unreachable code"
+                ? new Diag(d, Severity.Hint, new[] { DiagnosticTag.Unnecessary }, "unreachable")
+                : new Diag(d, Severity.Warning, null, Classify(d.Message)));
+        foreach (var d in ev.Inspect(m, ReportTypeMismatches)) r.Add(new Diag(d, Severity.Warning, null, Classify(d.Message)));
+        foreach (var u in UnusedImports(m))
+            r.Add(new Diag(new Diagnostic(u.Start, Math.Max(u.End - u.Start, 1), $"Unused import '{u.Name}'"),
+                Severity.Hint, new[] { DiagnosticTag.Unnecessary }, "unused-import"));
+        return r;
     }
 
     // ------------------------------------------------------------ node lookup

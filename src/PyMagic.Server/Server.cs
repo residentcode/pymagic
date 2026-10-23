@@ -135,6 +135,8 @@ public sealed class Server
                 return _service.PrepareRename(UriOf(p), PositionOf(p));
             case "textDocument/rename":
                 return _service.Rename(UriOf(p), PositionOf(p), p!["newName"]!.GetValue<string>());
+            case "textDocument/codeAction":
+                return _service.CodeActions(UriOf(p), RangeOf(p));
             case "textDocument/documentSymbol":
                 return _service.DocumentSymbols(UriOf(p));
             default:
@@ -169,6 +171,7 @@ public sealed class Server
                 definitionProvider = true,
                 completionProvider = new { triggerCharacters = new[] { "." } },
                 documentSymbolProvider = true,
+                codeActionProvider = new { codeActionKinds = new[] { LanguageService.QuickFixKind, LanguageService.OrganizeImportsKind } },
                 referencesProvider = true,
                 renameProvider = new { prepareProvider = true },
             },
@@ -232,6 +235,9 @@ public sealed class Server
     // ------------------------------------------------------------ plumbing
 
     static string UriOf(JsonNode? p) => p!["textDocument"]!["uri"]!.GetValue<string>();
+    static Range RangeOf(JsonNode? p) => new(
+        new Position(p!["range"]!["start"]!["line"]!.GetValue<int>(), p["range"]!["start"]!["character"]!.GetValue<int>()),
+        new Position(p["range"]!["end"]!["line"]!.GetValue<int>(), p["range"]!["end"]!["character"]!.GetValue<int>()));
     static Position PositionOf(JsonNode? p) =>
         new(p!["position"]!["line"]!.GetValue<int>(), p["position"]!["character"]!.GetValue<int>());
 
