@@ -73,7 +73,8 @@ public sealed record UnionType : PyType
 }
 
 /// <summary>A class object (IsInstance = false, printed type[C]) or an instance of a class (IsInstance = true).</summary>
-public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool IsInstance, IReadOnlyList<PyType>? TupleItems = null) : PyType
+/// <param name="EnumMember">For an instance of an enum class: the member it is known to be (Color.RED), else null.</param>
+public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool IsInstance, IReadOnlyList<PyType>? TupleItems = null, string? EnumMember = null) : PyType
 {
     public ClassType(ClassInfo info, bool isInstance) : this(info, Array.Empty<PyType>(), isInstance) { }
 
@@ -82,7 +83,7 @@ public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool 
 
     public bool Equals(ClassType? other) =>
         other != null && ReferenceEquals(Info, other.Info) && IsInstance == other.IsInstance
-        && Args.SequenceEqual(other.Args)
+        && Args.SequenceEqual(other.Args) && EnumMember == other.EnumMember
         && (TupleItems == null ? other.TupleItems == null : other.TupleItems != null && TupleItems.SequenceEqual(other.TupleItems));
 
     public override int GetHashCode() => HashCode.Combine(Info.Name, IsInstance, Args.Count, TupleItems?.Count);
@@ -90,6 +91,7 @@ public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool 
     public override string Display(int depth = 0)
     {
         if (IsInstance && Info.Name == "NoneType" && Info.Module.Name == "builtins") return "None";
+        if (IsInstance && EnumMember != null) return $"{Info.Name}.{EnumMember}";
         var sb = new StringBuilder(Info.Name);
         if (TupleItems != null)
         {

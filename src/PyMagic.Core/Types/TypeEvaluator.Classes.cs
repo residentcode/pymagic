@@ -409,7 +409,8 @@ public sealed partial class TypeEvaluator
     Dictionary<string, PyType> SubstFor(ClassType owner, PyType receiver)
     {
         var map = TypeParamMap(owner.Info, owner.Args);
-        map["Self"] = receiver is ClassType rc ? rc.AsInstance() : PyType.Unknown;
+        // Self is the receiver's class, not the specific enum member it happens to be (Flag.__or__ returns the Flag type)
+        map["Self"] = receiver is ClassType rc ? rc.AsInstance() with { EnumMember = null } : PyType.Unknown;
         map["type[Self]"] = receiver is ClassType rc2 ? rc2.AsClassObject() : PyType.Unknown;
         return map;
     }
@@ -458,6 +459,7 @@ public sealed partial class TypeEvaluator
                 case UnknownType: types.Add(member); break;
 
                 case ClassType c:
+                    if (TryEnumAttribute(c, name, types)) break;
                     LookupOnClass(c, name, c.IsInstance, types, missing, decls, sites);
                     break;
 
@@ -475,6 +477,11 @@ public sealed partial class TypeEvaluator
                 {
                     var recvClass = sup.Receiver is ClassType rc ? rc : null;
                     if (recvClass == null) { types.Add(PyType.Unknown); break; }
+                    if (name is "__init__" or "__new__" && SynthesizedMember(recvClass, name, sup.Current) is PyType synth)
+                    {
+                        types.Add(synth);
+                        break;
+                    }
                     var hit = FindMember(recvClass, name, recvClass.IsInstance, sup.Current, out bool unk);
                     if (hit == null) { types.Add(PyType.Unknown); break; }
                     types.Add(BoundMember(hit, recvClass, recvClass.IsInstance));
@@ -493,6 +500,11 @@ public sealed partial class TypeEvaluator
     void LookupOnClass(ClassType c, string name, bool instance, List<PyType> types, List<PyType> missing,
         List<Declaration> decls, List<Node> sites)
     {
+        if (name is "__init__" or "__new__" && SynthesizedMember(c, name, null) is PyType synthesizedMember)
+        {
+            types.Add(synthesizedMember);
+            return;
+        }
         var hit = FindMember(c, name, instance, null, out bool unknownBase);
         if (hit != null)
         {

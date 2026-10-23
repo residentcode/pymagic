@@ -286,7 +286,13 @@ public sealed partial class TypeEvaluator
         return Memo(s, () =>
         {
             var m = _ws.ModuleOf(s);
-            if (m == null || s.Declarations.Count == 0) return PyType.Unknown;
+            if (m == null)
+            {
+                // symbols of synthetic classes (namedtuple fields) carry their types directly
+                var known = s.Declarations.Where(d => _declOverride.ContainsKey(d)).Select(d => _declOverride[d]).ToList();
+                return known.Count == 0 ? PyType.Unknown : PyType.Union(known);
+            }
+            if (s.Declarations.Count == 0) return PyType.Unknown;
             return DeclaredType(m, s) ?? CombineDeclarations(m, s.Declarations);
         });
     }
@@ -323,6 +329,7 @@ public sealed partial class TypeEvaluator
 
     PyType TypeOfDeclaration(ModuleInfo m, Declaration d) => Memo(d, () =>
     {
+        if (_declOverride.TryGetValue(d, out var overridden)) return overridden;
         switch (d.Kind)
         {
             case DeclKind.Class: return new ClassType(ClassOf(m, (ClassDef)d.Node), false);
@@ -459,14 +466,15 @@ public sealed partial class TypeEvaluator
         return MapMembers(value, member =>
         {
             PyType element;
-            if (member is ClassType { TupleItems: not null } tup && starAt < 0 && tup.TupleItems.Count == items.Count)
-                element = tup.TupleItems[idx];
-            else if (member is ClassType { TupleItems: not null } tup2 && starAt >= 0 && tup2.TupleItems.Count >= items.Count - 1)
+            var fixedItems = member is ClassType mc ? TupleItemsOf(mc) : null;
+            if (fixedItems != null && starAt < 0 && fixedItems.Count == items.Count)
+                element = fixedItems[idx];
+            else if (fixedItems != null && starAt >= 0 && fixedItems.Count >= items.Count - 1)
             {
                 int after = items.Count - 1 - starAt;
-                if (idx < starAt) element = tup2.TupleItems[idx];
-                else if (idx == starAt) element = PyType.Union(tup2.TupleItems.Skip(starAt).Take(tup2.TupleItems.Count - starAt - after));
-                else element = tup2.TupleItems[tup2.TupleItems.Count - (items.Count - idx)];
+                if (idx < starAt) element = fixedItems[idx];
+                else if (idx == starAt) element = PyType.Union(fixedItems.Skip(starAt).Take(fixedItems.Count - starAt - after));
+                else element = fixedItems[fixedItems.Count - (items.Count - idx)];
                 if (idx == starAt) return Destructure(m, Inst("list", element), items[idx], name);
             }
             else element = IterElement(member);

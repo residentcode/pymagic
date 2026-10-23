@@ -209,8 +209,30 @@ public sealed partial class TypeEvaluator
         if (callee is FunctionType { Info: { Name: "super" } si } && si.Module.Name == "builtins")
             return Single(new CallTarget(callee, SuperOfCall(m, call, args), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 
+        if (callee is FunctionType { Info: { Name: "namedtuple" } nti } && nti.Module.Name == "collections")
+            return Single(new CallTarget(callee, NamedTupleFromCall(m, call), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
+
+        if (callee is ClassType { IsInstance: false } ntc && ntc.Info.QualifiedName == "typing.NamedTuple" && call.Args.Count >= 2)
+            return Single(new CallTarget(callee, NamedTupleFromTypingCall(m, call), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
+
+        if (TypedDictGet(m, call) is PyType tdGet)
+            return Single(new CallTarget(callee, tdGet, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
+
         var targets = CallValue(callee, args, call);
         return new CallResolution(targets.Count == 0 ? PyType.Unknown : PyType.Union(targets.Select(t => t.Returns)), targets);
+    }
+
+    /// <summary><c>movie.get("year")</c> on a TypedDict: the field's type (or None / the default's type).</summary>
+    PyType? TypedDictGet(ModuleInfo m, CallExpr call)
+    {
+        if (call.Func is not AttributeExpr { Attr: "get" } ga || call.Args.Count is < 1 or > 2) return null;
+        if (call.Args[0] is not { Name: null, Stars: 0, Value: var keyExpr } || StringValue(keyExpr) is not string key) return null;
+        if (TypeOf(m, ga.Value) is not ClassType { IsInstance: true } rc) return null;
+        var fields = TypedDictFieldsOf(rc.Info);
+        var field = fields?.FirstOrDefault(f => f.Field.Name == key);
+        if (field == null || field.Value.Field == null) return null;
+        var fieldType = field.Value.Field.Type;
+        return call.Args.Count == 2 ? PyType.Union(fieldType, TypeOf(m, call.Args[1].Value)) : PyType.Union(fieldType, NoneInstance);
     }
 
     static CallResolution Single(CallTarget t) => new(t.Returns, new[] { t });
@@ -243,9 +265,12 @@ public sealed partial class TypeEvaluator
         return result;
     }
 
-    CallTarget CallFunction(FunctionType f, IReadOnlyList<ArgInfo> args, Node? callNode)
+    CallTarget CallFunction(FunctionType f, IReadOnlyList<ArgInfo> args, Node? callNode) =>
+        CallParams(f, CallableParameters(f), () => ReturnTypeOf(f), args, callNode);
+
+    /// <summary>Maps arguments to parameters, solves type variables from them and computes the call's result.</summary>
+    CallTarget CallParams(PyType callee, IReadOnlyList<ParamInfo> ps, Func<PyType> returnType, IReadOnlyList<ArgInfo> args, Node? callNode)
     {
-        var ps = CallableParameters(f);
         var (map, problems) = MapArguments(ps, args, callNode);
 
         var solved = new Dictionary<string, PyType>();
@@ -265,9 +290,9 @@ public sealed partial class TypeEvaluator
                     $"Expected type '{expected}', got '{at}' instead"));
         }
 
-        var ret = EraseTypeVars(Substitute(ReturnTypeOf(f), solved));
+        var ret = EraseTypeVars(Substitute(returnType(), solved));
         var mappings = map.Where(x => x.Arg.Node != null).Select(x => new ArgumentMapping(x.Arg.Node!, x.Param)).ToList();
-        return new CallTarget(f, ret, mappings, problems, solved);
+        return new CallTarget(callee, ret, mappings, problems, solved);
     }
 
     CallTarget CallOverloaded(OverloadedType o, IReadOnlyList<ArgInfo> args, Node? callNode)
@@ -283,9 +308,7 @@ public sealed partial class TypeEvaluator
     CallTarget CallSignature(SignatureType s, IReadOnlyList<ArgInfo> args, Node? callNode)
     {
         if (s.Params == null) return new CallTarget(s, s.Return, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>());
-        var (map, problems) = MapArguments(s.Params, args, callNode);
-        var mappings = map.Where(x => x.Arg.Node != null).Select(x => new ArgumentMapping(x.Arg.Node!, x.Param)).ToList();
-        return new CallTarget(s, s.Return, mappings, problems);
+        return CallParams(s, s.Params, () => s.Return, args, callNode);
     }
 
     CallTarget CallInstance(ClassType inst, IReadOnlyList<ArgInfo> args, Node? callNode)
@@ -311,7 +334,12 @@ public sealed partial class TypeEvaluator
         if (qn == "builtins.type" && args.Count == 1 && args[0].Stars == 0 && args[0].Name == null)
         {
             var arg = args[0].Type();
-            return new CallTarget(cls, MapMembers(arg, t => t is ClassType { IsInstance: true } c ? c.AsClassObject() : PyType.Unknown), none, noProblems);
+            return new CallTarget(cls, MapMembers(arg, t => t switch
+            {
+                ClassType { IsInstance: true } c => (c with { EnumMember = null }).AsClassObject(),
+                ClassType { IsInstance: false } co => MetaclassOf(co.Info, out bool unknownMeta) ?? (unknownMeta ? PyType.Unknown : BuiltinClass("type") ?? PyType.Unknown),
+                _ => PyType.Unknown,
+            }), none, noProblems);
         }
         if (qn is "typing.TypeVar" or "typing.ParamSpec" or "typing.TypeVarTuple")
         {
@@ -324,13 +352,21 @@ public sealed partial class TypeEvaluator
         var selfArgs = cls.Args.Count > 0 ? cls.Args : ClassTypeParamsAsArgs(cls.Info);
         var receiver = new ClassType(cls.Info, selfArgs, true);
 
+        // library features with their own construction rules
+        if (IsEnumClass(cls.Info))
+            return new CallTarget(cls, cls.AsInstance(), none, noProblems);   // Color(1) looks a member up by value
+
+        var synthesized = SynthesizedInit(receiver);
+
         var init = FindMember(receiver, "__init__", true, null, out bool unkInit);
         var @new = FindMember(receiver, "__new__", true, null, out bool unkNew);
-        bool userInit = init != null && init.Owner.Info.QualifiedName != "builtins.object";
-        bool userNew = @new != null && @new.Owner.Info.QualifiedName != "builtins.object";
+        bool userInit = synthesized == null && init != null && init.Owner.Info.QualifiedName != "builtins.object";
+        bool userNew = synthesized == null && @new != null && @new.Owner.Info.QualifiedName != "builtins.object";
 
         CallTarget? inner = null;
-        if (userInit)
+        if (synthesized != null)
+            inner = CallSignature(synthesized, args, callNode);
+        else if (userInit)
             inner = Pick(CallValue(BoundMember(init!, receiver, true), args, callNode));
         else if (userNew)
         {
@@ -472,8 +508,9 @@ public sealed partial class TypeEvaluator
     public PyType IterElement(PyType iterable) => MapMembers(iterable, t =>
     {
         if (t is UnknownType) return t;
+        if (t is ClassType { IsInstance: false } enumClass && IsEnumClass(enumClass.Info)) return enumClass.AsInstance();   // for c in Color
         if (t is not ClassType { IsInstance: true } c) return PyType.Unknown;
-        if (c.TupleItems != null) return c.TupleItems.Count == 0 ? PyType.Unknown : PyType.Union(c.TupleItems);
+        if (TupleItemsOf(c) is { } items) return items.Count == 0 ? PyType.Unknown : PyType.Union(items);
         var it = CallMethod(c, "__iter__", Array.Empty<PyType>(), out _);
         if (it != null)
         {
@@ -493,19 +530,25 @@ public sealed partial class TypeEvaluator
         {
             switch (r)
             {
+                case ClassType { IsInstance: false } enumClass when IsEnumClass(enumClass.Info):
+                    return enumClass.AsInstance();                                   // Color["RED"]
+
                 case ClassType { IsInstance: false }:
                 case SpecialFormType:
                     return AnnotationToValue(AnnotationSubscript(m, s, null));
 
-                case ClassType { IsInstance: true, TupleItems: not null } tup:
+                case ClassType { IsInstance: true } td when StringValue(s.Index) is string key && TypedDictFieldsOf(td.Info) is { } tdFields:
+                    return tdFields.FirstOrDefault(f => f.Field.Name == key).Field?.Type ?? PyType.Unknown;
+
+                case ClassType { IsInstance: true } tupleLike when TupleItemsOf(tupleLike) is { } items:
                 {
                     if (ConstIndex(s.Index) is int i)
                     {
-                        int idx = i < 0 ? tup.TupleItems.Count + i : i;
-                        if (idx >= 0 && idx < tup.TupleItems.Count) return tup.TupleItems[idx];
+                        int idx = i < 0 ? items.Count + i : i;
+                        if (idx >= 0 && idx < items.Count) return items[idx];
                         return PyType.Unknown;
                     }
-                    if (s.Index is SliceExpr) return TupleHomogeneous(tup.Args.Count > 0 ? tup.Args[0] : PyType.Unknown);
+                    if (s.Index is SliceExpr) return TupleHomogeneous(tupleLike.Args.Count > 0 ? tupleLike.Args[0] : PyType.Union(items));
                     break;
                 }
             }
@@ -605,6 +648,9 @@ public sealed partial class TypeEvaluator
                     if (dc.Info.Name == "float" && s.Info.Name is "int" or "bool") return true;
                     if (dc.Info.Name == "complex" && s.Info.Name is "float" or "int" or "bool") return true;
                 }
+
+                // a dict literal where a TypedDict is expected: its keys are not checked here
+                if (s.Info.QualifiedName == "builtins.dict" && TypedDictFieldsOf(dc.Info) != null) return true;
 
                 var spec = SpecializeAs(s, dc.Info);
                 if (spec != null)
