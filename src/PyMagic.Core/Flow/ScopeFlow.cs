@@ -43,6 +43,8 @@ public sealed class ScopeFlow
     public ControlFlowGraph Graph { get; }
 
     readonly Dictionary<NameExpr, List<Instruction>> _reads = new(ReferenceEqualityComparer.Instance);
+    readonly Dictionary<NameExpr, List<Instruction>> _allReads = new(ReferenceEqualityComparer.Instance);
+    readonly HashSet<(Symbol, string)> _assertionKeys = new();
     readonly Dictionary<Symbol, int> _unboundId = new();
     readonly Dictionary<Symbol, Bits> _symbolMask = new();
     readonly List<(Symbol Sym, Declaration? Decl)> _defs = new(); // index = def id; Decl null = unbound
@@ -65,7 +67,13 @@ public sealed class ScopeFlow
         var owned = new List<Symbol>();
         foreach (var ins in Graph.Instructions)
         {
-            if (ins.Kind is not (InstrKind.Read or InstrKind.Write or InstrKind.Delete) || !Owned(ins.Symbol)) continue;
+            if (ins.Kind == InstrKind.Read && ins.Element is NameExpr rn)
+            {
+                if (!_allReads.TryGetValue(rn, out var all)) _allReads[rn] = all = new();
+                all.Add(ins);
+            }
+            if (ins.Kind == InstrKind.Assert && ins.Symbol != null) _assertionKeys.Add((ins.Symbol, ins.Path));
+            if (ins.Kind is not (InstrKind.Read or InstrKind.Write or InstrKind.Delete) || !Owned(ins.Symbol) || ins.Path.Length > 0) continue;
             var s = ins.Symbol!;
             if (!_unboundId.ContainsKey(s))
             {
@@ -113,7 +121,7 @@ public sealed class ScopeFlow
             _in[ins.Id] = inSet;
 
             var outSet = inSet;
-            if (Owned(ins.Symbol) && ins.Kind is InstrKind.Write or InstrKind.Delete)
+            if (Owned(ins.Symbol) && ins.Kind is InstrKind.Write or InstrKind.Delete && ins.Path.Length == 0)
             {
                 var sym = ins.Symbol!;
                 outSet = inSet.Clone();
@@ -127,6 +135,12 @@ public sealed class ScopeFlow
                     if (!queued[s.Id]) { queued[s.Id] = true; queue.Enqueue(s); }
         }
     }
+
+    /// <summary>Every Read instruction of this name expression (a finally block is built twice, so there can be two).</summary>
+    public IReadOnlyList<Instruction>? ReadInstructions(NameExpr use) => _allReads.GetValueOrDefault(use);
+
+    /// <summary>Whether a condition somewhere in this scope narrows the given reference (symbol and member path).</summary>
+    public bool HasAssertions(Symbol sym, string path) => _assertionKeys.Contains((sym, path));
 
     /// <summary>Reaching definitions for a read of a name in this scope; null if the name is not owned by this scope.</summary>
     public ReachingResult? ReachingFor(NameExpr use)

@@ -14,6 +14,8 @@ public enum InstrKind
     Join,        // merge/loop head/handler entry with no effect of its own
     Return,
     Raise,
+    /// <summary>A condition is known to be true or false from here on (narrowing of Symbol/Path).</summary>
+    Assert,
 }
 
 /// <summary>One step of evaluation. Instructions are linked in the order Python would execute them.</summary>
@@ -27,12 +29,19 @@ public sealed class Instruction
     public Symbol? Symbol { get; }
     /// <summary>For Write: the binding being established.</summary>
     public Declaration? Declaration { get; }
+    /// <summary>
+    /// Member path below Symbol for attribute chains ("x" for self.x, "a.b" for self.a.b); empty for the name itself.
+    /// Name-level analyses (reaching definitions) ignore instructions with a path.
+    /// </summary>
+    public string Path { get; }
+    /// <summary>For Assert: whether Element (the condition) is known to be true (else known to be false).</summary>
+    public bool AssertPositive { get; }
     public List<Instruction> Successors { get; } = new();
     public List<Instruction> Predecessors { get; } = new();
 
-    internal Instruction(int id, InstrKind kind, Node? element, Symbol? symbol, Declaration? decl)
+    internal Instruction(int id, InstrKind kind, Node? element, Symbol? symbol, Declaration? decl, string path = "", bool positive = false)
     {
-        Id = id; Kind = kind; Element = element; Symbol = symbol; Declaration = decl;
+        Id = id; Kind = kind; Element = element; Symbol = symbol; Declaration = decl; Path = path; AssertPositive = positive;
     }
 
     public override string ToString() => $"#{Id} {Kind} {(Element is NameExpr n ? n.Name : Element?.GetType().Name)}";

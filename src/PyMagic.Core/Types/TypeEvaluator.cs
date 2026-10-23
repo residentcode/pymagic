@@ -152,7 +152,7 @@ public sealed partial class TypeEvaluator
                 };
 
             case NameExpr n: return TypeOfName(m, n);
-            case AttributeExpr a: return AttributeType(TypeOf(m, a.Value), a.Attr).Type;
+            case AttributeExpr a: return NarrowedAttribute(m, a);
             case CallExpr c: return TypeOfCall(m, c);
             case SubscriptExpr s: return TypeOfSubscript(m, s);
 
@@ -247,23 +247,28 @@ public sealed partial class TypeEvaluator
 
         var sym = r.Symbol;
         var symModule = _ws.ModuleOf(sym) ?? m;
-        var declared = DeclaredType(symModule, sym);
-        if (declared != null) return declared;
 
         if ((r.Access & Access.Read) != 0)
         {
-            // locals: only the definitions that can reach this use
-            var reach = ReferenceEquals(sym.Scope, r.UseScope) ? m.Flow.ReachingDefinitions(n) : null;
-            if (reach != null)
-            {
-                if (reach.Definitions.Count == 0) return PyType.Unknown;
-                return PyType.Union(reach.Definitions.Select(d => TypeOfDeclaration(symModule, d)));
-            }
+            // flow-sensitive: only the assignments that reach this use, narrowed by the conditions on the way
+            var flowType = FlowTypeOfName(m, n, r, sym);
+            if (flowType != null) return flowType;
         }
         else
         {
             foreach (var d in sym.Declarations)
                 if (ReferenceEquals(d.Node, n)) return TypeOfDeclaration(symModule, d);
+        }
+
+        var declared = DeclaredType(symModule, sym);
+        if (declared != null) return declared;
+
+        // locals: only the assignments that can reach this use
+        if ((r.Access & Access.Read) != 0 && ReferenceEquals(sym.Scope, r.UseScope))
+        {
+            var reach = m.Flow.ReachingDefinitions(n);
+            if (reach != null)
+                return reach.Definitions.Count == 0 ? PyType.Unknown : PyType.Union(reach.Definitions.Select(d => TypeOfDeclaration(symModule, d)));
         }
         return TypeOfSymbol(sym);
     }

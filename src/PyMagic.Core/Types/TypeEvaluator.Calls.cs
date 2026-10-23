@@ -229,7 +229,7 @@ public sealed partial class TypeEvaluator
                 case ClassType { IsInstance: false } cls: result.Add(CallClass(cls, args, callNode)); break;
                 case ClassType inst: result.Add(CallInstance(inst, args, callNode)); break;
                 case SignatureType s: result.Add(CallSignature(s, args, callNode)); break;
-                case UnknownType: result.Add(new CallTarget(c, PyType.Unknown, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>())); break;
+                case UnknownType: result.Add(new CallTarget(c, c, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>())); break;
                 case NeverType: break;
                 case ModuleType:
                     result.Add(new CallTarget(c, PyType.Unknown, Array.Empty<ArgumentMapping>(),
@@ -411,7 +411,7 @@ public sealed partial class TypeEvaluator
         bool anyFound = false;
         foreach (var r in receiver.Members)
         {
-            if (r is UnknownType) { results.Add(PyType.Unknown); anyFound = true; continue; }
+            if (r is UnknownType) { results.Add(r); anyFound = true; continue; }
             if (r is not ClassType c) continue;
             var hit = FindMember(c, method, c.IsInstance, null, out bool unknownBase);
             if (hit == null)
@@ -453,7 +453,12 @@ public sealed partial class TypeEvaluator
         foreach (var l in left.Members)
             foreach (var r in right.Members)
             {
-                if (l is UnknownType || r is UnknownType) { results.Add(PyType.Unknown); continue; }
+                if (l is UnknownType || r is UnknownType)
+                {
+                    // keep the "depends on itself" marker so enclosing unions can still discard it
+                    results.Add(l is UnknownType { FromCycle: true } || r is UnknownType { FromCycle: true } ? PyType.CycleUnknown : PyType.Unknown);
+                    continue;
+                }
                 var fwd = CallMethod(l, names.Fwd, new[] { r }, out bool ok1);
                 if (fwd != null && ok1) { results.Add(fwd); continue; }
                 var rev = CallMethod(r, names.Rev, new[] { l }, out bool ok2);
@@ -466,6 +471,7 @@ public sealed partial class TypeEvaluator
     /// <summary>Type of the items produced by iterating a value.</summary>
     public PyType IterElement(PyType iterable) => MapMembers(iterable, t =>
     {
+        if (t is UnknownType) return t;
         if (t is not ClassType { IsInstance: true } c) return PyType.Unknown;
         if (c.TupleItems != null) return c.TupleItems.Count == 0 ? PyType.Unknown : PyType.Union(c.TupleItems);
         var it = CallMethod(c, "__iter__", Array.Empty<PyType>(), out _);

@@ -66,16 +66,22 @@ public static class Program
         var raw = new Dictionary<string, int>();
         var samples = new Dictionary<string, List<string>>();
         int files = 0, crashes = 0;
+        long loadMs = 0, inspectMs = 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         foreach (var f in Directory.EnumerateFiles(dir, "*.py", SearchOption.TopDirectoryOnly).Take(limit))
         {
             string name = Path.GetFileNameWithoutExtension(f);
             try
             {
+                var swLoad = System.Diagnostics.Stopwatch.StartNew();
                 var m = ws.GetModule(name);
+                loadMs += swLoad.ElapsedMilliseconds;
                 if (m == null) continue;
                 files++;
-                foreach (var d in ws.Evaluator.Inspect(m))
+                var swInsp = System.Diagnostics.Stopwatch.StartNew();
+                var found = ws.Evaluator.Inspect(m);
+                inspectMs += swInsp.ElapsedMilliseconds;
+                foreach (var d in found)
                 {
                     string kind = System.Text.RegularExpressions.Regex.Replace(d.Message, "'[^']*'", "'_'");
                     counts[kind] = counts.GetValueOrDefault(kind) + 1;
@@ -93,7 +99,7 @@ public static class Program
         }
         Console.WriteLine("-- most frequent exact messages --");
         foreach (var kv in raw.OrderByDescending(k => k.Value).Take(40)) Console.WriteLine($"{kv.Value,6}  {kv.Key}");
-        Console.WriteLine($"{files} files, {crashes} crashes, {sw.Elapsed.TotalSeconds:F1}s");
+        Console.WriteLine($"{files} files, {crashes} crashes, {sw.Elapsed.TotalSeconds:F1}s  (load {loadMs} ms, inspect {inspectMs} ms)");
         return 0;
     }
 

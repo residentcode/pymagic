@@ -56,9 +56,9 @@ internal sealed class CfgBuilder
 
     // ------------------------------------------------------------ emission helpers
 
-    Instruction Emit(InstrKind kind, Node? element = null, Symbol? sym = null, Declaration? decl = null)
+    Instruction Emit(InstrKind kind, Node? element = null, Symbol? sym = null, Declaration? decl = null, string path = "", bool positive = false)
     {
-        var i = new Instruction(_instrs.Count, kind, element, sym, decl);
+        var i = new Instruction(_instrs.Count, kind, element, sym, decl, path, positive);
         _instrs.Add(i);
         foreach (var p in _cur) Link(p, i);
         _cur = new List<Instruction> { i };
@@ -90,6 +90,47 @@ internal sealed class CfgBuilder
     {
         foreach (var p in ps)
             if (p.Kind is not (ParamKind.Slash or ParamKind.KwOnlySeparator)) WriteBound(p);
+    }
+
+    /// <summary>
+    /// A reference expression: a name followed by attribute accesses (x, self.a, self.a.b). Returns the root name
+    /// and the dotted path below it ("" for the name itself).
+    /// </summary>
+    internal static bool TryChain(Expr e, out NameExpr root, out string path)
+    {
+        var parts = new List<string>();
+        while (e is AttributeExpr a) { parts.Add(a.Attr); e = a.Value; }
+        if (e is NameExpr n)
+        {
+            root = n;
+            parts.Reverse();
+            path = string.Join(".", parts);
+            return true;
+        }
+        root = null!; path = "";
+        return false;
+    }
+
+    /// <summary>The reference a condition narrows, if it has one of the recognised shapes.</summary>
+    static bool NarrowedReference(Expr cond, out Expr reference)
+    {
+        reference = cond;
+        switch (cond)
+        {
+            case NameExpr or AttributeExpr:
+                return TryChain(cond, out _, out _);
+
+            case CompareExpr { Ops.Count: 1 } c when c.Ops[0] is "is" or "is not" or "==" or "!=":
+                if (c.Comparators[0] is ConstExpr { Kind: ConstKind.None } && TryChain(c.Left, out _, out _)) { reference = c.Left; return true; }
+                if (c.Left is ConstExpr { Kind: ConstKind.None } && TryChain(c.Comparators[0], out _, out _)) { reference = c.Comparators[0]; return true; }
+                return false;
+
+            case CallExpr { Func: NameExpr { Name: "isinstance" }, Args.Count: 2 } call
+                when call.Args[0] is { Name: null, Stars: 0 } && call.Args[1] is { Name: null, Stars: 0 } && TryChain(call.Args[0].Value, out _, out _):
+                reference = call.Args[0].Value;
+                return true;
+        }
+        return false;
     }
 
     /// <summary>Python decides some conditions statically; we only treat plain constants as such.</summary>
@@ -125,6 +166,7 @@ internal sealed class CfgBuilder
                 if (x.Target is NameExpr) EmitRead((NameExpr)x.Target); else VisitExpr(x.Target);
                 VisitExpr(x.Value);
                 if (x.Target is NameExpr) EmitWrite((NameExpr)x.Target);
+                else EmitMemberWrite(x.Target, InstrKind.Write);
                 break;
 
             case AnnAssignStmt x:
@@ -238,7 +280,22 @@ internal sealed class CfgBuilder
                 VisitExpr(e);
                 var truth = Truth(e);
                 var c = _cur;
-                return (truth == false ? new() : c, truth == true ? new() : c);
+                var t = truth == false ? new() : c;
+                var f = truth == true ? new() : c;
+
+                // narrowing: after the test, the reference has a known property on each branch
+                if (truth == null && c.Count > 0 && NarrowedReference(e, out var reference)
+                    && TryChain(reference, out var root, out var path))
+                {
+                    var sym = _model.ReferenceOf(root)?.Symbol;
+                    if (sym != null)
+                    {
+                        _cur = c; var onTrue = Emit(InstrKind.Assert, e, sym, null, path, true);
+                        _cur = c; var onFalse = Emit(InstrKind.Assert, e, sym, null, path, false);
+                        return (new List<Instruction> { onTrue }, new List<Instruction> { onFalse });
+                    }
+                }
+                return (t, f);
             }
         }
     }
@@ -412,7 +469,20 @@ internal sealed class CfgBuilder
             case TupleExpr tu: foreach (var i in tu.Items) VisitTarget(i); break;
             case ListExpr l: foreach (var i in l.Items) VisitTarget(i); break;
             case StarExpr s: VisitTarget(s.Value); break;
-            default: VisitTargetSubexpressions(t); break;
+            default:
+                VisitTargetSubexpressions(t);
+                EmitMemberWrite(t, InstrKind.Write);
+                break;
+        }
+    }
+
+    /// <summary>Assigning to / deleting self.a.b invalidates what was learned about self.a.b (and below).</summary>
+    void EmitMemberWrite(Expr target, InstrKind kind)
+    {
+        if (target is AttributeExpr && TryChain(target, out var root, out var path))
+        {
+            var sym = _model.ReferenceOf(root)?.Symbol;
+            if (sym != null) Emit(kind, target, sym, null, path);
         }
     }
 
@@ -433,7 +503,7 @@ internal sealed class CfgBuilder
             case NameExpr n: Emit(InstrKind.Delete, n, _model.ReferenceOf(n)?.Symbol); break;
             case TupleExpr tu: foreach (var i in tu.Items) VisitDelete(i); break;
             case ListExpr l: foreach (var i in l.Items) VisitDelete(i); break;
-            default: VisitTargetSubexpressions(t); break;
+            default: VisitTargetSubexpressions(t); EmitMemberWrite(t, InstrKind.Delete); break;
         }
     }
 
@@ -459,10 +529,12 @@ internal sealed class CfgBuilder
 
             case BinaryExpr { Op: "and" or "or" } b:
             {
-                VisitExpr(b.Left);
-                var afterLeft = _cur;
+                // the right operand runs only when the left one was true (and) / false (or); that carries narrowing
+                var (lt, lf) = VisitCond(b.Left);
+                bool isAnd = b.Op == "and";
+                _cur = isAnd ? lt : lf;
                 VisitExpr(b.Right);
-                _cur = Union(afterLeft, _cur); // right operand may be skipped
+                _cur = Union(isAnd ? lf : lt, _cur);
                 return;
             }
 
@@ -493,7 +565,11 @@ internal sealed class CfgBuilder
             var g = c.Generators[i];
             if (i > 0) VisitExpr(g.Iter);
             VisitTarget(g.Target);
-            foreach (var cond in g.Ifs) VisitExpr(cond);
+            foreach (var cond in g.Ifs)
+            {
+                var (t, _) = VisitCond(cond);
+                _cur = t; // later parts of the comprehension only see items that passed the condition
+            }
         }
         VisitExpr(c.Element);
         VisitExpr(c.Value);

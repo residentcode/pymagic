@@ -455,7 +455,7 @@ public sealed partial class TypeEvaluator
         {
             switch (member)
             {
-                case UnknownType: types.Add(PyType.Unknown); break;
+                case UnknownType: types.Add(member); break;
 
                 case ClassType c:
                     LookupOnClass(c, name, c.IsInstance, types, missing, decls, sites);

@@ -9,7 +9,8 @@ public sealed partial class TypeEvaluator
     /// exist on a fully known receiver. Conservative by design: anything involving unknown types is silent.
     /// </summary>
     /// <param name="includeTypeMismatches">Also report argument type mismatches (noisy until real typeshed is used).</param>
-    public IReadOnlyList<Diagnostic> Inspect(ModuleInfo m, bool includeTypeMismatches = false)
+    /// <param name="includeOptionalMisses">Also report attributes missing on None (e.g. an attribute initialised to None in __init__ and used elsewhere).</param>
+    public IReadOnlyList<Diagnostic> Inspect(ModuleInfo m, bool includeTypeMismatches = false, bool includeOptionalMisses = false)
     {
         var diags = new List<Diagnostic>();
         if (m.IsStub) return diags;
@@ -22,7 +23,7 @@ public sealed partial class TypeEvaluator
                     InspectCall(m, call, includeTypeMismatches, diags);
                     break;
                 case AttributeExpr attr when !IsStoreTarget(m, attr):
-                    InspectAttribute(m, attr, diags);
+                    InspectAttribute(m, attr, diags, includeOptionalMisses);
                     break;
             }
         }
@@ -49,12 +50,12 @@ public sealed partial class TypeEvaluator
         }
     }
 
-    void InspectAttribute(ModuleInfo m, AttributeExpr attr, List<Diagnostic> diags)
+    void InspectAttribute(ModuleInfo m, AttributeExpr attr, List<Diagnostic> diags, bool includeNone)
     {
         var recv = TypeOf(m, attr.Value);
         if (recv is UnknownType) return;
         var res = AttributeType(recv, attr.Attr);
-        var missing = res.Missing.Where(IsReportableMiss).ToList();
+        var missing = res.Missing.Where(x => IsReportableMiss(x, includeNone)).ToList();
         if (missing.Count == 0) return;
         int start = attr.End - attr.Attr.Length;
         diags.Add(new Diagnostic(start, attr.Attr.Length,
@@ -68,11 +69,11 @@ public sealed partial class TypeEvaluator
     /// None (needs narrowing: `if x is not None`), classes from the minimal bundled stubs (known gaps until real
     /// typeshed is used) and modules that build their namespace at runtime.
     /// </summary>
-    bool IsReportableMiss(PyType t)
+    bool IsReportableMiss(PyType t, bool includeNone)
     {
         switch (t)
         {
-            case ClassType c when IsNone(c): return false;
+            case ClassType c when IsNone(c): return includeNone;
             case ClassType c: return !c.Info.Module.IsBundledStub;
             case ModuleType mt:
                 if (!_dynamicNamespace.TryGetValue(mt.Module, out var dyn))
