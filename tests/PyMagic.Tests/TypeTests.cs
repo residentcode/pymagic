@@ -24,6 +24,10 @@ public class TypeTests
         return (ws, m);
     }
 
+    /// <summary>Real typeshed is more precise than the bundled stubs; accept either answer.</summary>
+    internal static void OneOf(string[] accepted, string actual) =>
+        Assert.True(accepted.Contains(actual), $"expected one of [{string.Join(", ", accepted)}] but got {actual}");
+
     // ---------------------------------------------------------------- stubs themselves
 
     [Fact]
@@ -109,7 +113,7 @@ public class TypeTests
     {
         Assert.Equal("ValueError", T("try:\n    pass\nexcept ValueError as e:\n    e"));
         Assert.Equal("OSError | KeyError", T("try:\n    pass\nexcept (OSError, KeyError) as e:\n    e"));
-        Assert.Equal("TextIO", T("with open('f') as f:\n    f"));
+        OneOf(new[] { "TextIO", "TextIOWrapper" }, T("with open('f') as f:\n    f"));   // the bundled stub is coarser than typeshed
         Assert.Equal("str", T("with open('f') as f:\n    f.read()"));
     }
 
@@ -241,7 +245,7 @@ public class TypeTests
         Assert.Equal("int", T("len([1])"));
         Assert.Equal("int | None", T("d = {'a': 1}\nd.get('a')"));
         Assert.Equal("int", T("d = {'a': 1}\nd['a']"));
-        Assert.Equal("KeysView[str]", T("{'a': 1}.keys()"));
+        OneOf(new[] { "KeysView[str]", "dict_keys[str, int]" }, T("{'a': 1}.keys()"));
         Assert.Equal("list[int]", T("sorted([3, 1])"));
         Assert.Equal("int", T("max(1, 2)"));
         Assert.Equal("int", T("max([1, 2])"));

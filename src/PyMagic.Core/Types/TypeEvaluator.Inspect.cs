@@ -55,7 +55,7 @@ public sealed partial class TypeEvaluator
         var recv = TypeOf(m, attr.Value);
         if (recv is UnknownType) return;
         var res = AttributeType(recv, attr.Attr);
-        var missing = res.Missing.Where(x => IsReportableMiss(x, includeNone)).ToList();
+        var missing = res.Missing.Where(x => IsReportableMiss(x, attr.Attr, includeNone)).ToList();
         if (missing.Count == 0) return;
         int start = attr.End - attr.Attr.Length;
         diags.Add(new Diagnostic(start, attr.Attr.Length,
@@ -69,8 +69,11 @@ public sealed partial class TypeEvaluator
     /// None (needs narrowing: `if x is not None`), classes from the minimal bundled stubs (known gaps until real
     /// typeshed is used) and modules that build their namespace at runtime.
     /// </summary>
-    bool IsReportableMiss(PyType t, bool includeNone)
+    bool IsReportableMiss(PyType t, string attribute, bool includeNone)
     {
+        // stubs describe the public interface only: a single-underscore name missing from one is not evidence
+        bool privateName = attribute.StartsWith('_') && !(attribute.StartsWith("__") && attribute.EndsWith("__"));
+        if (privateName && t is ClassType { Info.Module.IsStub: true } or ModuleType { Module.IsStub: true }) return false;
         switch (t)
         {
             case ClassType c when IsNone(c): return includeNone;

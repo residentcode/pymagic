@@ -11,13 +11,15 @@ public sealed class SemanticModel
     public Scope ModuleScope { get; }
     public IReadOnlyList<Diagnostic> Diagnostics { get; }
     public IReadOnlyCollection<Reference> References => _refs.Values;
+    /// <summary>The interpreter version/platform that decided the static conditions while binding.</summary>
+    public PythonEnvironment Environment { get; }
 
-    internal SemanticModel(Scope module, Dictionary<Node, Scope> scopes, Dictionary<NameExpr, Reference> refs, List<Diagnostic> diags)
+    internal SemanticModel(Scope module, Dictionary<Node, Scope> scopes, Dictionary<NameExpr, Reference> refs, List<Diagnostic> diags, PythonEnvironment env)
     {
-        ModuleScope = module; _scopes = scopes; _refs = refs; Diagnostics = diags;
+        ModuleScope = module; _scopes = scopes; _refs = refs; Diagnostics = diags; Environment = env;
     }
 
-    public static SemanticModel Build(Module module) => new Binder(module).Run();
+    public static SemanticModel Build(Module module, PythonEnvironment? env = null) => new Binder(module, env ?? PythonEnvironment.Default).Run();
 
     /// <summary>The scope a Module/FunctionDef/ClassDef/LambdaExpr/CompExpr node creates.</summary>
     public Scope? ScopeOf(Node node) => _scopes.GetValueOrDefault(node);

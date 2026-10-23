@@ -191,6 +191,21 @@ public class SpecialTests
         Assert.Equal("D", T(dc + "D()"));
     }
 
+    [Fact]
+    public void PropertySettersAndTupleUnpackingEdgeCases()
+    {
+        // @x.setter: x is the property object inside the class body
+        var (ws, m) = Load("class A:\n    @property\n    def x(self) -> int: ...\n    @x.setter\n    def x(self, v: int) -> None: ...\n");
+        var misses = AstChildren.Descendants(m.Ast).OfType<AttributeExpr>()
+            .Where(a => ws.Evaluator.AttributeType(ws.Evaluator.TypeOf(m, a.Value), a.Attr).Missing.Count > 0).ToList();
+        Assert.Equal(0, misses.Count);
+        Assert.Equal("int", T("class A:\n    @property\n    def x(self) -> int: ...\n    @x.setter\n    def x(self, v: int) -> None: ...\nA().x"));
+        // unpacking a tuple of a different size says nothing instead of mixing up the items
+        Assert.Equal("Unknown", T("def f(c):\n    if c:\n        return 1, 2, 3\n    return 1, 2, 3\nfor a, b in [f(0)]:\n    pass\nb"));
+        // __new__ implemented with object.__new__(cls) still constructs the class
+        Assert.Equal("D", T("class D:\n    def __new__(cls, v):\n        self = object.__new__(cls)\n        return self\nD(1)"));
+    }
+
     // ---------------------------------------------------------------- TypedDict
 
     const string TD = "from typing import TypedDict, NotRequired, Required\nclass Movie(TypedDict):\n    name: str\n    year: NotRequired[int]\n";
@@ -203,7 +218,7 @@ public class SpecialTests
         Assert.Equal("int | None", T(TD + "def f(m: Movie):\n    m.get('year')"));
         Assert.Equal("int", T(TD + "def f(m: Movie):\n    m.get('year', 0)"));
         Assert.Equal("str | None", T(TD + "def f(m: Movie):\n    m.get('name')"));
-        Assert.Equal("KeysView[str]", T(TD + "def f(m: Movie):\n    m.keys()"));
+        TypeTests.OneOf(new[] { "KeysView[str]", "dict_keys[str, object]" }, T(TD + "def f(m: Movie):\n    m.keys()"));
         Assert.Equal("Movie", T(TD + "Movie(name='x')"));
     }
 

@@ -42,7 +42,16 @@ public sealed partial class TypeEvaluator
 
     // ------------------------------------------------------------ builtin lookups
 
-    PyType NoneInstance => Inst("NoneType");
+    PyType NoneInstance
+    {
+        get
+        {
+            // typeshed defines NoneType in `types`; the bundled builtins stub defines it directly
+            var c = BuiltinClass("NoneType") ?? ModuleClass(_typesClasses, _ws.GetModule("types"), "NoneType");
+            return c == null ? PyType.Unknown : new ClassType(c.Info, Array.Empty<PyType>(), true);
+        }
+    }
+    readonly Dictionary<string, ClassType?> _typesClasses = new();
 
     /// <summary>Instance of a class from the builtins stub, e.g. Inst("list", elem). Unknown if the stub lacks it.</summary>
     PyType Inst(string name, params PyType[] args)
@@ -226,7 +235,7 @@ public sealed partial class TypeEvaluator
 
     static PyType WithoutNone(PyType t) => PyType.Union(t.Members.Where(x => !IsNone(x)));
 
-    static bool IsNone(PyType t) => t is ClassType { IsInstance: true, Info: { Name: "NoneType" } } c && c.Info.Module.Name == "builtins";
+    static bool IsNone(PyType t) => t is ClassType { IsInstance: true, Info: { Name: "NoneType" } } c && c.Info.Module.Name is "builtins" or "types";
 
     /// <summary>Applies f to every member of a union and unions the results.</summary>
     PyType MapMembers(PyType t, Func<PyType, PyType> f) =>
@@ -241,7 +250,8 @@ public sealed partial class TypeEvaluator
         if (r.Symbol == null)
         {
             // a star import may shadow the builtin of the same name (os.py: `from posix import *` provides open)
-            if (r.IsBuiltin && !m.Semantics.ModuleScope.HasStarImport) return BuiltinNameType(n.Name);
+            if (m.Semantics.ModuleScope.HasStarImport && FindModuleSymbol(m, n.Name) is { } viaStar) return TypeOfSymbol(viaStar);
+            if (r.IsBuiltin) return BuiltinNameType(n.Name);
             return PyType.Unknown;
         }
 
@@ -311,8 +321,18 @@ public sealed partial class TypeEvaluator
     }
 
     /// <summary>A variable's annotation (or the special form it stands for in typing), if it has one.</summary>
+    /// <summary>Names in typing that mean something to the type system rather than being ordinary classes or aliases.</summary>
+    static readonly HashSet<string> SpecialFormNames = new()
+    {
+        "Any", "Union", "Optional", "Callable", "Literal", "ClassVar", "Final", "Annotated", "Type", "Tuple",
+        "List", "Dict", "Set", "FrozenSet", "DefaultDict", "Counter", "Deque", "ChainMap", "OrderedDict",
+        "Generic", "Protocol", "NoReturn", "Never", "Self", "LiteralString", "TypeAlias", "Concatenate",
+        "TypeGuard", "TypeIs", "Unpack", "Required", "NotRequired", "ReadOnly", "TypedDict",
+    };
+
     PyType? DeclaredType(ModuleInfo m, Symbol sym)
     {
+        if (m.Name is "typing" or "typing_extensions" && SpecialFormNames.Contains(sym.Name)) return new SpecialFormType(sym.Name);
         foreach (var d in sym.Declarations)
         {
             if (d.Kind == DeclKind.Parameter && d.Node is Parameter { Annotation: not null })
@@ -477,6 +497,7 @@ public sealed partial class TypeEvaluator
                 else element = fixedItems[fixedItems.Count - (items.Count - idx)];
                 if (idx == starAt) return Destructure(m, Inst("list", element), items[idx], name);
             }
+            else if (fixedItems != null) return PyType.Unknown;    // a tuple of another size: unpacking it would fail, so say nothing
             else element = IterElement(member);
             return Destructure(m, element, items[idx], name);
         });
@@ -506,9 +527,13 @@ public sealed partial class TypeEvaluator
                 var abs = Workspace.AbsoluteName(m, s.Level, s.Module);
                 if (abs == null) return PyType.Unknown;
                 var mod = _ws.GetModule(abs);
-                if (mod != null && mod.Semantics.ModuleScope.Symbols.TryGetValue(a.Name, out var sym) && sym.Declarations.Count > 0)
-                    return TypeOfSymbol(sym);
                 var sub = _ws.GetModule(abs.Length == 0 ? a.Name : abs + "." + a.Name);
+                var sym = mod == null ? null : FindModuleSymbol(mod, a.Name);
+                // `from . import x` inside a package's own __init__ imports the submodule: the attribute of the same
+                // name (often defined from this very import: `path = _path`) cannot exist yet
+                if (sub != null && ReferenceEquals(mod, m)) return new ModuleType(sub);
+                // a name that only this import statement defines is not evidence of anything
+                if (sym != null && !sym.Declarations.All(d => ReferenceEquals(d.Node, a))) return TypeOfSymbol(sym);
                 return sub == null ? PyType.Unknown : new ModuleType(sub);
             }
         }

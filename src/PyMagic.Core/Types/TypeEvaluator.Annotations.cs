@@ -88,6 +88,12 @@ public sealed partial class TypeEvaluator
                         "FrozenSet" => Inst("frozenset"),
                         "Tuple" => Inst("tuple"),
                         "Type" => Inst("type"),
+                        "DefaultDict" => CollectionsInst("defaultdict"),
+                        "OrderedDict" => CollectionsInst("OrderedDict"),
+                        "Counter" => CollectionsInst("Counter"),
+                        "Deque" => CollectionsInst("deque"),
+                        "ChainMap" => CollectionsInst("ChainMap"),
+                        "TypedDict" => Inst("dict", Inst("str"), PyType.Any),
                         "Callable" => new SignatureType(null, PyType.Unknown),
                         _ => PyType.Unknown,
                     };
@@ -95,6 +101,15 @@ public sealed partial class TypeEvaluator
                 default: return PyType.Unknown;
             }
         });
+    }
+
+    readonly Dictionary<string, ClassType?> _collectionsClasses = new();
+
+    PyType CollectionsInst(string name, params PyType[] args)
+    {
+        var module = _ws.GetModule("collections");
+        var c = module == null ? null : ModuleClass(_collectionsClasses, module, name);
+        return c == null ? PyType.Unknown : new ClassType(c.Info, args, true);
     }
 
     /// <summary>The annotation form back to a value: instances of classes become the class object (for `Alias = list[int]`).</summary>
@@ -158,6 +173,11 @@ public sealed partial class TypeEvaluator
             case "Set": return Inst("set", A(0));
             case "FrozenSet": return Inst("frozenset", A(0));
             case "Dict": return Inst("dict", A(0), A(1));
+            case "DefaultDict": return CollectionsInst("defaultdict", A(0), A(1));
+            case "OrderedDict": return CollectionsInst("OrderedDict", A(0), A(1));
+            case "Counter": return CollectionsInst("Counter", A(0));
+            case "Deque": return CollectionsInst("deque", A(0));
+            case "ChainMap": return CollectionsInst("ChainMap", A(0), A(1));
             case "Literal": return PyType.Union(args.Select(a => LiteralType(a)));
             case "Callable":
             {

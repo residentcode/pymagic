@@ -40,6 +40,7 @@ public sealed partial class TypeEvaluator
         int slash = -1;
         for (int i = 0; i < ps.Count; i++) if (ps[i].Kind == ParamKind.Slash) slash = i;
         bool afterStar = false;
+        int dunderOnlyUntil = DunderPositionalOnlyEnd(ps);
         for (int i = 0; i < ps.Count; i++)
         {
             var p = ps[i];
@@ -57,7 +58,7 @@ public sealed partial class TypeEvaluator
                     break;
                 default:
                 {
-                    var cat = afterStar ? ParamCategory.KeywordOnly : (i < slash ? ParamCategory.PositionalOnly : ParamCategory.Normal);
+                    var cat = afterStar ? ParamCategory.KeywordOnly : (i < slash || i <= dunderOnlyUntil ? ParamCategory.PositionalOnly : ParamCategory.Normal);
                     result.Add(new ParamInfo(p.Name, Ty(), cat, p.Default != null));
                     break;
                 }
@@ -65,6 +66,25 @@ public sealed partial class TypeEvaluator
         }
         _params[info] = result;
         return result;
+    }
+
+    /// <summary>
+    /// Old-style positional-only parameters: names starting with two underscores (and not ending with them) that come
+    /// before any other parameter, apart from a leading self/cls. Returns the index of the last such parameter, or -1.
+    /// </summary>
+    static int DunderPositionalOnlyEnd(IReadOnlyList<Parameter> ps)
+    {
+        int last = -1;
+        for (int i = 0; i < ps.Count; i++)
+        {
+            var p = ps[i];
+            if (p.Kind != ParamKind.Normal) break;
+            bool dunder = p.Name.StartsWith("__") && !p.Name.EndsWith("__");
+            if (dunder) last = i;
+            else if (i == 0 && IsReceiverName(p.Name)) continue;
+            else break;
+        }
+        return last;
     }
 
     /// <summary>The parameters a call must supply for this function value (bound receiver removed, substitution applied).</summary>
@@ -206,7 +226,9 @@ public sealed partial class TypeEvaluator
         var args = call.Args.Select(a => new ArgInfo(a, a.Name, a.Stars, () => TypeOf(m, a.Value))).ToList();
 
         // super() needs the enclosing method, not just the callee's type
-        if (callee is FunctionType { Info: { Name: "super" } si } && si.Module.Name == "builtins")
+        // super is a function in the bundled stub and a class in typeshed
+        if (callee is FunctionType { Info: { Name: "super" } si } && si.Module.Name == "builtins"
+            || callee is ClassType { IsInstance: false, Info: { Name: "super" } sc } && sc.Module.Name == "builtins")
             return Single(new CallTarget(callee, SuperOfCall(m, call, args), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 
         if (callee is FunctionType { Info: { Name: "namedtuple" } nti } && nti.Module.Name == "collections")
@@ -341,7 +363,7 @@ public sealed partial class TypeEvaluator
                 _ => PyType.Unknown,
             }), none, noProblems);
         }
-        if (qn is "typing.TypeVar" or "typing.ParamSpec" or "typing.TypeVarTuple")
+        if (qn is "typing.TypeVar" or "typing.ParamSpec" or "typing.TypeVarTuple" or "typing_extensions.TypeVar" or "typing_extensions.ParamSpec" or "typing_extensions.TypeVarTuple")
         {
             var first = args.FirstOrDefault()?.Node?.Value as ConstExpr;
             string name = first != null ? first.Text.Trim('"', '\'') : "?";
@@ -391,8 +413,12 @@ public sealed partial class TypeEvaluator
 
         PyType instance = new ClassType(cls.Info, resultArgs, true);
         // __new__ may return something else (e.g. a subclass or Self)
-        if (userNew && !userInit && inner != null && inner.Returns is ClassType { IsInstance: true } nr
-            && !ReferenceEquals(nr.Info, cls.Info) && nr.Info.Name != "Self") instance = nr;
+        if (userNew && !userInit && inner != null && inner.Returns is ClassType { IsInstance: true } nr)
+        {
+            // another class (a subclass), or this class with arguments __new__ spells out (`-> count[int]`)
+            if (!ReferenceEquals(nr.Info, cls.Info) && nr.Info.Name != "Self" && IsSubclass(nr.Info, cls.Info)) instance = nr;
+            else if (ReferenceEquals(nr.Info, cls.Info) && cls.Args.Count == 0 && nr.Args.Any(a => a is not UnknownType)) instance = nr;
+        }
 
         return new CallTarget(cls, instance, inner?.Mappings ?? none, inner?.Problems ?? noProblems, inner?.Solved);
     }
@@ -582,7 +608,12 @@ public sealed partial class TypeEvaluator
                 {
                     if (a is not ClassType ac) continue;
                     var spec = SpecializeAs(ac, pc.Info);
-                    if (spec == null) continue;
+                    if (spec == null)
+                    {
+                        // a protocol is satisfied structurally: solve its variables from the matching members
+                        if (ClassDataOf(pc.Info).IsProtocol && ac.IsInstance) UnifyProtocol(pc, ac, solved);
+                        continue;
+                    }
                     if (pc.TupleItems != null && spec.TupleItems != null && pc.TupleItems.Count == spec.TupleItems.Count)
                         for (int i = 0; i < pc.TupleItems.Count; i++) Unify(pc.TupleItems[i], spec.TupleItems[i], solved);
                     else
@@ -613,6 +644,60 @@ public sealed partial class TypeEvaluator
                 }
                 return;
         }
+    }
+
+    /// <summary>
+    /// Solves the type arguments of a protocol parameter (SupportsNext[_T]) from an argument that merely has the right
+    /// members: each protocol member is matched with the argument's and their result types are unified.
+    /// </summary>
+    readonly HashSet<(ClassInfo, ClassInfo)> _protocolUnifying = new();
+
+    void UnifyProtocol(ClassType proto, ClassType arg, Dictionary<string, PyType> solved)
+    {
+        var protoParams = ClassDataOf(proto.Info).TypeParams;
+        if (protoParams.Count == 0) return;
+        // protocols refer to each other (an iterator's __iter__ returns an iterator): visit each pair once
+        if (!_protocolUnifying.Add((proto.Info, arg.Info))) return;
+        try { UnifyProtocolCore(proto, arg, protoParams, solved); }
+        finally { _protocolUnifying.Remove((proto.Info, arg.Info)); }
+    }
+
+    void UnifyProtocolCore(ClassType proto, ClassType arg, IReadOnlyList<TypeVarType> protoParams, Dictionary<string, PyType> solved)
+    {
+        var self = new ClassType(proto.Info, protoParams.Cast<PyType>().ToList(), true);
+        var inner = new Dictionary<string, PyType>();
+
+        foreach (var e in Mro(proto.Info))
+        {
+            if (e is not ClassType pe || !ClassDataOf(pe.Info).IsProtocol) continue;
+            foreach (var kv in pe.Info.Scope.Symbols)
+            {
+                if (kv.Value.Declarations.Count == 0 || NotProtocolMember.Contains(kv.Key)) continue;
+                var pHit = FindMember(self, kv.Key, true, null, out _);
+                var aHit = FindMember(arg, kv.Key, true, null, out _);
+                if (pHit == null || aHit == null) continue;
+                var pType = BoundMember(pHit, self, true);
+                var aType = BoundMember(aHit, arg, true);
+                UnifyResults(pType, aType, inner);
+            }
+        }
+        for (int i = 0; i < proto.Args.Count && i < protoParams.Count; i++)
+            if (inner.TryGetValue(protoParams[i].Name, out var found)) Unify(proto.Args[i], found, solved);
+    }
+
+    /// <summary>Unifies what two members produce: for methods their return types, for plain attributes their types.</summary>
+    void UnifyResults(PyType protocolMember, PyType argMember, Dictionary<string, PyType> inner)
+    {
+        PyType? Result(PyType t) => t switch
+        {
+            FunctionType f => ReturnTypeOf(f),
+            OverloadedType o when o.Overloads.Count > 0 => ReturnTypeOf(o.Overloads[0]),
+            SignatureType s => s.Return,
+            _ => t,
+        };
+        var p = Result(protocolMember);
+        var a = Result(argMember);
+        if (p != null && a != null) Unify(p, a, inner);
     }
 
     /// <summary>Lenient assignability: only reports false when both sides are well known and clearly incompatible.</summary>
@@ -669,6 +754,14 @@ public sealed partial class TypeEvaluator
 
     bool IsProtocolSatisfiedByClassObject(ClassType proto) => ClassDataOf(proto.Info).IsProtocol;
 
+    /// <summary>Bookkeeping names in a class body that are not part of the interface a protocol requires.</summary>
+    static readonly HashSet<string> NotProtocolMember = new()
+    {
+        "__slots__", "__doc__", "__module__", "__qualname__", "__dict__", "__annotations__", "__init__", "__new__",
+        "__init_subclass__", "__class_getitem__", "__weakref__", "__match_args__", "__parameters__", "__orig_bases__",
+        "__abstractmethods__", "_is_protocol", "_is_runtime_protocol",
+    };
+
     /// <summary>Structural check: the source has every member the protocol declares in its own body.</summary>
     bool Satisfies(ClassType proto, ClassType src)
     {
@@ -678,6 +771,7 @@ public sealed partial class TypeEvaluator
             foreach (var kv in pe.Info.Scope.Symbols)
             {
                 if (kv.Value.Declarations.Count == 0) continue;
+                if (NotProtocolMember.Contains(kv.Key)) continue;
                 if (FindMember(src, kv.Key, true, null, out bool unk) == null && !unk) return false;
             }
         }

@@ -193,7 +193,9 @@ class NamedTuple(tuple[Any, ...]):
     def _asdict(self) -> dict[str, Any]: ...
     def _replace(self, **kwargs: Any) -> Self: ...
 
-class TypedDict(Mapping[str, object]):
+TypedDict: _SpecialForm
+
+class _TypedDict(Mapping[str, object]):
     __total__: bool
     __required_keys__: frozenset[str]
     __optional_keys__: frozenset[str]

@@ -61,31 +61,44 @@ public static class Program
     /// </summary>
     static int InspectCorpus(string dir, int limit)
     {
-        var ws = new PyMagic.Core.Types.Workspace(dir);
+        // the files under test are user code; their imports resolve like a real project (typeshed first, then the library directory)
+        var ws = new PyMagic.Core.Types.Workspace(new PyMagic.Core.Types.WorkspaceOptions
+        {
+            LibraryRoots = new[] { dir },
+            TypeshedPath = PyMagic.Core.Types.Workspace.DefaultTypeshedPath,
+            // PM_PLATFORM=linux checks Unix-only code the way it would run there (default: this machine)
+            Environment = new PyMagic.Core.Semantics.PythonEnvironment(3, 13, System.Environment.GetEnvironmentVariable("PM_PLATFORM") ?? "win32"),
+        });
         var counts = new Dictionary<string, int>();
         var raw = new Dictionary<string, int>();
         var samples = new Dictionary<string, List<string>>();
         int files = 0, crashes = 0;
         long loadMs = 0, inspectMs = 0;
+        bool trace = System.Environment.GetEnvironmentVariable("PM_TRACE") != null;
+        string? match = System.Environment.GetEnvironmentVariable("PM_MATCH");   // print every diagnostic containing this text
         var sw = System.Diagnostics.Stopwatch.StartNew();
         foreach (var f in Directory.EnumerateFiles(dir, "*.py", SearchOption.TopDirectoryOnly).Take(limit))
         {
             string name = Path.GetFileNameWithoutExtension(f);
             try
             {
+                if (trace) Console.WriteLine($"-> {name}");
+                var swFile = System.Diagnostics.Stopwatch.StartNew();
                 var swLoad = System.Diagnostics.Stopwatch.StartNew();
-                var m = ws.GetModule(name);
+                var m = ws.AddFile("corpus_" + name, f);
                 loadMs += swLoad.ElapsedMilliseconds;
                 if (m == null) continue;
                 files++;
                 var swInsp = System.Diagnostics.Stopwatch.StartNew();
                 var found = ws.Evaluator.Inspect(m);
                 inspectMs += swInsp.ElapsedMilliseconds;
+                if (trace || swFile.ElapsedMilliseconds > 1500) Console.WriteLine($"   {name}: {swFile.ElapsedMilliseconds} ms");
                 foreach (var d in found)
                 {
                     string kind = System.Text.RegularExpressions.Regex.Replace(d.Message, "'[^']*'", "'_'");
                     counts[kind] = counts.GetValueOrDefault(kind) + 1;
                     raw[d.Message] = raw.GetValueOrDefault(d.Message) + 1;
+                    if (match != null && d.Message.Contains(match)) Console.WriteLine($"MATCH {name}.py:{m.Source.Take(d.Start).Count(c => c == '\n') + 1}  {d.Message}");
                     if (!samples.TryGetValue(kind, out var list)) samples[kind] = list = new();
                     if (list.Count < 6) list.Add($"{name}.py:{m.Source.Take(d.Start).Count(c => c == '\n') + 1}  {d.Message}");
                 }
@@ -103,6 +116,28 @@ public static class Program
         return 0;
     }
 
+    /// <summary>Real typeshed makes evaluation chains deep; run on a thread with room for them.</summary>
+    static int OnBigStack(Func<int> body)
+    {
+        int result = 0;
+        var thread = new Thread(() => result = body(), 512 * 1024 * 1024);
+        thread.Start();
+        thread.Join();
+        return result;
+    }
+
+    /// <summary>Prints the MRO of a class (module name, class name), marking unresolvable ancestors.</summary>
+    static int ShowMro(string module, string cls)
+    {
+        var ws = new PyMagic.Core.Types.Workspace();
+        var m = ws.GetModule(module) ?? throw new Exception("module not found");
+        var sym = ws.Evaluator.FindModuleSymbol(m, cls) ?? throw new Exception("class not found");
+        var t = ws.Evaluator.TypeOfSymbol(sym) as PyMagic.Core.Types.ClassType ?? throw new Exception("not a class");
+        Console.WriteLine(string.Join(" -> ", ws.Evaluator.MroOf(t.Info).Select(e => e is PyMagic.Core.Types.ClassType c ? c.ToString() : "<UNKNOWN>")));
+        Console.WriteLine($"protocol: {ws.Evaluator.IsProtocol(t.Info)}, type params: {string.Join(",", ws.Evaluator.TypeParametersOf(t.Info))}, module: {t.Info.Module.Name} ({t.Info.Module.Path})");
+        return 0;
+    }
+
     /// <summary>Prints the type of every expression statement in a file (a quick way to poke at the evaluator).</summary>
     static int ShowTypes(string file)
     {
@@ -113,6 +148,9 @@ public static class Program
         {
             int line = m.Source.Take(n.Start).Count(c => c == '\n') + 1;
             Console.WriteLine($"{line,4}: {m.Source.Substring(n.Start, n.End - n.Start),-40} -> {ws.Evaluator.TypeOf(m, n.Value)}");
+            if (n.Value is PyMagic.Core.Syntax.CallExpr call)
+                foreach (var t in ws.Evaluator.ResolveCall(m, call).Targets)
+                    foreach (var p in t.Problems) Console.WriteLine($"        problem ({p.Kind}): {p.Message}");
         }
         return 0;
     }
@@ -186,7 +224,8 @@ public static class Program
         if (args.Length == 2 && args[0] == "semantic") return SemanticCorpus(args[1]);
         if (args.Length == 2 && args[0] == "flow") return FlowCorpus(args[1]);
         if (args.Length == 2 && args[0] == "types") return ShowTypes(args[1]);
-        if (args.Length >= 2 && args[0] == "inspect") return InspectCorpus(args[1], args.Length > 2 ? int.Parse(args[2]) : int.MaxValue);
+        if (args.Length == 3 && args[0] == "mro") return ShowMro(args[1], args[2]);
+        if (args.Length >= 2 && args[0] == "inspect") return OnBigStack(() => InspectCorpus(args[1], args.Length > 2 ? int.Parse(args[2]) : int.MaxValue));
         int pass = 0, fail = 0;
         foreach (var type in Assembly.GetExecutingAssembly().GetTypes().Where(t => t.IsClass && t.Name.EndsWith("Tests")))
         {

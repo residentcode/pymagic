@@ -54,6 +54,8 @@ public sealed class Scope
     public Dictionary<string, Symbol> Symbols { get; } = new(StringComparer.Ordinal);
     /// <summary>A "from m import *" occurred here, so any unresolved name might come from it.</summary>
     public bool HasStarImport { get; internal set; }
+    /// <summary>The "from m import *" statements of this scope, in order.</summary>
+    public List<ImportFromStmt> StarImports { get; } = new();
 
     internal HashSet<string> GlobalNames { get; } = new();
     internal HashSet<string> NonlocalNames { get; } = new();

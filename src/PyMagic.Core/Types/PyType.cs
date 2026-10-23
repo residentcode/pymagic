@@ -90,7 +90,7 @@ public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool 
 
     public override string Display(int depth = 0)
     {
-        if (IsInstance && Info.Name == "NoneType" && Info.Module.Name == "builtins") return "None";
+        if (IsInstance && Info.Name == "NoneType" && Info.Module.Name is "builtins" or "types") return "None";
         if (IsInstance && EnumMember != null) return $"{Info.Name}.{EnumMember}";
         var sb = new StringBuilder(Info.Name);
         if (TupleItems != null)

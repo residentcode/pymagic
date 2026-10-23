@@ -5,6 +5,31 @@ using PyMagic.Core.Syntax;
 
 namespace PyMagic.Core.Types;
 
+/// <summary>Where a module was found; the order is the order resolution tries them.</summary>
+public enum ResolutionKind
+{
+    InMemory,        // added with AddModule (editor buffers, tests)
+    UserCode,        // a source root
+    StubPackage,     // foo-stubs next to the library
+    InlinePackage,   // a library marked with py.typed
+    Typeshed,        // typeshed stdlib or third-party stubs
+    LibrarySource,   // plain library source (site-packages, the interpreter's Lib directory)
+    NamespacePackage,// a directory without __init__
+    Bundled,         // the minimal stubs shipped inside PyMagic (used when no typeshed is configured)
+}
+
+/// <summary>How a workspace finds code. All paths are optional.</summary>
+public sealed class WorkspaceOptions
+{
+    /// <summary>The user's own code; searched first, so it shadows library modules of the same name.</summary>
+    public IReadOnlyList<string> SourceRoots { get; init; } = Array.Empty<string>();
+    /// <summary>Installed libraries: site-packages and the interpreter's standard library sources.</summary>
+    public IReadOnlyList<string> LibraryRoots { get; init; } = Array.Empty<string>();
+    /// <summary>A typeshed checkout (the directory containing stdlib/ and stubs/). Without it the bundled minimal stubs are used.</summary>
+    public string? TypeshedPath { get; init; }
+    public PythonEnvironment Environment { get; init; } = PythonEnvironment.Default;
+}
+
 /// <summary>One parsed module with its semantic and flow models.</summary>
 public sealed class ModuleInfo
 {
@@ -13,9 +38,10 @@ public sealed class ModuleInfo
     public string Source { get; }
     public bool IsStub { get; }
     /// <summary>A stub shipped inside PyMagic (not read from disk).</summary>
-    public bool IsBundledStub => IsStub && Path == null;
+    public bool IsBundledStub => IsStub && Path == null && Kind == ResolutionKind.Bundled;
     /// <summary>True for __init__ modules; relative imports resolve against the module itself instead of its parent.</summary>
     public bool IsPackage { get; }
+    public ResolutionKind Kind { get; }
     public Module Ast { get; }
     public IReadOnlyList<Diagnostic> SyntaxErrors { get; }
     public SemanticModel Semantics { get; }
@@ -23,12 +49,12 @@ public sealed class ModuleInfo
 
     Dictionary<Node, Node>? _parents;
 
-    internal ModuleInfo(string name, string? path, string source, bool isStub, bool isPackage)
+    internal ModuleInfo(string name, string? path, string source, bool isStub, bool isPackage, ResolutionKind kind, PythonEnvironment env)
     {
-        Name = name; Path = path; Source = source; IsStub = isStub; IsPackage = isPackage;
+        Name = name; Path = path; Source = source; IsStub = isStub; IsPackage = isPackage; Kind = kind;
         var r = Parser.Parse(source);
         Ast = r.Module; SyntaxErrors = r.Diagnostics;
-        Semantics = SemanticModel.Build(Ast);
+        Semantics = SemanticModel.Build(Ast, env);
         Flow = new FlowModel(Semantics);
     }
 
@@ -50,21 +76,32 @@ public sealed class ModuleInfo
 }
 
 /// <summary>
-/// The set of modules known to the analysis: in-memory modules (tests, editor buffers), bundled stubs and
-/// modules found under the search roots. Owns the <see cref="TypeEvaluator"/>.
+/// The set of modules known to the analysis: in-memory modules (tests, editor buffers), then whatever the resolver
+/// finds in source roots, libraries and typeshed. Owns the <see cref="TypeEvaluator"/>.
 /// </summary>
 public sealed class Workspace
 {
+    /// <summary>
+    /// Typeshed used by workspaces created without explicit options. Taken from the PYMAGIC_TYPESHED environment
+    /// variable so whole test suites can be run against real typeshed.
+    /// </summary>
+    public static string? DefaultTypeshedPath { get; set; } = System.Environment.GetEnvironmentVariable("PYMAGIC_TYPESHED");
+
     readonly Dictionary<string, ModuleInfo?> _modules = new();
     readonly Dictionary<Scope, ModuleInfo> _byRootScope = new(ReferenceEqualityComparer.Instance);
-    readonly List<string> _roots = new();
+    readonly ModuleResolver _resolver;
 
+    public WorkspaceOptions Options { get; }
     public TypeEvaluator Evaluator { get; }
-    public IReadOnlyList<string> Roots => _roots;
+    public PythonEnvironment Environment => Options.Environment;
 
-    public Workspace(params string[] searchRoots)
+    public Workspace(params string[] sourceRoots)
+        : this(new WorkspaceOptions { SourceRoots = sourceRoots, TypeshedPath = DefaultTypeshedPath }) { }
+
+    public Workspace(WorkspaceOptions options)
     {
-        _roots.AddRange(searchRoots);
+        Options = options;
+        _resolver = new ModuleResolver(options);
         Evaluator = new TypeEvaluator(this);
     }
 
@@ -74,7 +111,15 @@ public sealed class Workspace
     /// <summary>Adds (or replaces) a module from source text.</summary>
     public ModuleInfo AddModule(string name, string source, bool isPackage = false)
     {
-        var m = new ModuleInfo(name, null, source, false, isPackage);
+        var m = new ModuleInfo(name, null, source, false, isPackage, ResolutionKind.InMemory, Environment);
+        Register(name, m);
+        return m;
+    }
+
+    /// <summary>Reads a file as a module with the given name (user code), replacing any module of that name.</summary>
+    public ModuleInfo AddFile(string name, string path, bool isPackage = false)
+    {
+        var m = new ModuleInfo(name, path, File.ReadAllText(path), path.EndsWith(".pyi"), isPackage, ResolutionKind.UserCode, Environment);
         Register(name, m);
         return m;
     }
@@ -89,10 +134,25 @@ public sealed class Workspace
     public ModuleInfo? GetModule(string name)
     {
         if (_modules.TryGetValue(name, out var m)) return m;
-        m = LoadBundled(name) ?? LoadFromRoots(name);
+        m = Load(name);
         _modules[name] = m;
         if (m != null) _byRootScope[m.Semantics.ModuleScope] = m;
         return m;
+    }
+
+    ModuleInfo? Load(string name)
+    {
+        var found = _resolver.Resolve(name);
+        if (found != null)
+        {
+            try
+            {
+                string text = found.Kind == ResolutionKind.NamespacePackage ? "" : File.ReadAllText(found.Path!);
+                return new ModuleInfo(name, found.Path, text, found.IsStub, found.IsPackage, found.Kind, Environment);
+            }
+            catch (IOException) { /* fall through to the bundled stubs */ }
+        }
+        return Options.TypeshedPath == null ? LoadBundled(name) : null;
     }
 
     /// <summary>The module a symbol was declared in.</summary>
@@ -111,7 +171,7 @@ public sealed class Workspace
         return string.Join(".", parts);
     }
 
-    // ------------------------------------------------------------ loading
+    // ------------------------------------------------------------ bundled stubs
 
     static readonly Dictionary<string, string> BundledAliases = new()
     {
@@ -127,30 +187,8 @@ public sealed class Workspace
         if (s == null) return null;
         if (resource != name && _modules.TryGetValue(resource, out var existing) && existing != null) return existing;
         using var reader = new StreamReader(s);
-        var m = new ModuleInfo(resource, null, reader.ReadToEnd(), true, false);
+        var m = new ModuleInfo(resource, null, reader.ReadToEnd(), true, false, ResolutionKind.Bundled, Environment);
         if (resource != name) { _modules[resource] = m; _byRootScope[m.Semantics.ModuleScope] = m; }
         return m;
-    }
-
-    ModuleInfo? LoadFromRoots(string name)
-    {
-        var rel = name.Replace('.', System.IO.Path.DirectorySeparatorChar);
-        foreach (var root in _roots)
-        {
-            foreach (var ext in new[] { ".pyi", ".py" })
-            {
-                var file = System.IO.Path.Combine(root, rel + ext);
-                if (File.Exists(file)) return Load(name, file, false);
-                var init = System.IO.Path.Combine(root, rel, "__init__" + ext);
-                if (File.Exists(init)) return Load(name, init, true);
-            }
-        }
-        return null;
-    }
-
-    static ModuleInfo? Load(string name, string file, bool isPackage)
-    {
-        try { return new ModuleInfo(name, file, File.ReadAllText(file), file.EndsWith(".pyi"), isPackage); }
-        catch (IOException) { return null; }
     }
 }

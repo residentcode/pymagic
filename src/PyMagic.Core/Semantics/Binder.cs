@@ -10,12 +10,13 @@ namespace PyMagic.Core.Semantics;
 internal sealed class Binder
 {
     readonly Module _module;
+    readonly PythonEnvironment _env;
     readonly Dictionary<Node, Scope> _scopes = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<NameExpr, Reference> _refs = new(ReferenceEqualityComparer.Instance);
     readonly List<Diagnostic> _diags = new();
     Scope _scope = null!;
 
-    public Binder(Module module) { _module = module; }
+    public Binder(Module module, PythonEnvironment env) { _module = module; _env = env; }
 
     public SemanticModel Run()
     {
@@ -24,7 +25,7 @@ internal sealed class Binder
         _scope = root;
         Setup(root, _module.Body);
         VisitStmts(_module.Body);
-        return new SemanticModel(root, _scopes, _refs, _diags);
+        return new SemanticModel(root, _scopes, _refs, _diags, _env);
     }
 
     void Diag(Node n, string msg) => _diags.Add(new Diagnostic(n.Start, Math.Max(n.End - n.Start, 1), msg));
@@ -117,12 +118,15 @@ internal sealed class Binder
                 }
                 break;
             case ImportFromStmt x:
-                if (x.IsStar) sc.HasStarImport = true;
+                if (x.IsStar) { sc.HasStarImport = true; sc.StarImports.Add(x); }
                 foreach (var a in x.Names) Bind(sc, a.AsName ?? a.Name, DeclKind.Import, a);
                 break;
             case IfStmt x:
                 ScanWalrus(sc, x.Test);
-                DeclareStmts(sc, x.Body); DeclareStmts(sc, x.Orelse);
+                // a branch the environment rules out (sys.version_info, sys.platform, ...) binds nothing
+                var live = StaticConditions.Evaluate(x.Test, _env);
+                if (live != false) DeclareStmts(sc, x.Body);
+                if (live != true) DeclareStmts(sc, x.Orelse);
                 break;
             case WhileStmt x:
                 ScanWalrus(sc, x.Test);
@@ -242,7 +246,14 @@ internal sealed class Binder
             case RaiseStmt x: VisitExpr(x.Exc); VisitExpr(x.Cause); break;
             case AssertStmt x: VisitExpr(x.Test); VisitExpr(x.Message); break;
             case DelStmt x: foreach (var t in x.Targets) VisitTarget(t, Access.Delete); break;
-            case IfStmt x: VisitExpr(x.Test); VisitStmts(x.Body); VisitStmts(x.Orelse); break;
+            case IfStmt x:
+            {
+                VisitExpr(x.Test);
+                var live = StaticConditions.Evaluate(x.Test, _env);
+                if (live != false) VisitStmts(x.Body);
+                if (live != true) VisitStmts(x.Orelse);
+                break;
+            }
             case WhileStmt x: VisitExpr(x.Test); VisitStmts(x.Body); VisitStmts(x.Orelse); break;
             case ForStmt x:
                 VisitExpr(x.Iter);

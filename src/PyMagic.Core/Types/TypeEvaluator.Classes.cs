@@ -22,6 +22,8 @@ public sealed partial class TypeEvaluator
         /// <summary>Class given as metaclass=... on this class (not inherited).</summary>
         public ClassType? Metaclass { get; set; }
         public bool UnknownMetaclass { get; set; }
+        /// <summary>The class lists TypedDict (the special form) among its bases.</summary>
+        public bool IsTypedDict { get; set; }
     }
 
     sealed record InstanceAttr(ModuleInfo Module, Expr Target, FunctionInfo Method);
@@ -88,6 +90,14 @@ public sealed partial class TypeEvaluator
                 var v = ValueOf(m, expr, null);
                 if (v is SpecialFormType { Name: "Protocol" }) { d.IsProtocol = true; continue; }
                 if (v is SpecialFormType { Name: "Generic" }) continue;
+                if (v is SpecialFormType { Name: "TypedDict" })
+                {
+                    d.IsTypedDict = true;
+                    // typing._TypedDict is the real class behind the special form (a Mapping[str, object])
+                    var td = TypingClass("_TypedDict");
+                    if (td != null) d.Bases.Add(td);
+                    continue;
+                }
                 AddBase(d, v);
             }
 
@@ -465,6 +475,15 @@ public sealed partial class TypeEvaluator
 
                 case ModuleType mt: ModuleMember(mt, name, types, missing, decls); break;
 
+                case FunctionType { Info.IsProperty: true }:
+                {
+                    // `@x.setter`: inside the class body x is the property object, not a plain function
+                    var prop = BuiltinClass("property");
+                    if (prop != null) LookupOnClass(prop.AsInstance(), name, true, types, missing, decls, sites);
+                    else types.Add(PyType.Unknown);
+                    break;
+                }
+
                 case FunctionType or OverloadedType or SignatureType:
                 {
                     var fn = BuiltinClass("function");
@@ -550,11 +569,11 @@ public sealed partial class TypeEvaluator
     void ModuleMember(ModuleType mt, string name, List<PyType> types, List<PyType> missing, List<Declaration> decls)
     {
         var scope = mt.Module.Semantics.ModuleScope;
-        if (scope.Symbols.TryGetValue(name, out var s) && (s.Redirect ?? s).Declarations.Count > 0)
+        var found = FindModuleSymbol(mt.Module, name);
+        if (found != null)
         {
-            var sym = s.Redirect ?? s;
-            types.Add(TypeOfSymbol(sym));
-            decls.AddRange(sym.Declarations);
+            types.Add(TypeOfSymbol(found));
+            decls.AddRange(found.Declarations);
             return;
         }
         var sub = _ws.GetModule(mt.Module.Name + "." + name);

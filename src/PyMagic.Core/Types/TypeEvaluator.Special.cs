@@ -353,14 +353,19 @@ public sealed partial class TypeEvaluator
 
     // ---- TypedDict
 
+    /// <summary>A user TypedDict: it, or one of its ancestors, lists the TypedDict special form as a base (library classes do not count).</summary>
+    bool IsTypedDictClass(ClassInfo c) =>
+        c.Module.Name is not ("typing" or "typing_extensions")
+        && Mro(c).Any(e => e is ClassType ec && ClassDataOf(ec.Info).IsTypedDict);
+
     /// <summary>Fields of a TypedDict class (with inherited ones); null if the class is not a TypedDict.</summary>
     public IReadOnlyList<(FieldInfo Field, bool Required)>? TypedDictFieldsOf(ClassInfo c)
     {
-        if (c.QualifiedName == "typing.TypedDict" || !InheritsFrom(c, "typing.TypedDict")) return null;
+        if (!IsTypedDictClass(c)) return null;
         var result = new List<(FieldInfo, bool)>();
         foreach (var e in Mro(c).AsEnumerable().Reverse())
         {
-            if (e is not ClassType ec || ec.Info.QualifiedName == "typing.TypedDict" || !InheritsFrom(ec.Info, "typing.TypedDict")) continue;
+            if (e is not ClassType ec || !IsTypedDictClass(ec.Info)) continue;
             bool total = ec.Info.Node.Bases.FirstOrDefault(b => b.Name == "total") is not { } t || BoolConst(t.Value) != false;
             foreach (var a in AnnotatedFields(ec.Info))
             {
@@ -400,7 +405,7 @@ public sealed partial class TypeEvaluator
             var fields = NamedTupleFieldsOf(entry.Info) ?? Array.Empty<FieldInfo>();
             return fields.Select(f => new ParamInfo(f.Name, f.Type, ParamCategory.Normal, f.HasDefault)).ToList();
         }
-        if (entry.Info.QualifiedName != "typing.TypedDict" && InheritsFrom(entry.Info, "typing.TypedDict"))
+        if (IsTypedDictClass(entry.Info))
         {
             var fields = TypedDictFieldsOf(receiver.Info) ?? Array.Empty<(FieldInfo, bool)>();
             var ps = new List<ParamInfo> { new("__map", PyType.Any, ParamCategory.PositionalOnly, true) };

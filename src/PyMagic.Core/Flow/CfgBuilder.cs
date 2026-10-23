@@ -134,14 +134,7 @@ internal sealed class CfgBuilder
     }
 
     /// <summary>Python decides some conditions statically; we only treat plain constants as such.</summary>
-    static bool? Truth(Expr e) => e switch
-    {
-        ConstExpr { Kind: ConstKind.True } => true,
-        ConstExpr { Kind: ConstKind.False or ConstKind.None } => false,
-        ConstExpr { Kind: ConstKind.Int } c => !c.Text.All(ch => ch == '0' || ch == '_'),
-        UnaryExpr { Op: "not" } u => Truth(u.Operand) is bool b ? !b : null,
-        _ => null,
-    };
+    bool? Truth(Expr e) => StaticConditions.Evaluate(e, _model.Environment);
 
     // ------------------------------------------------------------ statements
 
