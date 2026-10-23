@@ -26,8 +26,38 @@ public static class Assert
 
 public static class Program
 {
+    /// <summary>Parses every .py file under a directory and reports files with syntax diagnostics (usage: corpus &lt;dir&gt;).</summary>
+    static int Corpus(string dir)
+    {
+        int files = 0, bad = 0;
+        foreach (var f in Directory.EnumerateFiles(dir, "*.py", SearchOption.AllDirectories))
+        {
+            string text;
+            try { text = File.ReadAllText(f); } catch { continue; }
+            files++;
+            try
+            {
+                var r = PyMagic.Core.Syntax.Parser.Parse(text);
+                if (r.Diagnostics.Count > 0)
+                {
+                    bad++;
+                    if (bad <= 25)
+                    {
+                        var d = r.Diagnostics[0];
+                        int line = text.Take(d.Start).Count(c => c == '\n') + 1;
+                        Console.WriteLine($"{f}:{line}: {d.Message}");
+                    }
+                }
+            }
+            catch (Exception e) { bad++; Console.WriteLine($"CRASH {f}: {e.GetType().Name} {e.Message}"); }
+        }
+        Console.WriteLine($"{files} files, {bad} with diagnostics");
+        return 0;
+    }
+
     public static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "corpus") return Corpus(args[1]);
         int pass = 0, fail = 0;
         foreach (var type in Assembly.GetExecutingAssembly().GetTypes().Where(t => t.IsClass && t.Name.EndsWith("Tests")))
         {

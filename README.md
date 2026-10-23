@@ -15,8 +15,9 @@ written from scratch in C#.
 ## Layout
 
 ```
-src/PyMagic.Core/Syntax   Token, Lexer (done), Parser/AST (next)
+src/PyMagic.Core/Syntax   Token, Lexer, Ast, Parser
 tests/PyMagic.Tests       dependency-free test runner:  dotnet run --project tests/PyMagic.Tests
+                          corpus check:  dotnet tests/PyMagic.Tests/bin/Debug/net9.0/PyMagic.Tests.dll corpus <dir>
 ```
 
 The test project is a plain console runner because this machine's NuGet only has an offline source
@@ -24,8 +25,8 @@ The test project is a plain console runner because this machine's NuGet only has
 
 ## Roadmap (matches the behaviour notes)
 
-1. **Lexer** - indent/dedent, brackets, continuations, strings, numbers. *Done, 27 tests.*
-2. Parser - recursive descent with error recovery, soft keywords (`match`, `case`, `type`), f-string parts, full AST with ranges.
+1. **Lexer** - indent/dedent, brackets, continuations, strings (PEP 701 f-strings), numbers. *Done.*
+2. **Parser** - recursive descent, statement-level error recovery, soft keywords (`match`, `case`, `type`) resolved by speculative parse, AST with source ranges. *Done; parses all 1037 stdlib files and 404 site-packages files with zero diagnostics.* Still open: f-string interior as expression nodes, store-context validation, finer error messages.
 3. Scopes + name tables (`global`/`nonlocal`, comprehensions, class scope rules).
 4. Control-flow graph, reaching definitions, resolve of names/attributes.
 5. Type model + evaluator: unions, generics, protocols, callables, `TypeEvalContext`-style caches.

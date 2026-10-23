@@ -67,6 +67,13 @@ public class LexerTests
     [Case("f\"{x}\"")]
     [Case("'''multi\nline'''")]
     [Case("r'\\''")]
+    [Case("f'{x!r:>{w}}'")]
+    [Case("f'a {{ b }} c'")]
+    [Case("f'{d['k']}'")]
+    [Case("f'{f'{y}'}'")]
+    [Case("f\"{x:'>10}\"")]
+    [Case("f'{(lambda: 1)()}'")]
+    [Case("f'''{\n'a'}'''")]
     public void Strings(string lit)
     {
         var toks = Lexer.Tokenize(lit);

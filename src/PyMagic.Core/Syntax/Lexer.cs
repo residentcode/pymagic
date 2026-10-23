@@ -278,40 +278,101 @@ public sealed class Lexer
         _ => c == '0' || c == '1',
     };
 
+
     /// <param name="start">token start (prefix start)</param>
     /// <param name="quotePos">position of opening quote</param>
     void LexString(int start, int quotePos)
     {
+        bool ok = ScanString(quotePos, PrefixIsF(quotePos), out int end);
+        Add(ok ? TokenKind.String : TokenKind.Error, start, end);
+        _pos = end;
+    }
+
+    /// <summary>True when the 1-2 letters directly before the quote form an f-/t-string prefix.</summary>
+    bool PrefixIsF(int quotePos)
+    {
+        int i = quotePos, n = 0;
+        while (i > 0 && n < 2 && char.IsAsciiLetter(_s[i - 1])) { i--; n++; }
+        if (n == 0 || (i > 0 && IsIdentPart(_s[i - 1]))) return false;
+        var prefix = _s.AsSpan(i, n);
+        return IsStringPrefix(prefix) && (prefix.IndexOfAny("fFtT") >= 0);
+    }
+
+    /// <summary>
+    /// Scans a string literal starting at its opening quote. f-/t-strings track replacement fields so that
+    /// nested strings (PEP 701: same quote kind inside {...}) and format specs are handled.
+    /// Returns false (with end = where scanning stopped) for an unterminated literal.
+    /// </summary>
+    bool ScanString(int quotePos, bool fstr, out int end)
+    {
         char q = _s[quotePos];
         bool triple = quotePos + 2 < _s.Length && _s[quotePos + 1] == q && _s[quotePos + 2] == q;
         int p = quotePos + (triple ? 3 : 1);
+        // One entry per open replacement field: bracket depth inside the expression, and whether we are in its format spec.
+        var fields = fstr ? new List<(int Paren, bool Spec)>() : null;
 
         while (p < _s.Length)
         {
             char c = _s[p];
+            bool newline = c == '\n' || c == '\r';
+
+            if (fields is { Count: > 0 })
+            {
+                var (paren, spec) = fields[^1];
+                if (!spec)
+                {
+                    if (c == '"' || c == '\'')
+                    {
+                        if (!ScanString(p, PrefixIsF(p), out int e)) { end = e; return false; }
+                        p = e;
+                        continue;
+                    }
+                    switch (c)
+                    {
+                        case '(' or '[' or '{': fields[^1] = (paren + 1, false); break;
+                        case ')' or ']': if (paren > 0) fields[^1] = (paren - 1, false); break;
+                        case '}':
+                            if (paren > 0) fields[^1] = (paren - 1, false);
+                            else fields.RemoveAt(fields.Count - 1);
+                            break;
+                        case ':': if (paren == 0) fields[^1] = (0, true); break;
+                    }
+                    p++;
+                    continue;
+                }
+
+                // format spec: literal text, nested fields allowed
+                if (c == '\\') { p += p + 1 < _s.Length ? 2 : 1; continue; }
+                if (c == '{') { fields.Add((0, false)); p++; continue; }
+                if (c == '}') { fields.RemoveAt(fields.Count - 1); p++; continue; }
+                if (newline && !triple) { end = p; return false; }
+                if (c == q && !triple) { p++; end = p; return true; }
+                if (c == q && p + 2 < _s.Length && _s[p + 1] == q && _s[p + 2] == q) { end = p + 3; return true; }
+                p++;
+                continue;
+            }
+
             if (c == '\\')
             {
                 // Also in raw strings a backslash keeps the next char (e.g. a quote) from ending the literal.
                 p += p + 1 < _s.Length ? 2 : 1;
                 continue;
             }
-            if (!triple && (c == '\n' || c == '\r'))
+            if (newline && !triple) { end = p; return false; }
+            if (fields != null && c == '{')
             {
-                Add(TokenKind.Error, start, p); // unterminated
-                _pos = p;
-                return;
+                if (p + 1 < _s.Length && _s[p + 1] == '{') p += 2;
+                else { fields.Add((0, false)); p++; }
+                continue;
             }
             if (c == q)
             {
-                if (!triple) { p++; Add(TokenKind.String, start, p); _pos = p; return; }
-                if (p + 2 < _s.Length &&_s[p + 1] == q && _s[p + 2] == q)
-                {
-                    p += 3; Add(TokenKind.String, start, p); _pos = p; return;
-                }
+                if (!triple) { end = p + 1; return true; }
+                if (p + 2 < _s.Length && _s[p + 1] == q && _s[p + 2] == q) { end = p + 3; return true; }
             }
             p++;
         }
-        Add(TokenKind.Error, start, _s.Length); // unterminated at EOF
-        _pos = _s.Length;
+        end = _s.Length;
+        return false;
     }
 }
