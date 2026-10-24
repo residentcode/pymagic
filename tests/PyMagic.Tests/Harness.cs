@@ -18,6 +18,12 @@ public static class Assert
             throw new AssertionException($"expected: {expected}\n  actual: {actual}");
     }
     public static void True(bool c, string? msg = null) { if (!c) throw new AssertionException(msg ?? "expected true"); }
+    public static void Throws<T>(Action a) where T : Exception
+    {
+        try { a(); }
+        catch (T) { return; }
+        throw new AssertionException("expected " + typeof(T).Name);
+    }
     public static void Contains(string needle, string hay)
     {
         if (!hay.Contains(needle)) throw new AssertionException($"'{needle}' not found in: {hay}");

@@ -340,7 +340,6 @@ export function setupRun(deps: RunDeps) {
   };
 
   // which interpreter will be used
-  fetch('/api/interpreter').then((r) => r.text()).then((t) => { $('interp').textContent = t || 'no Python found'; }).catch(() => {});
   setButtons();
 
   return { onModelCreated };

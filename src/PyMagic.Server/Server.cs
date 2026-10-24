@@ -221,6 +221,7 @@ public sealed class Server
             if (opts["libraryRoots"] is JsonArray libs)
                 foreach (var l in libs) if (l?.GetValue<string>() is { } s) _service.LibraryRoots.Add(s);
             if (opts["reportTypeMismatches"]?.GetValue<bool>() is { } r) _service.ReportTypeMismatches = r;
+            if (opts["pythonPath"]?.GetValue<string>() is { Length: > 0 } python) ApplyInterpreter(python);
         }
 
         return new
@@ -246,6 +247,21 @@ public sealed class Server
     {
         switch (method)
         {
+            case "workspace/didChangeConfiguration":
+            {
+                // settings may be nested under "pymagic" (the usual shape) or given flat
+                var s = p?["settings"];
+                s = s?["pymagic"] ?? s;
+                if (s?["pythonPath"] is { } pp)
+                {
+                    ApplyInterpreter(pp.GetValue<string?>());
+                    // what the libraries provide changed, so every open document may now look different
+                    _published.Clear();
+                    foreach (var open in _service.OpenUris) _dirty.Add(open);
+                    if (!Deferred) FlushDiagnostics();
+                }
+                break;
+            }
             case "exit":
                 Exited = true;
                 ExitCode = _shutdown ? 0 : 1;
@@ -284,6 +300,15 @@ public sealed class Server
                 break;
             }
         }
+    }
+
+    /// <summary>Follows the interpreter at this path (null or empty: back to the defaults).</summary>
+    void ApplyInterpreter(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) { _service.ConfigureInterpreter(null); return; }
+        var result = InterpreterInspector.Inspect(path);
+        if (result.Interpreter == null) Log($"cannot use interpreter '{path}': {result.Error}");
+        else _service.ConfigureInterpreter(result.Interpreter);
     }
 
     readonly HashSet<string> _dirty = new();

@@ -34,6 +34,24 @@ public sealed partial class LanguageService
     public List<string> LibraryRoots { get; } = new();
     public string? TypeshedPath { get; set; } = Workspace.DefaultTypeshedPath;
     public PythonEnvironment Environment { get; set; } = PythonEnvironment.Default;
+
+    /// <summary>The interpreter whose site-packages and version the analysis follows (null: just the configured roots and the default version).</summary>
+    public PythonInterpreter? Interpreter { get; private set; }
+
+    /// <summary>Folders searched for libraries: the explicitly configured ones, then the interpreter's.</summary>
+    IEnumerable<string> EffectiveLibraryRoots() =>
+        Interpreter == null ? LibraryRoots : LibraryRoots.Concat(Interpreter.LibraryRoots(includeStdlib: TypeshedPath != null)).Distinct(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Analyse for this interpreter: its Python version and platform decide which branches of `sys.version_info` and
+    /// `sys.platform` checks are live, and its site-packages (with whatever .pth files add) become library roots.
+    /// </summary>
+    public void ConfigureInterpreter(PythonInterpreter? interpreter)
+    {
+        Interpreter = interpreter;
+        Environment = interpreter == null ? PythonEnvironment.Default : new PythonEnvironment(interpreter.Major, interpreter.Minor, interpreter.Platform);
+        _snapshot = _full = null;
+    }
     /// <summary>Report argument-type mismatches too (noisier than the default arity/keyword checks).</summary>
     public bool ReportTypeMismatches { get; set; }
 
@@ -71,7 +89,7 @@ public sealed partial class LanguageService
         string stem = System.IO.Path.GetFileNameWithoutExtension(path);
         bool isPackage = stem == "__init__";
         string full = System.IO.Path.GetFullPath(path);
-        foreach (var root in SourceRoots.Concat(LibraryRoots))
+        foreach (var root in SourceRoots.Concat(EffectiveLibraryRoots()))
         {
             string r = System.IO.Path.GetFullPath(root).TrimEnd('\\', '/') + System.IO.Path.DirectorySeparatorChar;
             if (!full.StartsWith(r, StringComparison.OrdinalIgnoreCase)) continue;
@@ -117,7 +135,7 @@ public sealed partial class LanguageService
     WorkspaceOptions WorkspaceOptionsNow() => new()
     {
         SourceRoots = SourceRoots.ToArray(),
-        LibraryRoots = LibraryRoots.ToArray(),
+        LibraryRoots = EffectiveLibraryRoots().ToArray(),
         TypeshedPath = TypeshedPath,
         Environment = Environment,
     };

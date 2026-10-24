@@ -29,6 +29,30 @@ for (int i = 0; i < args.Length - 1; i++)
 root = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 www ??= FindWww();
 
+// ---- the project's interpreter ---------------------------------------------------------------------------------
+
+var interpreters = new InterpreterManager(root);
+var lspInboxes = new ConcurrentDictionary<BlockingCollection<JsonNode?>, byte>();
+interpreters.Changed += chosen =>
+{
+    // every open editor session follows the new interpreter (its libraries and version change what the code means)
+    foreach (var inbox in lspInboxes.Keys)
+        try
+        {
+            inbox.Add(new JsonObject
+            {
+                ["method"] = "workspace/didChangeConfiguration",
+                ["params"] = new JsonObject { ["settings"] = new JsonObject { ["pymagic"] = new JsonObject { ["pythonPath"] = chosen?.Path ?? "" } } },
+            });
+        }
+        catch (InvalidOperationException) { /* the session just ended */ }
+};
+Task.Run(() =>
+{
+    try { if (python != null) interpreters.Select(python, save: false); else interpreters.InitializeDefault(); }
+    catch (ServiceException e) { Console.Error.WriteLine(e.Message); }
+});
+
 static string FindWww()
 {
     for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
@@ -117,6 +141,8 @@ app.Map("/lsp", async (HttpContext ctx) =>
     var outbox = new BlockingCollection<string>();
     var server = new PyMagic.Server.Server(service, msg => outbox.Add(msg.ToJsonString()));
     var inbox = new BlockingCollection<JsonNode?>();
+    lspInboxes[inbox] = 0;
+    if (interpreters.Current is { } currentInterpreter) service.ConfigureInterpreter(currentInterpreter);
 
     // analysis recurses deeply on real code: a dedicated thread with a large stack handles this client's messages
     var worker = new Thread(() =>
@@ -155,6 +181,7 @@ app.Map("/lsp", async (HttpContext ctx) =>
     catch (WebSocketException) { }
     done:
     inbox.Add(null);
+    lspInboxes.TryRemove(inbox, out _);
     worker.Join(TimeSpan.FromSeconds(5));
     outbox.CompleteAdding();
     await sender;
@@ -163,18 +190,37 @@ app.Map("/lsp", async (HttpContext ctx) =>
 
 // ---- running and debugging ---------------------------------------------------------------------------------------
 
-app.MapGet("/api/interpreter", () =>
+object Describe(PythonInterpreter i) => new
 {
+    path = i.Path, label = i.Label, kind = i.Kind, source = i.Source, version = i.Version, platform = i.Platform,
+    implementation = i.Implementation, prefix = i.Prefix, isVenv = i.IsVenv,
+    current = interpreters.Current != null && string.Equals(interpreters.Current.Path, i.Path, StringComparison.OrdinalIgnoreCase),
+};
+
+app.MapGet("/api/interpreter", () => interpreters.Current is { } c ? Results.Json(Describe(c)) : Results.Json(new { }));
+
+app.MapGet("/api/interpreters", async () => (await interpreters.ListAsync()).Select(Describe).ToList());
+
+app.MapPost("/api/interpreter", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    string? path = body?["path"]?.GetValue<string>();
+    if (string.IsNullOrWhiteSpace(path)) return Results.BadRequest(new { error = "path is required" });
+    try { return Results.Json(Describe(await Task.Run(() => interpreters.Select(path)))); }
+    catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
+});
+
+app.MapPost("/api/venv", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    string? basePython = body?["base"]?.GetValue<string>() ?? interpreters.Current?.Path;
+    if (basePython == null) return Results.BadRequest(new { error = "no interpreter to create the environment with" });
     try
     {
-        var psi = new System.Diagnostics.ProcessStartInfo(python ?? Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python", "--version")
-        { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
-        using var p = System.Diagnostics.Process.Start(psi)!;
-        string text = (p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd()).Trim();
-        p.WaitForExit(5000);
-        return Results.Text(text.Length > 0 ? text : "unknown interpreter");
+        string exe = await Task.Run(() => interpreters.CreateVenv(basePython, body?["name"]?.GetValue<string>() ?? ".venv"));
+        return Results.Json(new { path = exe });
     }
-    catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { return Results.Text(""); }
+    catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
 });
 
 app.MapGet("/api/tests", () => TestDiscovery.Discover(root));
@@ -221,11 +267,13 @@ app.Map("/run", async (HttpContext ctx) =>
                 var args = (msg["args"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
                 string file0 = msg["file"]!.GetValue<string>();
                 ResolveInRoot(file0);   // refuses paths outside the workspace
+                session.Python = interpreters.Current?.Path ?? python;
                 session.Start(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
             }
             else if (msg["type"]?.GetValue<string>() == "startTests")
             {
                 var ids = (msg["ids"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
+                session.Python = interpreters.Current?.Path ?? python;
                 session.StartTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto");
             }
             else session.Handle(msg);
