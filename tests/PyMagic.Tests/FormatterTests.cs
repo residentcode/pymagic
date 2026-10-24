@@ -103,7 +103,7 @@ public class FormatterTests
     [Fact]
     public void MultilineStringsAndLineEndingsAreKept()
     {
-        string doc = "def f():\n    \"\"\"Doc\n      indented text\n    \"\"\"\n    return 1\n";
+        string doc = "def f():\n    \"\"\"Doc\n    indented text\n    \"\"\"\n    return 1\n";
         Assert.Equal(doc, Fmt(doc));
         Assert.Equal("x = 1\r\ny = 2\r\n", Fmt("x=1\r\ny=2\r\n"));
         Assert.Equal("x = 1\n", Fmt("x = 1\n\n\n"));
@@ -134,6 +134,44 @@ public class FormatterTests
     }
 
     // ------------------------------------------------------------ real programs
+
+    /// <summary>Compares a{i}.py with b{i}.py in a directory by their syntax trees (docstrings cleaned the way the formatter may rewrite them); "same" or the first difference.</summary>
+    static string CompareTrees(string dir, IEnumerable<int> indexes)
+    {
+        const string script = """
+import ast, inspect, sys
+
+def dump(text):
+    tree = ast.parse(text)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                first.value.value = chr(10).join(line.rstrip() for line in inspect.cleandoc(first.value.value).split(chr(10))).strip(chr(10))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Delete):
+            node.targets = [e for t in node.targets for e in (t.elts if isinstance(t, ast.Tuple) else [t])]
+    return ast.dump(tree)
+
+bad = []
+for i in [int(x) for x in sys.argv[1].split(',')]:
+    a = dump(open('a%d.py' % i, encoding='utf-8').read())
+    b = dump(open('b%d.py' % i, encoding='utf-8').read())
+    if a != b:
+        k = 0
+        while k < min(len(a), len(b)) and a[k] == b[k]:
+            k += 1
+        bad.append('file %d differs: BEFORE ...%s... AFTER ...%s...' % (i, a[max(0, k - 120):k + 120], b[max(0, k - 120):k + 120]))
+print('same' if not bad else chr(10).join(bad))
+""";
+        File.WriteAllText(Path.Combine(dir, "check.py"), script);
+        var psi = new ProcessStartInfo(Python!, "check.py " + string.Join(",", indexes)) { WorkingDirectory = dir, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        using var proc = Process.Start(psi)!;
+        var err = proc.StandardError.ReadToEndAsync();
+        string output = proc.StandardOutput.ReadToEnd().Trim();
+        proc.WaitForExit(60000);
+        return output == "same" ? output : output + " " + err.Result;
+    }
 
     static string? Python = Find();
 
@@ -194,14 +232,7 @@ public class FormatterTests
                 File.WriteAllText(Path.Combine(dir, $"a{i}.py"), pairs[i].Before);
                 File.WriteAllText(Path.Combine(dir, $"b{i}.py"), pairs[i].After);
             }
-            string check = "import ast, sys\nbad = []\nfor i in range(" + pairs.Count + "):\n    a = ast.dump(ast.parse(open(f'a{i}.py', encoding='utf-8').read()))\n    b = ast.dump(ast.parse(open(f'b{i}.py', encoding='utf-8').read()))\n    if a != b: bad.append(i)\nprint('same' if not bad else 'different %s' % bad)\n";
-            File.WriteAllText(Path.Combine(dir, "check.py"), check);
-            var psi = new ProcessStartInfo(Python, "check.py") { WorkingDirectory = dir, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
-            using var proc = Process.Start(psi)!;
-            var err = proc.StandardError.ReadToEndAsync();
-            string output = proc.StandardOutput.ReadToEnd().Trim();
-            proc.WaitForExit(30000);
-            Assert.Equal("same", output + (output == "same" ? "" : " " + err.Result));
+            Assert.Equal("same", CompareTrees(dir, Enumerable.Range(0, pairs.Count)));
         }
         finally { Directory.Delete(dir, true); }
     }
@@ -244,17 +275,7 @@ public class FormatterTests
                 written.Add(i);
                 checkedFiles++;
             }
-            string check = "import ast" + System.Environment.NewLine + "bad = []" + System.Environment.NewLine + "for i in " + "[" + string.Join(",", written) + "]:" + System.Environment.NewLine
-                + "    a = ast.dump(ast.parse(open('a%d.py' % i, encoding='utf-8').read()))" + System.Environment.NewLine
-                + "    b = ast.dump(ast.parse(open('b%d.py' % i, encoding='utf-8').read()))" + System.Environment.NewLine
-                + "    if a != b: bad.append(i)" + System.Environment.NewLine + "print('same' if not bad else 'different %s' % bad)" + System.Environment.NewLine;
-            File.WriteAllText(Path.Combine(dir, "check.py"), check);
-            var psi = new ProcessStartInfo(Python, "check.py") { WorkingDirectory = dir, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
-            using var proc = Process.Start(psi)!;
-            var err = proc.StandardError.ReadToEndAsync();
-            string output = proc.StandardOutput.ReadToEnd().Trim();
-            proc.WaitForExit(60000);
-            Assert.Equal("same", output + (output == "same" ? "" : " " + err.Result));
+            Assert.Equal("same", CompareTrees(dir, written));
         }
         finally { Directory.Delete(dir, true); }
         Assert.True(unstable.Count == 0, "not stable: " + string.Join(", ", unstable));

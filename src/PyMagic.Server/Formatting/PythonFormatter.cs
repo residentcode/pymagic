@@ -17,6 +17,7 @@ public static class PythonFormatter
     /// <summary>The formatted text, or null when the text has syntax errors, opts out (<c># fmt: off</c>) or the check failed.</summary>
     public static string? Format(string source)
     {
+        LastMismatch = null;
         if (source.Length == 0) return source;
         if (source.Contains("fmt: off") || source.Contains("fmt:off") || source.Contains("fmt: skip")) return null;
         var tokens = Lexer.Tokenize(source);
@@ -44,7 +45,8 @@ public static class PythonFormatter
     }
 
     static List<string> Comments(string text) =>
-        Lexer.Tokenize(text).Where(t => t.Kind == TokenKind.Comment).Select(t => t.Text(text).TrimStart('#').Trim()).ToList();
+        Lexer.Tokenize(text).Where(t => t.Kind == TokenKind.Comment)
+            .SelectMany(t => System.Text.RegularExpressions.Regex.Split(t.Text(text), @"\s{2,}#").Select(c => c.TrimStart('#').Trim())).ToList();
 
     [ThreadStatic] public static string? LastMismatch;
     static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, System.Reflection.PropertyInfo[]> Properties = new();
@@ -59,6 +61,10 @@ public static class PythonFormatter
             if (y is not ConstExpr cy || cx.Kind != cy.Kind || cx.IsFString != cy.IsFString) return false;
             return cx.Kind is ConstKind.Str or ConstKind.Bytes ? SameStrings(cx.Text, cy.Text) : cx.Text == cy.Text;
         }
+        if (x is ExprStmt sx2 && y is ExprStmt sy2 && sx2.Value is ConstExpr dx && sy2.Value is ConstExpr dy && dx.Kind == ConstKind.Str && dy.Kind == ConstKind.Str && !dx.IsFString && !dy.IsFString)
+            return SameDocstrings(dx.Text, dy.Text);
+        if (x is DelStmt delX && y is DelStmt delY)
+            return AstEqual(FlatTargets(delX.Targets), FlatTargets(delY.Targets));
         if (x is Node)
         {
             if (x.GetType() != y.GetType()) { LastMismatch ??= x.GetType().Name + " vs " + y.GetType().Name; return false; }
@@ -75,6 +81,33 @@ public static class PythonFormatter
             return true;
         }
         return x.Equals(y);
+    }
+
+    static List<object> FlatTargets(IReadOnlyList<Expr> targets) =>
+        targets.SelectMany(t => t is TupleExpr tuple ? tuple.Items.Cast<object>() : new object[] { t }).ToList();
+
+    /// <summary>A string statement (a docstring): the same text once indentation and trailing spaces are cleaned away.</summary>
+    static bool SameDocstrings(string a, string b)
+    {
+        var ta = Lexer.Tokenize(a).Where(t => t.Kind == TokenKind.String).Select(t => t.Text(a)).ToList();
+        var tb = Lexer.Tokenize(b).Where(t => t.Kind == TokenKind.String).Select(t => t.Text(b)).ToList();
+        if (ta.Count != tb.Count) return false;
+        for (int i = 0; i < ta.Count; i++)
+        {
+            var (pa, ba) = Parts(ta[i]);
+            var (pb, bb) = Parts(tb[i]);
+            if (pa != pb || Docstrings.Clean(ba) != Docstrings.Clean(bb)) return false;
+        }
+        return true;
+    }
+
+    static (string Prefix, string Body) Parts(string s)
+    {
+        int q = 0;
+        while (q < s.Length && s[q] != '"' && s[q] != '\'') q++;
+        string rest = s[q..];
+        int n = rest.Length >= 6 && (rest.StartsWith("\"\"\"") || rest.StartsWith("'''")) ? 3 : 1;
+        return (s[..q].ToLowerInvariant(), rest.Length >= 2 * n ? rest[n..^n] : rest);
     }
 
     /// <summary>Adjacent string literals: the same literals, whatever lies between them and whichever quotes they use.</summary>
@@ -156,7 +189,13 @@ public static class PythonFormatter
         {
             var lines = BuildLines();
             if (lines.Count == 0) return "";
-            foreach (var l in lines) l.Text = l.IsComment ? NormaliseComment(_s[l.Tokens[0].Start..l.Tokens[0].End], l.Start == FirstNonBlank()) : RenderCode(l);
+            for (int i = 0; i < lines.Count; i++)
+            {
+                var l = lines[i];
+                l.Text = l.IsComment ? NormaliseComment(_s[l.Tokens[0].Start..l.Tokens[0].End], l.Start == FirstNonBlank())
+                    : IsDocstringStatement(lines, i) ? RenderDocstring(l)
+                    : RenderCode(l);
+            }
             ApplyBlankLines(lines);
 
             var sb = new StringBuilder();
@@ -167,6 +206,34 @@ public static class PythonFormatter
                 sb.Append(new string(' ', l.Level * IndentWidth)).Append(l.Text).Append(_nl);
             }
             return sb.ToString();
+        }
+
+        /// <summary>The string that is the first statement of a module, class or function.</summary>
+        bool IsDocstringStatement(List<Line> lines, int i)
+        {
+            var l = lines[i];
+            if (l.IsComment || l.Tokens.Count == 0 || l.Tokens[0].Kind != TokenKind.String) return false;
+            if (l.Tokens.Skip(1).Any(t => t.Kind != TokenKind.Comment)) return false;
+            int prev = i - 1;
+            while (prev >= 0 && lines[prev].IsComment) prev--;
+            if (prev < 0) return l.Level == 0;
+            var header = lines[prev];
+            return header.Level == l.Level - 1 && IsDef(header) && EndsWithColon(header);
+        }
+
+        bool IsClassDocstring(List<Line> lines, int i)
+        {
+            if (i < 0 || !IsDocstringStatement(lines, i)) return false;
+            int header = i - 1;
+            while (header >= 0 && lines[header].IsComment) header--;
+            return header >= 0 && FirstWord(lines[header]) == "class";
+        }
+
+        string RenderDocstring(Line l)
+        {
+            string text = Docstrings.Format(l.Tokens[0].Text(_s), l.Level * IndentWidth, _nl);
+            if (l.Tokens.Count > 1) text += "  " + NormaliseComment(l.Tokens[1].Text(_s), false);
+            return text;
         }
 
         int FirstNonBlank()
@@ -332,6 +399,7 @@ public static class PythonFormatter
                     else if (IsDef(l) && IsStubDef(prev) && prev.Level == l.Level && l.BlankBefore == 0) blank = 0;   // overload stubs stay together
                     else blank = l.Level == 0 ? 2 : 1;
                 }
+                else if (IsClassDocstring(lines, i - 1) && prev.Level == l.Level) blank = 1;
                 else if (leftDef) blank = l.Level == 0 ? 2 : 1;
                 else if (IsImport(prev) && !IsImport(l) && prev.Level == l.Level) blank = Math.Max(blank, 1);
 
@@ -369,8 +437,7 @@ public static class PythonFormatter
             bool lastWasSliceColon = false;
 
             var pieces = new List<Piece>();     // the same line as tokens with their spaces, for the line wrapper
-            bool legacyOnly = false;            // comments inside brackets, backslashes, multi-line strings: keep the line breaks as they are
-            string? trailing = null;            // a comment at the end of the line
+            bool legacyOnly = false;            // backslashes and multi-line strings: keep the line breaks as they are
 
             for (int k = 0; k < toks.Count; k++)
             {
@@ -381,11 +448,16 @@ public static class PythonFormatter
                 string gap = p.HasValue ? _s[p.Value.End..t.Start] : "";
                 bool top = frames.Count > 0;
 
+                // the previous token that is not a comment decides the spacing
+                Token? ps = null;
+                for (int j = k - 1; j >= 0 && ps == null; j--) if (toks[j].Kind != TokenKind.Comment) ps = toks[j];
+                string psText = ps.HasValue ? ps.Value.Text(_s) : "";
+
                 // ---- the gap: spaces, or kept line breaks inside brackets
                 bool unary = false, kwargEq = false, hugPow = false, sliceColon = false, lambdaColon = false;
                 if (t.Kind == TokenKind.Operator)
                 {
-                    if (text is "+" or "-" or "~" or "*" or "**" or "@") unary = IsUnaryPosition(p, pText, k);
+                    if (text is "+" or "-" or "~" or "*" or "**" or "@") unary = IsUnaryPosition(ps, psText, k);
                     if (text == "=" && ((top && frames.Peek().Open == '(' && !frames.Peek().SawColon) || (lambdaDepths.Count > 0 && lambdaDepths.Peek() == frames.Count))) kwargEq = true;
                     if (text == ":")
                     {
@@ -399,14 +471,16 @@ public static class PythonFormatter
                 bool backslash = gap.Contains('\\');
                 if (t.Kind == TokenKind.Comment)
                 {
-                    if (k == toks.Count - 1 && k > 0 && !lineBreak) trailing = NormaliseComment(text, false);
-                    else legacyOnly = true;
+                    // after a token on its line: it follows that token; on a line of its own inside brackets: a piece of its own
+                    string comment = NormaliseComment(text, false);
+                    if (lineBreak || pieces.Count == 0) pieces.Add(new Piece { Text = comment, Kind = TokenKind.Comment, Standalone = true });
+                    else pieces[^1].Comments.Add(comment);
                 }
                 if (backslash || (t.Kind == TokenKind.String && text.Contains('\n'))) legacyOnly = true;
 
                 bool space = false;
-                if (k > 0 && t.Kind != TokenKind.Comment && !backslash)
-                    space = NeedSpace(t, text, p!.Value, pText, toks, k, frames, unary, kwargEq, hugPow, sliceColon, lambdaColon,
+                if (k > 0 && t.Kind != TokenKind.Comment && !backslash && ps.HasValue)
+                    space = NeedSpace(t, text, ps.Value, psText, toks, k, frames, unary, kwargEq, hugPow, sliceColon, lambdaColon,
                         lastNoSpaceAfter, lastWasSliceColon, sliceSpaced, lineBreak ? " " : gap, startsWithFrom, ref inRelativeDots);
                 if (t.Kind != TokenKind.Comment)
                     pieces.Add(new Piece
@@ -485,8 +559,8 @@ public static class PythonFormatter
             {
                 if (n > 0) result.Append(_nl).Append(' ', lines[n].Indent);
                 result.Append(lines[n].Text);
+                if (lines[n].Comment.Length > 0) result.Append("  ").Append(lines[n].Comment);
             }
-            if (trailing != null) result.Append("  ").Append(trailing);
             return result.ToString();
         }
 

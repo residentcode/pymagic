@@ -13,13 +13,20 @@ internal sealed class Piece
     public bool KwargEquals;            // the `=` of a keyword argument or default
     public bool IsOpen, IsClose;
     public int Match = -1;
+    public List<string> Comments = new();   // comments that follow this token on its line
+    public bool Standalone;                 // a comment on a line of its own inside brackets (Text is the comment)
 }
 
+/// <summary>One output line: its indentation, the code, and the comments that end it.</summary>
+internal readonly record struct OutLine(int Indent, string Text, string Comment = "", bool IsComment = false);
+
 /// <summary>
-/// Splits a logical line that is too long, or has a magic trailing comma, the way black does: at the last bracket pair
-/// (the parameters of a <c>def</c>), the content of the brackets on its own indented lines, one item per line at the
-/// strongest delimiter (commas, then boolean operators, comparisons, arithmetic, dots of a call chain), a trailing comma
-/// after the items, and invisible parentheses around the value of an assignment, a return or a condition.
+/// Splits a logical line that is too long, or has a magic trailing comma or a comment of its own inside brackets, the
+/// way black does: at the last bracket pair (the parameters of a <c>def</c>), the content of the brackets on its own
+/// indented lines, one item per line at the strongest delimiter (commas, then boolean operators, comparisons, arithmetic,
+/// dots of a call chain), a trailing comma after the items, and invisible parentheses around the value of an assignment,
+/// a return or a condition. Redundant parentheses around such a value are removed first. Comments stay with the token
+/// they follow; comments on their own lines stay between the items.
 /// </summary>
 internal sealed class LineWrapper
 {
@@ -28,21 +35,128 @@ internal sealed class LineWrapper
     const int Comma = 18, Comprehension = 20, Ternary = 16, Logic = 14, StringConcat = 12, Comparator = 10, Dot = 1;
 
     readonly List<Piece> _p;
-    readonly int[] _depth;
-    readonly int[] _before;          // priority of the delimiter that starts a new item at piece i (0: none)
-    readonly bool[] _magic;          // an opening bracket whose group ends with a trailing comma that must be kept
-    readonly bool[] _atom;           // an opening bracket that is not a call, subscript or parameter list
-    int _preferred = -1;             // a bracket pair chosen by the invisible-parenthesis logic for the next right-hand split
+    int[] _depth = Array.Empty<int>();
+    int[] _before = Array.Empty<int>();      // priority of the delimiter that starts a new item at piece i (0: none)
+    bool[] _magic = Array.Empty<bool>();     // an opening bracket whose group must be exploded (trailing comma, comment inside)
+    bool[] _atom = Array.Empty<bool>();      // an opening bracket that is not a call, subscript or parameter list
+    int _preferred = -1;                     // a bracket pair chosen by the invisible-parenthesis logic for the next right-hand split
 
     public LineWrapper(List<Piece> pieces)
     {
         _p = pieces;
-        int n = pieces.Count;
+        RemoveRedundantParentheses();
+        int n = _p.Count;
         _depth = new int[n];
         _before = new int[n];
         _magic = new bool[n];
         _atom = new bool[n];
         Analyse();
+    }
+
+    // ------------------------------------------------------------ redundant parentheses
+
+    /// <summary>`return (x)`, `x = (y)`, `if (a):`, `for (a, b) in (c):`, `del (a)`, `assert (a), (b)`: the parentheses go when they only wrap the value.</summary>
+    void RemoveRedundantParentheses()
+    {
+        if (_p.Count < 3) return;
+        string first = _p[0].Text;
+        bool colonEnd = _p[^1].Kind == TokenKind.Operator && _p[^1].Text == ":";
+
+        if (first == "return") StripRange(1, _p.Count, allowTuple: false);
+        else if (first is "if" or "elif" or "while" && colonEnd) StripRange(1, _p.Count - 1, allowTuple: false);
+        else if (first == "for" && colonEnd)
+        {
+            int inAt = IndexAtDepth0("in", 1);
+            if (inAt > 0)
+            {
+                // the iterable first, so the target's index stays valid
+                StripRange(inAt + 1, _p.Count - 1, allowTuple: false);
+                StripRange(1, inAt, allowTuple: true);
+            }
+        }
+        else if (first == "del") StripRange(1, _p.Count, allowTuple: true);
+        else if (first == "assert")
+        {
+            int comma = -1, depth = 0;
+            for (int i = 1; i < _p.Count; i++)
+            {
+                if (_p[i].IsOpen) depth++;
+                else if (_p[i].IsClose) depth--;
+                else if (depth == 0 && _p[i].Kind == TokenKind.Operator && _p[i].Text == ",") { comma = i; break; }
+            }
+            if (comma > 0) { StripRange(comma + 1, _p.Count, allowTuple: false); StripRange(1, comma, allowTuple: false); }
+            else StripRange(1, _p.Count, allowTuple: false);
+        }
+        else if (first is not ("def" or "class" or "from" or "import" or "with" or "raise" or "lambda" or "async" or "try" or "except" or "else" or "finally" or "global" or "nonlocal" or "pass" or "print" or "yield" or "await"))
+        {
+            int depth = 0, assign = -1;
+            for (int i = 0; i < _p.Count; i++)
+            {
+                if (_p[i].IsOpen) depth++;
+                else if (_p[i].IsClose) depth--;
+                else if (depth == 0 && _p[i].Kind == TokenKind.Operator && !_p[i].KwargEquals && IsAssignOperator(_p[i].Text)) assign = i;
+            }
+            if (assign > 0) StripRange(assign + 1, _p.Count, allowTuple: false);
+        }
+    }
+
+    int IndexAtDepth0(string keyword, int from)
+    {
+        int depth = 0;
+        for (int i = from; i < _p.Count; i++)
+        {
+            if (_p[i].IsOpen) depth++;
+            else if (_p[i].IsClose) depth--;
+            else if (depth == 0 && _p[i].Kind == TokenKind.Keyword && _p[i].Text == keyword) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>Removes the parentheses that enclose [start, end) as a whole, as often as they do.</summary>
+    void StripRange(int start, int end, bool allowTuple)
+    {
+        while (end - start >= 3 && _p[start].IsOpen && _p[start].Text == "(" && Closer(start) == end - 1 && Removable(start, end - 1, allowTuple))
+        {
+            _p[start + 1].Space = _p[start].Space;
+            // the comments of the brackets stay, on the tokens next to them
+            _p[start + 1].Comments.InsertRange(0, _p[start].Comments);
+            _p[end - 2].Comments.AddRange(_p[end - 1].Comments);
+            _p.RemoveAt(end - 1);
+            _p.RemoveAt(start);
+            end -= 2;
+        }
+    }
+
+    int Closer(int open)
+    {
+        int depth = 0;
+        for (int i = open; i < _p.Count; i++)
+        {
+            if (_p[i].IsOpen) depth++;
+            else if (_p[i].IsClose) { depth--; if (depth == 0) return i; }
+        }
+        return -1;
+    }
+
+    bool Removable(int open, int close, bool allowTuple)
+    {
+        int depth = 0;
+        for (int i = open + 1; i < close; i++)
+        {
+            var t = _p[i];
+            if (t.Standalone) return false;
+            if (t.IsOpen) { depth++; continue; }
+            if (t.IsClose) { depth--; continue; }
+            if (depth != 0) continue;
+            if (t.Kind == TokenKind.Operator && t.Text is "," && !allowTuple) return false;
+            if (t.Kind == TokenKind.Operator && t.Text == ":=") return false;
+            if (t.Kind == TokenKind.Keyword && t.Text is "yield" or "for" && i > open) return false;   // generators and yield need their parentheses
+            if (t.Kind == TokenKind.Keyword && t.Text == "async") return false;
+        }
+        var firstInner = _p[open + 1];
+        if (firstInner.Kind == TokenKind.Keyword && firstInner.Text == "yield") return false;
+        if (firstInner.Kind == TokenKind.Operator && firstInner.Text is "*" or "**") return false;
+        return true;
     }
 
     // ------------------------------------------------------------ analysis
@@ -69,12 +183,17 @@ internal sealed class LineWrapper
             if (!_p[i].IsOpen || _p[i].Match < 0) continue;
             int c = _p[i].Match;
             _atom[i] = i == 0 || !IsValueEnd(_p[i - 1]);
-            if (c - 1 > i && _p[c - 1].Text == ",")
+
+            // a comment on a line of its own inside the brackets makes them explode
+            for (int k = i + 1; k < c; k++) if (_p[k].Standalone) { _magic[i] = true; break; }
+
+            int last = LastReal(c - 1, i);
+            if (last > i && IsComma(last))
             {
                 int commas = 0;
                 for (int k = i + 1; k < c; k++) if (_depth[k] == _depth[i] + 1 && IsComma(k)) commas++;
                 // a one-element tuple `(1,)` and a one-element subscript `x[1,]` are not magic; `f(a,)`, `[1,]` and `{1,}` are
-                _magic[i] = commas > 1 || !((_p[i].Text == "(" && _atom[i]) || (_p[i].Text == "[" && !_atom[i]));
+                if (commas > 1 || !((_p[i].Text == "(" && _atom[i]) || (_p[i].Text == "[" && !_atom[i]))) _magic[i] = true;
             }
         }
 
@@ -85,6 +204,7 @@ internal sealed class LineWrapper
         for (int i = 0; i < _p.Count; i++)
         {
             var t = _p[i];
+            if (t.Standalone) continue;
             int dep = _depth[i];
             string x = t.Text;
             bool op = t.Kind == TokenKind.Operator, kw = t.Kind == TokenKind.Keyword;
@@ -93,12 +213,13 @@ internal sealed class LineWrapper
             if (inLambda.GetValueOrDefault(dep) && op && x == ":") { inLambda[dep] = false; continue; }
             if (inLambda.GetValueOrDefault(dep)) continue;
             if (kw && x == "lambda") { inLambda[dep] = true; continue; }
-            if (i == 0) continue;
+            int prev = PreviousReal(i);
+            if (prev < 0) continue;
 
             int priority = 0;
             if (op)
             {
-                if (x == "," ) continue;   // commas end their item; handled by IsComma
+                if (x == ",") continue;   // commas end their item; handled by IsComma
                 if (!t.Unary)
                     priority = x switch
                     {
@@ -107,7 +228,7 @@ internal sealed class LineWrapper
                         "<" or ">" or "<=" or ">=" or "==" or "!=" or "<>" => Comparator,
                         _ => 0,
                     };
-                if (x == "." && i > 0 && _p[i - 1].IsClose) priority = Dot;
+                if (x == "." && _p[prev].IsClose) priority = Dot;
             }
             else if (kw)
             {
@@ -115,22 +236,41 @@ internal sealed class LineWrapper
                 {
                     case "and" or "or": priority = Logic; break;
                     case "for": priority = dep > 0 ? Comprehension : 0; if (dep > 0) { sawFor[dep] = true; afterFor[dep] = true; } break;
-                    case "async" when i + 1 < _p.Count && _p[i + 1].Text == "for": priority = dep > 0 ? Comprehension : 0; break;
+                    case "async" when NextReal(i) >= 0 && _p[NextReal(i)].Text == "for": priority = dep > 0 ? Comprehension : 0; break;
                     case "if": priority = dep > 0 && sawFor.GetValueOrDefault(dep) ? Comprehension : Ternary; break;
                     case "else": priority = Ternary; break;
                     case "in":
                         if (afterFor.GetValueOrDefault(dep)) { afterFor[dep] = false; break; }
-                        priority = _p[i - 1].Text == "not" ? 0 : Comparator;
+                        priority = _p[prev].Text == "not" ? 0 : Comparator;
                         break;
                     case "not":
-                        priority = i + 1 < _p.Count && _p[i + 1].Text == "in" && !afterFor.GetValueOrDefault(dep) ? Comparator : 0;
+                        priority = NextReal(i) >= 0 && _p[NextReal(i)].Text == "in" && !afterFor.GetValueOrDefault(dep) ? Comparator : 0;
                         break;
                     case "is": priority = Comparator; break;
                 }
             }
-            else if (t.Kind == TokenKind.String && _p[i - 1].Kind == TokenKind.String && !_p[i - 1].IsOpen) priority = StringConcat;
+            else if (t.Kind == TokenKind.String && _p[prev].Kind == TokenKind.String) priority = StringConcat;
             _before[i] = priority;
         }
+    }
+
+    int PreviousReal(int i)
+    {
+        for (int k = i - 1; k >= 0; k--) if (!_p[k].Standalone) return k;
+        return -1;
+    }
+
+    int NextReal(int i)
+    {
+        for (int k = i + 1; k < _p.Count; k++) if (!_p[k].Standalone) return k;
+        return -1;
+    }
+
+    /// <summary>The last piece at or before <paramref name="i"/> (not before <paramref name="floor"/>) that is not a comment of its own.</summary>
+    int LastReal(int i, int floor)
+    {
+        while (i > floor && _p[i].Standalone) i--;
+        return i;
     }
 
     static bool IsValueEnd(Piece p) =>
@@ -138,28 +278,49 @@ internal sealed class LineWrapper
         || (p.Kind == TokenKind.Keyword && p.Text is "True" or "False" or "None")
         || (p.Kind == TokenKind.Operator && (p.IsClose || p.Text == "..."));
 
-    bool IsComma(int i) => _p[i].Kind == TokenKind.Operator && _p[i].Text == ",";
+    bool IsComma(int i) => !_p[i].Standalone && _p[i].Kind == TokenKind.Operator && _p[i].Text == ",";
 
-    // ------------------------------------------------------------ output
-
-    public List<(int Indent, string Text)> Wrap(int indent)
-    {
-        var lines = ImportLine(0, _p.Count, indent) ?? SplitLine(0, _p.Count, indent, inside: false, forced: false);
-        return lines;
-    }
+    // ------------------------------------------------------------ text of a range
 
     string Join(int a, int b)
     {
         var sb = new StringBuilder();
+        bool any = false;
         for (int i = a; i < b; i++)
         {
-            if (i > a && _p[i].Space) sb.Append(' ');
+            if (_p[i].Standalone) continue;
+            if (any && _p[i].Space) sb.Append(' ');
             sb.Append(_p[i].Text);
+            any = true;
         }
         return sb.ToString();
     }
 
-    bool Fits(int indent, string text) => indent + text.Length <= Width;
+    /// <summary>The comments that follow tokens of the range, as they are written at the end of a line.</summary>
+    string CommentsOf(int a, int b)
+    {
+        var all = new List<string>();
+        for (int i = a; i < b; i++) if (!_p[i].Standalone) all.AddRange(_p[i].Comments);
+        return string.Join("  ", all);
+    }
+
+    OutLine One(int indent, int a, int b) => new(indent, Join(a, b), CommentsOf(a, b));
+
+    List<OutLine> Single(int indent, int a, int b) => new() { One(indent, a, b) };
+
+    /// <summary>Black measures a line together with its comments.</summary>
+    bool FitsRange(int indent, int a, int b)
+    {
+        string text = Join(a, b), comment = CommentsOf(a, b);
+        return indent + text.Length + (comment.Length > 0 ? 2 + comment.Length : 0) <= Width;
+    }
+
+    bool FitsText(int indent, string text) => indent + text.Length <= Width;
+
+    // ------------------------------------------------------------ output
+
+    public List<OutLine> Wrap(int indent) =>
+        ImportLine(0, _p.Count, indent) ?? SplitLine(0, _p.Count, indent, inside: false, forced: false);
 
     int BaseDepth(int a, int b)
     {
@@ -186,31 +347,68 @@ internal sealed class LineWrapper
 
     bool ContainsMagic(int open) => HasMagic(open, _p[open].Match + 1);
 
-    List<(int Indent, string Text)> One(int indent, string text) => new() { (indent, text) };
-
-    List<(int Indent, string Text)> SplitLine(int a, int b, int indent, bool inside, bool forced)
+    bool HasBaseStandalone(int a, int b)
     {
-        string text = Join(a, b);
-        bool magic = HasMagic(a, b);
-        if (Fits(indent, text) && !magic && !forced) return One(indent, text);
+        int baseDepth = BaseDepth(a, b);
+        for (int i = a; i < b; i++) if (_p[i].Standalone && _depth[i] == baseDepth) return true;
+        return false;
+    }
+
+    List<OutLine> SplitLine(int a, int b, int indent, bool inside, bool forced)
+    {
+        if (FitsRange(indent, a, b) && !HasMagic(a, b) && !forced && !HasBaseStandalone(a, b)) return Single(indent, a, b);
 
         if (inside)
         {
             var split = DelimiterSplit(a, b, indent);
             if (split != null) return split;
         }
-        return RightHandSplit(a, b, indent, inside) ?? One(indent, text);
+        if (HasBaseStandalone(a, b)) return StandaloneSplit(a, b, indent);
+        return RightHandSplit(a, b, indent, inside) ?? Single(indent, a, b);
+    }
+
+    /// <summary>A comment on a line of its own ends the line before it and starts a new one after it.</summary>
+    List<OutLine> StandaloneSplit(int a, int b, int indent)
+    {
+        int baseDepth = BaseDepth(a, b);
+        var lines = new List<OutLine>();
+        int start = a;
+        for (int i = a; i < b; i++)
+        {
+            if (!(_p[i].Standalone && _depth[i] == baseDepth)) continue;
+            if (HasReal(start, i)) lines.AddRange(SplitLine(start, i, indent, inside: true, forced: false));
+            lines.Add(new OutLine(indent, _p[i].Text, "", IsComment: true));
+            start = i + 1;
+        }
+        if (HasReal(start, b)) lines.AddRange(SplitLine(start, b, indent, inside: true, forced: false));
+        return lines;
+    }
+
+    bool HasReal(int a, int b)
+    {
+        for (int i = a; i < b; i++) if (!_p[i].Standalone) return true;
+        return false;
+    }
+
+    static void AddToLastCode(List<OutLine> lines, string suffix)
+    {
+        for (int k = lines.Count - 1; k >= 0; k--)
+        {
+            if (lines[k].IsComment) continue;
+            lines[k] = lines[k] with { Text = lines[k].Text + suffix };
+            return;
+        }
     }
 
     // ---------------------------------------------------------- one item per line
 
-    List<(int Indent, string Text)>? DelimiterSplit(int a, int b, int indent)
+    List<OutLine>? DelimiterSplit(int a, int b, int indent)
     {
         int baseDepth = BaseDepth(a, b);
         int max = 0, count = 0;
         for (int i = a; i < b; i++)
         {
-            if (_depth[i] != baseDepth) continue;
+            if (_depth[i] != baseDepth || _p[i].Standalone) continue;
             int pr = IsComma(i) ? Comma : _before[i];
             if (pr > max) { max = pr; count = 1; } else if (pr == max && pr > 0) count++;
         }
@@ -221,43 +419,58 @@ internal sealed class LineWrapper
         int start = a;
         for (int i = a; i < b; i++)
         {
-            if (_depth[i] != baseDepth) continue;
+            if (_depth[i] != baseDepth || _p[i].Standalone) continue;
             if (max == Comma && IsComma(i)) { items.Add((start, i + 1)); start = i + 1; }
-            else if (max != Comma && _before[i] == max && i > start) { items.Add((start, i)); start = i; }
+            else if (max != Comma && _before[i] == max && i > start && HasReal(start, i)) { items.Add((start, i)); start = i; }
         }
         if (start < b) items.Add((start, b));
         if (items.Count == 0) return null;
 
-        var lines = new List<(int Indent, string Text)>();
+        var lines = new List<OutLine>();
         for (int k = 0; k < items.Count; k++)
         {
             // the comma that ends an item is not part of what is laid out; it is put back after the last line of the item
             int itemEnd = items[k].End;
             bool endsWithComma = max == Comma && IsComma(itemEnd - 1);
+            int commaAt = itemEnd - 1;
             if (endsWithComma) itemEnd--;
-            if (itemEnd <= items[k].Start) { if (lines.Count > 0) lines[^1] = (lines[^1].Indent, lines[^1].Text + ","); continue; }
+            if (itemEnd <= items[k].Start || !HasReal(items[k].Start, itemEnd))
+            {
+                // an item that is only its comma
+                if (endsWithComma) AddToLastCode(lines, ",");
+                if (endsWithComma && _p[commaAt].Comments.Count > 0) lines[^1] = lines[^1] with { Comment = JoinComments(lines[^1].Comment, string.Join("  ", _p[commaAt].Comments)) };
+                // comments of their own in an item without code
+                for (int i = items[k].Start; i < items[k].End; i++) if (_p[i].Standalone) lines.Add(new OutLine(indent, _p[i].Text, "", IsComment: true));
+                continue;
+            }
 
             // an item that is the whole range cannot be split by delimiters again (that would not end)
             bool whole = items[k].Start == a && itemEnd == b;
             var part = SplitLine(items[k].Start, itemEnd, indent, inside: !whole, forced: false);
-            if (endsWithComma) part[^1] = (part[^1].Indent, part[^1].Text + ",");
+            if (endsWithComma)
+            {
+                AddToLastCode(part, ",");
+                var lastCode = part.FindLastIndex(l => !l.IsComment);
+                if (lastCode >= 0 && _p[commaAt].Comments.Count > 0)
+                    part[lastCode] = part[lastCode] with { Comment = JoinComments(part[lastCode].Comment, string.Join("  ", _p[commaAt].Comments)) };
+            }
             lines.AddRange(part);
         }
-        if (max == Comma && !IsComma(b - 1))
-        {
-            var last = lines[^1];
-            lines[^1] = (last.Indent, last.Text + ",");
-        }
+
+        int lastReal = LastReal(b - 1, a - 1);
+        if (max == Comma && lastReal >= a && !IsComma(lastReal)) AddToLastCode(lines, ",");
         return lines;
     }
 
+    static string JoinComments(string a, string b) => a.Length == 0 ? b : b.Length == 0 ? a : a + "  " + b;
+
     // ---------------------------------------------------------- split at a bracket pair
 
-    List<(int Indent, string Text)>? RightHandSplit(int a, int b, int indent, bool inside)
+    List<OutLine>? RightHandSplit(int a, int b, int indent, bool inside)
     {
         // the value of an assignment, a return, a condition: optional parentheses
         _preferred = -1;
-        if (!inside && a == 0 && b == _p.Count && !HasMagic(a, b))
+        if (!inside && a == 0 && b == _p.Count)
         {
             var slot = FindSlot(a, b);
             if (slot != null)
@@ -285,50 +498,46 @@ internal sealed class LineWrapper
         {
             for (int k = groups.Count - 1; k >= 0; k--)
             {
-                if (Fits(indent, Join(a, groups[k] + 1))) { chosen = groups[k]; break; }
+                if (FitsRange(indent, a, groups[k] + 1)) { chosen = groups[k]; break; }
             }
             if (chosen < 0) chosen = groups[^1];
         }
         return SplitAt(a, b, indent, chosen, isDef && !inside && chosen == groups[0]);
     }
 
-    List<(int Indent, string Text)>? SplitAt(int a, int b, int indent, int open, bool defParameters)
+    List<OutLine>? SplitAt(int a, int b, int indent, int open, bool defParameters)
     {
         int close = _p[open].Match;
         var head = SplitLine(a, open + 1, indent, inside: false, forced: false);
-        // short lines of the head and the tail are left as they are; splitting them again is only for magic commas and long tails
         var body = BodyOf(open, close, indent + Indent, defParameters);
         var tail = SplitLine(close, b, indent, inside: false, forced: false);
 
-        var lines = new List<(int Indent, string Text)>(head);
+        var lines = new List<OutLine>(head);
         lines.AddRange(body);
         lines.AddRange(tail);
         return lines;
     }
 
-    List<(int Indent, string Text)> BodyOf(int open, int close, int indent, bool defParameters)
+    List<OutLine> BodyOf(int open, int close, int indent, bool defParameters)
     {
         int a = open + 1;
-        bool trailingComma = IsComma(close - 1);
+        int lastReal = LastReal(close - 1, open);
+        bool trailingComma = lastReal > open && IsComma(lastReal);
         int baseDepth = _depth[open] + 1;
         bool hasCommas = false;
-        for (int i = a; i < close - (trailingComma ? 1 : 0); i++) if (_depth[i] == baseDepth && IsComma(i)) { hasCommas = true; break; }
+        for (int i = a; i < close; i++) if (_depth[i] == baseDepth && IsComma(i) && !(trailingComma && i == lastReal)) { hasCommas = true; break; }
         bool maxIsComma = hasCommas && NoStrongerThanComma(a, close, baseDepth);
         bool forced = maxIsComma && (trailingComma || _atom[open] || IsImportParen(open));
 
         var lines = SplitLine(a, close, indent, inside: true, forced);
         // a def with a single parameter gets the trailing comma too
-        if (defParameters && !hasCommas && !trailingComma)
-        {
-            var last = lines[^1];
-            lines[^1] = (last.Indent, last.Text + ",");
-        }
+        if (defParameters && !hasCommas && !trailingComma && lines.Count > 0) AddToLastCode(lines, ",");
         return lines;
     }
 
     bool NoStrongerThanComma(int a, int b, int baseDepth)
     {
-        for (int i = a; i < b; i++) if (_depth[i] == baseDepth && _before[i] > Comma) return false;
+        for (int i = a; i < b; i++) if (_depth[i] == baseDepth && !_p[i].Standalone && _before[i] > Comma) return false;
         return true;
     }
 
@@ -366,7 +575,7 @@ internal sealed class LineWrapper
     static bool IsAssignOperator(string t) => t is "=" or "+=" or "-=" or "*=" or "/=" or "//=" or "%=" or "**=" or ">>=" or "<<=" or "&=" or "|=" or "^=" or "@=";
 
     /// <returns>The wrapped lines; or (null, false) to split at the value's own brackets; or (null, true) to leave the line alone.</returns>
-    (List<(int Indent, string Text)>? Lines, bool GiveUp) WrapSlot(int a, int b, int indent, Slot slot)
+    (List<OutLine>? Lines, bool GiveUp) WrapSlot(int a, int b, int indent, Slot slot)
     {
         if (slot.Wrap == SlotAction.Omit) return (null, false);
         int s = slot.Start, e = slot.End;
@@ -374,18 +583,36 @@ internal sealed class LineWrapper
         // the delimiters of the value decide whether the brackets of a call at its end are enough
         int baseDepth = BaseDepth(s, e), delimiters = 0;
         for (int i = s; i < e; i++)
-            if (_depth[i] == baseDepth && (IsComma(i) || _before[i] > 0)) delimiters++;
+            if (_depth[i] == baseDepth && !_p[i].Standalone && (IsComma(i) || _before[i] > 0)) delimiters++;
         var groups = TopGroups(s, e).Where(g => _p[g].Match > g + 1).ToList();
-        bool endsWithBracket = _p[e - 1].IsClose;
+        bool endsWithBracket = _p[LastReal(e - 1, s - 1)].IsClose;
 
-        if (groups.Count > 0 && (delimiters == 0 || (delimiters == 1 && endsWithBracket)) && Fits(indent, Join(a, groups[^1] + 1)))
-            return (null, false);
+        // splitting at the value's own brackets works when the head up to one of them fits and only short trailers follow it
+        if (groups.Count > 0 && (delimiters == 0 || (delimiters == 1 && endsWithBracket)))
+        {
+            for (int k = groups.Count - 1; k >= 0; k--)
+            {
+                int close = _p[groups[k]].Match;
+                if (FitsRange(indent, a, groups[k] + 1) && OnlyTrailersAfter(close, e, baseDepth) && FitsRange(indent, close, b)) return (null, false);
+            }
+        }
+
+        // a value that starts with a bracket and has one operator: `[...] + [...]` is split at the first bracket when the rest fits after it
+        if (delimiters == 1 && groups.Count > 0 && groups[0] == FirstReal(s, e) && _p[groups[0]].Match < e - 1)
+        {
+            int close = _p[groups[0]].Match;
+            if (FitsRange(indent, a, groups[0] + 1) && FitsRange(indent, close, b))
+            {
+                _preferred = groups[0];
+                return (null, false);
+            }
+        }
 
         // `(a, b, c) = value`: when the rest of the line fits after the target's closing bracket, the target is split instead
         if (s > 1 && _p[s - 1].Kind == TokenKind.Operator && IsAssignOperator(_p[s - 1].Text))
         {
             var targetGroups = TopGroups(a, s - 1).Where(g => _p[g].Match > g + 1).ToList();
-            if (targetGroups.Count > 0 && Fits(indent, Join(_p[targetGroups[^1]].Match, b)))
+            if (targetGroups.Count > 0 && FitsRange(indent, _p[targetGroups[^1]].Match, b))
             {
                 _preferred = targetGroups[^1];
                 return (null, false);
@@ -393,15 +620,34 @@ internal sealed class LineWrapper
         }
 
         // wrapping only helps when the value fits in the parentheses or can be split further
-        bool fitsInside = Fits(indent + Indent, Join(s, e));
+        bool fitsInside = FitsRange(indent + Indent, s, e);
         bool canSplit = groups.Count > 0 || delimiters > 0;
         if (!fitsInside && !canSplit) return (null, true);
 
-        var lines = new List<(int Indent, string Text)> { (indent, Join(a, s) + " (") };
+        var lines = new List<OutLine> { new(indent, Join(a, s) + " (", CommentsOf(a, s)) };
         bool forced = delimiters > 0 && MaxIsComma(s, e, baseDepth);
         lines.AddRange(SplitLine(s, e, indent + Indent, inside: true, forced));
-        lines.Add((indent, ")" + (e < b ? (_p[e].Space ? " " : "") + Join(e, b) : "")));
+        lines.Add(new OutLine(indent, ")" + (e < b ? (FirstReal(e, b) is int f && _p[f].Space ? " " : "") + Join(e, b) : ""), CommentsOf(e, b)));
         return (lines, false);
+    }
+
+    /// <summary>Calls, subscripts and attribute accesses only: what black leaves on the closing line of a split.</summary>
+    bool OnlyTrailersAfter(int close, int end, int baseDepth)
+    {
+        for (int i = close + 1; i < end; i++)
+        {
+            var t = _p[i];
+            if (t.Standalone || _depth[i] != baseDepth) continue;
+            if (t.IsOpen && _atom[i]) return false;
+            if (!(t.IsOpen || t.IsClose || t.Text == "." || t.Kind == TokenKind.Name)) return false;
+        }
+        return true;
+    }
+
+    int? FirstReal(int a, int b)
+    {
+        for (int i = a; i < b; i++) if (!_p[i].Standalone) return i;
+        return null;
     }
 
     bool MaxIsComma(int a, int b, int baseDepth)
@@ -409,7 +655,7 @@ internal sealed class LineWrapper
         bool comma = false;
         for (int i = a; i < b; i++)
         {
-            if (_depth[i] != baseDepth) continue;
+            if (_depth[i] != baseDepth || _p[i].Standalone) continue;
             if (IsComma(i)) comma = true;
             else if (_before[i] > Comma) return false;
         }
@@ -419,7 +665,7 @@ internal sealed class LineWrapper
     // ---------------------------------------------------------- imports
 
     /// <summary>`from m import a, b`: one line when it fits (the brackets go), else the names one per line in brackets.</summary>
-    List<(int Indent, string Text)>? ImportLine(int a, int b, int indent)
+    List<OutLine>? ImportLine(int a, int b, int indent)
     {
         if (b <= 3 || _p[0].Text != "from") return null;
         int imp = -1;
@@ -431,21 +677,49 @@ internal sealed class LineWrapper
         if (paren) { s++; e = b - 1; }
         if (s >= e || _p[s].Text == "*") return null;
 
-        bool magic = paren && IsComma(e - 1);
-        var names = new List<string>();
+        int lastReal = LastReal(e - 1, s - 1);
+        bool magic = paren && IsComma(lastReal);
+        bool standalone = false;
+        for (int i = s; i < e; i++) if (_p[i].Standalone) standalone = true;
+
+        // the names, each with its own comments
+        var items = new List<(string Text, string Comment, List<string> Before)>();
+        var pending = new List<string>();
         int start = s;
+        void Flush(int end, int commaAt)
+        {
+            if (HasReal(start, end))
+            {
+                string comment = CommentsOf(start, end);
+                if (commaAt >= 0 && _p[commaAt].Comments.Count > 0) comment = JoinComments(comment, string.Join("  ", _p[commaAt].Comments));
+                items.Add((Join(start, end), comment, new List<string>(pending)));
+                pending.Clear();
+            }
+            for (int i = start; i < end; i++) if (_p[i].Standalone && !pending.Contains(_p[i].Text) && !items.Any(it => it.Before.Contains(_p[i].Text))) pending.Add(_p[i].Text);
+        }
         for (int i = s; i < e; i++)
-            if (IsComma(i)) { if (i > start) names.Add(Join(start, i)); start = i + 1; }
-        if (start < e) names.Add(Join(start, e));
-        if (names.Count == 0) return null;
+        {
+            if (_p[i].Standalone) { if (!HasReal(start, i)) pending.Add(_p[i].Text); continue; }
+            if (IsComma(i)) { Flush(i, i); start = i + 1; }
+        }
+        if (HasReal(start, e)) Flush(e, -1);
+        if (items.Count == 0) return null;
 
         string module = Join(a, imp);
-        string single = $"{module} import {string.Join(", ", names)}";
-        if (!magic && Fits(indent, single)) return One(indent, single);
+        string headComment = CommentsOf(a, imp + (paren ? 2 : 1)) ;
+        string single = $"{module} import {string.Join(", ", items.Select(i => i.Text))}";
+        string allComments = string.Join("  ", items.Select(i => i.Comment).Where(c => c.Length > 0));
+        if (!magic && !standalone && pending.Count == 0 && FitsText(indent, single + (allComments.Length > 0 ? "  " + allComments : "")))
+            return new List<OutLine> { new(indent, single, JoinComments(headComment, allComments)) };
 
-        var lines = new List<(int Indent, string Text)> { (indent, $"{module} import (") };
-        foreach (var n in names) lines.Add((indent + Indent, n + ","));
-        lines.Add((indent, ")"));
+        var lines = new List<OutLine> { new(indent, $"{module} import (", headComment) };
+        foreach (var it in items)
+        {
+            foreach (var c in it.Before) lines.Add(new OutLine(indent + Indent, c, "", IsComment: true));
+            lines.Add(new OutLine(indent + Indent, it.Text + ",", it.Comment));
+        }
+        foreach (var c in pending) lines.Add(new OutLine(indent + Indent, c, "", IsComment: true));
+        lines.Add(new OutLine(indent, ")"));
         return lines;
     }
 }
