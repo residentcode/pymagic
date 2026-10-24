@@ -133,7 +133,7 @@ public static class PythonFormatter
         if (x is ConstExpr cx)
         {
             if (y is not ConstExpr cy || cx.Kind != cy.Kind || cx.IsFString != cy.IsFString) return false;
-            return cx.Kind is ConstKind.Str or ConstKind.Bytes ? SameStrings(cx.Text, cy.Text) : cx.Text == cy.Text;
+            return cx.Kind is ConstKind.Str or ConstKind.Bytes ? SameStrings(cx.Text, cy.Text) : cx.Kind is ConstKind.Int or ConstKind.Float or ConstKind.Imaginary ? NormaliseNumber(cx.Text) == NormaliseNumber(cy.Text) : cx.Text == cy.Text;
         }
         if (x is ExprStmt sx2 && y is ExprStmt sy2 && sx2.Value is ConstExpr dx && sy2.Value is ConstExpr dy && dx.Kind == ConstKind.Str && dy.Kind == ConstKind.Str && !dx.IsFString && !dy.IsFString)
             return SameDocstrings(dx.Text, dy.Text);
@@ -210,6 +210,24 @@ public static class PythonFormatter
     /// Double quotes (or single ones, or as written) unless that needs more escapes: only literals without backslashes
     /// and without the other quote are touched. Triple-quoted strings always use double quotes unless the style preserves them.
     /// </summary>
+    /// <summary>Black's number style: prefixes and exponents in lower case, hexadecimal digits in upper case, 1. is 1.0 and .5 is 0.5.</summary>
+    internal static string NormaliseNumber(string text)
+    {
+        if (text.Length > 1 && text[0] == '0' && char.ToLowerInvariant(text[1]) == 'x') return "0x" + text[2..].ToUpperInvariant();
+        string lower = text.ToLowerInvariant();
+        if (lower.Length > 1 && lower[0] == '0' && lower[1] is 'b' or 'o') return lower;
+        string suffix = lower.EndsWith('j') ? "j" : "";
+        string body = suffix.Length > 0 ? lower[..^1] : lower;
+        int e = body.IndexOf('e');
+        string mantissa = e >= 0 ? body[..e] : body, exponent = e >= 0 ? body[e..] : "";
+        if (mantissa.Contains('.'))
+        {
+            if (mantissa.StartsWith('.')) mantissa = "0" + mantissa;
+            if (mantissa.EndsWith('.')) mantissa += "0";
+        }
+        return mantissa + exponent + suffix;
+    }
+
     internal static string NormaliseString(string s, QuoteStyle style = QuoteStyle.Double)
     {
         if (style == QuoteStyle.Preserve) return s;
@@ -287,6 +305,7 @@ public static class PythonFormatter
             var lines = BuildLines();
             if (lines.Count == 0) return "";
             MarkVerbatim(lines);
+            lines = SplitStatements(lines);
             for (int i = 0; i < lines.Count; i++)
             {
                 var l = lines[i];
@@ -409,6 +428,82 @@ public static class PythonFormatter
                     else if (trailing.Contains("fmt: off") || trailing.Contains("fmt:off")) throw new InvalidOperationException("a trailing fmt: off");   // black reads it in ways we do not follow
                 }
             }
+        }
+
+        static readonly HashSet<string> CompoundKeywords = new() { "if", "elif", "else", "for", "while", "try", "except", "finally", "with", "class", "def" };
+
+        /// <summary>`if x: y = 1` becomes a header and a body line, `a = 1; b = 2` two lines (a stub body `...` of a def or class stays where it is).</summary>
+        List<Line> SplitStatements(List<Line> lines)
+        {
+            var result = new List<Line>(lines.Count);
+            foreach (var l in lines)
+            {
+                if (l.IsComment || l.Verbatim || l.Tokens.Count < 2) { result.Add(l); continue; }
+                string T(Token t) => t.Text(_s);
+                var toks = l.Tokens;
+                int first = toks[0].Kind == TokenKind.Name && T(toks[0]) == "async" && toks.Count > 1 ? 1 : 0;
+                bool compound = toks[first].Kind == TokenKind.Keyword && CompoundKeywords.Contains(T(toks[first]));
+
+                // the colon that ends the header: at depth 0, not the one of a lambda
+                int colon = -1;
+                if (compound)
+                {
+                    int depth = 0, lambdas = 0;
+                    for (int k = first; k < toks.Count; k++)
+                    {
+                        string text = T(toks[k]);
+                        if (toks[k].Kind == TokenKind.Operator && text is "(" or "[" or "{") depth++;
+                        else if (toks[k].Kind == TokenKind.Operator && text is ")" or "]" or "}") depth--;
+                        else if (depth == 0 && toks[k].Kind == TokenKind.Keyword && text == "lambda") lambdas++;
+                        else if (depth == 0 && toks[k].Kind == TokenKind.Operator && text == ":")
+                        {
+                            if (lambdas > 0) lambdas--; else { colon = k; break; }
+                        }
+                    }
+                }
+
+                var head = colon >= 0 ? toks.Take(colon + 1).ToList() : null;
+                var rest = colon >= 0 ? toks.Skip(colon + 1).ToList() : toks.ToList();
+                if (head != null && rest.All(t => t.Kind == TokenKind.Comment)) { result.Add(l); continue; }   // `if x:  # comment`
+                Token? trailingComment = rest.Count > 0 && rest[^1].Kind == TokenKind.Comment ? rest[^1] : null;
+                var body = trailingComment != null ? rest.Take(rest.Count - 1).ToList() : rest;
+                if (head != null && body.Count == 1 && T(body[0]) == "..." && T(toks[first]) is "def" or "class") { result.Add(l); continue; }
+
+                // statements separated by semicolons at depth 0
+                var statements = new List<List<Token>> { new() };
+                int d = 0;
+                foreach (var t in body)
+                {
+                    string text = T(t);
+                    if (t.Kind == TokenKind.Operator && text is "(" or "[" or "{") d++;
+                    else if (t.Kind == TokenKind.Operator && text is ")" or "]" or "}") d--;
+                    if (d == 0 && t.Kind == TokenKind.Operator && text == ";") { statements.Add(new List<Token>()); continue; }
+                    statements[^1].Add(t);
+                }
+                statements.RemoveAll(x => x.Count == 0);
+                if (head == null && statements.Count <= 1 && !toks.Any(t => t.Kind == TokenKind.Operator && T(t) == ";")) { result.Add(l); continue; }
+
+                int level = l.Level;
+                int prevEnd = l.PrevEnd;
+                if (head != null)
+                {
+                    result.Add(new Line { Level = level, Tokens = head, Start = head[0].Start, OriginalColumn = l.OriginalColumn, BlankBefore = l.BlankBefore, PrevEnd = l.PrevEnd, EndPos = head[^1].End, OrigBlank = l.OrigBlank });
+                    prevEnd = head[^1].End;
+                    level++;
+                }
+                for (int n = 0; n < statements.Count; n++)
+                {
+                    var tokens = statements[n];
+                    if (n == statements.Count - 1 && trailingComment != null) tokens = tokens.Append(trailingComment.Value).ToList();
+                    result.Add(new Line
+                    {
+                        Level = level, Tokens = tokens, Start = tokens[0].Start, OriginalColumn = l.OriginalColumn, PrevEnd = prevEnd, EndPos = tokens[^1].End,
+                        BlankBefore = head == null && n == 0 ? l.BlankBefore : 0, OrigBlank = l.OrigBlank,
+                    });
+                    prevEnd = tokens[^1].End;
+                }
+            }
+            return result;
         }
 
         List<Line> BuildLines()
@@ -749,6 +844,7 @@ public static class PythonFormatter
         string Normalise(Token t, string text, Line line) => t.Kind switch
         {
             TokenKind.String => NormaliseString(text, _o.Quotes),
+            TokenKind.Number => NormaliseNumber(text),
             TokenKind.Comment => NormaliseComment(text, false),
             _ => text,
         };
