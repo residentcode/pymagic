@@ -54,11 +54,14 @@ public class DjangoViewTests
     public void ASerializerForAnotherModelIsReported()
     {
         var (svc, uri, _) = Open(Head + "class BookViewSet(viewsets.ModelViewSet):\n    queryset = Book.objects.all()\n    serializer_class = AuthorSerializer\n");
+        svc.ResetInspections();   // the profile file lives in the fixture folder, shared by every run
         var found = svc.Diagnostics(uri).Where(d => d.Code == "django-view-serializer").ToList();
         Assert.Equal(1, found.Count);
         Assert.Contains("Author", found[0].Message);
         svc.SetInspection("django-view-serializer", "off");
-        Assert.Equal(0, svc.Diagnostics(uri).Count(d => d.Code == "django-view-serializer"));
+        int left = svc.Diagnostics(uri).Count(d => d.Code == "django-view-serializer");
+        svc.ResetInspections();
+        Assert.Equal(0, left);
     }
 
     [Fact]

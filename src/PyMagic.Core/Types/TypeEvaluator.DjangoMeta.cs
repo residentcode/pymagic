@@ -78,7 +78,7 @@ public sealed partial class TypeEvaluator
                 else if (n.Name == "serializer_class" && serializer == null && TypeOf(e.Info.Module, stmt.Value) is ClassType { IsInstance: false } sc)
                 {
                     serializer = sc.Info;
-                    if (ReferenceEquals(e.Info, c)) serializerExpr = stmt.Value;
+                    if (ReferenceEquals(e.Info.Node, c.Node)) serializerExpr = stmt.Value;
                 }
             }
         }
