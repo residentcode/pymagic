@@ -398,7 +398,7 @@ public sealed partial class TypeEvaluator
             }
         }
 
-        if (p.Annotation == null && p.Default == null && p.Kind == ParamKind.Normal && owner is FunctionDef
+        if (p.Annotation == null && (p.Default == null || p.Default is CallExpr) && p.Kind == ParamKind.Normal && owner is FunctionDef
             && _ws.Options.ParameterTypes is { } hook && hook(_ws, m, p) is { } provided)
             return provided;
 

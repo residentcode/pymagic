@@ -22,6 +22,9 @@ public static class CompletionKind
 
 /// <param name="InsertText">What to insert when it is not just the label; a snippet (with $1, ${2:name}, $0) when <paramref name="IsSnippet"/> is set.</param>
 /// <param name="AdditionalTextEdits">Edits elsewhere that come with the item: the import an auto-import item needs, or the removal of the expression a postfix template wraps.</param>
+/// <summary>A route of the project for the Endpoints view: methods, full path, handler, framework and where the handler is.</summary>
+public sealed record RouteEntry(string Methods, string Path, string Name, string Framework, string Uri, int Line);
+
 public sealed record CompletionItem(string Label, int Kind, string? Detail = null, string? SortText = null, string? InsertText = null,
     bool IsSnippet = false, List<TextEdit>? AdditionalTextEdits = null, string? FilterText = null, string? Documentation = null);
 

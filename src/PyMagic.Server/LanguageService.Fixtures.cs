@@ -77,7 +77,7 @@ public sealed partial class LanguageService
     (Workspace Workspace, FixtureContext Fixtures) NewWorkspace()
     {
         var fixtures = new FixtureContext(SourceRoots);
-        var ws = new Workspace(WorkspaceOptionsNow(fixtures.Resolver.TypeOfParameter), _cache);
+        var ws = new Workspace(WorkspaceOptionsNow((w, m, p) => p.Default == null ? fixtures.Resolver.TypeOfParameter(w, m, p) : DependencyParameterType(w, m, p)), _cache);
         _fixtureContexts.Add(ws, fixtures);
         return (ws, fixtures);
     }

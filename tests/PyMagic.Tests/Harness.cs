@@ -70,6 +70,7 @@ public static class Program
     {
         var svc = new PyMagic.Server.LanguageService { TypeshedPath = PyMagic.Core.Types.Workspace.DefaultTypeshedPath };
         svc.LibraryRoots.Add(dir);
+        foreach (var extra in (System.Environment.GetEnvironmentVariable("PM_LIB") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries)) svc.LibraryRoots.Add(extra);
         var uris = new List<(string Uri, string Name)>();
         var texts = new Dictionary<string, string>();
         // PM_REAL_URIS=1 opens the files at their real paths, below the folder, so conftest.py files are found the way a project has them

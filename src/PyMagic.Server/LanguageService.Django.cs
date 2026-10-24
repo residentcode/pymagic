@@ -12,7 +12,7 @@ public sealed partial class LanguageService
 {
     // ------------------------------------------------------------ string arguments that name something
 
-    enum DjangoNamed { UrlName, Template, QueryField }
+    enum DjangoNamed { UrlName, Template, QueryField, Endpoint, RouteUrl }
 
     /// <summary>A plain string literal that is an argument of a call Django gives a meaning to: `reverse("name")`, `render(request, "page.html")`, `order_by("title")`.</summary>
     sealed record NamedString(ModuleInfo Module, DjangoNamed Kind, string Value, int Start, int End, CallExpr Call);
@@ -20,6 +20,7 @@ public sealed partial class LanguageService
     static readonly HashSet<string> UrlReaders = new(StringComparer.Ordinal) { "reverse", "reverse_lazy", "redirect", "resolve_url" };
     static readonly HashSet<string> TemplateReaders = new(StringComparer.Ordinal) { "render_to_string", "get_template", "select_template" };
     static readonly HashSet<string> QueryStringMethods = new(StringComparer.Ordinal) { "order_by", "values", "values_list", "select_related", "prefetch_related", "only", "defer", "distinct" };
+    static readonly Regex EndpointShape = new(@"^[\w.:\-]+$", RegexOptions.Compiled);
     static readonly Regex UrlNameShape = new(@"^[\w:\-]+$", RegexOptions.Compiled);
 
     static string? CalleeName(CallExpr call) => call.Func switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => null };
@@ -51,6 +52,15 @@ public sealed partial class LanguageService
                 yield return new NamedString(m, DjangoNamed.UrlName, url.Value, url.Start, url.End, call);
             else if (callee is "render" or "TemplateResponse" or "SimpleTemplateResponse" && StringIn(call, 1, "template_name", "template") is { } t1)
                 yield return new NamedString(m, DjangoNamed.Template, t1.Value, t1.Start, t1.End, call);
+            else if (callee == "TemplateResponse" && StringIn(call, 0, "name") is { } t2)
+                yield return new NamedString(m, DjangoNamed.Template, t2.Value, t2.Start, t2.End, call);
+            else if (callee == "render_template" && StringIn(call, 0, "template_name_or_list") is { } t3)
+                yield return new NamedString(m, DjangoNamed.Template, t3.Value, t3.Start, t3.End, call);
+            else if (callee is "url_for" or "url_path_for" && StringIn(call, 0, "endpoint", "name") is { } ep && EndpointShape.IsMatch(ep.Value))
+                yield return new NamedString(m, DjangoNamed.Endpoint, ep.Value, ep.Start, ep.End, call);
+            else if (RouteVerbs.Contains(callee) && call.Func is AttributeExpr client && ReceiverName(client.Value) is { } holder && holder.Contains("client", StringComparison.OrdinalIgnoreCase)
+                && StringIn(call, 0, "url", "path") is { } route && route.Value.StartsWith('/'))
+                yield return new NamedString(m, DjangoNamed.RouteUrl, route.Value, route.Start, route.End, call);
             else if (TemplateReaders.Contains(callee) && StringIn(call, 0, "template_name", "template_name_list") is { } t0)
                 yield return new NamedString(m, DjangoNamed.Template, t0.Value, t0.Start, t0.End, call);
             else if (QueryStringMethods.Contains(callee) && call.Func is AttributeExpr)
@@ -169,16 +179,20 @@ public sealed partial class LanguageService
                 return Templates().Where(t => t.Name == s.Value).Select(t => new Location(UriOfPath(t.Path), new Range(new Position(0, 0), new Position(0, 0)))).ToList();
             case DjangoNamed.QueryField:
                 return QueryFieldTargets(snap, s);
+            case DjangoNamed.Endpoint or DjangoNamed.RouteUrl:
+                return RouteTargets(snap, s);
         }
         return Array.Empty<Location>();
     }
 
     Hover? DjangoHover(Snapshot snap, ModuleInfo m, int offset)
     {
-        if (NamedStringAt(snap, m, offset) is not { } s) return null;
+        if (NamedStringAt(snap, m, offset) is not { } s) return RouteDeclarationHover(snap, m, offset);
         var range = Lines(m).RangeOf(s.Start, s.End);
         switch (s.Kind)
         {
+            case DjangoNamed.Endpoint or DjangoNamed.RouteUrl:
+                return RouteHover(snap, s, range);
             case DjangoNamed.UrlName:
                 var defs = UrlDefsFor(DjangoIndexOf(snap), s.Value).ToList();
                 if (defs.Count == 0) return null;
@@ -316,7 +330,8 @@ public sealed partial class LanguageService
 
     IEnumerable<Diag> DjangoDiagnostics(ModuleInfo m, TypeEvaluator ev)
     {
-        if (m.IsStub || m.Source.IndexOf("django", StringComparison.OrdinalIgnoreCase) < 0 && m.Source.IndexOf("objects", StringComparison.Ordinal) < 0) yield break;
+        if (m.IsStub || m.Source.IndexOf("django", StringComparison.OrdinalIgnoreCase) < 0 && m.Source.IndexOf("objects", StringComparison.Ordinal) < 0
+            && m.Source.IndexOf("render_template", StringComparison.Ordinal) < 0 && m.Source.IndexOf("TemplateResponse", StringComparison.Ordinal) < 0) yield break;
         // the open buffers are the project here (the page opens every file): rebuilding the whole project after each keystroke would be too much
         var snap = Current();
         var fullModule = m;

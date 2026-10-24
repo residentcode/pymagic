@@ -114,6 +114,15 @@
     #git-diff.open { display: flex; } #git-diff-head { display: flex; gap: 12px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); } #git-diff-title { font-weight: 600; flex: 1; } #git-diff-body { flex: 1; min-height: 0; }
     .git-popup { position: fixed; z-index: 1000; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 14px #0006; padding: 6px 8px; max-width: 60ch; font-size: 12.5px; }
     .git-popup pre { margin: 4px 0; max-height: 14em; overflow: auto; font: 12px Consolas, monospace; color: #e06c75; } .git-popup button { margin-right: 6px; } .git-popup .meta { color: var(--dim); }
+    #routes-bar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
+    #routes-bar input { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 1px 6px; min-width: 220px; }
+    #routes-bar button { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; font: inherit; cursor: pointer; }
+    .route { display: flex; gap: 12px; align-items: baseline; padding: 2px 10px; cursor: pointer; }
+    .route:hover { background: var(--hover, rgba(128,128,128,.15)); }
+    .route .verb { min-width: 70px; font-weight: 700; font-size: 11px; }
+    .verb-get { color: #3fa9f5; } .verb-post { color: #4cbb6c; } .verb-put { color: #e0a030; } .verb-patch { color: #b58cf0; }
+    .verb-delete { color: #e5534b; } .verb-ws { color: #38c0c0; }
+    .route .rpath { font-family: var(--mono, monospace); }
     #hier-bar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
     #hier-title { font-weight: 600; } #hier-modes { margin-left: auto; display: flex; gap: 4px; }
     #hier-modes button { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; font: inherit; cursor: pointer; }
@@ -205,6 +214,7 @@
         <button id="t-search">Search</button>
         <button id="t-git">Git</button>
         <button id="t-hier">Hierarchy</button>
+        <button id="t-routes">Endpoints</button>
         <span class="spacer"></span>
         <button id="t-close" class="close" title="Hide panel">✕</button>
       </div>
@@ -286,6 +296,16 @@
               <div id="git-detail"></div>
             </div>
           </div>
+        </div>
+      </div>
+      <div id="routes-tab" class="tab">
+        <div class="col" id="routes-main">
+          <div id="routes-bar">
+            <span id="routes-summary"></span>
+            <input id="routes-filter" type="text" placeholder="Filter by path, method or function" spellcheck="false" autocomplete="off">
+            <button id="routes-refresh" title="Read the routes again">Refresh</button>
+          </div>
+          <div class="body" id="routes-list"></div>
         </div>
       </div>
       <div id="hier-tab" class="tab">
