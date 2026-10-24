@@ -71,6 +71,9 @@ public sealed partial class TypeEvaluator
         foreach (var entry in Mro(c))
         {
             if (entry is not ClassType e || e.Info.Module.IsStub || e.Info.Module.Name.StartsWith("rest_framework", StringComparison.Ordinal)) continue;
+            if (query == null && e.Info.Node.Body.OfType<FunctionDef>().FirstOrDefault(f => f.Name == "get_queryset") is { } getter)
+                foreach (var ret in AstChildren.Descendants(getter).OfType<ReturnStmt>())
+                    if (ret.Value != null && DjangoModelOfQuery(TypeOf(e.Info.Module, ret.Value)) is { } returned) { query = returned; break; }
             foreach (var stmt in e.Info.Node.Body.OfType<AssignStmt>())
             {
                 if (stmt.Targets.Count != 1 || stmt.Targets[0] is not NameExpr n) continue;
@@ -106,8 +109,18 @@ public sealed partial class TypeEvaluator
     /// <summary>`form.instance` and `form.save()` of a model form or model serializer are the model the Meta names.</summary>
     PyType? DjangoMetaMember(ClassType c, string name, bool instance)
     {
-        if (!instance || name is not ("instance" or "save") || c.Info.Module.IsStub) return null;
-        if (DjangoRoleOf(c.Info) is not (DjangoClassRole.Form or DjangoClassRole.Serializer) || DjangoMetaModel(c.Info) is not { } model) return null;
+        if (!instance || c.Info.Module.IsStub) return null;
+        var role = DjangoRoleOf(c.Info);
+        if (role == DjangoClassRole.View && name is "get_object" or "get_serializer")
+        {
+            // a method the view defines itself wins
+            foreach (var entry in Mro(c.Info))
+                if (entry is ClassType e && !e.Info.Module.IsStub && !e.Info.Module.Name.StartsWith("rest_framework", StringComparison.Ordinal) && e.Info.Scope.Symbols.ContainsKey(name)) return null;
+            var parts = DjangoViewParts(c.Info);
+            if (name == "get_object") return DjangoMetaModel(c.Info) is { } m ? Method(InstanceOfClass(m)) : null;
+            return parts.Serializer is { } s ? Method(InstanceOfClass(s)) : null;
+        }
+        if (name is not ("instance" or "save") || role is not (DjangoClassRole.Form or DjangoClassRole.Serializer) || DjangoMetaModel(c.Info) is not { } model) return null;
         var inst = InstanceOfClass(model);
         return name == "instance" ? inst : Method(inst);
     }

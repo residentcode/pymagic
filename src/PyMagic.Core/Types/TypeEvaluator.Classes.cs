@@ -525,7 +525,7 @@ public sealed partial class TypeEvaluator
             types.Add(synthesizedMember);
             return;
         }
-        if (name is "instance" or "save" && DjangoMetaMember(c, name, instance) is { } formMember) { types.Add(formMember); return; }
+        if (name is "instance" or "save" or "get_object" or "get_serializer" && DjangoMetaMember(c, name, instance) is { } formMember) { types.Add(formMember); return; }
         var hit = FindMember(c, name, instance, null, out bool unknownBase);
         if (hit != null)
         {
