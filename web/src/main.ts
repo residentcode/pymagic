@@ -3,6 +3,7 @@ import { LspClient } from './lsp';
 import { setupRun } from './run';
 import { setupTests } from './tests';
 import { setupInterpreters } from './interpreters';
+import { setupPackages } from './packages';
 
 (self as any).MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
 
@@ -328,6 +329,7 @@ async function main() {
   runHooks = setupRun({ ...common, root: info.root });
   setupTests(common);
   setupInterpreters();
+  setupPackages();
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void save());
   editor.onDidChangeCursorPosition((e) => { $('cursor').textContent = `Ln ${e.position.lineNumber}, Col ${e.position.column}`; });
 

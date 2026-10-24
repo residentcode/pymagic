@@ -68,6 +68,24 @@ builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 var app = builder.Build();
 
+// Only this page may talk to the host. Browsers let any web page open a WebSocket or send a POST to localhost, and the
+// host can run programs and install packages, so requests must come from our own address (this also stops DNS rebinding).
+var allowedAuthorities = new[] { $"127.0.0.1:{port}", $"localhost:{port}", $"[::1]:{port}" };
+app.Use(async (ctx, next) =>
+{
+    bool Allowed(string authority) => allowedAuthorities.Contains(authority, StringComparer.OrdinalIgnoreCase);
+    string? origin = ctx.Request.Headers.Origin.ToString();
+    bool originOk = string.IsNullOrEmpty(origin)
+        || (Uri.TryCreate(origin, UriKind.Absolute, out var o) && o.Scheme == "http" && Allowed(o.Authority));
+    if (!Allowed(ctx.Request.Host.Value ?? "") || !originOk)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await ctx.Response.WriteAsync("forbidden: requests must come from the PyMagic page itself");
+        return;
+    }
+    await next();
+});
+
 app.UseWebSockets();
 if (Directory.Exists(www))
 {
@@ -223,6 +241,66 @@ app.MapPost("/api/venv", async (HttpRequest req) =>
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
 });
 
+
+// ---- packages ----------------------------------------------------------------------------------------------------
+
+app.MapGet("/api/packages", async () =>
+{
+    var current = interpreters.Current;
+    if (current == null) return Results.Json(new { error = "no interpreter selected", hasPip = false, packages = Array.Empty<object>() });
+    var list = await Task.Run(() => PackageManager.List(current.Path));
+    return Results.Json(new
+    {
+        interpreter = Describe(current), hasPip = list.HasPip, error = list.Error, packages = list.Packages,
+        isVenv = current.IsVenv, canInstall = PackageManager.CanInstallGlobally(current),
+    });
+});
+
+app.MapGet("/api/packages/outdated", async () =>
+    interpreters.Current is { } c ? Results.Json(await Task.Run(() => PackageManager.Outdated(c.Path))) : Results.Json(Array.Empty<object>()));
+
+app.MapGet("/api/packages/info", async (string name) =>
+{
+    if (interpreters.Current is not { } c || !PackageManager.IsSafeSpec(name)) return Results.NotFound();
+    var info = await Task.Run(() => PackageManager.Show(c.Path, name));
+    return info == null ? Results.NotFound() : Results.Json(info);
+});
+
+app.MapGet("/api/requirements", async () =>
+{
+    var files = RequirementsScanner.Scan(root);
+    var installed = interpreters.Current is { } c ? (await Task.Run(() => PackageManager.List(c.Path))).Packages : Array.Empty<InstalledPackage>();
+    var byName = installed.ToDictionary(p => PackageManager.Normalize(p.Name), p => p.Version);
+    return files.Select(f => new
+    {
+        file = f.File,
+        requirements = f.Requirements.Select(r => new
+        {
+            name = r.Name, spec = r.Spec,
+            installed = byName.ContainsKey(PackageManager.Normalize(r.Name)),
+            version = byName.GetValueOrDefault(PackageManager.Normalize(r.Name)),
+        }),
+    });
+});
+
+var pypiCache = new ConcurrentDictionary<string, (DateTime At, object? Info)>(StringComparer.OrdinalIgnoreCase);
+using var pypi = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+app.MapGet("/api/pypi", async (string name) =>
+{
+    if (!PackageManager.IsSafeSpec(name) || name.Contains('[') || name.Contains(',') || name.Contains('=')) return Results.BadRequest(new { error = "not a package name" });
+    if (pypiCache.TryGetValue(name, out var hit) && DateTime.UtcNow - hit.At < TimeSpan.FromMinutes(10))
+        return hit.Info == null ? Results.NotFound() : Results.Json(hit.Info);
+    try
+    {
+        using var res = await pypi.GetAsync($"https://pypi.org/pypi/{Uri.EscapeDataString(name)}/json");
+        if (!res.IsSuccessStatusCode) { pypiCache[name] = (DateTime.UtcNow, null); return Results.NotFound(); }
+        var info = JsonNode.Parse(await res.Content.ReadAsStringAsync())!["info"]!;
+        object result = new { name = info["name"]!.GetValue<string>(), version = info["version"]!.GetValue<string>(), summary = info["summary"]?.GetValue<string>() ?? "" };
+        pypiCache[name] = (DateTime.UtcNow, result);
+        return Results.Json(result);
+    }
+    catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return Results.Json(new { error = "the package index is not reachable" }, statusCode: 502); }
+});
 app.MapGet("/api/tests", () => TestDiscovery.Discover(root));
 
 app.Map("/run", async (HttpContext ctx) =>
@@ -230,7 +308,13 @@ app.Map("/run", async (HttpContext ctx) =>
     if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
     using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
     var outbox = new BlockingCollection<string>();
-    using var session = new RunSession(msg => { if (!outbox.IsAddingCompleted) try { outbox.Add(msg.ToJsonString()); } catch (InvalidOperationException) { } }) { Python = python };
+    bool packageOperation = false;
+    using var session = new RunSession(msg =>
+    {
+        if (!outbox.IsAddingCompleted) try { outbox.Add(msg.ToJsonString()); } catch (InvalidOperationException) { }
+        // new or removed packages change what the editor can resolve: announce the interpreter again
+        if (packageOperation && msg["type"]?.GetValue<string>() == "exited") Task.Run(() => interpreters.Reload());
+    }) { Python = python };
 
     var sender = Task.Run(async () =>
     {
@@ -275,6 +359,49 @@ app.Map("/run", async (HttpContext ctx) =>
                 var ids = (msg["ids"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
                 session.Python = interpreters.Current?.Path ?? python;
                 session.StartTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto");
+            }
+            else if (msg["type"]?.GetValue<string>() == "startPip")
+            {
+                if (interpreters.Current is not { } target) { outbox.Add(new JsonObject { ["type"] = "error", ["message"] = "no interpreter selected" }.ToJsonString()); continue; }
+                string op = msg["op"]?.GetValue<string>() ?? "";
+                var names = (msg["packages"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
+                var pipArgs = new List<string>();
+                string module = "pip";
+                string? refusal = null;
+                if (names.Any(n => !PackageManager.IsSafeSpec(n))) refusal = "a package name contains characters that are not allowed";
+                else switch (op)
+                {
+                    case "install":
+                        if (names.Count == 0) { refusal = "no packages given"; break; }
+                        pipArgs.AddRange(new[] { "install", "--disable-pip-version-check", "--no-input", "--progress-bar", "off" });
+                        if (msg["upgrade"]?.GetValue<bool>() == true) pipArgs.Add("--upgrade");
+                        if (msg["user"]?.GetValue<bool>() == true && !target.IsVenv) pipArgs.Add("--user");
+                        pipArgs.AddRange(names);
+                        break;
+                    case "uninstall":
+                        if (names.Count == 0) { refusal = "no packages given"; break; }
+                        pipArgs.AddRange(new[] { "uninstall", "-y", "--disable-pip-version-check" });
+                        pipArgs.AddRange(names);
+                        break;
+                    case "installRequirements":
+                    {
+                        // only files that the scanner lists (inside the project) can be installed from
+                        string wanted = msg["file"]?.GetValue<string>() ?? "";
+                        var file = RequirementsScanner.Scan(root).FirstOrDefault(f => f.File == wanted && wanted.EndsWith(".txt"));
+                        if (file == null) { refusal = "that is not a requirements file of this project"; break; }
+                        pipArgs.AddRange(new[] { "install", "--disable-pip-version-check", "--no-input", "--progress-bar", "off", "-r", Path.Combine(root, wanted) });
+                        break;
+                    }
+                    case "ensurepip":
+                        module = "ensurepip";
+                        pipArgs.Add("--upgrade");
+                        break;
+                    default: refusal = "unknown operation"; break;
+                }
+                if (refusal != null) { outbox.Add(new JsonObject { ["type"] = "error", ["message"] = refusal }.ToJsonString()); continue; }
+                packageOperation = true;
+                session.Python = target.Path;
+                session.StartModule(root, module, pipArgs);
             }
             else session.Handle(msg);
         }

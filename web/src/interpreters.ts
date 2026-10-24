@@ -64,6 +64,7 @@ export function setupInterpreters() {
     const body = await res.json();
     if (!res.ok) { say(body.error ?? 'Could not switch the interpreter', true); await refresh(0); return; }
     say(`Using ${body.label}`);
+    window.dispatchEvent(new Event('pymagic:interpreter'));
     await refresh(0);
   }
 

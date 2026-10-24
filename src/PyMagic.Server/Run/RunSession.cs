@@ -59,6 +59,10 @@ public sealed class RunSession : IDisposable
         Launch(root, true, helperArgs, ids, null, helper: "pm_tests.py");
     }
 
+    /// <summary>Runs <c>python -m module args</c> (pip, ensurepip, venv...) and streams its output like a script run.</summary>
+    public void StartModule(string root, string module, IReadOnlyList<string> args) =>
+        Launch(root, false, new[] { "-m", module }, args, null);
+
     /// <param name="channel">Start the helper script and accept its socket (debugger and test runner); otherwise run the script directly.</param>
     void Launch(string root, bool channel, IReadOnlyList<string> leading, IReadOnlyList<string> args,
         IReadOnlyDictionary<string, List<int>>? breakpoints, string helper = "pm_debug.py")

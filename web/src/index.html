@@ -80,6 +80,22 @@
     #test-detail .tb { margin: 4px 0; padding: 6px; background: #00000030; border-radius: 4px; white-space: pre-wrap; word-break: break-word; font: 12px/1.4 Consolas, monospace; }
     #tests-console { margin: 0; max-height: 28%; overflow: auto; padding: 4px 10px; border-top: 1px solid var(--line); font: 12px/1.4 Consolas, monospace; color: var(--dim); white-space: pre-wrap; }
     #tests-console .err { color: var(--red); } #tests-console .info { color: var(--dim); }
+    #pk-main { flex: 1; } #pk-side { width: 34%; }
+    #pk-bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 3px 6px; background: var(--panel); border-bottom: 1px solid var(--line); }
+    #pk-bar input[type=text], #pk-bar input:not([type]) { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; font: inherit; min-width: 0; }
+    #pk-install { flex: 1 1 260px; } #pk-filter { width: 110px; }
+    #pk-bar button { background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 8px; font: inherit; cursor: pointer; white-space: nowrap; }
+    #pk-bar button:disabled { opacity: .4; cursor: default; }
+    #pk-bar label { color: var(--dim); white-space: nowrap; }
+    #pk-hint { padding: 0 8px; color: var(--dim); min-height: 0; font-size: 12px; } #pk-hint:not(:empty) { padding: 2px 8px; }
+    #pk-banner.warn { padding: 4px 8px; background: #e5c07b22; color: var(--amber); } #pk-banner button { margin-left: 6px; }
+    #pk-reqs .reqrow { padding: 2px 8px; border-bottom: 1px solid var(--line); } #pk-reqs .missing { color: var(--amber); } #pk-reqs button { margin-left: 8px; }
+    #pk-table { padding: 0; }
+    .pkrow { display: grid; grid-template-columns: 1fr 110px 90px 70px; gap: 6px; padding: 1px 8px; align-items: center; cursor: pointer; }
+    .pkrow:hover { background: #ffffff10; } .pkrow.sel { background: #3574f055; } .pkrow.head { color: var(--dim); cursor: default; position: sticky; top: 0; background: var(--panel); font-size: 11px; text-transform: uppercase; }
+    .pkrow .newer { color: var(--green); } .pkrow .actions { text-align: right; } .pkrow .actions button { background: transparent; color: var(--fg); border: 0; cursor: pointer; padding: 0 4px; } .pkrow .actions button:disabled { opacity: .3; cursor: default; } .pkrow .actions .armed { color: var(--red); font-weight: 700; }
+    #pk-detail { padding: 6px 10px; } #pk-detail div { margin-bottom: 3px; word-break: break-word; }
+    #pk-log { margin: 0; max-height: 40%; overflow: auto; padding: 4px 10px; border-top: 1px solid var(--line); font: 12px/1.4 Consolas, monospace; color: var(--dim); white-space: pre-wrap; } #pk-log .err { color: var(--red); } #pk-log .info { color: var(--green); }
     @media (max-width: 700px) { #app { grid-template-columns: 1fr; } #sidebar { display: none; } }
   </style>
 </head>
@@ -107,6 +123,7 @@
         <button id="t-output" class="active">Output</button>
         <button id="t-debug">Debugger</button>
         <button id="t-tests">Tests</button>
+        <button id="t-packages">Packages</button>
         <span class="spacer"></span>
         <button id="t-close" class="close" title="Hide panel">✕</button>
       </div>
@@ -137,6 +154,27 @@
           <h2 id="detail-title">Details</h2>
           <div class="body" id="test-detail"></div>
           <pre id="tests-console"></pre>
+        </div>
+      </div>
+      <div id="packages-tab" class="tab">
+        <div class="col" id="pk-main">
+          <div id="pk-bar">
+            <input id="pk-install" placeholder="Install: name or spec, e.g. requests  flask>=3  (space separates packages)" autocomplete="off" spellcheck="false">
+            <button id="pk-go">Install</button>
+            <label id="pk-user-label" style="display:none" title="Install for the current user only (system interpreters)"><input type="checkbox" id="pk-user"> --user</label>
+            <button id="pk-outdated" title="Ask the package index for newer versions">Check updates</button>
+            <button id="pk-refresh" title="Reload the list">⟳</button>
+            <input id="pk-filter" placeholder="Filter" autocomplete="off" spellcheck="false">
+          </div>
+          <div id="pk-hint"></div>
+          <div id="pk-banner"></div>
+          <div id="pk-reqs"></div>
+          <div class="body" id="pk-table"></div>
+        </div>
+        <div class="col" id="pk-side">
+          <h2 id="pk-title">Details</h2>
+          <div class="body" id="pk-detail"></div>
+          <pre id="pk-log"></pre>
         </div>
       </div>
     </section>

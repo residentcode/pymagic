@@ -52,6 +52,18 @@ public sealed class InterpreterManager
         return Set(r.Interpreter, save)!;
     }
 
+    /// <summary>
+    /// Looks at the current interpreter again (packages or .pth files may have been added) and announces it, so editors
+    /// pick up new libraries without being restarted.
+    /// </summary>
+    public PythonInterpreter? Reload()
+    {
+        var current = Current;
+        if (current == null) return null;
+        var r = InterpreterInspector.Inspect(current.Path, current.Kind, current.Source);
+        return Set(r.Interpreter ?? current, save: false);
+    }
+
     InspectResult Inspect(string path, string kind, string source)
     {
         var known = InterpreterDiscovery.Discover(_env).FirstOrDefault(c => SamePath(c.Path, path));
