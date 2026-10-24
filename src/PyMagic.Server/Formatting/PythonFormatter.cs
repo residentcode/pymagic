@@ -32,6 +32,45 @@ public static class PythonFormatter
         return SameCode(source, result) ? result : null;
     }
 
+    /// <summary>
+    /// Formats the logical lines that touch the selection and leaves the rest as it is. Formatting only some lines can
+    /// change the meaning (a re-indented header over an old-indented body), so the result is checked and, when it
+    /// does not hold, the selection grows to the top-level statements it touches.
+    /// </summary>
+    public static string? FormatRange(string source, int start, int end)
+    {
+        LastMismatch = null;
+        if (source.Length == 0) return source;
+        if (source.Contains("fmt: off") || source.Contains("fmt:off") || source.Contains("fmt: skip")) return null;
+        var tokens = Lexer.Tokenize(source);
+        if (tokens.Any(t => t.Kind == TokenKind.Error)) return null;
+        var parsed = Parser.Parse(source);
+        if (parsed.Diagnostics.Count > 0) return null;
+
+        string? Attempt(int a, int b)
+        {
+            string result;
+            try { result = new Renderer(source, tokens).RunRange(a, b); }
+            catch (ArgumentException) { return null; }
+            catch (InvalidOperationException) { return null; }
+            return SameCode(source, result) ? result : null;
+        }
+
+        var first = Attempt(start, end);
+        if (first != null) return first;
+
+        int wideStart = start, wideEnd = end;
+        foreach (var stmt in parsed.Module.Body)
+        {
+            if (stmt.End <= start || stmt.Start > end) continue;
+            int stmtEnd = stmt.End;
+            while (stmtEnd > stmt.Start && (source[stmtEnd - 1] == '\n' || source[stmtEnd - 1] == '\r')) stmtEnd--;   // a compound statement's End includes its last line break
+            wideStart = Math.Min(wideStart, stmt.Start);
+            wideEnd = Math.Max(wideEnd, stmtEnd);
+        }
+        return wideStart == start && wideEnd == end ? null : Attempt(wideStart, wideEnd);
+    }
+
     // ------------------------------------------------------------ the safety check
 
     /// <summary>The comments are the same, in the same order, and the syntax trees are equal (positions, quote style and redundant parentheses aside).</summary>
@@ -170,6 +209,8 @@ public static class PythonFormatter
         public int OriginalColumn;
         public int BlankBefore;
         public int Start;               // source offset of the first token
+        public int PrevEnd;             // where the previous line ended (after its line break): the blank lines before this one start here
+        public int EndPos;              // end of the last token (a comment after the code included)
         public string Text = "";
     }
 
@@ -205,6 +246,44 @@ public static class PythonFormatter
                 if (i > 0) for (int b = 0; b < l.BlankBefore; b++) sb.Append(_nl);
                 sb.Append(new string(' ', l.Level * IndentWidth)).Append(l.Text).Append(_nl);
             }
+            return sb.ToString();
+        }
+
+        /// <summary>The text with only the logical lines that touch [selStart, selEnd] formatted; the others stay as they were.</summary>
+        public string RunRange(int selStart, int selEnd)
+        {
+            var lines = BuildLines();
+            if (lines.Count == 0) return _s;
+            for (int i = 0; i < lines.Count; i++)
+            {
+                var l = lines[i];
+                l.Text = l.IsComment ? NormaliseComment(_s[l.Tokens[0].Start..l.Tokens[0].End], l.Start == FirstNonBlank())
+                    : IsDocstringStatement(lines, i) ? RenderDocstring(l)
+                    : RenderCode(l);
+            }
+            ApplyBlankLines(lines);
+
+            bool Selected(Line l) => LineStart(l.Start) <= selEnd && l.EndPos >= selStart;
+            var sb = new StringBuilder();
+            int afterLast = 0;
+            for (int i = 0; i < lines.Count; i++)
+            {
+                var l = lines[i];
+                // the line break that follows the line in the source
+                int p = l.EndPos;
+                if (p < _s.Length && _s[p] == '\r') p++;
+                if (p < _s.Length && _s[p] == '\n') p++;
+                afterLast = p;
+
+                if (Selected(l))
+                {
+                    if (i > 0) for (int b = 0; b < l.BlankBefore; b++) sb.Append(_nl);
+                    sb.Append(new string(' ', l.Level * IndentWidth)).Append(l.Text).Append(_nl);
+                }
+                else sb.Append(_s, l.PrevEnd, p - l.PrevEnd);
+            }
+            // blank lines after the last line are not part of any line: they stay
+            sb.Append(_s, afterLast, _s.Length - afterLast);
             return sb.ToString();
         }
 
@@ -284,6 +363,8 @@ public static class PythonFormatter
                         // a comment that starts its line (comments after code are inside a code line below)
                         var c = new Line { IsComment = true, Start = tok.Start, OriginalColumn = tok.Start - LineStart(tok.Start), Tokens = { tok } };
                         c.BlankBefore = any ? BlankLinesBetween(prevEnd, tok.Start) : 0;
+                c.PrevEnd = prevEnd;
+                c.EndPos = tok.End;
                         prevEnd = EndOfLine(tok.End);
                         pendingComments.Add(c);
                         any = true;
@@ -300,6 +381,8 @@ public static class PythonFormatter
                     if (_t[i].Kind is not (TokenKind.Indent or TokenKind.Dedent)) line.Tokens.Add(_t[i]);
                     i++;
                 }
+                line.PrevEnd = prevEnd;
+                line.EndPos = line.Tokens[^1].End;
                 prevEnd = i < _t.Count && _t[i].Kind == TokenKind.Newline ? _t[i].End : line.Tokens[^1].End;
                 Resolve(level);
                 columnOfLevel[level] = line.OriginalColumn;

@@ -129,6 +129,7 @@
     #sigdialog .pname { color: var(--dim); padding: 2px 0; font-weight: 600; } #sigdialog pre { margin: 0; font: 12.5px Consolas, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 0; overflow-x: auto; }
     #sigdialog pre div { padding: 0 8px; white-space: pre; } #sigdialog .hunk { color: var(--dim); background: #8882; } #sigdialog .add { background: #2ea04326; } #sigdialog .del { background: #f8514926; } #sigdialog .ctx { color: var(--dim); }
     #sigdialog .warnings { color: #e3b341; font-size: 12.5px; } #sigdialog .buttons label { display: flex; align-items: center; gap: 4px; color: var(--dim); }
+    #toolbar #fmt-engine { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; font: inherit; }
     #toolbar .fmtsave { color: var(--dim); display: flex; align-items: center; gap: 3px; white-space: nowrap; }
     @media (max-width: 700px) { #app { grid-template-columns: 1fr; } #sidebar { display: none; } }
   </style>
@@ -141,7 +142,10 @@
       <button id="b-debug" class="dbg" title="Debug / Resume (F5)">🐞 Debug</button>
       <button id="b-stop" class="stop" title="Stop (Shift+F5)" disabled>■ Stop</button>
       <span class="sep"></span>
-      <button id="b-format" title="Format the file and sort its imports (Shift+Alt+F)">✎ Format</button>
+      <button id="b-format" title="Format the file and sort its imports, or the selection (Shift+Alt+F, Ctrl+Alt+L)">✎ Format</button>
+      <select id="fmt-engine" title="Which formatter: built-in, or black / ruff when they are installed for the project's interpreter">
+        <option value="builtin">built-in</option><option value="black">black</option><option value="ruff">ruff</option>
+      </select>
       <button id="b-imports" title="Remove unused imports and sort the rest (Shift+Alt+O)">⇅ Imports</button>
       <label class="fmtsave" title="Format the file whenever it is saved"><input type="checkbox" id="fmt-save"> on save</label>
       <span class="sep"></span>

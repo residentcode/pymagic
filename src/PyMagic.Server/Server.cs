@@ -209,7 +209,11 @@ public sealed class Server
             case "textDocument/codeAction":
                 return _service.CodeActions(UriOf(p), RangeOf(p));
             case "textDocument/formatting":
-                return _service.FormatDocument(UriOf(p));
+                return _service.FormatDocument(UriOf(p), engine: EngineOf(p));
+            case "textDocument/rangeFormatting":
+                return _service.FormatRange(UriOf(p), RangeOf(p), EngineOf(p));
+            case "pymagic/formatters":
+                return _service.Formatters();
             case "pymagic/organizeImports":
                 return _service.OrganizeImports(UriOf(p));
             case "workspace/symbol":
@@ -251,6 +255,7 @@ public sealed class Server
                 documentSymbolProvider = true,
                 workspaceSymbolProvider = true,
                 documentFormattingProvider = true,
+                documentRangeFormattingProvider = true,
                 codeActionProvider = new { codeActionKinds = new[] { LanguageService.QuickFixKind, LanguageService.OrganizeImportsKind, LanguageService.RefactorKind, LanguageService.RefactorExtractKind, LanguageService.RefactorInlineKind } },
                 referencesProvider = true,
                 renameProvider = new { prepareProvider = true },
@@ -374,6 +379,8 @@ public sealed class Server
         }
         return list;
     }
+    /// <summary>The formatter the page selected: builtin, black or ruff.</summary>
+    static string EngineOf(JsonNode? p) => p?["options"]?["pymagicEngine"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Length > 0 ? s : "builtin";
     static string UriOf(JsonNode? p) => p!["textDocument"]!["uri"]!.GetValue<string>();
     static Range RangeOf(JsonNode? p) => new(
         new Position(p!["range"]!["start"]!["line"]!.GetValue<int>(), p["range"]!["start"]!["character"]!.GetValue<int>()),

@@ -25,16 +25,72 @@ public sealed partial class LanguageService
         return new List<TextEdit> { new(lines.RangeOf(prefix, old.Length - suffix), newText[prefix..^suffix]) };
     }
 
+    /// <summary>The interpreter that runs black and ruff: the project's, else PYMAGIC_PYTHON, else whatever `python` is.</summary>
+    string FormatterPython => Interpreter?.Path ?? System.Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python";
+
+    /// <summary>The built-in formatter, and black and ruff with what is known of them for the project's interpreter.</summary>
+    public IReadOnlyList<FormatterInfo> Formatters()
+    {
+        var list = new List<FormatterInfo> { new("builtin", "Built-in", true, null) };
+        foreach (var tool in ExternalFormatter.Tools)
+        {
+            FormatterInfo info;
+            try { info = ExternalFormatter.Probe(FormatterPython, tool); }
+            catch (ServiceException) { info = new FormatterInfo(tool, tool, false, null); }
+            list.Add(info with { Label = info.Available ? $"{tool} {info.Version}" : $"{tool} (not installed)" });
+        }
+        return list;
+    }
+
+    static string FilePathOf(string uri) =>
+        uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ? new Uri(uri).LocalPath : "main.py";
+
+    /// <summary>Formats text with black or ruff and checks that what came back is still Python.</summary>
+    string RunExternal(string engine, string text, string uri, (int, int)? lines = null)
+    {
+        if (!ExternalFormatter.Tools.Contains(engine)) throw new ServiceException($"Unknown formatter '{engine}'.");
+        string result = ExternalFormatter.Format(FormatterPython, engine, text, FilePathOf(uri), lines);
+        if (PyMagic.Core.Syntax.Parser.Parse(result).Diagnostics.Count > 0)
+            throw new ServiceException($"{engine} returned text that does not parse; the file was left as it is.");
+        return result;
+    }
+
     /// <summary>Format the document: imports are sorted and the code is laid out. Empty when nothing changes.</summary>
-    /// <exception cref="ServiceException">The file has syntax errors or opts out with `fmt: off`.</exception>
-    public IReadOnlyList<TextEdit> FormatDocument(string uri, bool sortImports = true)
+    /// <param name="engine">builtin, black or ruff.</param>
+    /// <exception cref="ServiceException">The file has syntax errors, opts out with `fmt: off`, or the tool is missing or fails.</exception>
+    public IReadOnlyList<TextEdit> FormatDocument(string uri, bool sortImports = true, string engine = "builtin")
     {
         var snap = Full();
         if (!snap.ByUri.TryGetValue(uri, out var m)) throw new ServiceException("unknown document");
+        if (m.SyntaxErrors.Count > 0) throw new ServiceException("Fix the syntax errors first: a file that does not parse cannot be formatted.");
         string text = m.Source;
         if (sortImports) text = ImportSorter.Sort(text, ImportClassifier(snap)) ?? text;
-        string formatted = PythonFormatter.Format(text)
-            ?? throw new ServiceException(m.SyntaxErrors.Count > 0 ? "Fix the syntax errors first: a file that does not parse cannot be formatted." : "This file cannot be formatted (it has `fmt: off`, or the result could have changed the code).");
+        string formatted = engine is "builtin" or ""
+            ? PythonFormatter.Format(text) ?? throw new ServiceException("This file cannot be formatted (it has `fmt: off`, or the result could have changed the code).")
+            : RunExternal(engine, text, uri);
+        return DiffEdit(m, formatted);
+    }
+
+    /// <summary>Formats the lines the range touches. black formats them itself (23.11 or newer); everything else uses the built-in formatter.</summary>
+    /// <exception cref="ServiceException">The selection cannot be formatted on its own.</exception>
+    public IReadOnlyList<TextEdit> FormatRange(string uri, Range range, string engine = "builtin")
+    {
+        var snap = Full();
+        if (!snap.ByUri.TryGetValue(uri, out var m)) throw new ServiceException("unknown document");
+        if (m.SyntaxErrors.Count > 0) throw new ServiceException("Fix the syntax errors first: a file that does not parse cannot be formatted.");
+        var lm = Lines(m);
+        int start = lm.OffsetOf(range.Start), end = lm.OffsetOf(range.End);
+
+        string formatted;
+        if (engine == "black")
+        {
+            // a selection that ends at the start of a line does not include that line
+            int last = range.End.Line + 1 - (range.End.Character == 0 && range.End.Line > range.Start.Line ? 1 : 0);
+            formatted = RunExternal("black", m.Source, uri, (range.Start.Line + 1, Math.Max(last, range.Start.Line + 1)));
+        }
+        else
+            formatted = PythonFormatter.FormatRange(m.Source, start, end)
+                ?? throw new ServiceException("This selection cannot be formatted on its own (it has `fmt: off`, or formatting it would change the code): select whole statements, or format the file.");
         return DiffEdit(m, formatted);
     }
 

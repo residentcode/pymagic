@@ -116,15 +116,48 @@ function applyTextEdits(model: monaco.editor.ITextModel, edits: { range: LspRang
   editor.pushUndoStop();
 }
 
+/** The formatter the toolbar selects: built-in, or black / ruff through the project's interpreter. */
+function formatOptions() {
+  let engine = 'builtin';
+  try { engine = localStorage.getItem('pymagic.formatter') ?? 'builtin'; } catch { /* storage unavailable */ }
+  return { tabSize: 4, insertSpaces: true, pymagicEngine: engine };
+}
+
+/** Tells the toolbar which formatters exist for the current interpreter. */
+async function refreshFormatters() {
+  const select = $<HTMLSelectElement>('fmt-engine');
+  try {
+    const list: { id: string; label: string; available: boolean }[] = (await lsp.request('pymagic/formatters', {})) ?? [];
+    for (const f of list) {
+      const option = Array.from(select.options).find((o) => o.value === f.id);
+      if (!option) continue;
+      option.textContent = f.id === 'builtin' ? 'built-in' : f.label;
+      option.disabled = !f.available;
+    }
+    // a formatter that is gone (uninstalled, other interpreter) falls back to the built-in one
+    const chosen = list.find((f) => f.id === select.value);
+    if (chosen && !chosen.available) { select.value = 'builtin'; try { localStorage.setItem('pymagic.formatter', 'builtin'); } catch { /* storage unavailable */ } }
+  } catch { /* the server is not ready */ }
+}
+
 async function formatCurrent(quiet = false): Promise<boolean> {
   const model = editor.getModel();
   const uri = model && serverUri.get(model);
   if (!model || !uri || !relPathOf.get(normalise(uri))?.endsWith('.py')) return false;
   lsp.notify('textDocument/didChange', { textDocument: { uri, version: model.getVersionId() }, contentChanges: [{ text: model.getValue() }] });
   try {
-    const edits = await lsp.request('textDocument/formatting', { textDocument: { uri }, options: { tabSize: 4, insertSpaces: true } });
+    // with a selection only the lines it touches are formatted
+    const sel = editor.getSelection();
+    const partial = !quiet && sel && !sel.isEmpty();
+    const edits = partial
+      ? await lsp.request('textDocument/rangeFormatting', {
+          textDocument: { uri },
+          range: { start: { line: sel!.startLineNumber - 1, character: sel!.startColumn - 1 }, end: { line: sel!.endLineNumber - 1, character: sel!.endColumn - 1 } },
+          options: formatOptions(),
+        })
+      : await lsp.request('textDocument/formatting', { textDocument: { uri }, options: formatOptions() });
     applyTextEdits(model, edits ?? []);
-    if (!quiet) toast(edits?.length ? 'Formatted' : 'Already formatted');
+    if (!quiet) toast(edits?.length ? (partial ? 'Formatted the selection' : 'Formatted') : 'Already formatted');
     return true;
   } catch (e: any) {
     toast(e.message ?? 'The file cannot be formatted.', true);
@@ -152,10 +185,28 @@ function registerProviders() {
       const uri = serverUri.get(model);
       if (!uri) return [];
       try {
-        const edits: { range: LspRange; newText: string }[] = (await lsp.request('textDocument/formatting', { textDocument: { uri }, options: { tabSize: 4, insertSpaces: true } })) ?? [];
+        const edits: { range: LspRange; newText: string }[] = (await lsp.request('textDocument/formatting', { textDocument: { uri }, options: formatOptions() })) ?? [];
         return edits.map((e) => ({ range: toRange(e.range), text: e.newText }));
       } catch (e: any) {
         toast(e.message ?? 'The file cannot be formatted.', true);
+        return [];
+      }
+    },
+  });
+
+  monaco.languages.registerDocumentRangeFormattingEditProvider('python', {
+    async provideDocumentRangeFormattingEdits(model, range) {
+      const uri = serverUri.get(model);
+      if (!uri) return [];
+      try {
+        const edits: { range: LspRange; newText: string }[] = (await lsp.request('textDocument/rangeFormatting', {
+          textDocument: { uri },
+          range: { start: { line: range.startLineNumber - 1, character: range.startColumn - 1 }, end: { line: range.endLineNumber - 1, character: range.endColumn - 1 } },
+          options: formatOptions(),
+        })) ?? [];
+        return edits.map((e) => ({ range: toRange(e.range), text: e.newText }));
+      } catch (e: any) {
+        toast(e.message ?? 'The selection cannot be formatted.', true);
         return [];
       }
     },
@@ -423,6 +474,11 @@ async function main() {
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyL, () => void formatCurrent());
   editor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyO, () => void organizeImports());
   $('b-format').onclick = () => void formatCurrent();
+  const engineSelect = $<HTMLSelectElement>('fmt-engine');
+  try { engineSelect.value = localStorage.getItem('pymagic.formatter') ?? 'builtin'; } catch { /* storage unavailable */ }
+  engineSelect.onchange = () => { try { localStorage.setItem('pymagic.formatter', engineSelect.value); } catch { /* storage unavailable */ } };
+  engineSelect.onfocus = () => void refreshFormatters();     // an install in the Packages tab shows up here
+  engineSelect.onmousedown = () => void refreshFormatters();
   $('b-imports').onclick = () => void organizeImports();
   try {
     $<HTMLInputElement>('fmt-save').checked = localStorage.getItem('pymagic.formatOnSave') === '1';
@@ -451,6 +507,7 @@ async function main() {
   await lsp.request('initialize', { processId: null, rootUri, capabilities: {} });
   lsp.notify('initialized', {});
   registerProviders();
+  void refreshFormatters();
 
   const files: string[] = await (await fetch('/api/files')).json();
   const list = $('files');
