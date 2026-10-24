@@ -33,34 +33,56 @@ public static class PythonFormatter
 
     // ------------------------------------------------------------ the safety check
 
+    /// <summary>The comments are the same, in the same order, and the syntax trees are equal (positions, quote style and redundant parentheses aside).</summary>
     static bool SameCode(string before, string after)
     {
-        var a = Significant(before);
-        var b = Significant(after);
-        if (a.Count != b.Count) return false;
-        for (int i = 0; i < a.Count; i++)
-            if (a[i] != b[i]) return false;
-        return true;
+        if (!Comments(before).SequenceEqual(Comments(after))) return false;
+        var a = Parser.Parse(before);
+        var b = Parser.Parse(after);
+        if (b.Diagnostics.Count > 0) return false;
+        return AstEqual(a.Module, b.Module);
     }
 
-    static List<string> Significant(string text)
+    static List<string> Comments(string text) =>
+        Lexer.Tokenize(text).Where(t => t.Kind == TokenKind.Comment).Select(t => t.Text(text).TrimStart('#').Trim()).ToList();
+
+    [ThreadStatic] public static string? LastMismatch;
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, System.Reflection.PropertyInfo[]> Properties = new();
+
+    static bool AstEqual(object? x, object? y)
     {
-        var list = new List<string>();
-        foreach (var t in Lexer.Tokenize(text))
+        if (ReferenceEquals(x, y)) return true;
+        if (x == null || y == null) return false;
+        if (x is string sx) return y is string sy && sx == sy;
+        if (x is ConstExpr cx)
         {
-            string s = t.Text(text);
-            switch (t.Kind)
-            {
-                case TokenKind.Comment: list.Add("#" + s.TrimStart('#').Trim()); break;
-                case TokenKind.String: list.Add("S" + StringCore(s)); break;
-                case TokenKind.Newline: list.Add("\n"); break;
-                case TokenKind.Indent: list.Add("INDENT"); break;
-                case TokenKind.Dedent: list.Add("DEDENT"); break;
-                case TokenKind.EndOfFile: break;
-                default: list.Add(s); break;
-            }
+            if (y is not ConstExpr cy || cx.Kind != cy.Kind || cx.IsFString != cy.IsFString) return false;
+            return cx.Kind is ConstKind.Str or ConstKind.Bytes ? SameStrings(cx.Text, cy.Text) : cx.Text == cy.Text;
         }
-        return list;
+        if (x is Node)
+        {
+            if (x.GetType() != y.GetType()) { LastMismatch ??= x.GetType().Name + " vs " + y.GetType().Name; return false; }
+            foreach (var prop in Properties.GetOrAdd(x.GetType(), t => t.GetProperties().Where(p => p.GetIndexParameters().Length == 0 && p.Name != "Parenthesized" && !p.Name.EndsWith("Start") && !p.Name.EndsWith("End")).ToArray()))
+                if (!AstEqual(prop.GetValue(x), prop.GetValue(y))) { LastMismatch ??= x.GetType().Name + "." + prop.Name; return false; }
+            return true;
+        }
+        if (x is System.Collections.IEnumerable ex && y is System.Collections.IEnumerable ey)
+        {
+            var ia = ex.Cast<object?>().ToList();
+            var ib = ey.Cast<object?>().ToList();
+            if (ia.Count != ib.Count) { LastMismatch ??= "list length " + ia.Count + " vs " + ib.Count; return false; }
+            for (int i = 0; i < ia.Count; i++) if (!AstEqual(ia[i], ib[i])) return false;
+            return true;
+        }
+        return x.Equals(y);
+    }
+
+    /// <summary>Adjacent string literals: the same literals, whatever lies between them and whichever quotes they use.</summary>
+    static bool SameStrings(string a, string b)
+    {
+        var ta = Lexer.Tokenize(a).Where(t => t.Kind == TokenKind.String).Select(t => StringCore(t.Text(a))).ToList();
+        var tb = Lexer.Tokenize(b).Where(t => t.Kind == TokenKind.String).Select(t => StringCore(t.Text(b))).ToList();
+        return ta.SequenceEqual(tb);
     }
 
     /// <summary>A string literal without its quote style: prefix (lower case) and the text between the quotes.</summary>
@@ -346,6 +368,10 @@ public static class PythonFormatter
             bool sliceSpaced = false;           // the spacing after the last slice colon
             bool lastWasSliceColon = false;
 
+            var pieces = new List<Piece>();     // the same line as tokens with their spaces, for the line wrapper
+            bool legacyOnly = false;            // comments inside brackets, backslashes, multi-line strings: keep the line breaks as they are
+            string? trailing = null;            // a comment at the end of the line
+
             for (int k = 0; k < toks.Count; k++)
             {
                 var t = toks[k];
@@ -369,13 +395,34 @@ public static class PythonFormatter
                     if (text == "**" && !unary) hugPow = IsSimplePower(toks, k);
                 }
 
+                bool lineBreak = gap.Contains('\n') || gap.Contains('\r');
+                bool backslash = gap.Contains('\\');
+                if (t.Kind == TokenKind.Comment)
+                {
+                    if (k == toks.Count - 1 && k > 0 && !lineBreak) trailing = NormaliseComment(text, false);
+                    else legacyOnly = true;
+                }
+                if (backslash || (t.Kind == TokenKind.String && text.Contains('\n'))) legacyOnly = true;
+
+                bool space = false;
+                if (k > 0 && t.Kind != TokenKind.Comment && !backslash)
+                    space = NeedSpace(t, text, p!.Value, pText, toks, k, frames, unary, kwargEq, hugPow, sliceColon, lambdaColon,
+                        lastNoSpaceAfter, lastWasSliceColon, sliceSpaced, lineBreak ? " " : gap, startsWithFrom, ref inRelativeDots);
+                if (t.Kind != TokenKind.Comment)
+                    pieces.Add(new Piece
+                    {
+                        Text = Normalise(t, text, line), Space = space, Kind = t.Kind, Unary = unary, KwargEquals = kwargEq,
+                        IsOpen = t.Kind == TokenKind.Operator && text is "(" or "[" or "{",
+                        IsClose = t.Kind == TokenKind.Operator && text is ")" or "]" or "}",
+                    });
+
                 if (k == 0)
                 {
                     sb.Append(Normalise(t, text, line));
                 }
-                else if (gap.Contains('\n') || gap.Contains('\r'))
+                else if (lineBreak)
                 {
-                    if (gap.Contains('\\')) sb.Append(gap);
+                    if (backslash) sb.Append(gap);
                     else
                     {
                         while (sb.Length > 0 && sb[^1] == ' ') sb.Length--;
@@ -385,7 +432,7 @@ public static class PythonFormatter
                         sb.Append(' ', Math.Max(0, LeadingWidth(t.Start) + newIndent - oldIndent));
                     }
                 }
-                else if (gap.Contains('\\'))
+                else if (backslash)
                 {
                     sb.Append(gap);
                 }
@@ -393,11 +440,9 @@ public static class PythonFormatter
                 {
                     sb.Append("  ");
                 }
-                else
+                else if (space)
                 {
-                    bool space = NeedSpace(t, text, p!.Value, pText, toks, k, frames, unary, kwargEq, hugPow, sliceColon, lambdaColon,
-                        lastNoSpaceAfter, lastWasSliceColon, sliceSpaced, gap, startsWithFrom, ref inRelativeDots);
-                    if (space) sb.Append(' ');
+                    sb.Append(' ');
                 }
 
                 if (k > 0)
@@ -431,7 +476,18 @@ public static class PythonFormatter
                 }
                 else if (t.Kind == TokenKind.Keyword && text == "lambda") lambdaDepths.Push(frames.Count);
             }
-            return sb.ToString().TrimEnd();
+            if (legacyOnly || pieces.Count == 0) return sb.ToString().TrimEnd();
+
+            // wrap what is too long, join what was wrapped by hand but fits
+            var lines = new LineWrapper(pieces).Wrap(newIndent);
+            var result = new StringBuilder();
+            for (int n = 0; n < lines.Count; n++)
+            {
+                if (n > 0) result.Append(_nl).Append(' ', lines[n].Indent);
+                result.Append(lines[n].Text);
+            }
+            if (trailing != null) result.Append("  ").Append(trailing);
+            return result.ToString();
         }
 
         int LeadingWidth(int pos)

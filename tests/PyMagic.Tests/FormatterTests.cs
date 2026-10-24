@@ -6,7 +6,7 @@ namespace PyMagic.Tests;
 public class FormatterTests
 {
     static string Src(params string[] lines) => string.Join("\n", lines) + "\n";
-    static string Fmt(string text) => PythonFormatter.Format(text) ?? throw new AssertionException("the formatter declined:\n" + text);
+    static string Fmt(string text) => PythonFormatter.Format(text) ?? throw new AssertionException("the formatter declined (" + PythonFormatter.LastMismatch + "):" + System.Environment.NewLine + text);
 
     [Fact]
     public void SpacesAroundOperatorsCommasAndBrackets()
@@ -97,7 +97,7 @@ public class FormatterTests
     public void ContinuationLinesMoveWithTheirStatement()
     {
         string input = Src("def f():", "  x = foo(1,", "          2)", "  return x");
-        Assert.Equal(Src("def f():", "    x = foo(1,", "            2)", "    return x"), Fmt(input));
+        Assert.Equal(Src("def f():", "    x = foo(1, 2)", "    return x"), Fmt(input));   // wrapped by hand but short enough: joined
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class FormatterTests
     [Fact]
     public void RelativeImportsAndDottedNames()
     {
-        Assert.Equal(Src("from . import a", "from .. import b", "from ...pkg import c", "from a.b import (d, e)", "import x.y as z"),
+        Assert.Equal(Src("from . import a", "from .. import b", "from ...pkg import c", "from a.b import d, e", "import x.y as z"),
             Fmt(Src("from  .  import a", "from ..import b", "from ... pkg import c", "from a . b import ( d,e )", "import x . y  as z")));
     }
 
@@ -171,8 +171,16 @@ public class FormatterTests
         {
             string before = File.ReadAllText(RepoFile(rel));
             string? after = PythonFormatter.Format(before);
-            Assert.True(after != null, "the formatter declined " + rel);
-            Assert.Equal(after!, PythonFormatter.Format(after!)!);
+            Assert.True(after != null, "the formatter declined " + rel + " (" + PythonFormatter.LastMismatch + ")");
+            string again = PythonFormatter.Format(after!) ?? "(declined: " + PythonFormatter.LastMismatch + ")";
+            if (again != after)
+            {
+                var l1 = after!.Split((char)10);
+                var l2 = again.Split((char)10);
+                int d = 0;
+                while (d < l1.Length && d < l2.Length && l1[d] == l2[d]) d++;
+                throw new AssertionException(rel + " is not stable at line " + (d + 1) + ":" + System.Environment.NewLine + string.Join(System.Environment.NewLine, l1.Skip(Math.Max(0, d - 2)).Take(8)) + System.Environment.NewLine + "--- second pass:" + System.Environment.NewLine + string.Join(System.Environment.NewLine, l2.Skip(Math.Max(0, d - 2)).Take(8)));
+            }
             pairs.Add((before, after!));
         }
         if (Python == null) return;
@@ -196,5 +204,73 @@ public class FormatterTests
             Assert.Equal("same", output + (output == "same" ? "" : " " + err.Result));
         }
         finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void StandardLibraryModulesKeepTheirSyntaxTreeAndFormatStably()
+    {
+        if (Python == null) return;
+        string? lib = RunPython("import sysconfig; print(sysconfig.get_paths()['stdlib'])");
+        if (lib == null || !Directory.Exists(lib)) return;
+        string[] names = { "argparse.py", "textwrap.py", "shlex.py", "dataclasses.py", "json/encoder.py", "json/decoder.py", "colorsys.py", "fractions.py", "heapq.py", "bisect.py", "base64.py", "copy.py", "contextlib.py", "functools.py", "queue.py", "string.py", "pprint.py", "difflib.py", "csv.py", "enum.py" };
+        if (System.Environment.GetEnvironmentVariable("PYMAGIC_STDLIB_ALL") == "1")
+            names = Directory.GetFiles(lib, "*.py").Select(Path.GetFileName).Where(n => n != null && !n.StartsWith("_")).Select(n => n!).OrderBy(n => n).ToArray();
+        string dir = Path.Combine(Path.GetTempPath(), "pm_std_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var declined = new List<string>();
+        var unstable = new List<string>();
+        int checkedFiles = 0;
+        try
+        {
+            var written = new List<int>();
+            for (int i = 0; i < names.Length; i++)
+            {
+                string path = Path.Combine(lib, names[i]);
+                if (!File.Exists(path)) continue;
+                string before = File.ReadAllText(path);
+                string? after = PythonFormatter.Format(before);
+                if (after == null) { declined.Add(names[i] + " (" + PythonFormatter.LastMismatch + ")"); continue; }
+                string? again = PythonFormatter.Format(after);
+                if (again != after)
+                {
+                    var l1 = after.Split((char)10);
+                    var l2 = (again ?? "(declined " + PythonFormatter.LastMismatch + ")").Split((char)10);
+                    int d = 0;
+                    while (d < l1.Length && d < l2.Length && l1[d] == l2[d]) d++;
+                    unstable.Add(names[i] + " line " + (d + 1) + ": [" + string.Join(" / ", l1.Skip(d).Take(3)) + "] became [" + string.Join(" / ", l2.Skip(d).Take(3)) + "]");
+                }
+                File.WriteAllText(Path.Combine(dir, "a" + i + ".py"), before);
+                File.WriteAllText(Path.Combine(dir, "b" + i + ".py"), after);
+                written.Add(i);
+                checkedFiles++;
+            }
+            string check = "import ast" + System.Environment.NewLine + "bad = []" + System.Environment.NewLine + "for i in " + "[" + string.Join(",", written) + "]:" + System.Environment.NewLine
+                + "    a = ast.dump(ast.parse(open('a%d.py' % i, encoding='utf-8').read()))" + System.Environment.NewLine
+                + "    b = ast.dump(ast.parse(open('b%d.py' % i, encoding='utf-8').read()))" + System.Environment.NewLine
+                + "    if a != b: bad.append(i)" + System.Environment.NewLine + "print('same' if not bad else 'different %s' % bad)" + System.Environment.NewLine;
+            File.WriteAllText(Path.Combine(dir, "check.py"), check);
+            var psi = new ProcessStartInfo(Python, "check.py") { WorkingDirectory = dir, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+            using var proc = Process.Start(psi)!;
+            var err = proc.StandardError.ReadToEndAsync();
+            string output = proc.StandardOutput.ReadToEnd().Trim();
+            proc.WaitForExit(60000);
+            Assert.Equal("same", output + (output == "same" ? "" : " " + err.Result));
+        }
+        finally { Directory.Delete(dir, true); }
+        Assert.True(unstable.Count == 0, "not stable: " + string.Join(", ", unstable));
+        Assert.True(declined.Count <= (System.Environment.GetEnvironmentVariable("PYMAGIC_STDLIB_ALL") == "1" ? 1000 : 2), "declined " + declined.Count + ": " + string.Join(", ", declined));
+        Assert.True(checkedFiles >= 12, "only " + checkedFiles + " files were checked");
+    }
+
+    static string? RunPython(string code)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(Python!, "-c \"" + code.Replace("\"", "'") + "\"") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+            using var p = Process.Start(psi)!;
+            string o = p.StandardOutput.ReadToEnd().Trim();
+            return p.WaitForExit(20000) && p.ExitCode == 0 ? o : null;
+        }
+        catch { return null; }
     }
 }
