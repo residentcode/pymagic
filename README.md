@@ -13,6 +13,10 @@ written from scratch in C#.
 | Host | ASP.NET Core minimal app (`src/PyMagic.Web`) | Serves the UI, a workspace file API and one in-process language server per browser tab over WebSocket |
 | UI | TypeScript + Monaco (`web/`, bundled with esbuild) | Mature editor component; Electron/Tauri shell later |
 
+## Try it on your PC
+
+Double-click `PyMagic.cmd` (or run `.\start.ps1`). It needs the .NET 9 SDK and Node.js. The first run installs the web packages, then it builds the page and the host, asks which project folder to open (Cancel opens `examples\demo`), uses PyCharm's typeshed when PyCharm is installed, picks a free port from 5180 and opens the browser. `.\start.ps1 C:\my\project` opens a folder directly, `-Rebuild` builds everything again, `-NoBrowser` skips the browser. Close the window to stop.
+
 ## Layout
 
 ```
