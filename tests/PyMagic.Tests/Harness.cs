@@ -80,6 +80,21 @@ public static class Program
             svc.Open(uri, File.ReadAllText(f), 1);
             uris.Add((uri, name));
         }
+        if (System.Environment.GetEnvironmentVariable("PM_MARKERS") != null)
+        {
+            // gutter marks and the class index for every file: how long, and what comes out
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var kinds = new Dictionary<string, int>();
+            int sampleLines = 0;
+            foreach (var (uri, name) in uris)
+                foreach (var mk in svc.InheritanceMarkers(uri))
+                {
+                    kinds[mk.Kind] = kinds.GetValueOrDefault(mk.Kind) + 1;
+                    if (sampleLines++ % 150 == 0) Console.WriteLine($"   {name}.py:{mk.Line + 1}  {mk.Kind}  {mk.Label}");
+                }
+            Console.WriteLine($"markers: {string.Join(", ", kinds.Select(k => k.Key + " " + k.Value))} in {clock.Elapsed.TotalSeconds:F1}s for {uris.Count} files");
+            return 0;
+        }
         var counts = new Dictionary<string, int>();
         var samples = new Dictionary<string, List<string>>();
         foreach (var (uri, name) in uris)

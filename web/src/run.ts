@@ -103,6 +103,8 @@ export function setupRun(deps: RunDeps) {
 
   editor.onMouseDown((e) => {
     if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) {
+      // the right lane holds the override marks (hierarchy.ts)
+      if ((e.target.detail as any)?.glyphMarginLane === monaco.editor.GlyphMarginLane.Right) return;
       const model = editor.getModel();
       if (!model) return;
       if (e.event.rightButton) void editBreakpointAt(model, e.target.position.lineNumber);

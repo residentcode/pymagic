@@ -6,6 +6,7 @@ import { setupInterpreters } from './interpreters';
 import { setupPackages } from './packages';
 import { setupRefactor } from './refactor';
 import { setupSearch } from './search';
+import { setupHierarchy } from './hierarchy';
 import { toast } from './toast';
 
 (self as any).MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
@@ -477,6 +478,11 @@ async function main() {
       }
       return out;
     },
+  });
+  setupHierarchy({
+    editor, lsp, openFile, modelForUri,
+    uriOf: (model) => serverUri.get(model),
+    relOfUri: (uri) => relPathOf.get(normalise(uri)),
   });
   // code actions that need the page (not just a text edit) arrive as commands
   monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name: string) => {

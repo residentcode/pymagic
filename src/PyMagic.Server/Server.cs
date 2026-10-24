@@ -190,6 +190,22 @@ public sealed class Server
                 return _service.Definition(UriOf(p), PositionOf(p));
             case "textDocument/completion":
                 return new { isIncomplete = false, items = _service.Completion(UriOf(p), PositionOf(p)) };
+            case "textDocument/implementation":
+                return _service.Implementation(UriOf(p), PositionOf(p));
+            case "textDocument/prepareCallHierarchy":
+                return _service.PrepareCallHierarchy(UriOf(p), PositionOf(p));
+            case "callHierarchy/incomingCalls":
+                return _service.IncomingCalls(HierarchyItemOf(p!["item"]));
+            case "callHierarchy/outgoingCalls":
+                return _service.OutgoingCalls(HierarchyItemOf(p!["item"]));
+            case "textDocument/prepareTypeHierarchy":
+                return _service.PrepareTypeHierarchy(UriOf(p), PositionOf(p));
+            case "typeHierarchy/supertypes":
+                return _service.Supertypes(HierarchyItemOf(p!["item"]));
+            case "typeHierarchy/subtypes":
+                return _service.Subtypes(HierarchyItemOf(p!["item"]));
+            case "pymagic/inheritance":
+                return _service.InheritanceMarkers(UriOf(p));
             case "textDocument/references":
                 return _service.References(UriOf(p), PositionOf(p), p!["context"]?["includeDeclaration"]?.GetValue<bool>() ?? true);
             case "textDocument/prepareRename":
@@ -256,6 +272,9 @@ public sealed class Server
                 completionProvider = new { triggerCharacters = new[] { "." } },
                 documentSymbolProvider = true,
                 workspaceSymbolProvider = true,
+                implementationProvider = true,
+                callHierarchyProvider = true,
+                typeHierarchyProvider = true,
                 documentFormattingProvider = true,
                 documentRangeFormattingProvider = true,
                 codeActionProvider = new { codeActionKinds = new[] { LanguageService.QuickFixKind, LanguageService.OrganizeImportsKind, LanguageService.RefactorKind, LanguageService.RefactorExtractKind, LanguageService.RefactorInlineKind } },
@@ -383,6 +402,14 @@ public sealed class Server
     }
     /// <summary>The formatter the page selected: builtin, black or ruff.</summary>
     static string EngineOf(JsonNode? p) => p?["options"]?["pymagicEngine"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Length > 0 ? s : "builtin";
+    static Position PositionAt(JsonNode? n) => new(n!["line"]!.GetValue<int>(), n["character"]!.GetValue<int>());
+
+    static Range RangeAt(JsonNode? n) => new(PositionAt(n!["start"]), PositionAt(n["end"]));
+
+    /// <summary>A call or type hierarchy item as the client sends it back.</summary>
+    static HierarchyItem HierarchyItemOf(JsonNode? n) => new(n!["name"]!.GetValue<string>(), n["kind"]!.GetValue<int>(), n["detail"]?.GetValue<string>(),
+        n["uri"]!.GetValue<string>(), RangeAt(n["range"]), RangeAt(n["selectionRange"]));
+
     static string UriOf(JsonNode? p) => p!["textDocument"]!["uri"]!.GetValue<string>();
     static Range RangeOf(JsonNode? p) => new(
         new Position(p!["range"]!["start"]!["line"]!.GetValue<int>(), p["range"]!["start"]!["character"]!.GetValue<int>()),

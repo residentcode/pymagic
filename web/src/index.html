@@ -91,6 +91,19 @@
     #fs-query { flex: 1 1 240px; } #fs-replace { flex: 1 1 180px; } #fs-include, #fs-exclude { flex: 1 1 160px; } #fs-bar label { color: var(--dim); white-space: nowrap; }
     #fs-bar button { background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 8px; font: inherit; cursor: pointer; white-space: nowrap; } #fs-bar button:disabled { opacity: .4; cursor: default; }
     #fs-summary { padding: 2px 8px; color: var(--dim); font-size: 12px; } #fs-summary.bad { color: var(--red, #f48771); }
+    #hier-bar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
+    #hier-title { font-weight: 600; } #hier-modes { margin-left: auto; display: flex; gap: 4px; }
+    #hier-modes button { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; font: inherit; cursor: pointer; }
+    #hier-modes button.active { color: var(--fg); border-color: var(--accent); }
+    .hn { display: flex; align-items: baseline; gap: 6px; padding: 1px 8px; cursor: pointer; white-space: nowrap; } .hn:hover { background: #8882; } .hn.sel { background: #3b82f633; }
+    .hn .caret { width: 12px; color: var(--dim); text-align: center; } .hn .kind { width: 14px; text-align: center; font-weight: 700; color: var(--accent); }
+    .hn .detail { color: var(--dim); } .hn .count { color: var(--dim); font-size: 11px; } .hn-empty { padding: 1px 8px 1px 40px; color: var(--dim); }
+    .inh-glyph { width: 14px !important; margin-left: 2px; background-repeat: no-repeat; background-position: center; cursor: pointer; opacity: .85; }
+    .inh-up { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M7 2 L12 9 H2 Z' fill='%2361afef'/%3E%3C/svg%3E"); }
+    .inh-down { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M7 12 L12 5 H2 Z' fill='%2398c379'/%3E%3C/svg%3E"); }
+    .inh-both { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M7 1 L11 6 H3 Z' fill='%2361afef'/%3E%3Cpath d='M7 13 L11 8 H3 Z' fill='%2398c379'/%3E%3C/svg%3E"); }
+    .inh-menu { position: fixed; z-index: 1000; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 14px #0006; padding: 3px 0; max-height: 40vh; overflow: auto; font-size: 12.5px; }
+    .inh-menu div { padding: 3px 12px; cursor: pointer; white-space: nowrap; } .inh-menu div:hover { background: var(--accent); color: #fff; } .inh-menu .where { color: var(--dim); margin-left: 8px; }
     .fs-head { padding: 2px 8px; cursor: pointer; background: #8881; font-weight: 600; } .fs-count { margin-left: 8px; color: var(--dim); font-weight: normal; }
     .fs-match { display: flex; gap: 8px; padding: 0 8px 0 22px; cursor: pointer; white-space: pre; font: 12.5px Consolas, monospace; } .fs-match:hover { background: #8882; }
     .fs-line { color: var(--dim); min-width: 3ch; text-align: right; } .fs-match mark { background: #e5c07b55; color: inherit; } .fs-match ins { background: #2ea04344; text-decoration: none; }
@@ -167,6 +180,7 @@
         <button id="t-tests">Tests</button>
         <button id="t-packages">Packages</button>
         <button id="t-search">Search</button>
+        <button id="t-hier">Hierarchy</button>
         <span class="spacer"></span>
         <button id="t-close" class="close" title="Hide panel">✕</button>
       </div>
@@ -216,6 +230,15 @@
           </div>
           <div id="fs-summary"></div>
           <div class="body" id="fs-results"></div>
+        </div>
+      </div>
+      <div id="hier-tab" class="tab">
+        <div class="col" id="hier-main">
+          <div id="hier-bar">
+            <span id="hier-title">Call hierarchy (Ctrl+Alt+H) and type hierarchy (Ctrl+H): put the cursor on a function, method or class.</span>
+            <span id="hier-modes"></span>
+          </div>
+          <div class="body" id="hier-tree"></div>
         </div>
       </div>
       <div id="packages-tab" class="tab">

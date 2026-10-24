@@ -21,6 +21,8 @@ public sealed partial class LanguageService
         public required Dictionary<ModuleInfo, string> UriOf { get; init; }
         public required List<ModuleInfo> Project { get; init; }
         public required FixtureContext Fixtures { get; init; }
+        /// <summary>The project's classes by the class they derive from (built on first use, see SubclassIndex).</summary>
+        public Dictionary<ClassDef, List<(ModuleInfo Module, ClassDef Class)>>? Subclasses { get; set; }
     }
 
     readonly Dictionary<string, Doc> _docs = new();
