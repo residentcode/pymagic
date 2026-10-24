@@ -202,11 +202,13 @@ public sealed partial class TypeEvaluator
             var call = d as CallExpr;
             var head = call != null ? call.Func : d;
             string? name = head switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => null };
-            if (name != "dataclass") continue;
+            // attrs' classic decorators: @attr.s, @attr.attrs, @attr.attributes (fields written `x = attr.ib()`)
+            bool attrs = head is AttributeExpr { Value: NameExpr { Name: "attr" or "attrs" }, Attr: "s" or "attrs" or "attributes" };
+            if (name != "dataclass" && !attrs) continue;
             o = new DataclassOptions(
                 Init: call == null || BoolConst(KeywordArg(call, "init")) != false,
                 KwOnly: call != null && BoolConst(KeywordArg(call, "kw_only")) == true,
-                Frozen: call != null && BoolConst(KeywordArg(call, "frozen")) == true);
+                Frozen: call != null && (BoolConst(KeywordArg(call, "frozen")) == true || attrs && BoolConst(KeywordArg(call, "frozen")) == true));
             break;
         }
         // a decorator or a base class marked with dataclass_transform (attrs, pydantic, your own)
@@ -221,6 +223,19 @@ public sealed partial class TypeEvaluator
         if (_ownFields.TryGetValue(c, out var cached)) return cached;
         var list = new List<FieldInfo>();
         bool kwOnly = classKwOnly;
+        var found = new List<(int Start, FieldInfo Field)>();
+        var annotatedNames = AnnotatedFields(c).Select(a => ((NameExpr)a.Target).Name).ToHashSet(StringComparer.Ordinal);
+        // fields written without an annotation: `x = attr.ib()`, `y = attr.ib(default=1, type=int)`
+        foreach (var assign in c.Node.Body.OfType<AssignStmt>())
+        {
+            if (assign.Targets.Count != 1 || assign.Targets[0] is not NameExpr un || annotatedNames.Contains(un.Name) || !IsFieldSpecifier(assign.Value, out var uc)) continue;
+            if ((uc.Func switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => null }) is not ("ib" or "attrib")) continue;
+            PyType type = KeywordArg(uc, "type") is { } typeArg ? AnnotationType(c.Module, typeArg)
+                : KeywordArg(uc, "default") is { } dflt ? TypeOf(c.Module, dflt).Members.Select(x => x is ClassType { LiteralValue: not null } lit ? lit.Widened() : x).Aggregate((PyType)PyType.Never, (acc, x) => PyType.Union(acc, x))
+                : PyType.Unknown;
+            bool uInit = BoolConst(KeywordArg(uc, "init")) != false;
+            found.Add((assign.Start, new FieldInfo(un.Name, type, FieldHasDefault(uc), uInit, BoolConst(KeywordArg(uc, "kw_only")) == true || kwOnly)));
+        }
         foreach (var a in AnnotatedFields(c))
         {
             var name = ((NameExpr)a.Target).Name;
@@ -239,8 +254,9 @@ public sealed partial class TypeEvaluator
                 if (BoolConst(KeywordArg(fc, "init")) == false) inInit = false;
                 if (BoolConst(KeywordArg(fc, "kw_only")) is bool k) fieldKw = k;
             }
-            list.Add(new FieldInfo(name, type, hasDefault, inInit, fieldKw));
+            found.Add((a.Start, new FieldInfo(name, type, hasDefault, inInit, fieldKw)));
         }
+        list.AddRange(found.OrderBy(x => x.Start).Select(x => x.Field));
         return _ownFields[c] = list;
     }
 
