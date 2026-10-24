@@ -31,6 +31,15 @@ public sealed partial class LanguageService
                 return attr is "fields" or "exclude" ? new MetaRule("field", true) : FormKeyAttributes.Contains(attr) ? new MetaRule("field", true) : null;
             case DjangoClassRole.Serializer when inMeta:
                 return attr is "fields" or "exclude" or "read_only_fields" ? new MetaRule("field", true) : FormKeyAttributes.Contains(attr) ? new MetaRule("field", true) : null;
+            case DjangoClassRole.View when !inMeta:
+                return attr switch
+                {
+                    "filterset_fields" or "ordering" => new MetaRule("path", false),
+                    "search_fields" => new MetaRule("lookup", false),
+                    "ordering_fields" => new MetaRule("field", true),
+                    "lookup_field" => new MetaRule("field", false),
+                    _ => null,
+                };
             case DjangoClassRole.Admin or DjangoClassRole.Inline when !inMeta:
                 return attr switch
                 {
@@ -148,7 +157,7 @@ public sealed partial class LanguageService
             {
                 "prepopulated_fields" => true,
                 "fieldsets" or "add_fieldsets" => value && underFieldsKey,
-                _ when FormKeyAttributes.Contains(attr) => key && dictDepth == 1,
+                _ when FormKeyAttributes.Contains(attr) || attr == "filterset_fields" => key && dictDepth == 1,
                 _ => false,
             };
             if (!ok) return null;
@@ -187,7 +196,7 @@ public sealed partial class LanguageService
     IEnumerable<Diag> MetaDiagnostics(ModuleInfo m, TypeEvaluator ev, Snapshot snap)
     {
         if (m.IsStub || m.Source.IndexOf("Meta", StringComparison.Ordinal) < 0 && m.Source.IndexOf("list_display", StringComparison.Ordinal) < 0 && m.Source.IndexOf("search_fields", StringComparison.Ordinal) < 0
-            && m.Source.IndexOf("fields", StringComparison.Ordinal) < 0) yield break;
+            && m.Source.IndexOf("fields", StringComparison.Ordinal) < 0 && m.Source.IndexOf("queryset", StringComparison.Ordinal) < 0) yield break;
         if (m.Source.IndexOf("django", StringComparison.OrdinalIgnoreCase) < 0 && m.Source.IndexOf("rest_framework", StringComparison.Ordinal) < 0) yield break;
         var admins = AdminModelsOf(snap);
         foreach (var literal in AstChildren.Descendants(m.Ast).OfType<ConstExpr>())
@@ -213,6 +222,20 @@ public sealed partial class LanguageService
             }
             if (message == null) continue;
             var finding = new Finding(span.Start, span.End - span.Start, message, "django-meta-field", FindingLevel.Warning);
+            if (!Suppressed(m.Source, finding)) yield return AsDiag(finding);
+        }
+    }
+
+    /// <summary>A view whose `serializer_class` is for another model than its `queryset`.</summary>
+    IEnumerable<Diag> ViewDiagnostics(ModuleInfo m, TypeEvaluator ev)
+    {
+        if (m.IsStub || m.Source.IndexOf("serializer_class", StringComparison.Ordinal) < 0 || m.Source.IndexOf("rest_framework", StringComparison.Ordinal) < 0) yield break;
+        foreach (var cd in AstChildren.Descendants(m.Ast).OfType<ClassDef>().ToList())
+        {
+            if (ClassInfoOf(m, cd, ev) is not { } info || ev.DjangoRoleOf(info) != DjangoClassRole.View) continue;
+            var (query, serializer, expr) = ev.DjangoViewParts(info);
+            if (query == null || serializer == null || expr == null || ev.DjangoMetaModel(serializer) is not { } serves || serves == query) continue;
+            var finding = new Finding(expr.Start, expr.End - expr.Start, $"{serializer.Name} is for {serves.Name}, but the queryset of {info.Name} is {query.Name}", "django-view-serializer", FindingLevel.Warning);
             if (!Suppressed(m.Source, finding)) yield return AsDiag(finding);
         }
     }

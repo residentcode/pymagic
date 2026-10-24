@@ -19,6 +19,7 @@ public sealed partial class LanguageService
         foreach (var d in DjangoDiagnostics(m, ev)) yield return d;
         foreach (var d in WebRouteDiagnostics(m, ev)) yield return d;
         foreach (var d in MetaDiagnostics(m, ev, Current())) yield return d;
+        foreach (var d in ViewDiagnostics(m, ev)) yield return d;
     }
 
     /// <summary>A comment on the line says to leave it alone: `# noqa`, `# noqa: code, code` or `# noinspection ...`.</summary>

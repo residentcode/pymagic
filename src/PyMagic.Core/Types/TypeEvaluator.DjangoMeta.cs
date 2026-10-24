@@ -3,8 +3,8 @@ using PyMagic.Core.Syntax;
 
 namespace PyMagic.Core.Types;
 
-/// <summary>What a class is to Django: a model, a model form, a REST framework model serializer, a model admin or an inline of one.</summary>
-public enum DjangoClassRole { None, Model, Form, Serializer, Admin, Inline }
+/// <summary>What a class is to Django: a model, a model form, a REST framework model serializer, a model admin, an inline of one or a REST framework view.</summary>
+public enum DjangoClassRole { None, Model, Form, Serializer, Admin, Inline, View }
 
 public sealed partial class TypeEvaluator
 {
@@ -28,6 +28,7 @@ public sealed partial class TypeEvaluator
                     if (e.Info.Name is "ModelForm" or "BaseModelForm" && module.StartsWith("django.forms", StringComparison.Ordinal)) { role = DjangoClassRole.Form; break; }
                     if (e.Info.Name == "ModelSerializer" && module.StartsWith("rest_framework", StringComparison.Ordinal)) { role = DjangoClassRole.Serializer; break; }
                     if (e.Info.Name is "InlineModelAdmin" or "TabularInline" or "StackedInline" && module.StartsWith("django.contrib.admin", StringComparison.Ordinal)) { role = DjangoClassRole.Inline; break; }
+                    if (module is "rest_framework.generics" or "rest_framework.viewsets") { role = DjangoClassRole.View; break; }
                     if (e.Info.Name is "ModelAdmin" or "BaseModelAdmin" && module.StartsWith("django.contrib.admin", StringComparison.Ordinal)) { role = DjangoClassRole.Admin; break; }
                 }
         }
@@ -55,10 +56,33 @@ public sealed partial class TypeEvaluator
         var role = DjangoRoleOf(c);
         if (role is DjangoClassRole.Form or DjangoClassRole.Serializer && DjangoMetaOf(c) is { } meta)
             result = ModelAssignedIn(meta.Meta.Body, meta.Owner.Module);
+        else if (role == DjangoClassRole.View) result = DjangoViewParts(c).QueryModel ?? (DjangoViewParts(c).Serializer is { } ser ? DjangoMetaModel(ser) : null);
         else if (role == DjangoClassRole.Inline)
             foreach (var entry in Mro(c))
                 if (entry is ClassType e && !e.Info.Module.IsStub && !IsDjangoInternal(e.Info) && ModelAssignedIn(e.Info.Node.Body, e.Info.Module) is { } m) { result = m; break; }
         return _djangoMetaModels[c] = result;
+    }
+
+    /// <summary>The model a view's `queryset = Book.objects...` is for and the class of its `serializer_class`, along the bases of the user's code.</summary>
+    public (ClassInfo? QueryModel, ClassInfo? Serializer, Expr? SerializerExpr) DjangoViewParts(ClassInfo c)
+    {
+        ClassInfo? query = null, serializer = null;
+        Expr? serializerExpr = null;
+        foreach (var entry in Mro(c))
+        {
+            if (entry is not ClassType e || e.Info.Module.IsStub || e.Info.Module.Name.StartsWith("rest_framework", StringComparison.Ordinal)) continue;
+            foreach (var stmt in e.Info.Node.Body.OfType<AssignStmt>())
+            {
+                if (stmt.Targets.Count != 1 || stmt.Targets[0] is not NameExpr n) continue;
+                if (n.Name == "queryset" && query == null) query = DjangoModelOfQuery(TypeOf(e.Info.Module, stmt.Value));
+                else if (n.Name == "serializer_class" && serializer == null && TypeOf(e.Info.Module, stmt.Value) is ClassType { IsInstance: false } sc)
+                {
+                    serializer = sc.Info;
+                    if (ReferenceEquals(e.Info, c)) serializerExpr = stmt.Value;
+                }
+            }
+        }
+        return (query, serializer, serializerExpr);
     }
 
     ClassInfo? ModelAssignedIn(IReadOnlyList<Stmt> body, ModuleInfo module)
