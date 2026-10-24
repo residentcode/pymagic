@@ -38,6 +38,7 @@ public sealed partial class LanguageService
         ("shadowed-builtin", "PEP 8 naming", "Shadowing a built-in name", "A variable, parameter or function that hides a built-in.", "weak"),
         ("fixture-not-found", "pytest", "Fixture not found", "A test parameter that no fixture provides.", "weak"),
         ("django-field", "Django", "Unknown field in a query", "A keyword or string that is not a field of the model.", "warning"),
+        ("django-meta-field", "Django", "Unknown field in Meta, form, serializer or admin", "A name in fields, ordering, list_display, search_fields and the like that the model does not have.", "warning"),
         ("django-url-name", "Django", "Unknown URL name", "A URL name no path() defines.", "weak"),
         ("django-template", "Django", "Missing template", "A template name no templates folder has.", "weak"),
         ("route-path-parameter", "Web routes", "Path parameter not taken by the function", "{id} in the route and no parameter 'id' (a warning for Flask, weak for FastAPI).", "warning"),

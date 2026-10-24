@@ -170,7 +170,7 @@ public sealed partial class LanguageService
         var snap = Full();
         if (!snap.ByUri.TryGetValue(uri, out var m)) return Array.Empty<Location>();
         int offset = Lines(m).OffsetOf(pos);
-        if (NamedStringAt(snap, m, offset) is not { } s) return Array.Empty<Location>();
+        if (NamedStringAt(snap, m, offset) is not { } s) return MetaFieldTarget(snap, m, offset)?.Locations ?? (IReadOnlyList<Location>)Array.Empty<Location>();
         switch (s.Kind)
         {
             case DjangoNamed.UrlName:
@@ -187,7 +187,11 @@ public sealed partial class LanguageService
 
     Hover? DjangoHover(Snapshot snap, ModuleInfo m, int offset)
     {
-        if (NamedStringAt(snap, m, offset) is not { } s) return RouteDeclarationHover(snap, m, offset);
+        if (NamedStringAt(snap, m, offset) is not { } s)
+        {
+            if (MetaFieldTarget(snap, m, offset) is { } meta && meta.Hover.Length > 0) return new Hover(new MarkupContent("markdown", meta.Hover), Lines(m).RangeOf(meta.Start, meta.End));
+            return RouteDeclarationHover(snap, m, offset);
+        }
         var range = Lines(m).RangeOf(s.Start, s.End);
         switch (s.Kind)
         {

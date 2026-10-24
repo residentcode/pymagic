@@ -29,7 +29,7 @@ public sealed partial class LanguageService
         switch (SiteAt(text, offset))
         {
             case CursorSite.Nothing:
-                return FixtureCompletion(doc, start, offset, prefix) ?? DjangoStringCompletion(doc, start, offset) ?? WebStringCompletion(doc, start, offset) ?? Array.Empty<CompletionItem>();   // a few strings name things: a fixture, a URL, a template, a field
+                return FixtureCompletion(doc, start, offset, prefix) ?? DjangoStringCompletion(doc, start, offset) ?? WebStringCompletion(doc, start, offset) ?? MetaStringCompletion(doc, start, offset) ?? Array.Empty<CompletionItem>();   // a few strings name things: a fixture, a URL, a template, a field
             case CursorSite.FStringField:
                 break;
         }
