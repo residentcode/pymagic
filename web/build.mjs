@@ -8,7 +8,7 @@ cpSync('src/index.html', 'dist/index.html');
 
 const options = {
   entryPoints: {
-    main: 'src/main.ts',
+    main: 'src/main.js',
     'editor.worker': 'node_modules/monaco-editor/esm/vs/editor/editor.worker.js',
   },
   bundle: true,
