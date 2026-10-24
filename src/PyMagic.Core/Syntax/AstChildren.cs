@@ -8,7 +8,8 @@ public static class AstChildren
         switch (node)
         {
             // --- expressions
-            case NameExpr or ConstExpr or ErrorExpr: break;
+            case NameExpr or ErrorExpr: break;
+            case ConstExpr x: foreach (var p in x.Parts) yield return p; break;
             case UnaryExpr x: yield return x.Operand; break;
             case BinaryExpr x: yield return x.Left; yield return x.Right; break;
             case CompareExpr x:

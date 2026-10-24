@@ -383,7 +383,7 @@ public class RefactorTests
         Refuses("safeDelete", Src("x| = 1", "print(x)"), null, "used 1 time");
         Refuses("safeDelete", Src("def helper|():", "    pass"), null, "other:1", ("file:///c:/proj/other.py", Src("from main import helper", "helper()")));
         Refuses("safeDelete", Src("def helper|():", "    pass", "__all__ = [\"helper\"]"), null, "string");
-        Refuses("safeDelete", Src("def helper|():", "    pass", "print(f\"{helper}\")"), null, "f-string");
+        Refuses("safeDelete", Src("def helper|():", "    pass", "print(f\"{helper}\")"), null, "used 1 time");   // a real use now that the fields are parsed
         Refuses("safeDelete", Src("def f(a|):", "    return a"), null, "parameters");
         Refuses("safeDelete", Src("x| = compute()"), null, "calls something");
     }

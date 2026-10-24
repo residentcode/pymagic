@@ -72,6 +72,9 @@ public sealed partial class LanguageService
                     if (u != null) Add($"Remove unused import '{u.Name}'", true, RemoveAliases(m, u.Statement, new[] { u.Alias }));
                     break;
                 }
+                default:
+                    if (d.Code != null) InspectionFixes(m, d.Code, ds, de, Add);
+                    break;
             }
         }
 

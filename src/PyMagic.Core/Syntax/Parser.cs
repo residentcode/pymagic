@@ -1147,17 +1147,137 @@ public sealed class Parser
     {
         int s = Cur.Start;
         bool bytes = false, fstr = false;
+        var parts = new List<Expr>();
         while (Cur.Kind == TokenKind.String)
         {
             var t = Advance();
+            bool formatted = false;
             for (int i = t.Start; i < t.End && _src[i] != '"' && _src[i] != '\''; i++)
             {
                 char c = char.ToLowerInvariant(_src[i]);
                 if (c == 'b') bytes = true;
-                else if (c is 'f' or 't') fstr = true;
+                else if (c is 'f' or 't') fstr = formatted = true;
             }
+            if (formatted) FStringParts(t, parts);
         }
-        return At(new ConstExpr(bytes ? ConstKind.Bytes : ConstKind.Str, _src.Substring(s, _prevEnd - s), fstr), s);
+        return At(new ConstExpr(bytes ? ConstKind.Bytes : ConstKind.Str, _src.Substring(s, _prevEnd - s), fstr) { Parts = parts }, s);
+    }
+
+    // ------------------------------------------------------------ f-string replacement fields
+
+    /// <summary>Parses the expressions in the replacement fields of an f-string token so names used in them are references like any other.</summary>
+    void FStringParts(Token t, List<Expr> parts)
+    {
+        int q = t.Start;
+        bool raw = false;
+        for (; q < t.End && _src[q] != '"' && _src[q] != '\''; q++)
+            if (char.ToLowerInvariant(_src[q]) == 'r') raw = true;
+        if (q >= t.End) return;
+        char quote = _src[q];
+        int quoteLength = q + 2 < t.End && _src[q + 1] == quote && _src[q + 2] == quote ? 3 : 1;
+        int bodyStart = q + quoteLength, bodyEnd = t.End - quoteLength;
+        if (bodyEnd <= bodyStart) return;
+
+        int pos = bodyStart;
+        while (pos < bodyEnd)
+        {
+            char c = _src[pos];
+            if (c == '{')
+            {
+                if (pos + 1 < bodyEnd && _src[pos + 1] == '{') { pos += 2; continue; }
+                pos = FStringField(pos, bodyEnd, parts);
+            }
+            else if (!raw && c == '\\' && pos + 2 < bodyEnd && _src[pos + 1] == 'N' && _src[pos + 2] == '{')
+            {
+                while (pos < bodyEnd && _src[pos] != '}') pos++;   // \N{unicode name} is not a field
+                pos++;
+            }
+            else pos++;
+        }
+    }
+
+    /// <summary>The field that starts at <paramref name="open"/> (a brace): its expression, then conversion and format spec, which may hold fields of their own. Returns the offset after the closing brace.</summary>
+    int FStringField(int open, int end, List<Expr> parts)
+    {
+        int start = open + 1, p = start, depth = 0;
+        while (p < end)
+        {
+            char c = _src[p];
+            if (c is '(' or '[' or '{') depth++;
+            else if (c is ')' or ']') depth--;
+            else if (c == '}')
+            {
+                if (depth == 0) break;
+                depth--;
+            }
+            else if (c is '"' or '\'') { p = SkipQuoted(p, end); continue; }
+            else if (depth == 0)
+            {
+                if (c == '!' && !(p + 1 < end && _src[p + 1] == '=')) break;
+                if (c == ':') break;
+                if (c == '=' && IsSelfDocumenting(p, end)) break;
+            }
+            p++;
+        }
+        ParseFieldExpression(start, p, parts);
+
+        if (p < end && _src[p] == '=') { p++; while (p < end && char.IsWhiteSpace(_src[p])) p++; }
+        if (p < end && _src[p] == '!') { while (p < end && _src[p] != ':' && _src[p] != '}') p++; }
+        if (p < end && _src[p] == ':')
+        {
+            p++;
+            while (p < end && _src[p] != '}')
+                p = _src[p] == '{' ? FStringField(p, end, parts) : p + 1;
+        }
+        return p < end ? p + 1 : end;
+    }
+
+    /// <summary>`=` of `{x=}`: not part of `==`, `!=`, `<=`, `>=`, and followed by the end of the field, a conversion or a spec.</summary>
+    bool IsSelfDocumenting(int p, int end)
+    {
+        if (p > 0 && _src[p - 1] is '=' or '!' or '<' or '>') return false;
+        if (p + 1 < end && _src[p + 1] == '=') return false;
+        int n = p + 1;
+        while (n < end && char.IsWhiteSpace(_src[n])) n++;
+        return n < end && _src[n] is '}' or '!' or ':';
+    }
+
+    /// <summary>The offset after the string literal that starts at <paramref name="p"/>.</summary>
+    int SkipQuoted(int p, int end)
+    {
+        char quote = _src[p];
+        bool triple = p + 2 < end && _src[p + 1] == quote && _src[p + 2] == quote;
+        int i = p + (triple ? 3 : 1);
+        while (i < end)
+        {
+            if (_src[i] == '\\') { i += 2; continue; }
+            if (_src[i] == quote && (!triple || i + 2 < end && _src[i + 1] == quote && _src[i + 2] == quote))
+                return i + (triple ? 3 : 1);
+            i++;
+        }
+        return end;
+    }
+
+    void ParseFieldExpression(int start, int end, List<Expr> parts)
+    {
+        if (end <= start || _src.AsSpan(start, end - start).Trim().Length == 0) return;
+        try
+        {
+            // the field is wrapped in parentheses (so it may span lines) and parsed in a copy of the source where it sits at its real offsets
+            var tokens = Lexer.Tokenize("(" + _src.Substring(start, end - start) + ")");
+            int shift = start - 1;
+            var shifted = tokens.Where(k => k.Kind != TokenKind.Comment).Select(k => k with { Start = k.Start + shift }).ToList();
+            string aligned = string.Create(end + 1, (_src, start, end), static (span, f) =>
+            {
+                span.Fill(' ');
+                f._src.AsSpan(f.start, f.end - f.start).CopyTo(span[f.start..]);
+                span[f.start - 1] = '(';
+                span[f.end] = ')';
+            });
+            var sub = new Parser(aligned, shifted);
+            parts.Add(sub.ParseParen());
+        }
+        catch (SyntaxError) { /* an unparsable field stays opaque, as before */ }
     }
 
     Expr ParseParen()

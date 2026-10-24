@@ -18,7 +18,11 @@ public sealed record NameExpr(string Name) : Expr;
 public enum ConstKind { Int, Float, Imaginary, Str, Bytes, True, False, None, Ellipsis }
 
 /// <summary>Literal. For strings Text is the raw source (all adjacent literals joined); IsFString marks any f-/t-string part.</summary>
-public sealed record ConstExpr(ConstKind Kind, string Text, bool IsFString = false) : Expr;
+public sealed record ConstExpr(ConstKind Kind, string Text, bool IsFString = false) : Expr
+{
+    /// <summary>The expressions inside the replacement fields of an f-string (and of nested format specs), in source order.</summary>
+    public IReadOnlyList<Expr> Parts { get; init; } = Array.Empty<Expr>();
+}
 
 public sealed record UnaryExpr(string Op, Expr Operand) : Expr;
 /// <summary>Arithmetic, bitwise and boolean (and/or) binary operators.</summary>

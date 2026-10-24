@@ -96,7 +96,17 @@ public static class Program
                 if (m == null) continue;
                 files++;
                 var swInsp = System.Diagnostics.Stopwatch.StartNew();
-                var found = ws.Evaluator.Inspect(m);
+                IReadOnlyList<PyMagic.Core.Syntax.Diagnostic> found = ws.Evaluator.Inspect(m);
+                // PM_INSPECTIONS=1 adds the syntax-level inspections (unused variables, == None, ...) to the count
+                if (System.Environment.GetEnvironmentVariable("PM_INSPECTIONS") != null)
+                    found = found.Concat(PyMagic.Core.Types.CodeInspections.Run(m).Select(x =>
+                        new PyMagic.Core.Syntax.Diagnostic(x.Start, x.Length, $"[{x.Code}] {x.Message}")))
+                        .Concat(m.Semantics.Diagnostics).Concat(m.Flow.Analyse().Where(x => x.Message != "Unreachable code")).ToList();
+                // findings that sit inside an f-string field are tagged, to see what parsing the fields changed
+                var fields = PyMagic.Core.Syntax.AstChildren.Descendants(m.Ast).OfType<PyMagic.Core.Syntax.ConstExpr>()
+                    .SelectMany(c => c.Parts).Select(p => (p.Start, p.End)).ToList();
+                found = found.Select(x => fields.Any(f => x.Start >= f.Start && x.Start < f.End)
+                    ? new PyMagic.Core.Syntax.Diagnostic(x.Start, x.Length, "[in-fstring] " + x.Message) : x).ToList();
                 inspectMs += swInsp.ElapsedMilliseconds;
                 if (trace || swFile.ElapsedMilliseconds > 1500) Console.WriteLine($"   {name}: {swFile.ElapsedMilliseconds} ms");
                 foreach (var d in found)
