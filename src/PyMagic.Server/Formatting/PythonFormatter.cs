@@ -28,7 +28,42 @@ public static class PythonFormatter
         catch (ArgumentException) { return null; }
         catch (InvalidOperationException) { return null; }
 
-        return SameCode(source, result) ? result : null;
+        return SameCode(source, result) ? Finish(result, options) : null;
+    }
+
+    /// <summary>The rest of what the options ask for: tabs for indentation, the line ending.</summary>
+    static string Finish(string result, FormatOptions o)
+    {
+        if (o.UseTabs) result = IndentWithTabs(result, o.IndentWidth);
+        return o.Endings switch
+        {
+            LineEnding.Lf => result.Replace("\r\n", "\n"),
+            LineEnding.Crlf => result.Replace("\r\n", "\n").Replace("\n", "\r\n"),
+            _ => result,
+        };
+    }
+
+    /// <summary>Leading spaces become one tab per indentation level, except on lines that start inside a string.</summary>
+    static string IndentWithTabs(string text, int width)
+    {
+        var insideString = new HashSet<int>();
+        foreach (var t in Lexer.Tokenize(text))
+            if (t.Kind == TokenKind.String)
+                for (int i = t.Start; i < t.End; i++)
+                    if (text[i] == '\n' && i + 1 < t.End) insideString.Add(i + 1);
+        var sb = new StringBuilder(text.Length);
+        int pos = 0;
+        while (pos < text.Length)
+        {
+            int end = text.IndexOf('\n', pos);
+            end = end < 0 ? text.Length : end + 1;
+            int spaces = 0;
+            if (!insideString.Contains(pos))
+                while (pos + spaces < end && text[pos + spaces] == ' ') spaces++;
+            sb.Append('\t', spaces / width).Append(' ', spaces % width).Append(text, pos + spaces, end - pos - spaces);
+            pos = end;
+        }
+        return sb.ToString();
     }
 
     /// <summary>
@@ -39,6 +74,8 @@ public static class PythonFormatter
     public static string? FormatRange(string source, int start, int end, FormatOptions? options = null)
     {
         options ??= FormatOptions.Default;
+        // tabs and a fixed line ending are decided for the whole file
+        if (options.UseTabs || options.Endings != LineEnding.Auto) return Format(source, options);
         LastMismatch = null;
         if (source.Length == 0) return source;
         if (source.Contains("fmt: off") || source.Contains("fmt:off") || source.Contains("fmt: skip")) return null;

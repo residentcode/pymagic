@@ -5,44 +5,75 @@ namespace PyMagic.Server.Formatting;
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum QuoteStyle { Double, Single, Preserve }
 
-/// <summary>What the built-in formatter can be told: the same knobs black and ruff read from pyproject.toml.</summary>
+/// <summary>How lines end in the formatted text: as the file has them (Auto), or always LF or CRLF.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LineEnding { Auto, Lf, Crlf }
+
+/// <summary>What the built-in formatter can be told: the same knobs black and ruff read from pyproject.toml, and what .editorconfig says.</summary>
 /// <param name="LineLength">The width lines are wrapped at (black's and ruff's <c>line-length</c>).</param>
 /// <param name="Quotes">Double (the default), Single, or Preserve (black's <c>skip-string-normalization</c>, ruff's <c>quote-style = "preserve"</c>).</param>
 /// <param name="MagicTrailingComma">False when a trailing comma does not keep a collection exploded (<c>skip-magic-trailing-comma</c>).</param>
-/// <param name="IndentWidth">Spaces per level (ruff's <c>indent-width</c>).</param>
+/// <param name="IndentWidth">Spaces per level (ruff's <c>indent-width</c>, editorconfig's <c>indent_size</c>); with tabs, the width a tab counts for.</param>
 /// <param name="Source">The configuration file the options were read from, if any.</param>
-public sealed record FormatOptions(int LineLength = 88, QuoteStyle Quotes = QuoteStyle.Double, bool MagicTrailingComma = true, int IndentWidth = 4, string? Source = null)
+/// <param name="UseTabs">One tab per level (ruff's <c>indent-style = "tab"</c>, editorconfig's <c>indent_style = tab</c>).</param>
+/// <param name="Endings">ruff's <c>line-ending</c>, editorconfig's <c>end_of_line</c>.</param>
+public sealed record FormatOptions(int LineLength = 88, QuoteStyle Quotes = QuoteStyle.Double, bool MagicTrailingComma = true, int IndentWidth = 4, string? Source = null,
+    bool UseTabs = false, LineEnding Endings = LineEnding.Auto)
 {
     public static readonly FormatOptions Default = new();
 }
 
-/// <summary>Finds and reads the formatter settings of a project: <c>[tool.black]</c> and <c>[tool.ruff]</c> in pyproject.toml, <c>ruff.toml</c> and <c>.ruff.toml</c>.</summary>
+/// <summary>The settings a configuration file states, each null when it says nothing (so another source can fill it in).</summary>
+public sealed record FormatSettings(int? LineLength = null, QuoteStyle? Quotes = null, bool? MagicTrailingComma = null, int? IndentWidth = null, bool? UseTabs = null, LineEnding? Endings = null)
+{
+    /// <summary>The options these settings give, the defaults filling what is left.</summary>
+    public FormatOptions ToOptions(string? source = null, FormatOptions? baseline = null)
+    {
+        var d = baseline ?? FormatOptions.Default;
+        return new FormatOptions(LineLength ?? d.LineLength, Quotes ?? d.Quotes, MagicTrailingComma ?? d.MagicTrailingComma, IndentWidth ?? d.IndentWidth, source ?? d.Source, UseTabs ?? d.UseTabs, Endings ?? d.Endings);
+    }
+}
+
+/// <summary>Finds and reads the formatter settings of a project: <c>[tool.black]</c> and <c>[tool.ruff]</c> in pyproject.toml, <c>ruff.toml</c> and <c>.ruff.toml</c>, then <c>.editorconfig</c> for what they leave open.</summary>
 public static class FormatConfig
 {
     static readonly string[] ProjectMarkers = { "pyproject.toml", "ruff.toml", ".ruff.toml", ".git", ".hg" };
 
     /// <summary>
     /// The options for a file: from the nearest folder upwards that holds a configuration file (the project root, as black
-    /// and ruff find it). A project root without a formatter section means the defaults.
+    /// and ruff find it). A project root without a formatter section means the defaults. What those files do not say
+    /// is taken from the .editorconfig files that apply to the file.
     /// </summary>
     public static FormatOptions For(string filePath)
     {
+        var fromEditor = FromEditorConfig(EditorConfig.For(filePath));
+        var fromProject = ProjectSettings(filePath, out string? source);
+        var merged = new FormatSettings(
+            fromProject.LineLength ?? fromEditor.LineLength, fromProject.Quotes ?? fromEditor.Quotes, fromProject.MagicTrailingComma ?? fromEditor.MagicTrailingComma,
+            fromProject.IndentWidth ?? fromEditor.IndentWidth, fromProject.UseTabs ?? fromEditor.UseTabs, fromProject.Endings ?? fromEditor.Endings);
+        return merged.ToOptions(source);
+    }
+
+    static FormatSettings ProjectSettings(string filePath, out string? source)
+    {
+        source = null;
         string? dir;
         try { dir = Path.GetDirectoryName(Path.GetFullPath(filePath)); }
-        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return FormatOptions.Default; }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return new FormatSettings(); }
 
         for (; dir != null; dir = Path.GetDirectoryName(dir))
         {
-            var found = ReadFolder(dir);
+            var found = ReadFolder(dir, out source);
             if (found != null) return found;
-            if (ProjectMarkers.Any(m => File.Exists(Path.Combine(dir, m)) || Directory.Exists(Path.Combine(dir, m)))) return FormatOptions.Default;
+            if (ProjectMarkers.Any(m => File.Exists(Path.Combine(dir, m)) || Directory.Exists(Path.Combine(dir, m)))) return new FormatSettings();
         }
-        return FormatOptions.Default;
+        return new FormatSettings();
     }
 
-    /// <summary>The options a folder's configuration files give, or null when they have no formatter section.</summary>
-    static FormatOptions? ReadFolder(string dir)
+    /// <summary>The settings a folder's configuration files give, or null when they have no formatter section.</summary>
+    static FormatSettings? ReadFolder(string dir, out string? source)
     {
+        source = null;
         foreach (var name in new[] { "pyproject.toml", "ruff.toml", ".ruff.toml" })
         {
             string path = Path.Combine(dir, name);
@@ -51,14 +82,29 @@ public static class FormatConfig
             try { text = File.ReadAllText(path); }
             catch (IOException) { continue; }
             catch (UnauthorizedAccessException) { continue; }
-            var options = FromToml(text, isRuffFile: name != "pyproject.toml", path);
-            if (options != null) return options;
+            var settings = SettingsFromToml(text, isRuffFile: name != "pyproject.toml");
+            if (settings != null) { source = path; return settings; }
         }
         return null;
     }
 
+    /// <summary>What an .editorconfig says: <c>indent_style</c>, <c>indent_size</c> (or <c>tab_width</c>), <c>end_of_line</c> and <c>max_line_length</c>.</summary>
+    public static FormatSettings FromEditorConfig(IReadOnlyDictionary<string, string> p)
+    {
+        bool? tabs = p.TryGetValue("indent_style", out var style) ? style switch { "tab" => true, "space" => false, _ => null } : null;
+        int? width = null;
+        if (p.TryGetValue("indent_size", out var size) && size != "tab" && int.TryParse(size, out int n) && n is >= 1 and <= 100) width = n;
+        else if (p.TryGetValue("tab_width", out var tw) && int.TryParse(tw, out int t) && t is >= 1 and <= 100 && (size == "tab" || tabs == true)) width = t;
+        LineEnding? ending = p.TryGetValue("end_of_line", out var eol) ? eol switch { "lf" => LineEnding.Lf, "crlf" => LineEnding.Crlf, _ => null } : null;
+        int? length = p.TryGetValue("max_line_length", out var ml) && int.TryParse(ml, out int len) && len is >= 1 and <= 1000 ? len : null;
+        return new FormatSettings(LineLength: length, IndentWidth: width, UseTabs: tabs, Endings: ending);
+    }
+
     /// <summary>The options a configuration text gives; null when it has no black or ruff section (or is not valid TOML).</summary>
-    public static FormatOptions? FromToml(string text, bool isRuffFile = false, string? source = null)
+    public static FormatOptions? FromToml(string text, bool isRuffFile = false, string? source = null) =>
+        SettingsFromToml(text, isRuffFile)?.ToOptions(source);
+
+    static FormatSettings? SettingsFromToml(string text, bool isRuffFile)
     {
         var root = Toml.Parse(text);
         if (root == null) return null;
@@ -71,15 +117,17 @@ public static class FormatConfig
         bool? Bool(Dictionary<string, object?>? t, string key) => t != null && t.TryGetValue(key, out var v) && v is bool b ? b : null;
         string? Str(Dictionary<string, object?>? t, string key) => t != null && t.TryGetValue(key, out var v) && v is string s ? s : null;
 
-        int lineLength = Int(black, "line-length") ?? Int(ruff, "line-length") ?? FormatOptions.Default.LineLength;
-        int indent = Int(ruff, "indent-width") ?? FormatOptions.Default.IndentWidth;
+        int? lineLength = Int(black, "line-length") ?? Int(ruff, "line-length");
+        int? indent = Int(ruff, "indent-width");
 
-        var quotes = QuoteStyle.Double;
+        QuoteStyle? quotes = null;
         if (Bool(black, "skip-string-normalization") == true) quotes = QuoteStyle.Preserve;
         else if (black == null || !black.ContainsKey("skip-string-normalization"))
-            quotes = Str(ruffFormat, "quote-style") switch { "single" => QuoteStyle.Single, "preserve" => QuoteStyle.Preserve, _ => QuoteStyle.Double };
+            quotes = Str(ruffFormat, "quote-style") switch { "single" => QuoteStyle.Single, "preserve" => QuoteStyle.Preserve, "double" => QuoteStyle.Double, _ => null };
 
-        bool magic = !(Bool(black, "skip-magic-trailing-comma") == true || Bool(ruffFormat, "skip-magic-trailing-comma") == true);
-        return new FormatOptions(lineLength, quotes, magic, indent, source);
+        bool? magic = Bool(black, "skip-magic-trailing-comma") == true || Bool(ruffFormat, "skip-magic-trailing-comma") == true ? false : null;
+        bool? tabs = Str(ruffFormat, "indent-style") switch { "tab" => true, "space" => false, _ => null };
+        LineEnding? ending = Str(ruffFormat, "line-ending") switch { "lf" => LineEnding.Lf, "cr-lf" or "crlf" => LineEnding.Crlf, "auto" => LineEnding.Auto, _ => null };
+        return new FormatSettings(lineLength, quotes, magic, indent, tabs, ending);
     }
 }
