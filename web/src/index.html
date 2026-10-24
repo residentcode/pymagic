@@ -129,6 +129,7 @@
     #sigdialog .pname { color: var(--dim); padding: 2px 0; font-weight: 600; } #sigdialog pre { margin: 0; font: 12.5px Consolas, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 0; overflow-x: auto; }
     #sigdialog pre div { padding: 0 8px; white-space: pre; } #sigdialog .hunk { color: var(--dim); background: #8882; } #sigdialog .add { background: #2ea04326; } #sigdialog .del { background: #f8514926; } #sigdialog .ctx { color: var(--dim); }
     #sigdialog .warnings { color: #e3b341; font-size: 12.5px; } #sigdialog .buttons label { display: flex; align-items: center; gap: 4px; color: var(--dim); }
+    #toolbar .fmtsave { color: var(--dim); display: flex; align-items: center; gap: 3px; white-space: nowrap; }
     @media (max-width: 700px) { #app { grid-template-columns: 1fr; } #sidebar { display: none; } }
   </style>
 </head>
@@ -139,6 +140,10 @@
       <button id="b-run" class="run" title="Run (Ctrl+F5)">▶ Run</button>
       <button id="b-debug" class="dbg" title="Debug / Resume (F5)">🐞 Debug</button>
       <button id="b-stop" class="stop" title="Stop (Shift+F5)" disabled>■ Stop</button>
+      <span class="sep"></span>
+      <button id="b-format" title="Format the file and sort its imports (Shift+Alt+F)">✎ Format</button>
+      <button id="b-imports" title="Remove unused imports and sort the rest (Shift+Alt+O)">⇅ Imports</button>
+      <label class="fmtsave" title="Format the file whenever it is saved"><input type="checkbox" id="fmt-save"> on save</label>
       <span class="sep"></span>
       <button id="b-over" title="Step over (F10)" disabled>Step over</button>
       <button id="b-into" title="Step into (F11)" disabled>Step into</button>

@@ -84,12 +84,9 @@ public sealed partial class LanguageService
                     new LspCommand(option.Title, "pymagic.refactor", new object[] { option.Kind, uri, range, option.DefaultName ?? "", option.All })));
         }
         catch (Exception e) when (e is InvalidOperationException or ArgumentException or KeyNotFoundException or IndexOutOfRangeException) { /* the quick fixes above still work */ }
-        var all = UnusedImports(m).ToList();
-        if (all.Count > 0)
-        {
-            var edits = all.GroupBy(u => u.Statement).Select(g => RemoveAliases(m, g.Key, g.Select(u => u.Alias).ToList())).ToArray();
-            actions.Add(new CodeAction("Optimize imports", OrganizeImportsKind, One(edits)));
-        }
+        var organized = OrganizedText(snap, m);
+        if (organized != null && organized != m.Source)
+            actions.Add(new CodeAction("Optimize imports", OrganizeImportsKind, new WorkspaceEdit(new Dictionary<string, List<TextEdit>> { [uri] = DiffEdit(m, organized) })));
         return actions;
     }
 

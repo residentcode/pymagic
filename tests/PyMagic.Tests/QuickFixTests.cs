@@ -161,7 +161,8 @@ public class QuickFixTests
         var all = Actions(src);
         var opt = all.Single(a => a.Title == "Optimize imports");
         Assert.Equal(LanguageService.OrganizeImportsKind, opt.Kind);
-        Assert.Equal("from a import c\nimport sys\nprint(c, sys)\n", Apply(src, opt.Edit, Main));
+        // the unused ones go and the rest is sorted into sections (standard library first)
+        Assert.Equal("import sys\n\nfrom a import c\nprint(c, sys)\n", Apply(src, opt.Edit, Main));
     }
 
     [Fact]

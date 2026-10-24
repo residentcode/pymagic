@@ -208,6 +208,10 @@ public sealed class Server
                 return _service.Refactor(UriOf(p), p!["kind"]!.GetValue<string>(), RangeOf(p), p["name"]?.GetValue<string>(), p["all"]?.GetValue<bool>() ?? false);
             case "textDocument/codeAction":
                 return _service.CodeActions(UriOf(p), RangeOf(p));
+            case "textDocument/formatting":
+                return _service.FormatDocument(UriOf(p));
+            case "pymagic/organizeImports":
+                return _service.OrganizeImports(UriOf(p));
             case "workspace/symbol":
                 return _service.WorkspaceSymbols(p?["query"]?.GetValue<string>() ?? "");
             case "textDocument/documentSymbol":
@@ -246,6 +250,7 @@ public sealed class Server
                 completionProvider = new { triggerCharacters = new[] { "." } },
                 documentSymbolProvider = true,
                 workspaceSymbolProvider = true,
+                documentFormattingProvider = true,
                 codeActionProvider = new { codeActionKinds = new[] { LanguageService.QuickFixKind, LanguageService.OrganizeImportsKind, LanguageService.RefactorKind, LanguageService.RefactorExtractKind, LanguageService.RefactorInlineKind } },
                 referencesProvider = true,
                 renameProvider = new { prepareProvider = true },

@@ -6,6 +6,7 @@ import { setupInterpreters } from './interpreters';
 import { setupPackages } from './packages';
 import { setupRefactor } from './refactor';
 import { setupSearch } from './search';
+import { toast } from './toast';
 
 (self as any).MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
 
@@ -107,7 +108,59 @@ async function modelForUri(uri: string): Promise<monaco.editor.ITextModel | null
 
 // ---------------------------------------------------------------- language features
 
+/** Applies LSP text edits to a model as one undo step. */
+function applyTextEdits(model: monaco.editor.ITextModel, edits: { range: LspRange; newText: string }[]) {
+  if (edits.length === 0) return;
+  editor.pushUndoStop();
+  model.pushEditOperations([], edits.map((e) => ({ range: toRange(e.range), text: e.newText })), () => null);
+  editor.pushUndoStop();
+}
+
+async function formatCurrent(quiet = false): Promise<boolean> {
+  const model = editor.getModel();
+  const uri = model && serverUri.get(model);
+  if (!model || !uri || !relPathOf.get(normalise(uri))?.endsWith('.py')) return false;
+  lsp.notify('textDocument/didChange', { textDocument: { uri, version: model.getVersionId() }, contentChanges: [{ text: model.getValue() }] });
+  try {
+    const edits = await lsp.request('textDocument/formatting', { textDocument: { uri }, options: { tabSize: 4, insertSpaces: true } });
+    applyTextEdits(model, edits ?? []);
+    if (!quiet) toast(edits?.length ? 'Formatted' : 'Already formatted');
+    return true;
+  } catch (e: any) {
+    toast(e.message ?? 'The file cannot be formatted.', true);
+    return false;
+  }
+}
+
+async function organizeImports() {
+  const model = editor.getModel();
+  const uri = model && serverUri.get(model);
+  if (!model || !uri || !relPathOf.get(normalise(uri))?.endsWith('.py')) return;
+  lsp.notify('textDocument/didChange', { textDocument: { uri, version: model.getVersionId() }, contentChanges: [{ text: model.getValue() }] });
+  try {
+    const edits = await lsp.request('pymagic/organizeImports', { textDocument: { uri } });
+    applyTextEdits(model, edits ?? []);
+    toast(edits?.length ? 'Imports organized' : 'Imports are already in order');
+  } catch (e: any) {
+    toast(e.message ?? 'The imports cannot be organized.', true);
+  }
+}
+
 function registerProviders() {
+  monaco.languages.registerDocumentFormattingEditProvider('python', {
+    async provideDocumentFormattingEdits(model) {
+      const uri = serverUri.get(model);
+      if (!uri) return [];
+      try {
+        const edits: { range: LspRange; newText: string }[] = (await lsp.request('textDocument/formatting', { textDocument: { uri }, options: { tabSize: 4, insertSpaces: true } })) ?? [];
+        return edits.map((e) => ({ range: toRange(e.range), text: e.newText }));
+      } catch (e: any) {
+        toast(e.message ?? 'The file cannot be formatted.', true);
+        return [];
+      }
+    },
+  });
+
   monaco.languages.registerHoverProvider('python', {
     async provideHover(model, position) {
       const uri = serverUri.get(model);
@@ -306,6 +359,7 @@ async function openFile(rel: string, reveal?: monaco.IRange) {
 }
 
 async function save() {
+  if ($<HTMLInputElement>('fmt-save').checked) await formatCurrent(true);
   const model = editor.getModel();
   const rel = model && relPathOf.get(normalise(serverUri.get(model)!));
   if (!model || !rel) return;
@@ -366,6 +420,14 @@ async function main() {
     window.dispatchEvent(new CustomEvent('pymagic:install', { detail: name }));
   });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void save());
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyL, () => void formatCurrent());
+  editor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyO, () => void organizeImports());
+  $('b-format').onclick = () => void formatCurrent();
+  $('b-imports').onclick = () => void organizeImports();
+  try {
+    $<HTMLInputElement>('fmt-save').checked = localStorage.getItem('pymagic.formatOnSave') === '1';
+    $<HTMLInputElement>('fmt-save').onchange = () => localStorage.setItem('pymagic.formatOnSave', $<HTMLInputElement>('fmt-save').checked ? '1' : '0');
+  } catch { /* storage unavailable */ }
   editor.onDidChangeCursorPosition((e) => { $('cursor').textContent = `Ln ${e.position.lineNumber}, Col ${e.position.column}`; });
 
   // go-to-definition into another file switches the editor to it
