@@ -200,6 +200,10 @@ public sealed class Server
                 return _service.GetSignature(UriOf(p), PositionOf(p));
             case "pymagic/changeSignature":
                 return _service.ChangeSignature(UriOf(p), PositionOf(p), p!["newName"]?.GetValue<string>(), ParseParameters(p["parameters"]));
+            case "pymagic/moveTargets":
+                return _service.MoveTargets(UriOf(p));
+            case "pymagic/move":
+                return _service.MoveSymbol(UriOf(p), PositionOf(p), p!["target"]!.GetValue<string>());
             case "pymagic/refactor":
                 return _service.Refactor(UriOf(p), p!["kind"]!.GetValue<string>(), RangeOf(p), p["name"]?.GetValue<string>(), p["all"]?.GetValue<bool>() ?? false);
             case "textDocument/codeAction":

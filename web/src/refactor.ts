@@ -3,6 +3,7 @@
 import * as monaco from 'monaco-editor';
 import type { LspClient } from './lsp';
 import { editSignature, fetchSignature, type SigInfo } from './signature';
+import { pickTarget } from './movepicker';
 
 export interface RefactorDeps {
   editor: monaco.editor.IStandaloneCodeEditor;
@@ -106,7 +107,27 @@ export function setupRefactor(deps: RefactorDeps) {
     editor.focus();
   }
 
+  async function moveSymbol(uri: string, position: LspPosition) {
+    const model = editor.getModel();
+    if (model && deps.uriOf(model) === uri) {
+      lsp.notify('textDocument/didChange', { textDocument: { uri, version: model.getVersionId() }, contentChanges: [{ text: model.getValue() }] });
+    }
+    try {
+      const targets: { uri: string; module: string }[] = await lsp.request('pymagic/moveTargets', { textDocument: { uri } });
+      const chosen = await pickTarget(targets);
+      if (!chosen) { editor.focus(); return; }
+      const edit: { changes: Record<string, { range: LspRange; newText: string }[]> } =
+        await lsp.request('pymagic/move', { textDocument: { uri }, position, target: chosen.uri });
+      await applyEdits(edit.changes);
+      toast(`Moved to ${chosen.module}`);
+    } catch (e: any) {
+      toast(e.message ?? 'The definition cannot be moved.', true);
+    }
+    editor.focus();
+  }
+
   async function run(kind: string, uri: string, range: LspRange, defaultName: string, all: boolean) {
+    if (kind === 'moveSymbol') { await moveSymbol(uri, range.start); return; }
     if (kind === 'changeSignature') { await changeSignature(uri, range.start); return; }
     let name: string | undefined;
     if (defaultName) {
@@ -166,6 +187,7 @@ export function setupRefactor(deps: RefactorDeps) {
   editor.addCommand(M.CtrlCmd | M.Alt | K.KeyN, () => void trigger('inlineVariable'));
   editor.addCommand(M.CtrlCmd | K.F6, () => void trigger('changeSignature'));
   editor.addCommand(M.CtrlCmd | M.Alt | K.KeyP, () => void trigger('inlineMethod'));
+  editor.addCommand(K.F6, () => void trigger('moveSymbol'));
 
   return { trigger };
 }

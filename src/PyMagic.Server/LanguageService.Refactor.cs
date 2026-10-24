@@ -31,6 +31,7 @@ public sealed partial class LanguageService
         "inlineVariable" => "refactor.inline.variable",
         "inlineMethod" or "inlineMethodAll" => "refactor.inline.method",
         "changeSignature" => "refactor.rewrite.signature",
+        "moveSymbol" => "refactor.move",
         _ => "refactor.rewrite",
     };
 
@@ -81,6 +82,7 @@ public sealed partial class LanguageService
             if (Feasible("inlineVariable", null)) options.Add(new RefactorOption("inlineVariable", "Inline variable", null));
             if (Feasible("safeDelete", null)) options.Add(new RefactorOption("safeDelete", "Safe delete (no usages)", null));
             if (CanChangeSignature(snap, m, start)) options.Add(new RefactorOption("changeSignature", "Change signature…", null));
+            if (CanMove(uri, range.Start)) options.Add(new RefactorOption("moveSymbol", "Move to another file…", null));
             if (Feasible("inlineMethod", null)) options.Add(new RefactorOption("inlineMethod", "Inline method (this call)", null));
             if (CanInlineAll(snap, m, start)) options.Add(new RefactorOption("inlineMethodAll", "Inline method and remove it", null));
         }

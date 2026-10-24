@@ -109,6 +109,7 @@
     #sigdialog input:disabled { opacity: .5; } #sigdialog button { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
     #sigdialog button:disabled { opacity: .4; cursor: default; } #sigdialog button.primary { border-color: var(--accent); }
     #sigdialog .buttons { display: flex; gap: 8px; }
+    #sigdialog .picklist { max-height: 260px; overflow: auto; min-width: 320px; } #sigdialog .pick { padding: 3px 8px; cursor: pointer; font: 13px Consolas, monospace; border-radius: 4px; } #sigdialog .pick.sel, #sigdialog .pick:hover { background: var(--accent); color: #fff; }
     @media (max-width: 700px) { #app { grid-template-columns: 1fr; } #sidebar { display: none; } }
   </style>
 </head>

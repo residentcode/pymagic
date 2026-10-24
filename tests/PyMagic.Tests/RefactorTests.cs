@@ -404,7 +404,7 @@ public class RefactorTests
         Assert.True(repeated.Any(t => t.Contains("replace all 2 occurrences")), string.Join(" | ", repeated));
 
         Assert.Equal("Inline variable", string.Join(",", Options(Src("def f():", "    x| = 3", "    return x")).Select(o => o.Title)));
-        Assert.Equal("Safe delete (no usages),Change signature…", string.Join(",", Options(Src("def spare|():", "    pass")).Select(o => o.Title)));
+        Assert.Equal("Safe delete (no usages),Change signature…,Move to another file…", string.Join(",", Options(Src("def spare|():", "    pass")).Select(o => o.Title)));
         Assert.Equal(0, Options(Src("def f():", "    return ⟦1 +⟧")).Count);   // a syntax error: nothing is offered
     }
 
