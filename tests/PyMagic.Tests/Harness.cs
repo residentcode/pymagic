@@ -65,6 +65,37 @@ public static class Program
     /// Runs the type inspections over files of a directory (the directory is also the import search root),
     /// printing timing, crashes, message counts and samples. Optional second argument limits the number of files.
     /// </summary>
+    /// <summary>Runs the language service's own diagnostics (class hierarchy inspections included) over a folder of modules; counts by code, with samples.</summary>
+    static int ServiceCorpus(string dir)
+    {
+        var svc = new PyMagic.Server.LanguageService { TypeshedPath = PyMagic.Core.Types.Workspace.DefaultTypeshedPath };
+        svc.LibraryRoots.Add(dir);
+        var uris = new List<(string Uri, string Name)>();
+        foreach (var f in Directory.EnumerateFiles(dir, "*.py", SearchOption.TopDirectoryOnly))
+        {
+            string name = Path.GetFileNameWithoutExtension(f);
+            string uri = $"file:///c:/corpus_open/{name}.py";
+            svc.Open(uri, File.ReadAllText(f), 1);
+            uris.Add((uri, name));
+        }
+        var counts = new Dictionary<string, int>();
+        var samples = new Dictionary<string, List<string>>();
+        foreach (var (uri, name) in uris)
+            foreach (var d in svc.Diagnostics(uri))
+            {
+                string code = d.Code ?? "(none)";
+                counts[code] = counts.GetValueOrDefault(code) + 1;
+                if (!samples.TryGetValue(code, out var l)) samples[code] = l = new();
+                if (l.Count < 12) l.Add($"{name}.py:{d.Range.Start.Line + 1}  {d.Message}");
+            }
+        foreach (var kv in counts.OrderByDescending(k => k.Value))
+        {
+            Console.WriteLine($"{kv.Value,6}  {kv.Key}");
+            if (kv.Key is "missing-super-init" or "unimplemented-abstract") foreach (var s in samples[kv.Key]) Console.WriteLine("          " + s);
+        }
+        return 0;
+    }
+
     static int InspectCorpus(string dir, int limit)
     {
         // the files under test are user code; their imports resolve like a real project (typeshed first, then the library directory)
@@ -242,6 +273,7 @@ public static class Program
         if (args.Length == 2 && args[0] == "flow") return FlowCorpus(args[1]);
         if (args.Length == 2 && args[0] == "types") return ShowTypes(args[1]);
         if (args.Length == 3 && args[0] == "mro") return ShowMro(args[1], args[2]);
+        if (args.Length >= 2 && args[0] == "service") return OnBigStack(() => ServiceCorpus(args[1]));
         if (args.Length >= 2 && args[0] == "inspect") return OnBigStack(() => InspectCorpus(args[1], args.Length > 2 ? int.Parse(args[2]) : int.MaxValue));
         int pass = 0, fail = 0;
         foreach (var type in Assembly.GetExecutingAssembly().GetTypes().Where(t => t.IsClass && t.Name.EndsWith("Tests")))

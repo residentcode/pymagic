@@ -73,7 +73,7 @@ public sealed partial class LanguageService
                     break;
                 }
                 default:
-                    if (d.Code != null) InspectionFixes(m, d.Code, ds, de, Add);
+                    if (d.Code != null) InspectionFixes(snap, m, uri, d.Code, ds, de, Add, actions);
                     break;
             }
         }

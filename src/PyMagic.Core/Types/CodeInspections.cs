@@ -5,7 +5,7 @@ using PyModule = PyMagic.Core.Syntax.Module;
 
 namespace PyMagic.Core.Types;
 
-public enum FindingLevel { Error, Warning, Unused }
+public enum FindingLevel { Error, Warning, Weak, Unused }
 
 /// <summary>One finding of <see cref="CodeInspections"/>: a span, a message and the stable code the quick fixes key on.</summary>
 public sealed record Finding(int Start, int Length, string Message, string Code, FindingLevel Level);
@@ -52,10 +52,170 @@ public static class CodeInspections
         foreach (var scope in Scopes(m.Semantics.ModuleScope))
         {
             UnusedVariables(m, scope, found);
+            UnusedParameters(m, scope, found);
             Redeclared(m, scope, found);
+            Shadowing(m, scope, found);
+            Naming(m, scope, found);
         }
         return found;
     }
+
+    /// <summary>A parameter node may start at its `*`; the name itself is what findings and renames point at.</summary>
+    static int NameStartOf(ModuleInfo m, Parameter p)
+    {
+        int i = m.Source.IndexOf(p.Name, p.Start, StringComparison.Ordinal);
+        return i >= 0 && i < p.End ? i : p.Start;
+    }
+
+    // ------------------------------------------------------------ unused parameters
+
+    /// <summary>The class whose body defines this function, also when the def sits under an `if` or `try` inside it.</summary>
+    static ClassDef? EnclosingClass(ModuleInfo m, FunctionDef f) =>
+        m.Semantics.ScopeOf(f)?.Parent is { Kind: ScopeKind.Class, Node: ClassDef c } ? c : null;
+
+    static readonly Regex DeliberatelyUnused = new(@"^(_|unused|dummy|ignored?)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    static bool HasBases(ClassDef c) => c.Bases.Any(b => b.Name == null && b.Stars == 0 && !(b.Value is NameExpr { Name: "object" }));
+
+    /// <summary>A parameter nobody reads. Quiet where it is not the author's choice: overrides (a method of a class with bases),
+    /// bodies that only stand in for an implementation, decorated functions (the decorator decides what is passed) and dunder methods.</summary>
+    static void UnusedParameters(ModuleInfo m, Scope scope, List<Finding> found)
+    {
+        if (scope.Kind != ScopeKind.Function || scope.Node is not FunctionDef def) return;
+        if (def.Name.StartsWith("__") && def.Name.EndsWith("__")) return;
+        if (def.Decorators.Any(d => d is not NameExpr { Name: "staticmethod" or "classmethod" })) return;
+        var owner = EnclosingClass(m, def);
+        if (owner != null && HasBases(owner)) return;
+        if (IsPlaceholderBody(def.Body)) return;
+        if (Regex.IsMatch(m.Source[def.Start..def.End], @"\b(locals|vars|eval|exec)\s*\(")) return;
+
+        bool first = true;
+        foreach (var p in def.Params)
+        {
+            if (p.Kind is ParamKind.Slash or ParamKind.KwOnlySeparator) continue;
+            bool implicitFirst = first && owner != null && !def.Decorators.Any(d => d is NameExpr { Name: "staticmethod" });
+            first = false;
+            if (implicitFirst || DeliberatelyUnused.IsMatch(p.Name)) continue;
+            if (!scope.Symbols.TryGetValue(p.Name, out var sym) || sym.Redirect != null) continue;
+            if (sym.References.Any(r => (r.Access & Access.Read) != 0) || ChangedByNestedScope(scope, p.Name)) continue;
+            if (sym.Declarations.Count == 0 || sym.Declarations[0].Kind != DeclKind.Parameter) continue;
+            found.Add(new Finding(NameStartOf(m, p), p.Name.Length, $"Parameter '{p.Name}' value is not used", "unused-argument", FindingLevel.Unused));
+        }
+    }
+
+    /// <summary>Only a docstring, `pass`, `...` or `raise NotImplementedError`: the function is a stub, its parameters describe a contract.</summary>
+    static bool IsPlaceholderBody(IReadOnlyList<Stmt> body) => body.All(s => s switch
+    {
+        PassStmt => true,
+        ExprStmt { Value: ConstExpr { Kind: ConstKind.Str or ConstKind.Ellipsis } } => true,
+        RaiseStmt { Exc: NameExpr { Name: "NotImplementedError" } } => true,
+        RaiseStmt { Exc: CallExpr { Func: NameExpr { Name: "NotImplementedError" } } } => true,
+        _ => false,
+    });
+
+    // ------------------------------------------------------------ shadowed built-ins
+
+    static readonly HashSet<string> TolerableBuiltins = new(StringComparer.Ordinal)
+    {
+        "copyright", "credits", "license", "exit", "quit", "help", "_",
+    };
+
+    /// <summary>A module-level or local name, parameter, function or class that hides a built-in (class bodies are left alone: attributes are reached through the class).</summary>
+    static void Shadowing(ModuleInfo m, Scope scope, List<Finding> found)
+    {
+        if (scope.Kind is not (ScopeKind.Module or ScopeKind.Function)) return;
+        foreach (var sym in scope.Symbols.Values)
+        {
+            string name = sym.Name;
+            if (sym.Redirect != null || sym.Declarations.Count == 0 || TolerableBuiltins.Contains(name)) continue;
+            if (name.StartsWith("__") && name.EndsWith("__")) continue;
+            if (!Builtins.Names.Contains(name)) continue;
+            var decl = sym.Declarations[0];
+            (int Start, int Length)? at = decl.Kind switch
+            {
+                DeclKind.Parameter when decl.Node is Parameter dp => (NameStartOf(m, dp), name.Length),
+                DeclKind.Function when decl.Node is FunctionDef f => (f.NameStart, name.Length),
+                DeclKind.Class when decl.Node is ClassDef c => (c.NameStart, name.Length),
+                DeclKind.Variable when IsPlainAssignment(m, decl.Node) && !IsRebindOfItself(m, decl.Node) => (decl.Node.Start, name.Length),
+                _ => null,
+            };
+            if (at is { } a)
+                found.Add(new Finding(a.Start, a.Length, $"Shadows built-in name '{name}'", "shadowed-builtin", FindingLevel.Weak));
+        }
+    }
+
+    /// <summary>`BlockingIOError = BlockingIOError`, `input = raw_input`-style compatibility bindings read the built-in on purpose.</summary>
+    static bool IsRebindOfItself(ModuleInfo m, Node target) =>
+        m.ParentOf(target) is AssignStmt { Value: NameExpr v } && target is NameExpr n && v.Name == n.Name;
+
+    // ------------------------------------------------------------ PEP 8 naming
+
+    static readonly Regex LowerName = new(@"^_*[a-z0-9][a-z0-9_]*$|^_+$", RegexOptions.Compiled);
+    static readonly Regex CapWords = new(@"^_*[A-Z][A-Za-z0-9]*_?$", RegexOptions.Compiled);
+
+    public static string ToSnakeCase(string name)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < name.Length; i++)
+        {
+            char c = name[i];
+            if (char.IsUpper(c))
+            {
+                bool afterLowerOrDigit = i > 0 && (char.IsLower(name[i - 1]) || char.IsDigit(name[i - 1]));
+                bool endsRun = i > 0 && char.IsUpper(name[i - 1]) && i + 1 < name.Length && char.IsLower(name[i + 1]);
+                if ((afterLowerOrDigit || endsRun) && sb.Length > 0 && sb[^1] != '_') sb.Append('_');
+                sb.Append(char.ToLowerInvariant(c));
+            }
+            else sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    public static string ToCapWords(string name)
+    {
+        string trimmed = name.TrimStart('_');
+        string lead = name[..(name.Length - trimmed.Length)];
+        var parts = trimmed.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        return lead + string.Concat(parts.Select(p => char.ToUpperInvariant(p[0]) + p[1..]));
+    }
+
+    static void Naming(ModuleInfo m, Scope scope, List<Finding> found)
+    {
+        switch (scope.Node)
+        {
+            case ClassDef c when scope.Kind == ScopeKind.Class:
+                if (!CapWords.IsMatch(c.Name) && !(c.Name.StartsWith("__") && c.Name.EndsWith("__")))
+                    found.Add(new Finding(c.NameStart, c.Name.Length, "Class names should use CamelCase convention", "naming-class", FindingLevel.Weak));
+                break;
+            case FunctionDef f when scope.Kind == ScopeKind.Function:
+            {
+                var owner = EnclosingClass(m, f);
+                bool override_ = owner != null && HasBases(owner);
+                bool dunder = f.Name.StartsWith("__") && f.Name.EndsWith("__");
+                if (!dunder && !override_ && !LowerName.IsMatch(f.Name))
+                    found.Add(new Finding(f.NameStart, f.Name.Length, "Function name should be lowercase", "naming-function", FindingLevel.Weak));
+                foreach (var p in f.Params)
+                    if (p.Kind is not (ParamKind.Slash or ParamKind.KwOnlySeparator) && !LowerName.IsMatch(p.Name))
+                        found.Add(new Finding(NameStartOf(m, p), p.Name.Length, "Argument name should be lowercase", "naming-argument", FindingLevel.Weak));
+                foreach (var sym in scope.Symbols.Values)
+                {
+                    if (sym.Redirect != null || LowerName.IsMatch(sym.Name) || sym.Declarations.Count == 0) continue;
+                    if (!sym.Declarations.All(d => d.Kind == DeclKind.Variable && IsPlainAssignment(m, d.Node) && !IsAlias(m, d.Node))) continue;
+                    var first = sym.Declarations[0].Node;
+                    found.Add(new Finding(first.Start, sym.Name.Length, "Variable in function should be lowercase", "naming-variable", FindingLevel.Weak));
+                }
+                break;
+            }
+        }
+    }
+
+    /// <summary>`Point = namedtuple(...)`, `Alias = SomeClass`: a name for a class or type may be CapWords anywhere.</summary>
+    static bool IsAlias(ModuleInfo m, Node target) => m.ParentOf(target) switch
+    {
+        AssignStmt { Value: NameExpr or AttributeExpr or SubscriptExpr or CallExpr } => true,
+        AnnAssignStmt => true,
+        _ => false,
+    };
 
     static IEnumerable<Scope> Scopes(Scope s)
     {
@@ -163,7 +323,7 @@ public static class CodeInspections
 
     static void MissingSelf(ModuleInfo m, FunctionDef f, List<Finding> found)
     {
-        if (m.ParentOf(f) is not ClassDef) return;
+        if (EnclosingClass(m, f) == null) return;
         if (f.Decorators.Count > 0 || f.Name is "__new__" or "__init_subclass__" or "__class_getitem__") return;
         if (f.Params.Count > 0 && f.Params[0].Kind != ParamKind.Slash && f.Params[0].Kind != ParamKind.KwOnlySeparator) return;
         found.Add(new Finding(f.NameStart, f.Name.Length, "Method must have a first parameter, usually called 'self'", "missing-self", FindingLevel.Warning));
@@ -199,7 +359,7 @@ public static class CodeInspections
 
         foreach (var sym in scope.Symbols.Values)
         {
-            if (sym.Redirect != null || sym.Name.StartsWith('_') || sym.Declarations.Count == 0) continue;
+            if (sym.Redirect != null || DeliberatelyUnused.IsMatch(sym.Name) || sym.Declarations.Count == 0) continue;
             if (sym.References.Any(r => (r.Access & Access.Read) != 0)) continue;
             if (ChangedByNestedScope(scope, sym.Name)) continue;
             if (!sym.Declarations.All(d => d.Kind == DeclKind.Variable && IsPlainAssignment(m, d.Node))) continue;
