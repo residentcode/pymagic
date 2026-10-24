@@ -100,6 +100,15 @@
     #toast.bad { border-color: var(--red); color: #ffb3ba; }
     #namebox { position: fixed; top: 90px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--panel); border: 1px solid var(--accent); border-radius: 6px; box-shadow: 0 6px 20px #0008; }
     #namebox label { color: var(--dim); white-space: nowrap; } #namebox input { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px; font: 13px Consolas, monospace; width: 220px; outline: none; }
+    #sigdialog { position: fixed; inset: 0; z-index: 70; background: #0007; display: flex; align-items: flex-start; justify-content: center; padding-top: 80px; }
+    #sigdialog .box { background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; padding: 14px 16px; min-width: 560px; max-width: 92vw; box-shadow: 0 10px 30px #000a; display: flex; flex-direction: column; gap: 10px; }
+    #sigdialog h2 { margin: 0; font-size: 15px; } #sigdialog .namerow { display: flex; gap: 8px; align-items: center; }
+    #sigdialog table { border-collapse: collapse; } #sigdialog th { text-align: left; color: var(--dim); font-weight: normal; padding: 2px 4px; }
+    #sigdialog td { padding: 2px 4px; white-space: nowrap; } #sigdialog .dim { color: var(--dim); }
+    #sigdialog input, #sigdialog select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font: 13px Consolas, monospace; outline: none; }
+    #sigdialog input:disabled { opacity: .5; } #sigdialog button { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+    #sigdialog button:disabled { opacity: .4; cursor: default; } #sigdialog button.primary { border-color: var(--accent); }
+    #sigdialog .buttons { display: flex; gap: 8px; }
     @media (max-width: 700px) { #app { grid-template-columns: 1fr; } #sidebar { display: none; } }
   </style>
 </head>

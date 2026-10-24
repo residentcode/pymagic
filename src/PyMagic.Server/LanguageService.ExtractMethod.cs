@@ -214,7 +214,14 @@ public sealed partial class LanguageService
     /// The selected statements' text moved to a new indentation. Lines inside multi-line string literals are left alone
     /// (changing them would change the string).
     /// </summary>
-    static string Dedent(ModuleInfo m, int s, int e, string baseIndent, string newIndent, IEnumerable<Node> roots)
+    static string Dedent(ModuleInfo m, int s, int e, string baseIndent, string newIndent, IEnumerable<Node> roots) =>
+        DedentWithEdits(m, s, e, baseIndent, newIndent, roots, null);
+
+    /// <summary>
+    /// <see cref="Dedent"/> with replacements applied on the way: each replacement lies within one line, so they are applied
+    /// to the line before it is re-indented.
+    /// </summary>
+    static string DedentWithEdits(ModuleInfo m, int s, int e, string baseIndent, string newIndent, IEnumerable<Node> roots, List<(int Start, int End, string Text)>? replacements)
     {
         string text = m.Source;
         var rawLineStarts = new HashSet<int>();
@@ -225,6 +232,21 @@ public sealed partial class LanguageService
                 if (text[i] == '\n') rawLineStarts.Add(i + 1);
         }
 
+        string WithReplacements(int from, int to)
+        {
+            if (replacements == null) return text[from..to];
+            var sb2 = new StringBuilder();
+            int p = from;
+            foreach (var r in replacements.Where(x => x.Start >= from && x.End <= to).OrderBy(x => x.Start))
+            {
+                if (r.Start < p) continue;
+                sb2.Append(text, p, r.Start - p).Append(r.Text);
+                p = r.End;
+            }
+            sb2.Append(text, p, to - p);
+            return sb2.ToString();
+        }
+
         var sb = new StringBuilder();
         int pos = s;
         bool firstLine = true;
@@ -232,9 +254,8 @@ public sealed partial class LanguageService
         {
             int nlPos = text.IndexOf('\n', pos);
             int lineEnd = nlPos < 0 || nlPos >= e ? e : nlPos;
-            string line = text[pos..lineEnd];
-            bool hasCr = line.EndsWith('\r');
-            string core = hasCr ? line[..^1] : line;
+            bool hasCr = lineEnd > pos && text[lineEnd - 1] == '\r';
+            string core = WithReplacements(pos, hasCr ? lineEnd - 1 : lineEnd);
             if (firstLine) sb.Append(core);
             else if (rawLineStarts.Contains(pos)) sb.Append(core);
             else if (core.Trim().Length == 0) { /* blank line stays blank */ }

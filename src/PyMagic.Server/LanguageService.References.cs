@@ -128,6 +128,18 @@ public sealed partial class LanguageService
             if (sym == null) return null;
             var t = new Target { Name = ne.Name, Module = m, Token = (ne.Start, ne.End) };
             AddSymbol(t, Canon(sym));
+
+            // `make` imported from another file is that file's `make`: start from where it is defined as well
+            var current = Canon(sym);
+            var currentModule = m;
+            for (int hops = 0; hops < 12; hops++)
+            {
+                var hop = ImportHop(snap, currentModule, current);
+                if (hop == null || hop.Value.OriginModule == null || hop.Value.Alias.AsName != null) break;
+                AddSymbol(t, hop.Value.Origin);
+                current = hop.Value.Origin;
+                currentModule = hop.Value.OriginModule;
+            }
             return t;
         }
         if (at is AttributeExpr ae)

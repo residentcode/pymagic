@@ -26,22 +26,7 @@ public sealed partial class LanguageService
         or TupleExpr { Parenthesized: true };
 
     /// <summary>The text that replaces a use: the expression itself, in parentheses unless the context makes them unnecessary.</summary>
-    static string InlinedText(ModuleInfo m, Expr value, NameExpr use)
-    {
-        string text = m.Source[value.Start..value.End];
-        if (IsAtom(value)) return text;
-        bool exempt = m.ParentOf(use) switch
-        {
-            AssignStmt a => ReferenceEquals(a.Value, use),
-            ReturnStmt => true,
-            ExprStmt => true,
-            IfStmt i => ReferenceEquals(i.Test, use),
-            WhileStmt w => ReferenceEquals(w.Test, use),
-            Argument { Stars: 0 } => value is not (TupleExpr or StarExpr or NamedExpr or YieldExpr),
-            _ => false,
-        };
-        return exempt ? text : "(" + text + ")";
-    }
+    static string InlinedText(ModuleInfo m, Expr value, NameExpr use) => WrapForContext(m, value, m.Source[value.Start..value.End], use);
 
     Dictionary<ModuleInfo, List<Edit>> InlineVariable(Snapshot snap, ModuleInfo m, int offset)
     {

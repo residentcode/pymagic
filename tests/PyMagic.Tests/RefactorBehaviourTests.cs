@@ -8,7 +8,7 @@ public class RefactorBehaviourTests
 {
     const string Main = "file:///c:/proj/main.py";
 
-    static readonly string? Python = Find();
+    internal static readonly string? Python = Find();
 
     static string? Find()
     {
@@ -21,7 +21,7 @@ public class RefactorBehaviourTests
         catch { return null; }
     }
 
-    static string RunPython(string code)
+    internal static string RunPython(string code)
     {
         string path = Path.Combine(Path.GetTempPath(), "pm_beh_" + Guid.NewGuid().ToString("N") + ".py");
         File.WriteAllText(path, code);
@@ -38,7 +38,7 @@ public class RefactorBehaviourTests
     }
 
     /// <summary>Applies the refactoring to the marked program and returns the new text.</summary>
-    static string Refactor(string marked, string kind, string? name)
+    internal static string Refactor(string marked, string kind, string? name)
     {
         int a = marked.IndexOf('⟦');
         string open = a >= 0 ? marked.Remove(a, 1) : marked;

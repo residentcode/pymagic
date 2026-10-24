@@ -2,6 +2,7 @@
 // name where one is needed, sends the request and applies the returned edits.
 import * as monaco from 'monaco-editor';
 import type { LspClient } from './lsp';
+import { editSignature, fetchSignature, type SigInfo } from './signature';
 
 export interface RefactorDeps {
   editor: monaco.editor.IStandaloneCodeEditor;
@@ -74,7 +75,39 @@ export function setupRefactor(deps: RefactorDeps) {
     extractMethod: 'Name of the new function',
   };
 
+  async function applyEdits(changes: Record<string, { range: LspRange; newText: string }[]>) {
+    editor.pushUndoStop();
+    for (const [target, list] of Object.entries(changes)) {
+      const m = await deps.modelForUri(target);
+      if (!m) continue;
+      m.pushEditOperations([], list.map((e) => ({ range: toRange(e.range), text: e.newText })), () => null);
+    }
+    editor.pushUndoStop();
+  }
+
+  async function changeSignature(uri: string, position: LspPosition) {
+    const model = editor.getModel();
+    if (model && deps.uriOf(model) === uri) {
+      lsp.notify('textDocument/didChange', { textDocument: { uri, version: model.getVersionId() }, contentChanges: [{ text: model.getValue() }] });
+    }
+    let info: SigInfo;
+    try { info = await fetchSignature(lsp, uri, position); }
+    catch (e: any) { toast(e.message ?? 'The signature cannot be changed.', true); return; }
+    const edited = await editSignature(info);
+    if (!edited) { editor.focus(); return; }
+    try {
+      const result: { changes: Record<string, { range: LspRange; newText: string }[]>; warnings: string[] } =
+        await lsp.request('pymagic/changeSignature', { textDocument: { uri }, position, newName: edited.newName, parameters: edited.parameters });
+      await applyEdits(result.changes);
+      if (result.warnings?.length) toast(result.warnings.join('\n'), true);
+    } catch (e: any) {
+      toast(e.message ?? 'The signature cannot be changed.', true);
+    }
+    editor.focus();
+  }
+
   async function run(kind: string, uri: string, range: LspRange, defaultName: string, all: boolean) {
+    if (kind === 'changeSignature') { await changeSignature(uri, range.start); return; }
     let name: string | undefined;
     if (defaultName) {
       const answer = await promptName(titles[kind] ?? 'Name', defaultName);
@@ -131,6 +164,8 @@ export function setupRefactor(deps: RefactorDeps) {
   editor.addCommand(M.CtrlCmd | M.Alt | K.KeyC, () => void trigger('extractConstant'));
   editor.addCommand(M.CtrlCmd | M.Alt | K.KeyM, () => void trigger('extractMethod'));
   editor.addCommand(M.CtrlCmd | M.Alt | K.KeyN, () => void trigger('inlineVariable'));
+  editor.addCommand(M.CtrlCmd | K.F6, () => void trigger('changeSignature'));
+  editor.addCommand(M.CtrlCmd | M.Alt | K.KeyP, () => void trigger('inlineMethod'));
 
   return { trigger };
 }

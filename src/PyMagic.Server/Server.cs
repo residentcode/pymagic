@@ -196,6 +196,10 @@ public sealed class Server
                 return _service.PrepareRename(UriOf(p), PositionOf(p));
             case "textDocument/rename":
                 return _service.Rename(UriOf(p), PositionOf(p), p!["newName"]!.GetValue<string>());
+            case "pymagic/signature":
+                return _service.GetSignature(UriOf(p), PositionOf(p));
+            case "pymagic/changeSignature":
+                return _service.ChangeSignature(UriOf(p), PositionOf(p), p!["newName"]?.GetValue<string>(), ParseParameters(p["parameters"]));
             case "pymagic/refactor":
                 return _service.Refactor(UriOf(p), p!["kind"]!.GetValue<string>(), RangeOf(p), p["name"]?.GetValue<string>(), p["all"]?.GetValue<bool>() ?? false);
             case "textDocument/codeAction":
@@ -346,6 +350,18 @@ public sealed class Server
 
     // ------------------------------------------------------------ plumbing
 
+
+    static List<SignatureParam> ParseParameters(JsonNode? node)
+    {
+        var list = new List<SignatureParam>();
+        foreach (var item in node?.AsArray() ?? new JsonArray())
+        {
+            string? Str(string key) => item![key] is { } v && v.GetValueKind() == System.Text.Json.JsonValueKind.String ? v.GetValue<string>() : null;
+            int? origin = item!["origin"] is { } o && o.GetValueKind() == System.Text.Json.JsonValueKind.Number ? o.GetValue<int>() : null;
+            list.Add(new SignatureParam(origin, Str("name") ?? "", Str("category") ?? "normal", Str("annotation"), Str("default"), Str("callValue")));
+        }
+        return list;
+    }
     static string UriOf(JsonNode? p) => p!["textDocument"]!["uri"]!.GetValue<string>();
     static Range RangeOf(JsonNode? p) => new(
         new Position(p!["range"]!["start"]!["line"]!.GetValue<int>(), p["range"]!["start"]!["character"]!.GetValue<int>()),

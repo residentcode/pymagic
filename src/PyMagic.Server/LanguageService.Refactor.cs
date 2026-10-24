@@ -29,6 +29,8 @@ public sealed partial class LanguageService
         "extractConstant" => "refactor.extract.constant",
         "extractMethod" => "refactor.extract.function",
         "inlineVariable" => "refactor.inline.variable",
+        "inlineMethod" or "inlineMethodAll" => "refactor.inline.method",
+        "changeSignature" => "refactor.rewrite.signature",
         _ => "refactor.rewrite",
     };
 
@@ -78,6 +80,9 @@ public sealed partial class LanguageService
         {
             if (Feasible("inlineVariable", null)) options.Add(new RefactorOption("inlineVariable", "Inline variable", null));
             if (Feasible("safeDelete", null)) options.Add(new RefactorOption("safeDelete", "Safe delete (no usages)", null));
+            if (CanChangeSignature(snap, m, start)) options.Add(new RefactorOption("changeSignature", "Change signature…", null));
+            if (Feasible("inlineMethod", null)) options.Add(new RefactorOption("inlineMethod", "Inline method (this call)", null));
+            if (CanInlineAll(snap, m, start)) options.Add(new RefactorOption("inlineMethodAll", "Inline method and remove it", null));
         }
         return options;
     }
@@ -111,6 +116,8 @@ public sealed partial class LanguageService
             case "extractConstant": return one(ExtractConstant(m, RequireSelection(m, start, end), name, all));
             case "extractMethod": return one(ExtractMethod(m, RequireSelection(m, start, end), name));
             case "inlineVariable": return InlineVariable(snap, m, start);
+            case "inlineMethod": return InlineMethod(snap, m, start, all: false);
+            case "inlineMethodAll": return InlineMethod(snap, m, start, all: true);
             case "safeDelete": return SafeDelete(snap, m, start);
             default: throw new ServiceException($"unknown refactoring '{kind}'");
         }

@@ -114,6 +114,23 @@ public class RenameTests
     }
 
     [Fact]
+    public void RenameFromAUseOfAnImportedNameReachesTheDefinition()
+    {
+        var r = Rename("build",
+            (Lib, "def make():\n    return 1\n"),
+            (Main, "from lib import make\nma|ke()\nprint(make)\n"));
+        Assert.Equal("def build():\n    return 1\n", r[Lib]);
+        Assert.Equal("from lib import build\nbuild()\nprint(build)\n", r[Main]);
+
+        // an alias keeps its own name: renaming the alias does not touch the original
+        var alias = Rename("shorter",
+            (Lib, "def make():\n    return 1\n"),
+            (Main, "from lib import make as mk\nm|k()\n"));
+        Assert.True(!alias.ContainsKey(Lib) || alias[Lib] == "def make():\n    return 1\n");
+        Assert.Equal("from lib import make as shorter\nshorter()\n", alias[Main]);
+    }
+
+    [Fact]
     public void RenameFromTheDefinitionReachesImporters()
     {
         var r = Rename("build",
