@@ -71,10 +71,12 @@ public static class Program
         var svc = new PyMagic.Server.LanguageService { TypeshedPath = PyMagic.Core.Types.Workspace.DefaultTypeshedPath };
         svc.LibraryRoots.Add(dir);
         var uris = new List<(string Uri, string Name)>();
-        foreach (var f in Directory.EnumerateFiles(dir, "*.py", SearchOption.TopDirectoryOnly))
+        // PM_REAL_URIS=1 opens the files at their real paths, below the folder, so conftest.py files are found the way a project has them
+        bool real = System.Environment.GetEnvironmentVariable("PM_REAL_URIS") != null;
+        foreach (var f in Directory.EnumerateFiles(dir, "*.py", real ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly))
         {
             string name = Path.GetFileNameWithoutExtension(f);
-            string uri = $"file:///c:/corpus_open/{name}.py";
+            string uri = real ? PyMagic.Server.LanguageService.UriOfPath(f) : $"file:///c:/corpus_open/{name}.py";
             svc.Open(uri, File.ReadAllText(f), 1);
             uris.Add((uri, name));
         }
@@ -91,7 +93,8 @@ public static class Program
         foreach (var kv in counts.OrderByDescending(k => k.Value))
         {
             Console.WriteLine($"{kv.Value,6}  {kv.Key}");
-            if (kv.Key is "missing-super-init" or "unimplemented-abstract") foreach (var s in samples[kv.Key]) Console.WriteLine("          " + s);
+            var show = (System.Environment.GetEnvironmentVariable("PM_SAMPLE") ?? "").Split(',');
+            if (kv.Key is "missing-super-init" or "unimplemented-abstract" or "fixture-not-found" || show.Contains(kv.Key)) foreach (var s in samples[kv.Key]) Console.WriteLine("          " + s);
         }
         return 0;
     }

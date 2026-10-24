@@ -28,6 +28,11 @@ public sealed class WorkspaceOptions
     /// <summary>A typeshed checkout (the directory containing stdlib/ and stubs/). Without it the bundled minimal stubs are used.</summary>
     public string? TypeshedPath { get; init; }
     public PythonEnvironment Environment { get; init; } = PythonEnvironment.Default;
+    /// <summary>
+    /// Lets the host decide the type of a parameter that has no annotation and no default (a pytest fixture request, for one):
+    /// called with the workspace, the module and the parameter; null leaves the type to the usual rules.
+    /// </summary>
+    public Func<Workspace, ModuleInfo, Parameter, PyType?>? ParameterTypes { get; init; }
 }
 
 /// <summary>One parsed module with its semantic and flow models.</summary>

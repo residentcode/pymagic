@@ -83,6 +83,7 @@ public static class CodeInspections
     {
         if (scope.Kind != ScopeKind.Function || scope.Node is not FunctionDef def) return;
         if (def.Name.StartsWith("__") && def.Name.EndsWith("__")) return;
+        if (def.Name.StartsWith("test")) return;   // a test asks for fixtures it needs only for their effect
         if (def.Decorators.Any(d => d is not NameExpr { Name: "staticmethod" or "classmethod" })) return;
         var owner = EnclosingClass(m, def);
         if (owner != null && HasBases(owner)) return;

@@ -26,6 +26,18 @@ public sealed partial class LanguageService
     public IReadOnlyList<Location> References(string uri, Position pos, bool includeDeclaration)
     {
         var snap = Full();
+        if (snap.ByUri.TryGetValue(uri, out var fm))
+        {
+            int at = Lines(fm).OffsetOf(pos);
+            if (FixtureTargetAt(snap, fm, at) is { Def: not null } fixture)
+                return FixtureReferences(snap, fm, at, fixture, includeDeclaration, SymbolReferences(uri, pos, includeDeclaration));
+        }
+        return SymbolReferences(uri, pos, includeDeclaration);
+    }
+
+    IReadOnlyList<Location> SymbolReferences(string uri, Position pos, bool includeDeclaration)
+    {
+        var snap = Full();
         if (!snap.ByUri.TryGetValue(uri, out var m)) return Array.Empty<Location>();
         var target = FindTarget(snap, m, Lines(m).OffsetOf(pos));
         if (target == null) return Array.Empty<Location>();
@@ -39,6 +51,7 @@ public sealed partial class LanguageService
 
     public PrepareRenameResult? PrepareRename(string uri, Position pos)
     {
+        if (FixturePrepareRename(uri, pos) is { } fixture) return fixture;
         var snap = Full();
         if (!snap.ByUri.TryGetValue(uri, out var m)) return null;
         var target = FindTarget(snap, m, Lines(m).OffsetOf(pos));
@@ -49,6 +62,15 @@ public sealed partial class LanguageService
 
     /// <exception cref="ServiceException">The thing cannot be renamed, or the new name is not valid.</exception>
     public WorkspaceEdit Rename(string uri, Position pos, string newName)
+    {
+        var snap = Full();
+        if (snap.ByUri.TryGetValue(uri, out var fm) && FixtureTargetAt(snap, fm, Lines(fm).OffsetOf(pos)) is { } fixture)
+            return RenameFixture(snap, fixture, newName);
+        return RenameSymbol(uri, pos, newName);
+    }
+
+    /// <summary>Rename of the thing under the cursor as a name in the program (a fixture is handled by <see cref="RenameFixture"/>).</summary>
+    WorkspaceEdit RenameSymbol(string uri, Position pos, string newName)
     {
         var snap = Full();
         if (!snap.ByUri.TryGetValue(uri, out var m)) throw new ServiceException("unknown document");

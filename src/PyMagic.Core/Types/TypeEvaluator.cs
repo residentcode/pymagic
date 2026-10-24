@@ -398,6 +398,10 @@ public sealed partial class TypeEvaluator
             }
         }
 
+        if (p.Annotation == null && p.Default == null && p.Kind == ParamKind.Normal && owner is FunctionDef
+            && _ws.Options.ParameterTypes is { } hook && hook(_ws, m, p) is { } provided)
+            return provided;
+
         PyType t;
         if (p.Annotation != null) t = AnnotationType(m, p.Annotation);
         else if (p.Default is ConstExpr { Kind: ConstKind.None }) t = PyType.Unknown; // `x=None` conventionally means "optional anything"

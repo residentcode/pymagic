@@ -20,6 +20,7 @@ public sealed partial class LanguageService
         public required Dictionary<string, ModuleInfo> ByUri { get; init; }
         public required Dictionary<ModuleInfo, string> UriOf { get; init; }
         public required List<ModuleInfo> Project { get; init; }
+        public required FixtureContext Fixtures { get; init; }
     }
 
     readonly Dictionary<string, Doc> _docs = new();
@@ -132,17 +133,18 @@ public sealed partial class LanguageService
         }
     }
 
-    WorkspaceOptions WorkspaceOptionsNow() => new()
+    WorkspaceOptions WorkspaceOptionsNow(Func<Workspace, ModuleInfo, Parameter, PyType?>? parameterTypes = null) => new()
     {
         SourceRoots = SourceRoots.Concat(ImplicitSourceRoots()).ToArray(),
         LibraryRoots = EffectiveLibraryRoots().ToArray(),
         TypeshedPath = TypeshedPath,
         Environment = Environment,
+        ParameterTypes = parameterTypes,
     };
 
     Snapshot BuildSnapshot(bool includeProject)
     {
-        var ws = new Workspace(WorkspaceOptionsNow(), _cache);
+        var (ws, fixtures) = NewWorkspace();
         var byUri = new Dictionary<string, ModuleInfo>();
         var uriOf = new Dictionary<ModuleInfo, string>(ReferenceEqualityComparer.Instance);
         foreach (var d in _docs.Values)
@@ -150,6 +152,7 @@ public sealed partial class LanguageService
             var m = ws.AddModule(d.ModuleName, d.Text, d.IsPackage);
             byUri[d.Uri] = m;
             uriOf[m] = d.Uri;
+            fixtures.Register(m, d.Uri, d.Path);
         }
         var project = new List<ModuleInfo>(byUri.Values);
         if (includeProject)
@@ -163,10 +166,11 @@ public sealed partial class LanguageService
                 ModuleInfo m;
                 try { m = ws.AddDiskModule(name, path, isPackage); } catch (IOException) { continue; }
                 uriOf[m] = UriOfPath(path);
+                fixtures.Register(m, uriOf[m], path);
                 project.Add(m);
             }
         }
-        return new Snapshot { Workspace = ws, ByUri = byUri, UriOf = uriOf, Project = project };
+        return new Snapshot { Workspace = ws, ByUri = byUri, UriOf = uriOf, Project = project, Fixtures = fixtures };
     }
 
     LineMap Lines(ModuleInfo m)
@@ -275,6 +279,8 @@ public sealed partial class LanguageService
         var lines = Lines(m);
         int offset = lines.OffsetOf(pos);
         var ev = Current().Workspace.Evaluator;
+
+        if (FixtureHover(Current(), m, offset) is { } fixtureHover) return fixtureHover;
 
         // definition names: `def f`, `class C`
         foreach (var n in AstChildren.Descendants(m.Ast))
@@ -428,6 +434,8 @@ public sealed partial class LanguageService
         int offset = Lines(m).OffsetOf(pos);
         var found = new List<Location>();
 
+        if (FixtureDefinition(uri, pos) is { Count: > 0 } fixtureLocations) return fixtureLocations;
+
         void AddNode(ModuleInfo? module, Node node)
         {
             if (module == null) return;
@@ -580,6 +588,7 @@ public sealed partial class LanguageService
         string prefix = doc.Text[start..offset];
         bool afterDot = start > 0 && doc.Text[start - 1] == '.' && !(start > 1 && doc.Text[start - 2] == '.');
 
+        if (!afterDot && FixtureCompletion(doc, start, offset, prefix) is { } fixtureItems) return fixtureItems;
         if (afterDot) return MemberCompletion(doc, start, offset, prefix);
         return NameCompletion(doc, start, offset, prefix);
     }
@@ -591,10 +600,11 @@ public sealed partial class LanguageService
         // `recv.pre|` is usually a syntax error while typing, so analyse a copy with a complete attribute access
         const string Placeholder = "__pymagic_cursor__";
         string patched = doc.Text[..start] + Placeholder + doc.Text[end..];
-        var ws = new Workspace(WorkspaceOptionsNow(), _cache);
+        var (ws, fixtures) = NewWorkspace();
         foreach (var d in _docs.Values)
-            if (d.Uri != doc.Uri) ws.AddModule(d.ModuleName, d.Text, d.IsPackage);
+            if (d.Uri != doc.Uri) fixtures.Register(ws.AddModule(d.ModuleName, d.Text, d.IsPackage), d.Uri, d.Path);
         var m = ws.AddModule(doc.ModuleName, patched, doc.IsPackage, cached: false);
+        fixtures.Register(m, doc.Uri, doc.Path);
 
         AttributeExpr? access = null;
         foreach (var n in AstChildren.Descendants(m.Ast))

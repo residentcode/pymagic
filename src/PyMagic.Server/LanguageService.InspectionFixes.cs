@@ -15,6 +15,7 @@ public sealed partial class LanguageService
         foreach (var f in CodeInspections.Run(m))
             if (!Suppressed(m.Source, f)) yield return AsDiag(f);
         foreach (var d in ClassDiagnostics(m, ev)) yield return d;
+        foreach (var d in FixtureDiagnostics(m, ev)) yield return d;
     }
 
     /// <summary>A comment on the line says to leave it alone: `# noqa`, `# noqa: code, code` or `# noinspection ...`.</summary>
@@ -77,6 +78,9 @@ public sealed partial class LanguageService
             }
             case "unimplemented-abstract":
                 ImplementAbstractFix(snap, m, start, add);
+                break;
+            case "fixture-not-found":
+                CreateFixtureFix(m, start, add);
                 break;
 
             case "none-comparison" or "is-literal":
