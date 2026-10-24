@@ -114,6 +114,14 @@
     #git-diff.open { display: flex; } #git-diff-head { display: flex; gap: 12px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); } #git-diff-title { font-weight: 600; flex: 1; } #git-diff-body { flex: 1; min-height: 0; }
     .git-popup { position: fixed; z-index: 1000; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 14px #0006; padding: 6px 8px; max-width: 60ch; font-size: 12.5px; }
     .git-popup pre { margin: 4px 0; max-height: 14em; overflow: auto; font: 12px Consolas, monospace; color: #e06c75; } .git-popup button { margin-right: 6px; } .git-popup .meta { color: var(--dim); }
+    #insp-bar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
+    #insp-bar input { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 1px 6px; min-width: 220px; }
+    #insp-bar button { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; font: inherit; cursor: pointer; }
+    #insp-bar button:disabled { opacity: .4; cursor: default; }
+    .insp-group { padding: 6px 10px 2px; font-weight: 600; color: var(--dim); }
+    .insp-row { display: flex; gap: 12px; align-items: center; padding: 1px 10px 1px 22px; }
+    .insp-row .insp-title { min-width: 300px; } .insp-row.changed .insp-title { font-weight: 600; }
+    .insp-row select { margin-left: auto; background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; }
     #routes-bar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
     #routes-bar input { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 1px 6px; min-width: 220px; }
     #routes-bar button { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; font: inherit; cursor: pointer; }
@@ -215,6 +223,7 @@
         <button id="t-git">Git</button>
         <button id="t-hier">Hierarchy</button>
         <button id="t-routes">Endpoints</button>
+        <button id="t-insp">Inspections</button>
         <span class="spacer"></span>
         <button id="t-close" class="close" title="Hide panel">✕</button>
       </div>
@@ -296,6 +305,16 @@
               <div id="git-detail"></div>
             </div>
           </div>
+        </div>
+      </div>
+      <div id="insp-tab" class="tab">
+        <div class="col" id="insp-main">
+          <div id="insp-bar">
+            <span id="insp-summary"></span>
+            <input id="insp-filter" type="text" placeholder="Filter inspections" spellcheck="false" autocomplete="off">
+            <button id="insp-reset" title="Back to the defaults (deletes .pymagic/inspections.json)">Reset all</button>
+          </div>
+          <div class="body" id="insp-list"></div>
         </div>
       </div>
       <div id="routes-tab" class="tab">

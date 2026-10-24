@@ -232,6 +232,16 @@ public sealed class Server
                 return _service.FormatRange(UriOf(p), RangeOf(p), EngineOf(p));
             case "pymagic/formatters":
                 return _service.Formatters();
+            case "pymagic/inspections":
+                return _service.Inspections();
+            case "pymagic/setInspection":
+                _service.SetInspection(p!["code"]!.GetValue<string>(), p["level"] is { } lv && lv.GetValueKind() == System.Text.Json.JsonValueKind.String ? lv.GetValue<string>() : null);
+                RepublishAll();
+                return null;
+            case "pymagic/resetInspections":
+                _service.ResetInspections();
+                RepublishAll();
+                return null;
             case "pymagic/formatConfig":
                 return _service.FormatConfigOf(UriOf(p));
             case "pymagic/organizeImports":
@@ -355,6 +365,13 @@ public sealed class Server
         var result = InterpreterInspector.Inspect(path);
         if (result.Interpreter == null) Log($"cannot use interpreter '{path}': {result.Error}");
         else _service.ConfigureInterpreter(result.Interpreter);
+    }
+
+    /// <summary>Looks at every open document again (the profile changed what is reported).</summary>
+    void RepublishAll()
+    {
+        foreach (var uri in _service.AllOpenUris) _dirty.Add(uri);
+        _published.Clear();
     }
 
     readonly HashSet<string> _dirty = new();

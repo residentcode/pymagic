@@ -8,6 +8,7 @@ import { setupRefactor } from './refactor';
 import { setupSearch } from './search';
 import { setupHierarchy } from './hierarchy';
 import { setupRoutes } from './routes';
+import { setupInspections } from './inspections';
 import { setupGit } from './git';
 import { toast } from './toast';
 
@@ -575,6 +576,7 @@ async function main() {
     uriOf: (model) => serverUri.get(model),
     relOfUri: (uri) => relPathOf.get(normalise(uri)),
   });
+  setupInspections(lsp);
   setupRoutes({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
   // code actions that need the page (not just a text edit) arrive as commands
   monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name: string) => {

@@ -233,7 +233,7 @@ public sealed partial class LanguageService
             r.Add(new Diag(new Diagnostic(u.Start, Math.Max(u.End - u.Start, 1), $"Unused import '{u.Name}'"),
                 Severity.Hint, new[] { DiagnosticTag.Unnecessary }, "unused-import"));
         r.AddRange(InspectionDiagnostics(m, ev));
-        return r;
+        return ApplyProfile(r);
     }
 
     // ------------------------------------------------------------ node lookup

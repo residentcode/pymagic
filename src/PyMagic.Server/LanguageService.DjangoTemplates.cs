@@ -838,7 +838,7 @@ public sealed partial class LanguageService
                 }
             }
         }
-        return result;
+        return ApplyTemplateProfile(result);
     }
 
     bool IsProjectClass(Snapshot snap, ClassInfo c) => snap.Project.Any(m => ReferenceEquals(m, c.Module)) || snap.Workspace.UserModules.Any(m => ReferenceEquals(m, c.Module));
