@@ -196,6 +196,8 @@ public sealed class Server
                 return _service.PrepareRename(UriOf(p), PositionOf(p));
             case "textDocument/rename":
                 return _service.Rename(UriOf(p), PositionOf(p), p!["newName"]!.GetValue<string>());
+            case "pymagic/refactor":
+                return _service.Refactor(UriOf(p), p!["kind"]!.GetValue<string>(), RangeOf(p), p["name"]?.GetValue<string>(), p["all"]?.GetValue<bool>() ?? false);
             case "textDocument/codeAction":
                 return _service.CodeActions(UriOf(p), RangeOf(p));
             case "textDocument/documentSymbol":
@@ -233,7 +235,7 @@ public sealed class Server
                 definitionProvider = true,
                 completionProvider = new { triggerCharacters = new[] { "." } },
                 documentSymbolProvider = true,
-                codeActionProvider = new { codeActionKinds = new[] { LanguageService.QuickFixKind, LanguageService.OrganizeImportsKind } },
+                codeActionProvider = new { codeActionKinds = new[] { LanguageService.QuickFixKind, LanguageService.OrganizeImportsKind, LanguageService.RefactorKind, LanguageService.RefactorExtractKind, LanguageService.RefactorInlineKind } },
                 referencesProvider = true,
                 renameProvider = new { prepareProvider = true },
             },

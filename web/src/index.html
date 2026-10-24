@@ -96,6 +96,10 @@
     .pkrow .newer { color: var(--green); } .pkrow .actions { text-align: right; } .pkrow .actions button { background: transparent; color: var(--fg); border: 0; cursor: pointer; padding: 0 4px; } .pkrow .actions button:disabled { opacity: .3; cursor: default; } .pkrow .actions .armed { color: var(--red); font-weight: 700; }
     #pk-detail { padding: 6px 10px; } #pk-detail div { margin-bottom: 3px; word-break: break-word; }
     #pk-log { margin: 0; max-height: 40%; overflow: auto; padding: 4px 10px; border-top: 1px solid var(--line); font: 12px/1.4 Consolas, monospace; color: var(--dim); white-space: pre-wrap; } #pk-log .err { color: var(--red); } #pk-log .info { color: var(--green); }
+    #toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); max-width: 70vw; padding: 8px 14px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 16px #0006; display: none; z-index: 50; }
+    #toast.bad { border-color: var(--red); color: #ffb3ba; }
+    #namebox { position: fixed; top: 90px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--panel); border: 1px solid var(--accent); border-radius: 6px; box-shadow: 0 6px 20px #0008; }
+    #namebox label { color: var(--dim); white-space: nowrap; } #namebox input { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px; font: 13px Consolas, monospace; width: 220px; outline: none; }
     @media (max-width: 700px) { #app { grid-template-columns: 1fr; } #sidebar { display: none; } }
   </style>
 </head>
@@ -184,7 +188,7 @@
       <span id="runstate"></span>
       <span class="spacer"></span>
       <span id="cursor"></span>
-      <span>F5 debug · Ctrl+F5 run · F9 breakpoint · F10/F11 step · Ctrl+S save · F12 definition · F2 rename · Ctrl+. fixes</span>
+      <span>F5 debug · Ctrl+F5 run · F9 breakpoint · F10/F11 step · Ctrl+S save · F12 definition · F2 rename · Ctrl+. fixes and refactorings</span>
     </footer>
   </div>
   <script src="main.js"></script>

@@ -75,6 +75,15 @@ public sealed partial class LanguageService
             }
         }
 
+
+        // refactorings: the page asks for a name where one is needed and then calls pymagic/refactor
+        try
+        {
+            foreach (var option in RefactorOptions(uri, range))
+                actions.Add(new CodeAction(option.Title, RefactorActionKind(option.Kind), null, false,
+                    new LspCommand(option.Title, "pymagic.refactor", new object[] { option.Kind, uri, range, option.DefaultName ?? "", option.All })));
+        }
+        catch (Exception e) when (e is InvalidOperationException or ArgumentException or KeyNotFoundException or IndexOutOfRangeException) { /* the quick fixes above still work */ }
         var all = UnusedImports(m).ToList();
         if (all.Count > 0)
         {

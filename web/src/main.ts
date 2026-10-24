@@ -4,6 +4,7 @@ import { setupRun } from './run';
 import { setupTests } from './tests';
 import { setupInterpreters } from './interpreters';
 import { setupPackages } from './packages';
+import { setupRefactor } from './refactor';
 
 (self as any).MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
 
@@ -334,6 +335,7 @@ async function main() {
   setupTests(common);
   setupInterpreters();
   setupPackages();
+  setupRefactor({ editor, lsp, modelForUri, uriOf: (model: monaco.editor.ITextModel) => serverUri.get(model) });
   // code actions that need the page (not just a text edit) arrive as commands
   monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name: string) => {
     window.dispatchEvent(new CustomEvent('pymagic:install', { detail: name }));
