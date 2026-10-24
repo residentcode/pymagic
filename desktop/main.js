@@ -7,7 +7,9 @@ const path = require('node:path');
 const http = require('node:http');
 
 const repo = path.resolve(__dirname, '..');
-const www = path.join(repo, 'web', 'dist');
+const packaged = app.isPackaged;
+const www = packaged ? path.join(process.resourcesPath, 'www') : path.join(repo, 'web', 'dist');
+const demo = packaged ? path.join(process.resourcesPath, 'demo') : path.join(repo, 'examples', 'demo');
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 
 let host = null;
@@ -48,6 +50,7 @@ function run(cmd, args, cwd) {
 
 /** Builds the page and the host when they are missing or older than their sources; returns the host dll. */
 function prepare(report) {
+  if (packaged) return path.join(process.resourcesPath, 'host', 'pymagic-web.exe');
   const web = path.join(repo, 'web');
   if (!fs.existsSync(path.join(web, 'node_modules', 'monaco-editor'))) {
     report('Installing the editor packages (first run only)...');
@@ -98,7 +101,9 @@ async function startHost(dll, folder) {
   const args = [dll, '--root', folder, '--www', www, '--port', String(port)];
   const ts = typeshed();
   if (ts) args.push('--typeshed', ts);
-  host = spawn('dotnet', args, { cwd: repo, windowsHide: true });
+  host = packaged
+    ? spawn(dll, args.slice(1), { cwd: path.dirname(dll), windowsHide: true })
+    : spawn('dotnet', args, { cwd: repo, windowsHide: true });
   host.on('exit', () => { host = null; });
   await waitFor(`http://127.0.0.1:${port}/api/info`);
 }
@@ -124,7 +129,7 @@ function menu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: 'File', submenu: [
       { label: 'Open Folder...', accelerator: 'CmdOrCtrl+Shift+O', click: () => chooseFolder() },
-      { label: 'Open the demo project', click: () => openProject(path.join(repo, 'examples', 'demo')) },
+      { label: 'Open the demo project', click: () => openProject(demo) },
       { type: 'separator' },
       { role: 'quit' },
     ] },
@@ -149,10 +154,10 @@ app.whenReady().then(async () => {
   try {
     await splash('Starting PyMagic...');
     hostDll = await new Promise((resolve, reject) => setImmediate(() => { try { resolve(prepare(report)); } catch (e) { reject(e); } }));
-    let folder = process.argv.slice(app.isPackaged ? 1 : 2).find(a => !a.startsWith('--') && fs.existsSync(a));
+    let folder = process.argv.slice(packaged ? 1 : 2).find(a => !a.startsWith('--') && fs.existsSync(a));
     if (!folder) {
       const last = readSettings().last;
-      folder = last && fs.existsSync(last) ? last : path.join(repo, 'examples', 'demo');
+      folder = last && fs.existsSync(last) ? last : demo;
     }
     await openProject(path.resolve(folder));
   } catch (e) {

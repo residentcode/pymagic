@@ -7,3 +7,5 @@ web/node_modules/
 web/dist/
 .venv/
 .pymagic/
+desktop/out/
+desktop/stage/

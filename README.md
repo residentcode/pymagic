@@ -17,6 +17,8 @@ written from scratch in C#.
 
 PyMagic is a Windows app: an Electron window (`desktop/`, plain JavaScript) that starts the C# engine in the background. Double-click `PyMagic.cmd`. It needs the .NET 9 SDK and Node.js. The first run installs the packages; every start builds the editor and the engine when they changed, then opens the project you used last (or `examples\demo`). *File > Open Folder...* (Ctrl+Shift+O) switches project, `PyMagic.cmd C:\my\project` opens a folder directly. PyCharm's typeshed is used when PyCharm is installed.
 
+To get a copy that needs nothing installed, run `node desktop/package.mjs` (needs internet once, for the .NET runtime package): it builds `desktop\out\PyMagic-win32-x64\PyMagic.exe` (about 470 MB, with Electron and the .NET runtime inside), which can be copied to any Windows PC.
+
 `PyMagic-web.cmd` (or `start.ps1`) runs the same editor in a browser tab instead.
 
 ## Layout
