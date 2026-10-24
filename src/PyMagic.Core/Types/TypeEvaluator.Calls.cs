@@ -18,7 +18,7 @@ public sealed record CallTarget(PyType Callee, PyType Returns, IReadOnlyList<Arg
 public sealed record CallResolution(PyType Returns, IReadOnlyList<CallTarget> Targets);
 
 /// <summary>One argument of a call. Type is evaluated lazily, only when a parameter actually needs it.</summary>
-sealed record ArgInfo(Argument? Node, string? Name, int Stars, Func<PyType> Type);
+sealed record ArgInfo(Argument? Node, string? Name, int Stars, Func<PyType> Type, Func<PyType?>? Literal = null);
 
 public sealed partial class TypeEvaluator
 {
@@ -223,7 +223,7 @@ public sealed partial class TypeEvaluator
     public CallResolution ResolveCall(ModuleInfo m, CallExpr call)
     {
         var callee = TypeOf(m, call.Func);
-        var args = call.Args.Select(a => new ArgInfo(a, a.Name, a.Stars, () => TypeOf(m, a.Value))).ToList();
+        var args = call.Args.Select(a => new ArgInfo(a, a.Name, a.Stars, () => TypeOf(m, a.Value), () => ArgumentLiteral(m, a.Value))).ToList();
 
         // super() needs the enclosing method, not just the callee's type
         // super is a function in the bundled stub and a class in typeshed
@@ -304,6 +304,16 @@ public sealed partial class TypeEvaluator
         _ => null,
     };
 
+    /// <summary>The literal an argument is: a written constant, or a name assigned once, from a constant (`mode = "r"` is always that literal).</summary>
+    PyType? ArgumentLiteral(ModuleInfo m, Expr e)
+    {
+        if (ConstantLiteral(e) is { } direct) return direct;
+        if (e is NameExpr n && m.Semantics.Resolve(n) is { Declarations.Count: 1 } sym
+            && sym.Declarations[0] is { Kind: DeclKind.Variable } d && m.ParentOf(d.Node) is AssignStmt { Targets.Count: 1 } a && ReferenceEquals(a.Targets[0], d.Node))
+            return ConstantLiteral(a.Value);
+        return null;
+    }
+
     /// <summary>Maps arguments to parameters, solves type variables from them and computes the call's result.</summary>
     CallTarget CallParams(PyType callee, IReadOnlyList<ParamInfo> ps, Func<PyType> returnType, IReadOnlyList<ArgInfo> args, Node? callNode)
     {
@@ -323,7 +333,7 @@ public sealed partial class TypeEvaluator
             var at = at0;
             var expected = Substitute(param.Type, solved);
             // a constant written in the call is the literal it spells where a Literal[...] is wanted
-            if (expected.Members.Any(x => x is ClassType { IsInstance: true, LiteralValue: not null }) && arg.Node?.Value is { } written && ConstantLiteral(written) is { } literal) at = literal;
+            if (expected.Members.Any(x => x is ClassType { IsInstance: true, LiteralValue: not null }) && arg.Literal?.Invoke() is { } literal) at = literal;
             if (!IsAssignable(expected, at))
                 problems.Add(new CallProblem(CallProblemKind.Type, (Node?)arg.Node ?? callNode,
                     $"Expected type '{expected}', got '{at}' instead"));

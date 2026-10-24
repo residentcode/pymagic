@@ -39,6 +39,22 @@ public class LiteralArgumentTests
     }
 
     [Fact]
+    public void ANameAssignedOnceFromAConstantKeepsItsLiteral()
+    {
+        var found = Mismatches("def open_it(mode: Literal[\"r\", \"w\"]): ...\n\n\ngood = \"r\"\nbad = \"q\"\nopen_it(good)\nopen_it(bad)\n\n\ndef g():\n    local = \"zz\"\n    open_it(local)\n");
+        Assert.Equal(2, found.Count);
+        Assert.True(found.Any(m => m.Contains("Literal['q']")), string.Join(" / ", found));
+        Assert.True(found.Any(m => m.Contains("Literal['zz']")), string.Join(" / ", found));
+    }
+
+    [Fact]
+    public void ANameAssignedTwiceIsNotGuessed()
+    {
+        var found = Mismatches("def open_it(mode: Literal[\"r\", \"w\"]): ...\n\n\nmode = \"q\"\nmode = \"r\"\nopen_it(mode)\n\n\ndef g(flag: bool):\n    m = \"q\"\n    if flag:\n        m = \"r\"\n    open_it(m)\n");
+        Assert.Equal(0, found.Count);
+    }
+
+    [Fact]
     public void ALiteralAlsoGoesWhereItsClassIsWanted()
     {
         var found = Mismatches("def put(text: str, n: int, f: float): ...\n\n\nput(\"a\", 1, 2)\n");
