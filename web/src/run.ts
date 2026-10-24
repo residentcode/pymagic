@@ -1,5 +1,7 @@
 // Run and debug: toolbar, output panel, breakpoints in the gutter, stepping, frames, variables and evaluate.
 import * as monaco from 'monaco-editor';
+import { RunClient } from './runclient';
+import { showTab } from './panel';
 
 export interface RunDeps {
   editor: monaco.editor.IStandaloneCodeEditor;
@@ -81,40 +83,6 @@ export function setupRun(deps: RunDeps) {
     model.onDidChangeContent(() => { persist(); });
   }
 
-  // ------------------------------------------------------------ run client
-
-  class RunClient {
-    private ws: WebSocket;
-    private nextId = 1;
-    private waiting = new Map<number, (m: any) => void>();
-    onMessage: (m: any) => void = () => {};
-    onClose: () => void = () => {};
-
-    constructor(first: object) {
-      const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-      this.ws = new WebSocket(`${scheme}://${location.host}/run`);
-      this.ws.onopen = () => this.ws.send(JSON.stringify(first));
-      this.ws.onclose = () => this.onClose();
-      this.ws.onmessage = (ev) => {
-        const m = JSON.parse(ev.data as string);
-        const waiter = m.id !== undefined ? this.waiting.get(m.id) : undefined;
-        if (waiter && (m.type === 'scopes' || m.type === 'variables' || m.type === 'evaluated')) {
-          this.waiting.delete(m.id);
-          waiter(m);
-        } else this.onMessage(m);
-      };
-    }
-
-    send(msg: object) { if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg)); }
-
-    ask(msg: object): Promise<any> {
-      const id = this.nextId++;
-      return new Promise((resolve) => { this.waiting.set(id, resolve); this.send({ ...msg, id }); });
-    }
-
-    close() { try { this.ws.close(); } catch { /* already closed */ } }
-  }
-
   let run: RunClient | null = null;
   let debugging = false;
   let paused = false;
@@ -127,13 +95,6 @@ export function setupRun(deps: RunDeps) {
   const panel = $('panel');
   const output = $<HTMLPreElement>('output');
 
-  function showTab(name: 'output' | 'debug') {
-    panel.classList.add('open');
-    $('t-output').classList.toggle('active', name === 'output');
-    $('t-debug').classList.toggle('active', name === 'debug');
-    $('output-tab').classList.toggle('active', name === 'output');
-    $('debug-tab').classList.toggle('active', name === 'debug');
-  }
   $('t-output').onclick = () => showTab('output');
   $('t-debug').onclick = () => showTab('debug');
   $('t-close').onclick = () => panel.classList.remove('open');

@@ -1,0 +1,283 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Text.Json.Nodes;
+using PyMagic.Server;
+
+namespace PyMagic.Tests;
+
+public class TestRunnerTests
+{
+    static string PythonExe => Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python";
+
+    static bool CanRun(string args)
+    {
+        try
+        {
+            var p = Process.Start(new ProcessStartInfo(PythonExe, args) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true });
+            return p != null && p.WaitForExit(20000) && p.ExitCode == 0;
+        }
+        catch { return false; }
+    }
+
+    static readonly bool HavePython = CanRun("--version");
+    static readonly bool HavePytest = HavePython && CanRun("-c \"import pytest\"");
+
+    // ------------------------------------------------------------ discovery
+
+    static TestNode Discover(string text) => TestDiscovery.DiscoverFile("tests/test_x.py", text)!;
+    static string Ids(TestNode n) => string.Join(",", n.Children.SelectMany(c => c.Children.Count == 0 ? new[] { c.Id } : c.Children.Select(k => k.Id)));
+
+    [Fact]
+    public void FindsFunctionsClassesAndTestCases()
+    {
+        var f = Discover(
+            "import unittest\n" +
+            "def test_a(): ...\n" +
+            "def helper(): ...\n" +
+            "async def test_b(): ...\n" +
+            "class TestGroup:\n" +
+            "    def test_c(self): ...\n" +
+            "    def not_a_test(self): ...\n" +
+            "class Plain:\n" +
+            "    def test_hidden(self): ...\n" +
+            "class WithInit:\n" +
+            "    def __init__(self): ...\n" +
+            "    def test_skipped(self): ...\n" +
+            "class Cases(unittest.TestCase):\n" +
+            "    def testOld(self): ...\n" +
+            "    def test_new(self): ...\n");
+        Assert.Equal("tests/test_x.py::test_a,tests/test_x.py::test_b,tests/test_x.py::TestGroup::test_c," +
+                     "tests/test_x.py::Cases::testOld,tests/test_x.py::Cases::test_new", Ids(f));
+        Assert.Equal("file", f.Kind);
+        var group = f.Children.Single(c => c.Name == "TestGroup");
+        Assert.Equal("class", group.Kind);
+        Assert.Equal(5, group.Line);
+        Assert.Equal("method", group.Children[0].Kind);
+        Assert.Equal(6, group.Children[0].Line);
+        Assert.Equal("function", f.Children[0].Kind);
+        Assert.Equal(2, f.Children[0].Line);
+    }
+
+    [Fact]
+    public void TestCaseSubclassesAndInheritedMethodsAreFollowed()
+    {
+        var f = Discover(
+            "from unittest import TestCase\n" +
+            "import django.test\n" +
+            "class Base(TestCase):\n" +
+            "    def test_shared(self): ...\n" +
+            "class Child(Base):\n" +
+            "    def test_own(self): ...\n" +
+            "class Web(django.test.TestCase):\n" +
+            "    def test_page(self): ...\n" +
+            "class Mixin:\n" +
+            "    def test_not_collected(self): ...\n");
+        Assert.Equal("tests/test_x.py::Base::test_shared,tests/test_x.py::Child::test_shared,tests/test_x.py::Child::test_own,tests/test_x.py::Web::test_page", Ids(f));
+    }
+
+    [Fact]
+    public void FilesWithoutTestsAreOmittedAndDiscoveryWalksTheFolder()
+    {
+        Assert.True(TestDiscovery.DiscoverFile("tests/test_none.py", "def helper(): ...\n") == null);
+        string root = Path.Combine(Path.GetTempPath(), "pm_disc_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "tests"));
+        Directory.CreateDirectory(Path.Combine(root, ".venv"));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "tests", "test_a.py"), "def test_one(): ...\n");
+            File.WriteAllText(Path.Combine(root, "b_test.py"), "def test_two(): ...\n");
+            File.WriteAllText(Path.Combine(root, "helpers.py"), "def test_not_in_a_test_file(): ...\n");
+            File.WriteAllText(Path.Combine(root, ".venv", "test_ignored.py"), "def test_venv(): ...\n");
+            var files = TestDiscovery.Discover(root);
+            Assert.Equal("b_test.py,tests/test_a.py", string.Join(",", files.Select(x => x.Id)));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    // ------------------------------------------------------------ running
+
+    sealed class Project : IDisposable
+    {
+        public readonly string Root = Path.Combine(Path.GetTempPath(), "pm_tr_" + Guid.NewGuid().ToString("N"));
+        public Project() { Directory.CreateDirectory(Root); }
+        public void File(string rel, string text)
+        {
+            string full = Path.Combine(Root, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            System.IO.File.WriteAllText(full, text.Replace("\r\n", "\n"));
+        }
+        public void Dispose() { try { Directory.Delete(Root, true); } catch (IOException) { } }
+
+        /// <summary>Runs and returns every message up to the process exit.</summary>
+        public List<JsonNode> Run(string framework, params string[] ids)
+        {
+            var events = new BlockingCollection<JsonNode>();
+            using var session = new RunSession(events.Add);
+            session.StartTests(Root, ids, framework);
+            var all = new List<JsonNode>();
+            while (true)
+            {
+                if (!events.TryTake(out var e, TimeSpan.FromSeconds(60))) throw new AssertionException("timed out; saw: " + string.Join(" ", all.Select(x => x.ToJsonString())));
+                all.Add(e);
+                if (e["type"]!.GetValue<string>() is "exited" or "error") return all;
+            }
+        }
+    }
+
+    static Dictionary<string, JsonNode> Results(List<JsonNode> events) => events.Any(e => e["type"]!.GetValue<string>() == "testResult") ? ResultsCore(events) : throw new AssertionException("no results; events: " + string.Join(" ", events.Select(e => e.ToJsonString())));
+    static Dictionary<string, JsonNode> ResultsCore(List<JsonNode> events) =>
+        events.Where(e => e["type"]!.GetValue<string>() == "testResult").ToDictionary(e => e["id"]!.GetValue<string>(), e => e);
+
+    static string Outcome(Dictionary<string, JsonNode> r, string id) => r[id]["outcome"]!.GetValue<string>();
+
+    const string UnitTests =
+        "import unittest\n" +
+        "class Cart(unittest.TestCase):\n" +
+        "    def test_ok(self):\n" +                  // 3
+        "        self.assertEqual(1 + 1, 2)\n" +
+        "    def test_bad(self):\n" +                 // 5
+        "        self.assertEqual(1 + 1, 3)\n" +      // 6
+        "    def test_error(self):\n" +               // 7
+        "        raise KeyError('boom')\n" +          // 8
+        "    @unittest.skip('later')\n" +
+        "    def test_skipped(self):\n" +
+        "        pass\n";
+
+    [Fact]
+    public void UnittestResultsCarryOutcomesMessagesAndLocations()
+    {
+        if (!HavePython) return;
+        using var p = new Project();
+        p.File("tests/test_cart.py", UnitTests);
+        var events = p.Run("unittest");
+        var r = Results(events);
+        const string id = "tests/test_cart.py::Cart::";
+        Assert.Equal("passed", Outcome(r, id + "test_ok"));
+        Assert.Equal("failed", Outcome(r, id + "test_bad"));
+        Assert.Equal("error", Outcome(r, id + "test_error"));
+        Assert.Equal("skipped", Outcome(r, id + "test_skipped"));
+
+        var bad = r[id + "test_bad"];
+        Assert.Contains("AssertionError", bad["message"]!.GetValue<string>());
+        Assert.Contains("2 != 3", bad["traceback"]!.GetValue<string>());
+        Assert.Equal("tests/test_cart.py", bad["file"]!.GetValue<string>());
+        Assert.Equal(6, bad["line"]!.GetValue<int>());
+        Assert.Equal("later", r[id + "test_skipped"]["message"]!.GetValue<string>());
+        Assert.Equal("KeyError: 'boom'", r[id + "test_error"]["message"]!.GetValue<string>());
+
+        // started is reported before the result
+        int started = events.FindIndex(e => e["type"]!.GetValue<string>() == "testStarted" && e["id"]!.GetValue<string>() == id + "test_ok");
+        int done = events.FindIndex(e => e["type"]!.GetValue<string>() == "testResult" && e["id"]!.GetValue<string>() == id + "test_ok");
+        Assert.True(started >= 0 && started < done);
+        Assert.Equal(1, events.Last()["code"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void UnittestRunsOnlyTheSelectedIds()
+    {
+        if (!HavePython) return;
+        using var p = new Project();
+        p.File("tests/test_cart.py", UnitTests);
+        Assert.Equal(1, Results(p.Run("unittest", "tests/test_cart.py::Cart::test_ok")).Count);
+        Assert.Equal(4, Results(p.Run("unittest", "tests/test_cart.py::Cart")).Count);
+        Assert.Equal(4, Results(p.Run("unittest", "tests/test_cart.py")).Count);
+        Assert.Equal(4, Results(p.Run("unittest")).Count);   // no ids: discover everything
+    }
+
+    [Fact]
+    public void ImportErrorsAreCollectErrors()
+    {
+        if (!HavePython) return;
+        using var p = new Project();
+        p.File("tests/test_broken.py", "import module_that_does_not_exist\ndef test_x(): ...\n");
+        var events = p.Run("unittest", "tests/test_broken.py");
+        var err = events.First(e => e["type"]!.GetValue<string>() == "collectError");
+        Assert.Contains("module_that_does_not_exist", err["message"]!.GetValue<string>());
+        Assert.Equal(1, events.Last()["code"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void AutoFallsBackToUnittestWithoutPytest()
+    {
+        if (!HavePython || HavePytest) return;
+        using var p = new Project();
+        p.File("tests/test_cart.py", UnitTests);
+        var events = p.Run("auto");
+        Assert.Equal(4, Results(events).Count);
+        Assert.True(events.Any(e => e["type"]!.GetValue<string>() == "output" && e["text"]!.GetValue<string>().Contains("pytest is not installed")));
+    }
+
+    const string PytestFile =
+        "import pytest\n" +
+        "def test_ok():\n" +                       // 2
+        "    assert 1 + 1 == 2\n" +
+        "def test_bad():\n" +                      // 4
+        "    total = 5\n" +
+        "    assert total == 6\n" +                // 6
+        "@pytest.mark.skip(reason='later')\n" +
+        "def test_skipped(): ...\n" +
+        "@pytest.mark.parametrize('n', [1, 2, 3])\n" +
+        "def test_many(n):\n" +
+        "    assert n < 3\n" +
+        "@pytest.fixture\n" +
+        "def broken():\n" +
+        "    raise RuntimeError('no fixture')\n" +
+        "def test_fixture_error(broken): ...\n" +
+        "class TestGroup:\n" +
+        "    def test_method(self):\n" +
+        "        print('hello from the test')\n" +
+        "        assert True\n";
+
+    [Fact]
+    public void PytestReportsEveryOutcome()
+    {
+        if (!HavePytest) return;
+        using var p = new Project();
+        p.File("tests/test_p.py", PytestFile);
+        var events = p.Run("pytest", "tests/test_p.py");
+        var r = Results(events);
+        const string f = "tests/test_p.py::";
+        Assert.Equal("passed", Outcome(r, f + "test_ok"));
+        Assert.Equal("failed", Outcome(r, f + "test_bad"));
+        Assert.Equal("skipped", Outcome(r, f + "test_skipped"));
+        Assert.Equal("passed", Outcome(r, f + "test_many[1]"));
+        Assert.Equal("failed", Outcome(r, f + "test_many[3]"));
+        Assert.Equal("error", Outcome(r, f + "test_fixture_error"));
+        Assert.Equal("passed", Outcome(r, f + "TestGroup::test_method"));
+
+        var bad = r[f + "test_bad"];
+        Assert.Contains("assert 5 == 6", bad["message"]!.GetValue<string>());
+        Assert.Equal("tests/test_p.py", bad["file"]!.GetValue<string>());
+        Assert.Equal(6, bad["line"]!.GetValue<int>());
+        Assert.Contains("assert total == 6", bad["traceback"]!.GetValue<string>());
+        Assert.Equal("later", r[f + "test_skipped"]["message"]!.GetValue<string>());
+        Assert.Contains("hello from the test", r[f + "TestGroup::test_method"]["output"]!.GetValue<string>());
+        Assert.Contains("no fixture", r[f + "test_fixture_error"]["message"]!.GetValue<string>());
+
+        var collected = events.First(e => e["type"]!.GetValue<string>() == "collected")["tests"]!.AsArray();
+        Assert.True(collected.Any(t => t!["id"]!.GetValue<string>() == f + "test_many[2]"), "parametrized cases are listed");
+    }
+
+    [Fact]
+    public void PytestRunsSelectedIdsAndRunsUnittestToo()
+    {
+        if (!HavePytest) return;
+        using var p = new Project();
+        p.File("tests/test_p.py", PytestFile);
+        p.File("tests/test_u.py", UnitTests);
+        Assert.Equal(1, Results(p.Run("pytest", "tests/test_p.py::test_ok")).Count);
+        Assert.Equal(4, Results(p.Run("pytest", "tests/test_u.py")).Count);
+        var r = Results(p.Run("auto", "tests/test_u.py::Cart::test_bad"));
+        Assert.Equal("failed", Outcome(r, "tests/test_u.py::Cart::test_bad"));
+    }
+
+    [Fact]
+    public void PytestCollectionErrorsAreReported()
+    {
+        if (!HavePytest) return;
+        using var p = new Project();
+        p.File("tests/test_broken.py", "def test_x(:\n");
+        var events = p.Run("pytest");
+        Assert.True(events.Any(e => e["type"]!.GetValue<string>() == "collectError"), "syntax error in a test file");
+    }
+}

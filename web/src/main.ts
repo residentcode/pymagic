@@ -1,6 +1,7 @@
 import * as monaco from 'monaco-editor';
 import { LspClient } from './lsp';
 import { setupRun } from './run';
+import { setupTests } from './tests';
 
 (self as any).MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
 
@@ -307,11 +308,10 @@ async function main() {
     glyphMargin: true,
   });
   (window as any).pymagic = { editor, monaco, openFile };
-  runHooks = setupRun({
+  const common = {
     editor,
-    root: info.root,
     modelFor: ensureModel,
-    relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')),
+    relOf: (model: monaco.editor.ITextModel) => relPathOf.get(normalise(serverUri.get(model) ?? '')),
     openFile,
     saveAll: async () => {
       for (const [key, model] of models) {
@@ -323,7 +323,9 @@ async function main() {
       }
       refreshDirty();
     },
-  });
+  };
+  runHooks = setupRun({ ...common, root: info.root });
+  setupTests(common);
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void save());
   editor.onDidChangeCursorPosition((e) => { $('cursor').textContent = `Ln ${e.position.lineNumber}, Col ${e.position.column}`; });
 

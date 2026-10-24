@@ -41,10 +41,29 @@ public sealed class RunSession : IDisposable
     public void Start(string root, string script, bool debug, IReadOnlyList<string> args,
         IReadOnlyDictionary<string, List<int>>? breakpoints = null)
     {
-        string python = Python ?? Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python";
         string scriptPath = Path.GetFullPath(Path.Combine(root, script));
         if (!File.Exists(scriptPath)) { Error($"script not found: {script}"); return; }
         IsDebug = debug;
+
+        if (debug) Launch(root, true, new[] { "--script", scriptPath, "--" }, args, breakpoints);
+        else Launch(root, false, new[] { scriptPath }, args, null);
+    }
+
+    /// <summary>
+    /// Runs the tests with ids like <c>tests/test_a.py::TestX::test_y</c> (a whole file or class is a prefix of those;
+    /// no ids means everything). Results arrive as <c>testStarted</c> / <c>testResult</c> / <c>collectError</c> messages.
+    /// </summary>
+    public void StartTests(string root, IReadOnlyList<string> ids, string framework = "auto")
+    {
+        var helperArgs = new List<string> { "--framework", framework, "--" };
+        Launch(root, true, helperArgs, ids, null, helper: "pm_tests.py");
+    }
+
+    /// <param name="channel">Start the helper script and accept its socket (debugger and test runner); otherwise run the script directly.</param>
+    void Launch(string root, bool channel, IReadOnlyList<string> leading, IReadOnlyList<string> args,
+        IReadOnlyDictionary<string, List<int>>? breakpoints, string helper = "pm_debug.py")
+    {
+        string python = Python ?? Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python";
 
         var psi = new ProcessStartInfo(python)
         {
@@ -65,39 +84,39 @@ public sealed class RunSession : IDisposable
         psi.Environment["PYTHONPATH"] = string.IsNullOrEmpty(existing) ? root : root + Path.PathSeparator + existing;
 
         string? token = null;
-        if (debug)
+        if (channel)
         {
             token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
             _listener = new TcpListener(IPAddress.Loopback, 0);
             _listener.Start();
             int port = ((IPEndPoint)_listener.LocalEndpoint).Port;
-            psi.ArgumentList.Add(ExtractHelper());
+            psi.ArgumentList.Add(ExtractHelper(helper));
             psi.ArgumentList.Add("--port"); psi.ArgumentList.Add(port.ToString());
             psi.ArgumentList.Add("--token"); psi.ArgumentList.Add(token);
             psi.ArgumentList.Add("--root"); psi.ArgumentList.Add(root);
-            psi.ArgumentList.Add("--script"); psi.ArgumentList.Add(scriptPath);
-            psi.ArgumentList.Add("--");
         }
-        else psi.ArgumentList.Add(scriptPath);
+        foreach (var a in leading) psi.ArgumentList.Add(a);
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         try { _process = Process.Start(psi); }
         catch (System.ComponentModel.Win32Exception e) { Error($"cannot start '{python}': {e.Message}"); return; }
         if (_process == null) { Error($"cannot start '{python}'"); return; }
 
-        _emit(new JsonObject { ["type"] = "started", ["pid"] = _process.Id, ["debug"] = debug });
+        _emit(new JsonObject { ["type"] = "started", ["pid"] = _process.Id, ["debug"] = IsDebug });
 
         var readers = new[]
         {
             Pump(_process.StandardOutput, "stdout"),
             Pump(_process.StandardError, "stderr"),
         };
-        if (debug) Task.Run(() => AcceptDebugger(token!, root, breakpoints));
+        Task? channelTask = channel ? Task.Run(() => AcceptDebugger(token!, root, breakpoints)) : null;
 
         Task.Run(() =>
         {
             _process.WaitForExit();
             Task.WaitAll(readers.Select(r => r).ToArray(), TimeSpan.FromSeconds(2));
+            // messages the helper sent just before exiting must reach the UI before the exit does
+            try { channelTask?.Wait(TimeSpan.FromSeconds(3)); } catch (AggregateException) { }
             _emit(new JsonObject { ["type"] = "exited", ["code"] = _process.ExitCode });
             Cleanup();
         });
@@ -118,16 +137,16 @@ public sealed class RunSession : IDisposable
 
     void Error(string message) => _emit(new JsonObject { ["type"] = "error", ["message"] = message });
 
-    static string ExtractHelper()
+    static string ExtractHelper(string name)
     {
-        using var s = typeof(RunSession).Assembly.GetManifestResourceStream("pm_debug.py")
+        using var s = typeof(RunSession).Assembly.GetManifestResourceStream(name)
             ?? throw new InvalidOperationException("debug helper missing from the assembly");
         using var ms = new MemoryStream();
         s.CopyTo(ms);
         var bytes = ms.ToArray();
         string dir = Path.Combine(Path.GetTempPath(), "pymagic", Convert.ToHexString(SHA256.HashData(bytes))[..12]);
         Directory.CreateDirectory(dir);
-        string path = Path.Combine(dir, "pm_debug.py");
+        string path = Path.Combine(dir, name);
         if (!File.Exists(path) || new FileInfo(path).Length != bytes.Length) File.WriteAllBytes(path, bytes);
         return path;
     }

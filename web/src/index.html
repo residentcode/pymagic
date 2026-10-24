@@ -60,6 +60,25 @@
     .bp-glyph { background: var(--red); border-radius: 50%; width: 11px !important; height: 11px !important; margin: 4px 0 0 5px; }
     .debug-line { background: #3574f033; }
     .debug-arrow { background: var(--amber); clip-path: polygon(0 20%, 60% 20%, 60% 0, 100% 50%, 60% 100%, 60% 80%, 0 80%); width: 12px !important; height: 12px !important; margin: 3px 0 0 4px; }
+    #tree-col { width: 46%; } #detail-col { flex: 1; }
+    #tests-bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 3px 6px; background: var(--panel); border-bottom: 1px solid var(--line); }
+    #tests-bar button, #tests-bar select { white-space: nowrap; background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 7px; font: inherit; cursor: pointer; }
+    #tests-bar button:disabled { opacity: .35; cursor: default; }
+    #tests-bar select { background: var(--bg); }
+    #tests-summary { margin-left: auto; white-space: nowrap; color: var(--dim); } #tests-summary.good { color: var(--green); } #tests-summary.bad { color: var(--red); }
+    #tests-tree ul { list-style: none; margin: 0; padding-left: 16px; } #tests-tree > ul { padding-left: 4px; }
+    #tests-tree .trow { display: flex; align-items: center; gap: 4px; padding: 1px 4px; cursor: pointer; white-space: nowrap; }
+    #tests-tree .trow:hover { background: #ffffff10; } #tests-tree .trow.sel { background: #3574f055; }
+    #tests-tree .caret { width: 12px; color: var(--dim); } #tests-tree .ticon { width: 14px; text-align: center; }
+    #tests-tree .tname { overflow: hidden; text-overflow: ellipsis; }
+    #tests-tree .tplay { margin-left: auto; color: var(--green); visibility: hidden; padding: 0 4px; } #tests-tree .trow:hover .tplay { visibility: visible; }
+    #tests-tree .empty { padding: 10px; color: var(--dim); font-family: system-ui, sans-serif; }
+    #test-detail { padding: 6px 10px; } #test-detail .dim { color: var(--dim); } #test-detail .msg { color: var(--amber); margin: 4px 0; }
+    #test-detail .outcome { font-weight: 700; } #test-detail .outcome.passed { color: var(--green); } #test-detail .outcome.failed, #test-detail .outcome.error { color: var(--red); }
+    #test-detail .link { color: #6cb6ff; cursor: pointer; text-decoration: underline; margin: 2px 0; }
+    #test-detail .tb { margin: 4px 0; padding: 6px; background: #00000030; border-radius: 4px; white-space: pre-wrap; word-break: break-word; font: 12px/1.4 Consolas, monospace; }
+    #tests-console { margin: 0; max-height: 28%; overflow: auto; padding: 4px 10px; border-top: 1px solid var(--line); font: 12px/1.4 Consolas, monospace; color: var(--dim); white-space: pre-wrap; }
+    #tests-console .err { color: var(--red); } #tests-console .info { color: var(--dim); }
     @media (max-width: 700px) { #app { grid-template-columns: 1fr; } #sidebar { display: none; } }
   </style>
 </head>
@@ -74,6 +93,8 @@
       <button id="b-over" title="Step over (F10)" disabled>Step over</button>
       <button id="b-into" title="Step into (F11)" disabled>Step into</button>
       <button id="b-out" title="Step out (Shift+F11)" disabled>Step out</button>
+      <span class="sep"></span>
+      <button id="b-tests" title="Test explorer (Ctrl+Shift+F10 runs the test at the cursor)">🧪 Tests</button>
       <span class="spacer"></span>
       <span id="interp"></span>
     </div>
@@ -82,6 +103,7 @@
       <div id="tabs">
         <button id="t-output" class="active">Output</button>
         <button id="t-debug">Debugger</button>
+        <button id="t-tests">Tests</button>
         <span class="spacer"></span>
         <button id="t-close" class="close" title="Hide panel">✕</button>
       </div>
@@ -94,6 +116,25 @@
         <div class="col" id="vars-col"><h2>Variables</h2><div class="body" id="vars"></div></div>
         <div class="col" id="watch-col"><h2>Evaluate</h2><div class="body" id="watch-log"></div>
           <input id="watch-in" placeholder="Expression, Enter to evaluate" autocomplete="off" spellcheck="false"></div>
+      </div>
+      <div id="tests-tab" class="tab">
+        <div class="col" id="tree-col">
+          <div id="tests-bar">
+            <button id="tests-all" title="Run all tests">▶ All</button>
+            <button id="tests-sel" title="Run the selected node">▶ Selected</button>
+            <button id="tests-here" title="Run the test at the cursor (Ctrl+Shift+F10)">▶ At cursor</button>
+            <button id="tests-rerun" title="Run the failed tests again" disabled>↻ Failed</button>
+            <button id="tests-refresh" title="Rescan test files">⟳</button>
+            <select id="tests-fw" title="Test framework"><option value="auto">auto</option><option value="pytest">pytest</option><option value="unittest">unittest</option></select>
+            <span id="tests-summary"></span>
+          </div>
+          <div class="body" id="tests-tree"></div>
+        </div>
+        <div class="col" id="detail-col">
+          <h2 id="detail-title">Details</h2>
+          <div class="body" id="test-detail"></div>
+          <pre id="tests-console"></pre>
+        </div>
       </div>
     </section>
     <footer id="status">

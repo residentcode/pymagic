@@ -182,6 +182,8 @@ app.MapGet("/api/interpreter", () =>
     catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { return Results.Text(""); }
 });
 
+app.MapGet("/api/tests", () => TestDiscovery.Discover(root));
+
 app.Map("/run", async (HttpContext ctx) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
@@ -225,6 +227,11 @@ app.Map("/run", async (HttpContext ctx) =>
                 string file0 = msg["file"]!.GetValue<string>();
                 ResolveInRoot(file0);   // refuses paths outside the workspace
                 session.Start(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
+            }
+            else if (msg["type"]?.GetValue<string>() == "startTests")
+            {
+                var ids = (msg["ids"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
+                session.StartTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto");
             }
             else session.Handle(msg);
         }
