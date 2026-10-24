@@ -150,8 +150,8 @@ internal sealed class CfgBuilder
                 }
                 // x is None, x == C.MEMBER, (m := f()) is not None
                 if (IsChain(left)) { reference = Referent(left); return true; }
-                // None is not x
-                if (left is ConstExpr { Kind: ConstKind.None } && IsChain(right)) { reference = Referent(right); return true; }
+                // None is not x, "a" == x
+                if (left is ConstExpr && IsChain(right)) { reference = Referent(right); return true; }
                 return false;
             }
 

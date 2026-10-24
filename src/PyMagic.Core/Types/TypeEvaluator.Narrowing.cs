@@ -182,6 +182,9 @@ public sealed partial class TypeEvaluator
 
     PyType Truthiness(PyType t, bool truthy)
     {
+        // Literal[""] and Literal[0] are always falsy, other literals always truthy
+        if (t.Members.Any(x => x is ClassType { IsInstance: true, LiteralValue: not null }))
+            t = PyType.Union(t.Members.Where(x => x is not ClassType { IsInstance: true, LiteralValue: { } v } || IsTruthyLiteral(v) == truthy));
         if (truthy) return WithoutNone(t);
         // a falsy value: None, or an instance of a class that can be falsy (defines __bool__ or __len__)
         return PyType.Union(t.Members.Where(x => x switch

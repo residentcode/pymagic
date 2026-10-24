@@ -420,7 +420,7 @@ public sealed partial class TypeEvaluator
     {
         var map = TypeParamMap(owner.Info, owner.Args);
         // Self is the receiver's class, not the specific enum member it happens to be (Flag.__or__ returns the Flag type)
-        map["Self"] = receiver is ClassType rc ? rc.AsInstance() with { EnumMember = null } : PyType.Unknown;
+        map["Self"] = receiver is ClassType rc ? rc.AsInstance().Widened() : PyType.Unknown;
         map["type[Self]"] = receiver is ClassType rc2 ? rc2.AsClassObject() : PyType.Unknown;
         return map;
     }

@@ -68,22 +68,54 @@ public sealed record UnionType : PyType
         other != null && MemberList.Count == other.MemberList.Count && MemberList.All(m => other.MemberList.Contains(m));
     public override int GetHashCode() => MemberList.Aggregate(17, (h, m) => h ^ m.GetHashCode());
 
-    public override string Display(int depth = 0) =>
-        string.Join(" | ", MemberList.Select(m => m.Display(depth + 1)));
+    public override string Display(int depth = 0)
+    {
+        // the literal members share one `Literal[...]`, written where the first of them stands
+        var parts = new List<string>();
+        List<string>? literals = null;
+        int literalAt = -1;
+        foreach (var m in MemberList)
+        {
+            if (m is ClassType { IsInstance: true, LiteralValue: not null } lit)
+            {
+                if (literals == null) { literals = new List<string>(); literalAt = parts.Count; parts.Add(""); }
+                literals.Add(ClassType.LiteralText(lit.LiteralValue!));
+            }
+            else parts.Add(m.Display(depth + 1));
+        }
+        if (literals != null) parts[literalAt] = "Literal[" + string.Join(", ", literals) + "]";
+        return string.Join(" | ", parts);
+    }
 }
 
 /// <summary>A class object (IsInstance = false, printed type[C]) or an instance of a class (IsInstance = true).</summary>
+/// <summary>The value of a bytes literal type, Literal[b"x"]: kept apart from str values.</summary>
+public sealed record LiteralBytes(string Raw);
+
 /// <param name="EnumMember">For an instance of an enum class: the member it is known to be (Color.RED), else null.</param>
-public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool IsInstance, IReadOnlyList<PyType>? TupleItems = null, string? EnumMember = null) : PyType
+/// <param name="LiteralValue">For an instance written as Literal[...]: its value (string for str, long for int, bool, LiteralBytes), else null.</param>
+public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool IsInstance, IReadOnlyList<PyType>? TupleItems = null, string? EnumMember = null, object? LiteralValue = null) : PyType
 {
     public ClassType(ClassInfo info, bool isInstance) : this(info, Array.Empty<PyType>(), isInstance) { }
+
+    /// <summary>The same type without what makes it one particular value: Literal['a'] becomes str, Color.RED becomes Color.</summary>
+    public ClassType Widened() => this with { LiteralValue = null, EnumMember = null };
+
+    /// <summary>How a literal value is written in Literal[...]: 'a', 1, True, b'x'.</summary>
+    public static string LiteralText(object value) => value switch
+    {
+        string s => "'" + s + "'",
+        bool b => b ? "True" : "False",
+        LiteralBytes bytes => "b'" + bytes.Raw + "'",
+        _ => value.ToString() ?? "",
+    };
 
     public ClassType AsInstance() => IsInstance ? this : this with { IsInstance = true };
     public ClassType AsClassObject() => IsInstance ? this with { IsInstance = false } : this;
 
     public bool Equals(ClassType? other) =>
         other != null && ReferenceEquals(Info, other.Info) && IsInstance == other.IsInstance
-        && Args.SequenceEqual(other.Args) && EnumMember == other.EnumMember
+        && Args.SequenceEqual(other.Args) && EnumMember == other.EnumMember && Equals(LiteralValue, other.LiteralValue)
         && (TupleItems == null ? other.TupleItems == null : other.TupleItems != null && TupleItems.SequenceEqual(other.TupleItems));
 
     public override int GetHashCode() => HashCode.Combine(Info.Name, IsInstance, Args.Count, TupleItems?.Count);
@@ -92,6 +124,7 @@ public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool 
     {
         if (IsInstance && Info.Name == "NoneType" && Info.Module.Name is "builtins" or "types") return "None";
         if (IsInstance && EnumMember != null) return $"{Info.Name}.{EnumMember}";
+        if (IsInstance && LiteralValue != null) return $"Literal[{LiteralText(LiteralValue)}]";
         var sb = new StringBuilder(Info.Name);
         if (TupleItems != null)
         {

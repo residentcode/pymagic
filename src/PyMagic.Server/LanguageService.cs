@@ -378,6 +378,7 @@ public sealed partial class LanguageService
             case ClassType { IsInstance: true, Info.Name: "NoneType" }: return "None";
             case ClassType { IsInstance: false } c: return $"type[{FormatType(ev, c.AsInstance(), depth + 1)}]";
             case ClassType c when c.EnumMember != null: return $"{c.Info.Name}.{c.EnumMember}";
+            case ClassType { LiteralValue: { } literal }: return $"Literal[{ClassType.LiteralText(literal)}]";
             case ClassType c when c.TupleItems != null:
                 return c.TupleItems.Count == 0 ? "tuple[()]"
                     : $"tuple[{string.Join(", ", c.TupleItems.Select(x => FormatType(ev, x, depth + 1)))}]";
@@ -387,7 +388,23 @@ public sealed partial class LanguageService
                 return c.Args.Count == 0 ? c.Info.Name
                     : $"{c.Info.Name}[{string.Join(", ", c.Args.Select(x => FormatType(ev, x, depth + 1)))}]";
             case UnionType u:
-                return string.Join(" | ", u.MemberList.Select(x => FormatType(ev, x, depth + 1)));
+            {
+                // the literal members share one Literal[...], written where the first of them stands
+                var parts = new List<string>();
+                List<string>? literals = null;
+                int literalAt = -1;
+                foreach (var x in u.MemberList)
+                {
+                    if (x is ClassType { IsInstance: true, LiteralValue: { } lv })
+                    {
+                        if (literals == null) { literals = new List<string>(); literalAt = parts.Count; parts.Add(""); }
+                        literals.Add(ClassType.LiteralText(lv));
+                    }
+                    else parts.Add(FormatType(ev, x, depth + 1));
+                }
+                if (literals != null) parts[literalAt] = "Literal[" + string.Join(", ", literals) + "]";
+                return string.Join(" | ", parts);
+            }
             case FunctionType f:
                 return FormatFunction(ev, f.Info.Name, f);
             case SignatureType s:

@@ -99,7 +99,7 @@ public class NarrowingMoreTests
     [Fact]
     public void OtherComparisonsLeaveTheTypeAlone()
     {
-        Same("int | None", T("def f(x: Optional[int]):\n    if x == 5:\n        x"));
+        Assert.Equal("int", T("def f(x: Optional[int]):\n    if x == 5:\n        x"));      // None is never equal to 5
         Same("int | None", T("def f(x: Optional[int], y: int):\n    if x == y:\n        x"));
         Same("int | str", T("def f(x: int | str):\n    if x is Color.RED:\n        pass\n    x"));
     }

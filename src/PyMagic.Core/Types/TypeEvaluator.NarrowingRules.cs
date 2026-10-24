@@ -39,6 +39,9 @@ public sealed partial class TypeEvaluator
 
         if (other is ConstExpr { Kind: ConstKind.None }) return equal ? OnlyNone(t) : WithoutNone(t);
 
+        // x == "a", x != 3, x is True
+        if (LiteralOf(other) is { } literal) return NarrowLiteral(t, literal, equal);
+
         // x is Color.RED, x == Color.RED
         if (other is NameExpr or AttributeExpr && TypeOf(m, other) is ClassType { IsInstance: true, EnumMember: not null } member && IsEnumClass(member.Info))
             return equal ? NarrowToEnumMember(t, member, identity: op is "is" or "is not") : WithoutEnumMember(t, member);
@@ -121,6 +124,19 @@ public sealed partial class TypeEvaluator
     /// <summary>`x in container`: x is one of the container's elements, so None goes unless the elements can be None.</summary>
     PyType NarrowIn(ModuleInfo m, Expr container, PyType t, bool isIn)
     {
+        // x in ("a", "b"): a Literal member stays when it is one of the values (and goes when it is, for `not in`)
+        var values = LiteralSet(container);
+        if (values != null && t.Members.Any(x => x is ClassType { IsInstance: true, LiteralValue: not null } || IsNone(x)))
+        {
+            var kept = new List<PyType>();
+            foreach (var x in t.Members)
+            {
+                if (x is ClassType { IsInstance: true, LiteralValue: { } lv }) { if (values.Any(v => Equals(v.Value, lv)) == isIn) kept.Add(x); }
+                else if (IsNone(x)) { if (!isIn) kept.Add(x); }
+                else kept.Add(x);
+            }
+            return kept.Count == 0 ? PyType.Never : PyType.Union(kept);
+        }
         if (!isIn) return t;
         // only None and enum members can be removed, so most conditions need no look at the container
         if (!t.Members.Any(x => IsNone(x) || x is ClassType { IsInstance: true } c && IsEnumClass(c.Info))) return t;
@@ -265,11 +281,75 @@ public sealed partial class TypeEvaluator
             case MatchValue v:
             {
                 if (v.Value is ConstExpr { Kind: ConstKind.None }) return matched ? OnlyNone(t) : WithoutNone(t);
+                if (LiteralOf(v.Value) is { } literal) return NarrowLiteral(t, literal, matched);
                 if (v.Value is NameExpr or AttributeExpr && TypeOf(m, v.Value) is ClassType { IsInstance: true, EnumMember: not null } member && IsEnumClass(member.Info))
                     return matched ? NarrowToEnumMember(t, member, identity: false) : WithoutEnumMember(t, member);
                 return t;
             }
         }
         return t;
+    }
+
+    // ------------------------------------------------------------ literal values
+
+    /// <summary>A constant in the source that can be a Literal value: "a", 3, -1, b"x", True, False.</summary>
+    static (string Class, object Value)? LiteralOf(Expr e) => e switch
+    {
+        ConstExpr { Kind: ConstKind.Str, IsFString: false } c when StringValue(c) is { } s => ("str", s),
+        ConstExpr { Kind: ConstKind.Int } c when LiteralInt(c.Text, negative: false) is { } i => ("int", i),
+        UnaryExpr { Op: "-", Operand: ConstExpr { Kind: ConstKind.Int } c } when LiteralInt(c.Text, negative: true) is { } i => ("int", i),
+        ConstExpr { Kind: ConstKind.Bytes } c when LiteralBytesValue(c) is { } b => ("bytes", b),
+        ConstExpr { Kind: ConstKind.True } => ("bool", true),
+        ConstExpr { Kind: ConstKind.False } => ("bool", false),
+        _ => null,
+    };
+
+    /// <summary>The values of a tuple, list or set display made only of constants; null for anything else.</summary>
+    static List<(string Class, object Value)>? LiteralSet(Expr container)
+    {
+        var items = container switch { TupleExpr t => t.Items, ListExpr l => l.Items, SetExpr s => s.Items, _ => null };
+        if (items == null || items.Count == 0) return null;
+        var values = new List<(string, object)>();
+        foreach (var it in items)
+        {
+            if (LiteralOf(it) is not { } v) return null;
+            values.Add(v);
+        }
+        return values;
+    }
+
+    static bool IsTruthyLiteral(object value) => value switch
+    {
+        string s => s.Length > 0,
+        long l => l != 0,
+        bool b => b,
+        LiteralBytes bytes => bytes.Raw.Length > 0,
+        _ => true,
+    };
+
+    /// <summary>The type on the branch where the reference equals the constant (<paramref name="equal"/>) or differs from it.</summary>
+    PyType NarrowLiteral(PyType t, (string Class, object Value) literal, bool equal)
+    {
+        var result = new List<PyType>();
+        foreach (var x in t.Members)
+        {
+            if (x is not ClassType { IsInstance: true } xc) { result.Add(x); continue; }
+            bool sameClass = xc.Info.Module.Name == "builtins" && xc.Info.Name == literal.Class;
+
+            if (xc.LiteralValue != null)
+            {
+                if (sameClass) { if (Equals(xc.LiteralValue, literal.Value) == equal) result.Add(xc); }
+                else if (!equal || !(literal.Class is "str" or "bytes" || xc.Info.Name is "str" or "bytes")) result.Add(xc);   // a str is never equal to an int
+            }
+            else if (IsNone(xc)) { if (!equal) result.Add(xc); }
+            else if (sameClass && literal.Class == "bool")
+            {
+                // `x is True` leaves a bool that is True
+                bool value = (bool)literal.Value;
+                result.Add(xc with { LiteralValue = equal ? value : !value });
+            }
+            else result.Add(xc);
+        }
+        return result.Count == 0 ? PyType.Never : PyType.Union(result);
     }
 }

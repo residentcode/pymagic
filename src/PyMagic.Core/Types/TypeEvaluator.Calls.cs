@@ -364,7 +364,7 @@ public sealed partial class TypeEvaluator
             var arg = args[0].Type();
             return new CallTarget(cls, MapMembers(arg, t => t switch
             {
-                ClassType { IsInstance: true } c => (c with { EnumMember = null }).AsClassObject(),
+                ClassType { IsInstance: true } c => c.Widened().AsClassObject(),
                 ClassType { IsInstance: false } co => MetaclassOf(co.Info, out bool unknownMeta) ?? (unknownMeta ? PyType.Unknown : BuiltinClass("type") ?? PyType.Unknown),
                 _ => PyType.Unknown,
             }), none, noProblems);
@@ -732,6 +732,10 @@ public sealed partial class TypeEvaluator
                 if (src is not ClassType s) return true; // unknown shapes: do not complain
 
                 if (!s.IsInstance) return dc.Info.Name is "type" or "object" || IsProtocolSatisfiedByClassObject(dc);
+
+                // one literal is not another: Literal['a'] does not go where Literal['b'] or Color.GREEN is wanted
+                if (dc.LiteralValue != null && s.LiteralValue != null && ReferenceEquals(dc.Info, s.Info) && !Equals(dc.LiteralValue, s.LiteralValue)) return false;
+                if (dc.EnumMember != null && s.EnumMember != null && ReferenceEquals(dc.Info, s.Info) && dc.EnumMember != s.EnumMember) return false;
 
                 // numeric tower promotions
                 if (dc.Info.Module.Name == "builtins" && s.Info.Module.Name == "builtins")

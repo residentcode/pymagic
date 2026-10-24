@@ -178,7 +178,7 @@ public sealed partial class TypeEvaluator
             case "Counter": return CollectionsInst("Counter", A(0));
             case "Deque": return CollectionsInst("deque", A(0));
             case "ChainMap": return CollectionsInst("ChainMap", A(0), A(1));
-            case "Literal": return PyType.Union(args.Select(a => LiteralType(a)));
+            case "Literal": return PyType.Union(args.Select(a => LiteralType(m, a, lookup)));
             case "Callable":
             {
                 if (args.Count < 2) return new SignatureType(null, PyType.Unknown);
@@ -195,14 +195,48 @@ public sealed partial class TypeEvaluator
         }
     }
 
-    PyType LiteralType(Expr e) => e switch
+    /// <summary>One argument of Literal[...]: a value of str, int, bytes or bool, None, an enum member, or another Literal.</summary>
+    PyType LiteralType(ModuleInfo m, Expr e, Scope? lookup)
     {
-        ConstExpr { Kind: ConstKind.Int } => Inst("int"),
-        ConstExpr { Kind: ConstKind.Str } => Inst("str"),
-        ConstExpr { Kind: ConstKind.Bytes } => Inst("bytes"),
-        ConstExpr { Kind: ConstKind.True or ConstKind.False } => Inst("bool"),
-        ConstExpr { Kind: ConstKind.None } => NoneInstance,
-        UnaryExpr { Op: "-", Operand: ConstExpr { Kind: ConstKind.Int } } => Inst("int"),
-        _ => PyType.Unknown,
-    };
+        PyType WithValue(string cls, object? value) =>
+            Inst(cls) is ClassType c && value != null ? c with { LiteralValue = value } : Inst(cls);
+        switch (e)
+        {
+            case ConstExpr { Kind: ConstKind.Int } i: return WithValue("int", LiteralInt(i.Text, negative: false));
+            case ConstExpr { Kind: ConstKind.Str, IsFString: false } s: return WithValue("str", StringValue(s));
+            case ConstExpr { Kind: ConstKind.Bytes } b: return WithValue("bytes", LiteralBytesValue(b));
+            case ConstExpr { Kind: ConstKind.True }: return WithValue("bool", true);
+            case ConstExpr { Kind: ConstKind.False }: return WithValue("bool", false);
+            case ConstExpr { Kind: ConstKind.None }: return NoneInstance;
+            case UnaryExpr { Op: "-", Operand: ConstExpr { Kind: ConstKind.Int } ni }: return WithValue("int", LiteralInt(ni.Text, negative: true));
+            case NameExpr or AttributeExpr:
+                // Literal[Color.RED]
+                return TypeOf(m, e) is ClassType { IsInstance: true, EnumMember: not null } member ? member : PyType.Unknown;
+            case SubscriptExpr:
+                return Annotation(m, e, lookup);      // Literal[Literal["a"], "b"]
+            default: return PyType.Unknown;
+        }
+    }
+
+    static object? LiteralInt(string text, bool negative)
+    {
+        text = text.Replace("_", "");
+        long value;
+        if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) { if (!long.TryParse(text[2..], System.Globalization.NumberStyles.HexNumber, null, out value)) return null; }
+        else if (text.StartsWith("0o", StringComparison.OrdinalIgnoreCase)) { try { value = Convert.ToInt64(text[2..], 8); } catch (Exception) { return null; } }
+        else if (text.StartsWith("0b", StringComparison.OrdinalIgnoreCase)) { try { value = Convert.ToInt64(text[2..], 2); } catch (Exception) { return null; } }
+        else if (!long.TryParse(text, out value)) return null;
+        return negative ? -value : value;
+    }
+
+    /// <summary>The text between the quotes of a bytes literal.</summary>
+    static LiteralBytes? LiteralBytesValue(ConstExpr c)
+    {
+        string text = c.Text;
+        int q = 0;
+        while (q < text.Length && text[q] != '"' && text[q] != '\'') q++;
+        if (q >= text.Length) return null;
+        int n = text.Length - q >= 6 && text[q + 1] == text[q] && text[q + 2] == text[q] ? 3 : 1;
+        return text.Length < q + 2 * n ? null : new LiteralBytes(text.Substring(q + n, text.Length - q - 2 * n));
+    }
 }
