@@ -7,6 +7,7 @@ import { setupPackages } from './packages';
 import { setupRefactor } from './refactor';
 import { setupSearch } from './search';
 import { setupHierarchy } from './hierarchy';
+import { setupGit } from './git';
 import { toast } from './toast';
 
 (self as any).MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
@@ -433,7 +434,26 @@ async function save() {
   const rel = model && relPathOf.get(normalise(serverUri.get(model)!));
   if (!model || !rel) return;
   const res = await fetch('/api/file?path=' + encodeURIComponent(rel), { method: 'PUT', body: model.getValue() });
-  if (res.ok) { savedText.set(rel, model.getValue()); refreshDirty(); }
+  if (res.ok) { savedText.set(rel, model.getValue()); refreshDirty(); window.dispatchEvent(new Event('pymagic:saved')); }
+}
+
+/** Reads a file from disk into its open model (after git changed it behind the editor's back). */
+async function reloadFromDisk(rel: string) {
+  const model = models.get(normalise(uriFor(rel)));
+  const res = await fetch('/api/file?path=' + encodeURIComponent(rel));
+  if (!res.ok) return;
+  const text = await res.text();
+  savedText.set(rel, text);
+  if (model && model.getValue() !== text) model.setValue(text);
+  refreshDirty();
+}
+
+async function reloadAllFromDisk() {
+  for (const key of Array.from(models.keys())) {
+    const rel = relPathOf.get(key);
+    const model = models.get(key);
+    if (rel && model && model.getValue() === savedText.get(rel)) await reloadFromDisk(rel);   // edits that are not saved stay
+  }
 }
 
 async function main() {
@@ -468,6 +488,7 @@ async function main() {
         }
       }
       refreshDirty();
+      window.dispatchEvent(new Event('pymagic:saved'));
     },
   };
   runHooks = setupRun({ ...common, root: info.root });
@@ -487,6 +508,16 @@ async function main() {
       }
       return out;
     },
+  });
+  setupGit({
+    editor,
+    relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')),
+    currentRel: () => currentRel,
+    openFile,
+    savedText: (rel) => savedText.get(rel),
+    saveAll: common.saveAll,
+    reload: reloadFromDisk,
+    reloadAll: reloadAllFromDisk,
   });
   setupHierarchy({
     editor, lsp, openFile, modelForUri,
@@ -546,6 +577,7 @@ async function main() {
     li.onclick = () => void openFile(rel);
     list.appendChild(li);
   }
+  window.dispatchEvent(new Event('pymagic:files'));
   // open everything so cross-file diagnostics and navigation see the whole project
   await Promise.all(files.map((f) => ensureModel(f)));
   if (files.length) await openFile(files[0]);

@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.FileProviders;
 using PyMagic.Core.Types;
 using PyMagic.Server;
+using PyMagic.Server.Git;
 
 // pymagic-web [--root <dir>] [--typeshed <dir>] [--lib <dir>]... [--www <dir>] [--port <n>]
 // Serves the Monaco front-end, a small file API for the workspace folder, and /lsp: one language server per browser tab.
@@ -435,5 +436,95 @@ app.Map("/run", async (HttpContext ctx) =>
     outbox.CompleteAdding();
     await sender;
 });
+// ---- git ------------------------------------------------------------------------------------------------------
+
+// The workspace folder's repository, looked up again while there is none (the user may create one from the page).
+GitRepository? gitRepo = null;
+string? gitReason = null;
+object gitLock = new();
+GitRepository? FindGit()
+{
+    lock (gitLock)
+    {
+        gitRepo ??= GitRepository.Locate(root, out gitReason);
+        return gitRepo;
+    }
+}
+
+async Task<IResult> GitCall(Func<GitRepository, object?> work)
+{
+    var repo = FindGit();
+    if (repo == null) return Results.BadRequest(new { error = gitReason ?? "no repository" });
+    try { return Results.Json(await Task.Run(() => work(repo))); }
+    catch (GitException e) { return Results.BadRequest(new { error = e.Message }); }
+}
+
+string[] StringsOf(JsonNode? node) => node is JsonArray a ? a.Select(x => x?.GetValue<string>() ?? "").ToArray() : Array.Empty<string>();
+
+app.MapGet("/api/git/status", async () =>
+{
+    var repo = FindGit();
+    if (repo == null) return Results.Json(new { available = false, reason = gitReason, canInit = gitReason == "not a git repository" });
+    try
+    {
+        var status = await Task.Run(repo.Status);
+        return Results.Json(new { available = true, status.Branch, status.Upstream, status.Ahead, status.Behind, status.Detached, status.HasCommits, status.Files });
+    }
+    catch (GitException e) { return Results.Json(new { available = false, reason = e.Message, canInit = false }); }
+});
+
+app.MapPost("/api/git/init", async () =>
+{
+    try
+    {
+        var created = await Task.Run(() => GitRepository.Init(root));
+        lock (gitLock) gitRepo = created;
+        return Results.Json(new { ok = true });
+    }
+    catch (GitException e) { return Results.BadRequest(new { error = e.Message }); }
+});
+
+// a file as committed (HEAD by default); 204 when the revision does not have it (a 404 would only fill the browser console)
+app.MapGet("/api/git/file", async (string path, string? rev) =>
+{
+    var repo = FindGit();
+    if (repo == null) return Results.NoContent();
+    try
+    {
+        var text = await Task.Run(() => repo.FileAt(rev ?? "HEAD", path));
+        return text == null ? Results.NoContent() : Results.Text(text, "text/plain; charset=utf-8");
+    }
+    catch (GitException e) { return Results.BadRequest(new { error = e.Message }); }
+});
+
+app.MapGet("/api/git/log", (string? path, int? limit, int? skip) => GitCall(r => r.Log(string.IsNullOrEmpty(path) ? null : path, limit ?? 100, skip ?? 0)));
+app.MapGet("/api/git/commit", (string hash) => GitCall(r => r.Show(hash)));
+app.MapGet("/api/git/blame", (string path) => GitCall(r => r.Blame(path)));
+app.MapGet("/api/git/branches", () => GitCall(r => r.Branches()));
+
+app.MapPost("/api/git/commit", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    return await GitCall(r => new { hash = r.Commit(StringsOf(body?["paths"]), body?["message"]?.GetValue<string>() ?? "", body?["amend"]?.GetValue<bool>() ?? false) });
+});
+
+app.MapPost("/api/git/discard", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    return await GitCall(r => { r.Discard(StringsOf(body?["paths"])); return new { ok = true }; });
+});
+
+app.MapPost("/api/git/checkout", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    return await GitCall(r => { r.Checkout(body?["branch"]?.GetValue<string>() ?? ""); return new { ok = true }; });
+});
+
+app.MapPost("/api/git/branch", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    return await GitCall(r => { r.CreateBranch(body?["name"]?.GetValue<string>() ?? ""); return new { ok = true }; });
+});
+
 Console.WriteLine($"PyMagic on http://127.0.0.1:{port}/   workspace: {root}   typeshed: {typeshed ?? "(bundled stubs)"}");
 app.Run();

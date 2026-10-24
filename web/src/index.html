@@ -91,6 +91,29 @@
     #fs-query { flex: 1 1 240px; } #fs-replace { flex: 1 1 180px; } #fs-include, #fs-exclude { flex: 1 1 160px; } #fs-bar label { color: var(--dim); white-space: nowrap; }
     #fs-bar button { background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 8px; font: inherit; cursor: pointer; white-space: nowrap; } #fs-bar button:disabled { opacity: .4; cursor: default; }
     #fs-summary { padding: 2px 8px; color: var(--dim); font-size: 12px; } #fs-summary.bad { color: var(--red, #f48771); }
+    #git-bar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
+    #git-bar #git-branch { font-weight: 600; } #git-bar select, #git-bar input[type=text], #git-new-name { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 1px 4px; }
+    #git-state { margin-left: auto; color: var(--dim); } #git-none { padding: 8px 12px; color: var(--dim); }
+    #git-split { display: flex; flex: 1; min-height: 0; } #git-left, #git-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; } #git-left { flex: 0 0 42%; border-right: 1px solid var(--line); } #git-right { flex: 1; }
+    .git-head { display: flex; justify-content: space-between; padding: 2px 8px; background: #8881; font-weight: 600; } .git-head label { font-weight: normal; color: var(--dim); }
+    #git-changes, #git-log { flex: 1; overflow: auto; min-height: 40px; } #git-detail { max-height: 38%; overflow: auto; border-top: 1px solid var(--line); }
+    .gc { display: flex; gap: 6px; align-items: baseline; padding: 1px 8px; cursor: pointer; white-space: nowrap; } .gc:hover { background: #8882; }
+    .gc .st { width: 14px; text-align: center; font-weight: 700; } .gc .path { overflow: hidden; text-overflow: ellipsis; } .gc .roll { margin-left: auto; visibility: hidden; color: var(--dim); background: none; border: 0; cursor: pointer; } .gc:hover .roll { visibility: visible; }
+    .st-M { color: #61afef; } .st-A, .st-\? { color: #98c379; } .st-D { color: #e06c75; } .st-R { color: #c678dd; } .st-U { color: #e5c07b; }
+    #files li.git-M { color: #61afef; } #files li.git-A { color: #98c379; } #files li.git-D { color: #e06c75; } #files li.git-U { color: #e5c07b; }
+    #git-message { margin: 4px 8px; height: 60px; resize: vertical; background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 3px 5px; }
+    #git-commit-bar { display: flex; gap: 10px; align-items: center; padding: 0 8px 6px; } #git-result { color: var(--dim); } #git-result.bad { color: var(--red); }
+    .gl { display: flex; gap: 8px; padding: 1px 8px; cursor: pointer; white-space: nowrap; } .gl:hover { background: #8882; } .gl.sel { background: #3b82f633; }
+    .gl .hash { font-family: Consolas, monospace; color: var(--accent); } .gl .subject { overflow: hidden; text-overflow: ellipsis; flex: 1; } .gl .who { color: var(--dim); } .gl .refs { color: #e5c07b; }
+    #git-detail .msg { padding: 4px 8px; white-space: pre-wrap; } #git-detail .meta { padding: 2px 8px; color: var(--dim); }
+    .git-bar-added { background: #2ea043; width: 3px !important; margin-left: 3px; cursor: pointer; }
+    .git-bar-modified { background: #4493f8; width: 3px !important; margin-left: 3px; cursor: pointer; }
+    .git-bar-deleted { border-top: 3px solid #f85149; width: 8px !important; margin-left: 2px; cursor: pointer; }
+    .git-blame-inline { color: var(--dim); font-style: italic; margin-left: 3em; opacity: .7; }
+    #git-diff { position: fixed; inset: 4% 5%; z-index: 900; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 30px #000a; display: none; flex-direction: column; }
+    #git-diff.open { display: flex; } #git-diff-head { display: flex; gap: 12px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); } #git-diff-title { font-weight: 600; flex: 1; } #git-diff-body { flex: 1; min-height: 0; }
+    .git-popup { position: fixed; z-index: 1000; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 14px #0006; padding: 6px 8px; max-width: 60ch; font-size: 12.5px; }
+    .git-popup pre { margin: 4px 0; max-height: 14em; overflow: auto; font: 12px Consolas, monospace; color: #e06c75; } .git-popup button { margin-right: 6px; } .git-popup .meta { color: var(--dim); }
     #hier-bar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
     #hier-title { font-weight: 600; } #hier-modes { margin-left: auto; display: flex; gap: 4px; }
     #hier-modes button { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; font: inherit; cursor: pointer; }
@@ -180,6 +203,7 @@
         <button id="t-tests">Tests</button>
         <button id="t-packages">Packages</button>
         <button id="t-search">Search</button>
+        <button id="t-git">Git</button>
         <button id="t-hier">Hierarchy</button>
         <span class="spacer"></span>
         <button id="t-close" class="close" title="Hide panel">✕</button>
@@ -232,6 +256,38 @@
           <div class="body" id="fs-results"></div>
         </div>
       </div>
+      <div id="git-tab" class="tab">
+        <div class="col" id="git-main">
+          <div id="git-bar">
+            <span id="git-branch" title="Current branch"></span>
+            <select id="git-branches" title="Switch branch"></select>
+            <input id="git-new-name" placeholder="new branch name" autocomplete="off" spellcheck="false" style="display:none">
+            <button id="git-new">New branch</button>
+            <button id="git-refresh" title="Reload the status">⟳</button>
+            <label title="Show who last changed each line, in the line numbers"><input type="checkbox" id="git-annotate"> Annotate</label>
+            <label title="Show who changed the current line, after it"><input type="checkbox" id="git-inline"> Inline blame</label>
+            <span id="git-state"></span>
+          </div>
+          <div id="git-none" style="display:none"><span id="git-none-text"></span> <button id="git-init" style="display:none">Create a repository here</button></div>
+          <div id="git-split">
+            <div id="git-left">
+              <div class="git-head"><span>Changes <span id="git-count"></span></span><label><input type="checkbox" id="git-all" checked> all</label></div>
+              <div id="git-changes"></div>
+              <textarea id="git-message" placeholder="Commit message" spellcheck="true"></textarea>
+              <div id="git-commit-bar">
+                <label title="Replace the last commit"><input type="checkbox" id="git-amend"> Amend</label>
+                <button id="git-commit">Commit</button>
+                <span id="git-result"></span>
+              </div>
+            </div>
+            <div id="git-right">
+              <div class="git-head"><span>History</span><label><input type="checkbox" id="git-file-log"> current file</label></div>
+              <div id="git-log"></div>
+              <div id="git-detail"></div>
+            </div>
+          </div>
+        </div>
+      </div>
       <div id="hier-tab" class="tab">
         <div class="col" id="hier-main">
           <div id="hier-bar">
@@ -273,5 +329,6 @@
     </footer>
   </div>
   <script src="main.js"></script>
+<div id="git-diff"><div id="git-diff-head"><span id="git-diff-title"></span><button id="git-diff-close">Close (Esc)</button></div><div id="git-diff-body"></div></div>
 </body>
 </html>
