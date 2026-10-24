@@ -111,23 +111,54 @@ internal sealed class CfgBuilder
         return false;
     }
 
+    /// <summary>`x` or `(x := value)`: the expression whose name or member path a condition can narrow.</summary>
+    static Expr Referent(Expr e) => e is NamedExpr { Target: NameExpr t } ? t : e;
+
+    static bool IsChain(Expr e) => TryChain(Referent(e), out _, out _);
+
     /// <summary>The reference a condition narrows, if it has one of the recognised shapes.</summary>
     static bool NarrowedReference(Expr cond, out Expr reference)
     {
         reference = cond;
         switch (cond)
         {
+            case NamedExpr { Target: NameExpr t }:                                  // if (m := f()):
+                reference = t;
+                return true;
+
             case NameExpr or AttributeExpr:
                 return TryChain(cond, out _, out _);
 
-            case CompareExpr { Ops.Count: 1 } c when c.Ops[0] is "is" or "is not" or "==" or "!=":
-                if (c.Comparators[0] is ConstExpr { Kind: ConstKind.None } && TryChain(c.Left, out _, out _)) { reference = c.Left; return true; }
-                if (c.Left is ConstExpr { Kind: ConstKind.None } && TryChain(c.Comparators[0], out _, out _)) { reference = c.Comparators[0]; return true; }
-                return false;
+            case CompareExpr { Ops.Count: 1 } c:
+            {
+                string op = c.Ops[0];
+                var left = c.Left;
+                var right = c.Comparators[0];
+                if (op is "in" or "not in")                                         // x in (1, 2), x not in names
+                {
+                    if (!IsChain(left)) return false;
+                    reference = Referent(left);
+                    return true;
+                }
+                if (op is not ("is" or "is not" or "==" or "!=")) return false;
 
-            case CallExpr { Func: NameExpr { Name: "isinstance" }, Args.Count: 2 } call
-                when call.Args[0] is { Name: null, Stars: 0 } && call.Args[1] is { Name: null, Stars: 0 } && TryChain(call.Args[0].Value, out _, out _):
-                reference = call.Args[0].Value;
+                // type(x) is C
+                if (left is CallExpr { Func: NameExpr { Name: "type" }, Args.Count: 1 } tc && tc.Args[0] is { Name: null, Stars: 0 } && IsChain(tc.Args[0].Value))
+                {
+                    reference = Referent(tc.Args[0].Value);
+                    return true;
+                }
+                // x is None, x == C.MEMBER, (m := f()) is not None
+                if (IsChain(left)) { reference = Referent(left); return true; }
+                // None is not x
+                if (left is ConstExpr { Kind: ConstKind.None } && IsChain(right)) { reference = Referent(right); return true; }
+                return false;
+            }
+
+            case CallExpr { Func: NameExpr or AttributeExpr } call
+                when call.Args.Count >= 1 && call.Args[0] is { Name: null, Stars: 0 } && IsChain(call.Args[0].Value):
+                // isinstance, issubclass, callable, hasattr and user functions that return TypeGuard / TypeIs
+                reference = Referent(call.Args[0].Value);
                 return true;
         }
         return false;
@@ -394,12 +425,31 @@ internal sealed class CfgBuilder
         VisitExpr(x.Subject);
         var fail = _cur;
         var ends = new List<Instruction>();
+
+        // a subject that is a name or a member path is narrowed by the patterns that match it, and by those that did not
+        Symbol? subject = null;
+        string subjectPath = "";
+        if (TryChain(Referent(x.Subject), out var subjectRoot, out subjectPath)) subject = _model.ReferenceOf(subjectRoot)?.Symbol;
+
         foreach (var c in x.Cases)
         {
             _cur = fail;
+            var beforePattern = fail;
             VisitPattern(c.Pattern);
             bool refutable = !IsIrrefutable(c.Pattern);
+            bool narrows = subject != null && NarrowsSubject(c.Pattern);
             List<Instruction> nextFail = refutable ? fail : new();
+            if (narrows)
+            {
+                Emit(InstrKind.Assert, c.Pattern, subject, null, subjectPath, true);
+                var matched = _cur;
+                if (refutable)
+                {
+                    _cur = beforePattern;
+                    nextFail = new List<Instruction> { Emit(InstrKind.Assert, c.Pattern, subject, null, subjectPath, false) };
+                }
+                _cur = matched;
+            }
             if (c.Guard != null)
             {
                 var (gt, gf) = VisitCond(c.Guard);
@@ -412,6 +462,16 @@ internal sealed class CfgBuilder
         }
         _cur = Union(ends, fail);
     }
+
+    /// <summary>Patterns that say something about the type of the subject.</summary>
+    static bool NarrowsSubject(Pattern p) => p switch
+    {
+        MatchClass => true,
+        MatchValue => true,
+        MatchOr o => o.Alternatives.All(NarrowsSubject),
+        MatchAs a => NarrowsSubject(a.Pattern),
+        _ => false,
+    };
 
     static bool IsIrrefutable(Pattern p) => p switch
     {

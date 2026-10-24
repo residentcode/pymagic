@@ -32,6 +32,11 @@ public sealed partial class TypeEvaluator
         readonly Dictionary<Instruction, PyType> _memo = new();
         readonly HashSet<Instruction> _active = new();
         readonly HashSet<Instruction> _open = new();
+        int _steps;
+
+        /// <summary>The walk visited more instructions than it is worth: the caller falls back to the unnarrowed answer.</summary>
+        public bool Exhausted => _steps > Budget;
+        const int Budget = 30_000;
 
         public FlowWalker(TypeEvaluator ev, ModuleInfo m, ScopeFlow flow, Symbol sym, string path, PyType entry)
         {
@@ -87,6 +92,7 @@ public sealed partial class TypeEvaluator
             var cur = Skip(at);
             if (_memo.TryGetValue(cur, out var hit)) return hit;
             if (cur.Kind == InstrKind.Entry) return _entry;
+            if (++_steps > Budget) return _entry;
 
             if (!_active.Add(cur)) { _open.Add(cur); return PyType.CycleUnknown; }
             PyType result;
@@ -152,26 +158,21 @@ public sealed partial class TypeEvaluator
     /// <summary>Applies what a branch of a condition tells us (assertion instruction) to the type before it.</summary>
     PyType Narrow(ModuleInfo m, Instruction assertion, PyType t)
     {
-        if (t is NeverType || assertion.Element is not Expr cond) return t;
+        if (t is NeverType) return t;
         bool positive = assertion.AssertPositive;
+        if (assertion.Element is Pattern pattern) return NarrowPattern(m, pattern, t, positive);
+        if (assertion.Element is not Expr cond) return t;
 
         switch (cond)
         {
-            case NameExpr or AttributeExpr:
+            case NameExpr or AttributeExpr or NamedExpr:
                 return Truthiness(t, positive);
 
             case CompareExpr c:
-            {
-                bool equalsNone = c.Ops[0] is "is" or "==";
-                return equalsNone == positive ? OnlyNone(t) : WithoutNone(t);
-            }
+                return NarrowCompare(m, assertion, c, t, positive);
 
             case CallExpr call:
-            {
-                var classes = IsinstanceClasses(m, call.Args[1].Value);
-                if (classes == null) return t;
-                return positive ? IsInstancePositive(t, classes) : IsInstanceNegative(t, classes);
-            }
+                return NarrowCall(m, call, t, positive);
         }
         return t;
     }
@@ -283,6 +284,7 @@ public sealed partial class TypeEvaluator
         var entry = owned ? PyType.Never : TypeOfSymbol(sym);
         var w = Walker(m, flow, sym, "", entry);
         var t = PyType.Union(reads.Select(w.Before));
+        if (w.Exhausted) return null;   // too tangled to follow: use the plain reaching-definitions answer
         return t is NeverType ? PyType.Unknown : t;
     }
     /// <summary>Type of <c>a.b.c</c> after applying conditions such as <c>if a.b is not None</c>.</summary>
@@ -299,6 +301,7 @@ public sealed partial class TypeEvaluator
 
         var w = Walker(m, flow, r.Symbol, path, baseline);
         var t = PyType.Union(reads.Select(w.Before));
+        if (w.Exhausted) return baseline;
         return t is NeverType ? baseline : t;
     }
 }

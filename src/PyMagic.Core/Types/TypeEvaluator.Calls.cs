@@ -237,6 +237,12 @@ public sealed partial class TypeEvaluator
         if (callee is ClassType { IsInstance: false } ntc && ntc.Info.QualifiedName == "typing.NamedTuple" && call.Args.Count >= 2)
             return Single(new CallTarget(callee, NamedTupleFromTypingCall(m, call), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 
+        if (callee is ClassType { IsInstance: false } enumBase && IsEnumFunctionalCall(enumBase, call))
+            return Single(new CallTarget(callee, EnumFromCall(m, call, enumBase), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
+
+        if (IsTypedDictFunctionalCall(callee, call))
+            return Single(new CallTarget(callee, TypedDictFromCall(m, call), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
+
         if (TypedDictGet(m, call) is PyType tdGet)
             return Single(new CallTarget(callee, tdGet, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 

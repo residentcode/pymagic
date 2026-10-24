@@ -206,3 +206,13 @@ class _TypedDict(Mapping[str, object]):
     def __delitem__(self, k: str, /) -> None: ...
 
 def is_typeddict(tp: object) -> bool: ...
+
+def dataclass_transform(
+    *,
+    eq_default: bool = True,
+    order_default: bool = False,
+    kw_only_default: bool = False,
+    frozen_default: bool = False,
+    field_specifiers: tuple[Any, ...] = (),
+    **kwargs: Any,
+) -> Callable[[_T], _T]: ...

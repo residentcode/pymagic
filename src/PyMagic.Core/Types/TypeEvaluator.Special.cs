@@ -209,6 +209,8 @@ public sealed partial class TypeEvaluator
                 Frozen: call != null && BoolConst(KeywordArg(call, "frozen")) == true);
             break;
         }
+        // a decorator or a base class marked with dataclass_transform (attrs, pydantic, your own)
+        o ??= TransformedDataclassOf(c);
         return _dataclassOptions[c] = o;
     }
 
@@ -231,9 +233,9 @@ public sealed partial class TypeEvaluator
             var type = AnnotationType(c.Module, ann);
 
             bool hasDefault = a.Value != null, inInit = true, fieldKw = kwOnly;
-            if (a.Value is CallExpr { Func: NameExpr { Name: "field" } or AttributeExpr { Attr: "field" } } fc)
+            if (IsFieldSpecifier(a.Value, out var fc))
             {
-                hasDefault = KeywordArg(fc, "default") != null || KeywordArg(fc, "default_factory") != null;
+                hasDefault = FieldHasDefault(fc);
                 if (BoolConst(KeywordArg(fc, "init")) == false) inInit = false;
                 if (BoolConst(KeywordArg(fc, "kw_only")) is bool k) fieldKw = k;
             }
@@ -366,6 +368,15 @@ public sealed partial class TypeEvaluator
         foreach (var e in Mro(c).AsEnumerable().Reverse())
         {
             if (e is not ClassType ec || !IsTypedDictClass(ec.Info)) continue;
+            if (_syntheticTypedDictFields.TryGetValue(ec.Info, out var synthetic))
+            {
+                foreach (var sf in synthetic)
+                {
+                    int at0 = result.FindIndex(x => x.Item1.Name == sf.Field.Name);
+                    if (at0 >= 0) result[at0] = (sf.Field, sf.Required); else result.Add((sf.Field, sf.Required));
+                }
+                continue;
+            }
             bool total = ec.Info.Node.Bases.FirstOrDefault(b => b.Name == "total") is not { } t || BoolConst(t.Value) != false;
             foreach (var a in AnnotatedFields(ec.Info))
             {
