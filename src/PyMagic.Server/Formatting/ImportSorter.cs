@@ -5,6 +5,22 @@ namespace PyMagic.Server.Formatting;
 
 public enum ImportSection { Future, Stdlib, ThirdParty, FirstParty, Local }
 
+/// <summary>What isort and ruff's `lint.isort` let a project decide: which packages belong where, and how the lines are laid out.</summary>
+/// <param name="ForceSortWithinSections">`import x` and `from x import y` sorted together by module name.</param>
+/// <param name="CombineAsImports">`from a import b as c, d` in one statement instead of a line for each alias.</param>
+/// <param name="ForceSingleLine">One imported name per line.</param>
+/// <param name="OrderByType">Constants, classes, then the rest (the default); off sorts names case-insensitively.</param>
+/// <param name="KnownFirstParty">Top-level packages that are the project's own.</param>
+/// <param name="KnownThirdParty">Top-level packages that are installed ones.</param>
+public sealed record ImportOptions(bool ForceSortWithinSections = false, bool CombineAsImports = false, bool ForceSingleLine = false, bool OrderByType = true,
+    IReadOnlyList<string>? KnownFirstParty = null, IReadOnlyList<string>? KnownThirdParty = null)
+{
+    public static readonly ImportOptions Default = new();
+
+    public ImportSection? Override(string top) =>
+        KnownFirstParty?.Contains(top) == true ? ImportSection.FirstParty : KnownThirdParty?.Contains(top) == true ? ImportSection.ThirdParty : null;
+}
+
 /// <summary>
 /// Sorts the blocks of top-level imports the way isort does with its black profile: sections (future, standard
 /// library, third party, first party, relative), `import x` lines before `from x import y` lines inside a section,
@@ -29,8 +45,9 @@ public static class ImportSorter
     }
 
     /// <summary>The sorted text, or null when the text cannot be handled (syntax errors, `isort: skip_file`).</summary>
-    public static string? Sort(string source, Func<string, ImportSection> classify, int lineLength = 88)
+    public static string? Sort(string source, Func<string, ImportSection> classify, int lineLength = 88, ImportOptions? options = null)
     {
+        options ??= ImportOptions.Default;
         if (source.Contains("isort: skip_file") || source.Contains("isort:skip_file")) return null;
         var parsed = Parser.Parse(source);
         if (parsed.Diagnostics.Count > 0) return null;
@@ -52,7 +69,7 @@ public static class ImportSorter
         string text = source;
         for (int r = runs.Count - 1; r >= 0; r--)
         {
-            var replaced = SortRun(text, source, runs[r], tokens, classify, lineLength, nl);
+            var replaced = SortRun(text, source, runs[r], tokens, classify, lineLength, nl, options);
             if (replaced == null) continue;
             text = text[..replaced.Value.Start] + replaced.Value.Text + text[replaced.Value.End..];
         }
@@ -62,7 +79,7 @@ public static class ImportSorter
     // `text` is the evolving result, `original` the text the offsets of the syntax tree refer to; runs are processed from
     // the end, so the offsets of earlier runs are still valid in `text`.
     static (int Start, int End, string Text)? SortRun(string text, string original, List<Stmt> run, List<Token> tokens,
-        Func<string, ImportSection> classify, int lineLength, string nl)
+        Func<string, ImportSection> classify, int lineLength, string nl, ImportOptions options)
     {
         string s = original;
         var entries = new List<Entry>();
@@ -138,7 +155,7 @@ public static class ImportSorter
         foreach (var e in entries)
         {
             string top = e.Module.Split('.')[0];
-            e.Section = e.Level > 0 ? ImportSection.Local : e.Module == "__future__" ? ImportSection.Future : classify(top);
+            e.Section = e.Level > 0 ? ImportSection.Local : e.Module == "__future__" ? ImportSection.Future : options.Override(top) ?? classify(top);
         }
 
         // duplicates go (the first copy keeps its comments); the others are merged by the rendering
@@ -156,7 +173,7 @@ public static class ImportSorter
             unique.Add(e);
         }
 
-        string rendered = Render(unique, lineLength, nl);
+        string rendered = Render(unique, lineLength, nl, options);
         string before = text[regionStart..regionEnd];
         if (rendered == before) return null;
         return (regionStart, regionEnd, rendered);
@@ -164,7 +181,7 @@ public static class ImportSorter
 
     // ---------------------------------------------------------- output
 
-    static string Render(List<Entry> entries, int lineLength, string nl)
+    static string Render(List<Entry> entries, int lineLength, string nl, ImportOptions options)
     {
         var sb = new StringBuilder();
         bool firstSection = true;
@@ -175,27 +192,39 @@ public static class ImportSorter
             if (!firstSection) sb.Append(nl);
             firstSection = false;
 
-            foreach (var e in inSection.Where(e => !e.IsFrom).OrderBy(e => e.Module.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(e => e.Module, StringComparer.Ordinal).ThenBy(e => e.Alias ?? "", StringComparer.Ordinal))
-                AppendEntry(sb, e, $"import {e.Module}{(e.Alias != null ? " as " + e.Alias : "")}", nl);
-
-            // `from` imports: one statement per module, as-imports and imports with comments on their own
+            var plain = inSection.Where(e => !e.IsFrom).OrderBy(e => e.Module.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(e => e.Module, StringComparer.Ordinal).ThenBy(e => e.Alias ?? "", StringComparer.Ordinal).ToList();
             var froms = inSection.Where(e => e.IsFrom).ToList();
             var ordered = froms.OrderBy(e => -e.Level).ThenBy(e => e.Module.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(e => e.Module, StringComparer.Ordinal)
-                .ThenBy(e => Mergeable(e) ? 0 : 1).ThenBy(e => TypeRank(e.Name!)).ThenBy(e => e.Name!.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(e => e.Alias ?? "", StringComparer.Ordinal).ToList();
+                .ThenBy(e => Mergeable(e, options.CombineAsImports) ? 0 : 1).ThenBy(e => TypeRank(e.Name!, options)).ThenBy(e => e.Name!.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(e => e.Alias ?? "", StringComparer.Ordinal).ToList();
+
+            // each statement to write: a plain import, or one from statement made of one or more entries
+            var statements = new List<(string SortKey, int Level, Action Write)>();
+            foreach (var e in plain)
+            {
+                var entry = e;
+                statements.Add((e.Module.ToLowerInvariant(), 0, () => AppendEntry(sb, entry, $"import {entry.Module}{(entry.Alias != null ? " as " + entry.Alias : "")}", nl)));
+            }
             var done = new HashSet<Entry>();
             foreach (var e in ordered)
             {
                 if (done.Contains(e)) continue;
-                var group = ordered.Where(x => x.Level == e.Level && x.Module == e.Module && !done.Contains(x) && Mergeable(x) && Mergeable(e)).ToList();
-                if (group.Count == 0 || !Mergeable(e)) group = new List<Entry> { e };
+                var group = ordered.Where(x => x.Level == e.Level && x.Module == e.Module && !done.Contains(x) && Mergeable(x, options.CombineAsImports) && Mergeable(e, options.CombineAsImports)).ToList();
+                if (group.Count == 0 || !Mergeable(e, options.CombineAsImports)) group = new List<Entry> { e };
                 foreach (var g in group) done.Add(g);
-                AppendFrom(sb, group, lineLength, nl);
+                var captured = group;
+                statements.Add((e.Module.ToLowerInvariant(), e.Level, () => AppendFrom(sb, captured, lineLength, nl, options)));
             }
+            if (options.ForceSortWithinSections)
+            {
+                // one run ordered by module name, relative imports keeping their own order (farthest first)
+                foreach (var s in statements.Select((s, i) => (s, i)).OrderBy(x => -x.s.Level).ThenBy(x => x.s.SortKey, StringComparer.Ordinal).ThenBy(x => x.i).Select(x => x.s)) s.Write();
+            }
+            else foreach (var s in statements) s.Write();
         }
         return sb.ToString().TrimEnd('\r', '\n');
     }
 
-    static bool Mergeable(Entry e) => e.Alias == null && !e.HasComment && e.Name != "*";
+    static bool Mergeable(Entry e, bool combineAs = false) => (combineAs || e.Alias == null) && !e.HasComment && e.Name != "*";
 
     static void AppendEntry(StringBuilder sb, Entry e, string statement, string nl)
     {
@@ -205,14 +234,19 @@ public static class ImportSorter
         sb.Append(nl);
     }
 
-    static void AppendFrom(StringBuilder sb, List<Entry> group, int lineLength, string nl)
+    static void AppendFrom(StringBuilder sb, List<Entry> group, int lineLength, string nl, ImportOptions options)
     {
         var first = group[0];
         string module = new string('.', first.Level) + first.Module;
-        var names = group.Select(g => (Name: g.Name!, g.Alias)).Distinct().OrderBy(x => TypeRank(x.Name)).ThenBy(x => x.Name.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(x => x.Name, StringComparer.Ordinal).ToList();
-        string list = string.Join(", ", names.Select(n => n.Alias != null ? $"{n.Name} as {n.Alias}" : n.Name));
-        string line = $"from {module} import {list}";
+        var names = group.Select(g => (Name: g.Name!, g.Alias)).Distinct().OrderBy(x => TypeRank(x.Name, options)).ThenBy(x => x.Name.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(x => x.Name, StringComparer.Ordinal).ToList();
+        string Written((string Name, string? Alias) n) => n.Alias != null ? $"{n.Name} as {n.Alias}" : n.Name;
         foreach (var c in first.Leading) sb.Append(c).Append(nl);
+        if (options.ForceSingleLine)
+        {
+            foreach (var n in names) sb.Append($"from {module} import {Written(n)}").Append(nl);
+            return;
+        }
+        string line = $"from {module} import {string.Join(", ", names.Select(Written))}";
         if (line.Length <= lineLength || names.Count == 1 && first.Name == "*")
         {
             sb.Append(line);
@@ -223,13 +257,14 @@ public static class ImportSorter
         sb.Append($"from {module} import (");
         if (first.Trailing != null) sb.Append("  ").Append(first.Trailing);
         sb.Append(nl);
-        foreach (var n in names) sb.Append("    ").Append(n.Alias != null ? $"{n.Name} as {n.Alias}" : n.Name).Append(',').Append(nl);
+        foreach (var n in names) sb.Append("    ").Append(Written(n)).Append(',').Append(nl);
         sb.Append(')').Append(nl);
     }
 
     /// <summary>CONSTANTS first, then Classes, then everything else (isort's order_by_type).</summary>
-    static int TypeRank(string name)
+    static int TypeRank(string name, ImportOptions options)
     {
+        if (!options.OrderByType) return 0;
         if (name == "*") return 0;
         if (name.Length > 1 && name.ToUpperInvariant() == name && name.Any(char.IsLetter)) return 0;
         if (char.IsUpper(name[0])) return 1;

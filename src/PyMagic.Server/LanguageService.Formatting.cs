@@ -69,7 +69,7 @@ public sealed partial class LanguageService
         if (m.SyntaxErrors.Count > 0) throw new ServiceException("Fix the syntax errors first: a file that does not parse cannot be formatted.");
         string text = m.Source;
         var options = FormatConfigOf(uri);
-        if (sortImports) text = ImportSorter.Sort(text, ImportClassifier(snap), options.LineLength) ?? text;
+        if (sortImports) text = ImportSorter.Sort(text, ImportClassifier(snap), options.LineLength, options.Imports) ?? text;
         string formatted = engine is "builtin" or ""
             ? PythonFormatter.Format(text, options) ?? throw new ServiceException("This file cannot be formatted (it has `fmt: off`, or the result could have changed the code).")
             : RunExternal(engine, text, uri);
@@ -118,6 +118,7 @@ public sealed partial class LanguageService
                 .OrderByDescending(e => e.Start).ToList();
             foreach (var e in edits) text = text[..e.Start] + e.Text + text[e.End..];
         }
-        return ImportSorter.Sort(text, ImportClassifier(snap));
+        var options = snap.UriOf.TryGetValue(m, out var uri) ? FormatConfigOf(uri) : FormatOptions.Default;
+        return ImportSorter.Sort(text, ImportClassifier(snap), options.LineLength, options.Imports);
     }
 }

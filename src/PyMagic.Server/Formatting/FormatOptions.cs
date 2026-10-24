@@ -17,20 +17,21 @@ public enum LineEnding { Auto, Lf, Crlf }
 /// <param name="Source">The configuration file the options were read from, if any.</param>
 /// <param name="UseTabs">One tab per level (ruff's <c>indent-style = "tab"</c>, editorconfig's <c>indent_style = tab</c>).</param>
 /// <param name="Endings">ruff's <c>line-ending</c>, editorconfig's <c>end_of_line</c>.</param>
+/// <param name="Imports">isort's and ruff's import settings (<c>known-first-party</c>, <c>force-sort-within-sections</c>, ...).</param>
 public sealed record FormatOptions(int LineLength = 88, QuoteStyle Quotes = QuoteStyle.Double, bool MagicTrailingComma = true, int IndentWidth = 4, string? Source = null,
-    bool UseTabs = false, LineEnding Endings = LineEnding.Auto)
+    bool UseTabs = false, LineEnding Endings = LineEnding.Auto, ImportOptions? Imports = null)
 {
     public static readonly FormatOptions Default = new();
 }
 
 /// <summary>The settings a configuration file states, each null when it says nothing (so another source can fill it in).</summary>
-public sealed record FormatSettings(int? LineLength = null, QuoteStyle? Quotes = null, bool? MagicTrailingComma = null, int? IndentWidth = null, bool? UseTabs = null, LineEnding? Endings = null)
+public sealed record FormatSettings(int? LineLength = null, QuoteStyle? Quotes = null, bool? MagicTrailingComma = null, int? IndentWidth = null, bool? UseTabs = null, LineEnding? Endings = null, ImportOptions? Imports = null)
 {
     /// <summary>The options these settings give, the defaults filling what is left.</summary>
     public FormatOptions ToOptions(string? source = null, FormatOptions? baseline = null)
     {
         var d = baseline ?? FormatOptions.Default;
-        return new FormatOptions(LineLength ?? d.LineLength, Quotes ?? d.Quotes, MagicTrailingComma ?? d.MagicTrailingComma, IndentWidth ?? d.IndentWidth, source ?? d.Source, UseTabs ?? d.UseTabs, Endings ?? d.Endings);
+        return new FormatOptions(LineLength ?? d.LineLength, Quotes ?? d.Quotes, MagicTrailingComma ?? d.MagicTrailingComma, IndentWidth ?? d.IndentWidth, source ?? d.Source, UseTabs ?? d.UseTabs, Endings ?? d.Endings, Imports ?? d.Imports);
     }
 }
 
@@ -50,7 +51,7 @@ public static class FormatConfig
         var fromProject = ProjectSettings(filePath, out string? source);
         var merged = new FormatSettings(
             fromProject.LineLength ?? fromEditor.LineLength, fromProject.Quotes ?? fromEditor.Quotes, fromProject.MagicTrailingComma ?? fromEditor.MagicTrailingComma,
-            fromProject.IndentWidth ?? fromEditor.IndentWidth, fromProject.UseTabs ?? fromEditor.UseTabs, fromProject.Endings ?? fromEditor.Endings);
+            fromProject.IndentWidth ?? fromEditor.IndentWidth, fromProject.UseTabs ?? fromEditor.UseTabs, fromProject.Endings ?? fromEditor.Endings, fromProject.Imports);
         return merged.ToOptions(source);
     }
 
@@ -100,6 +101,27 @@ public static class FormatConfig
         return new FormatSettings(LineLength: length, IndentWidth: width, UseTabs: tabs, Endings: ending);
     }
 
+    /// <summary>`[tool.ruff.lint.isort]` (`[lint.isort]` in ruff.toml) and `[tool.isort]`: the packages that are first or third party and how the lines are laid out.</summary>
+    static ImportOptions? ImportsFromToml(Dictionary<string, object?> root, bool isRuffFile)
+    {
+        var tables = new List<Dictionary<string, object?>>();
+        foreach (var path in isRuffFile ? new[] { "lint.isort", "isort" } : new[] { "tool.ruff.lint.isort", "tool.ruff.isort", "tool.isort" })
+            if (Toml.At(root, path) is Dictionary<string, object?> t) tables.Add(t);
+        if (tables.Count == 0) return null;
+
+        object? Find(string key)
+        {
+            foreach (var t in tables)
+                foreach (var spelled in new[] { key, key.Replace('-', '_') })
+                    if (t.TryGetValue(spelled, out var v)) return v;
+            return null;
+        }
+        bool Flag(string key, bool fallback) => Find(key) is bool b ? b : fallback;
+        List<string>? Names(string key) => Find(key) is List<object?> list ? list.OfType<string>().ToList() : null;
+        return new ImportOptions(Flag("force-sort-within-sections", false), Flag("combine-as-imports", false), Flag("force-single-line", false), Flag("order-by-type", true),
+            Names("known-first-party"), Names("known-third-party"));
+    }
+
     /// <summary>The options a configuration text gives; null when it has no black or ruff section (or is not valid TOML).</summary>
     public static FormatOptions? FromToml(string text, bool isRuffFile = false, string? source = null) =>
         SettingsFromToml(text, isRuffFile)?.ToOptions(source);
@@ -128,6 +150,6 @@ public static class FormatConfig
         bool? magic = Bool(black, "skip-magic-trailing-comma") == true || Bool(ruffFormat, "skip-magic-trailing-comma") == true ? false : null;
         bool? tabs = Str(ruffFormat, "indent-style") switch { "tab" => true, "space" => false, _ => null };
         LineEnding? ending = Str(ruffFormat, "line-ending") switch { "lf" => LineEnding.Lf, "cr-lf" or "crlf" => LineEnding.Crlf, "auto" => LineEnding.Auto, _ => null };
-        return new FormatSettings(lineLength, quotes, magic, indent, tabs, ending);
+        return new FormatSettings(lineLength, quotes, magic, indent, tabs, ending, ImportsFromToml(root, isRuffFile));
     }
 }
