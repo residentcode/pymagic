@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
@@ -144,6 +145,25 @@ app.MapPut("/api/file", async (string path, HttpRequest req) =>
         return Results.NoContent();
     }
     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.BadRequest(e.Message); }
+});
+
+// Find in files: the page sends the texts of its unsaved editors so that results match what is on screen.
+app.MapPost("/api/search", async (HttpRequest req) =>
+{
+    try
+    {
+        var body = await JsonNode.ParseAsync(req.Body) as JsonObject ?? throw new ServiceException("bad request");
+        string? Str(string key) => body[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+        bool Flag(string key) => body[key] is JsonValue v && v.TryGetValue<bool>(out var b) && b;
+        var unsaved = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (body["unsaved"] is JsonObject open)
+            foreach (var (path, text) in open) if (text is JsonValue tv && tv.TryGetValue<string>(out var t)) unsaved[path] = t;
+        var options = new SearchOptions(Str("query") ?? "", Flag("regex"), Flag("caseSensitive"), Flag("wholeWord"), Str("include"), Str("exclude"), Str("replace"));
+        return Results.Json(WorkspaceSearch.Run(root, options, unsaved), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+    }
+    catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
+    catch (System.Text.Json.JsonException) { return Results.BadRequest(new { error = "bad request" }); }
+    catch (RegexMatchTimeoutException) { return Results.BadRequest(new { error = "The pattern is too slow on this project; make it more specific." }); }
 });
 
 // ---- language server over WebSocket ---------------------------------------------------------------------------

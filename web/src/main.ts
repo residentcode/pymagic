@@ -5,6 +5,7 @@ import { setupTests } from './tests';
 import { setupInterpreters } from './interpreters';
 import { setupPackages } from './packages';
 import { setupRefactor } from './refactor';
+import { setupSearch } from './search';
 
 (self as any).MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
 
@@ -63,6 +64,16 @@ async function loadModel(rel: string, key: string): Promise<monaco.editor.ITextM
   if (!res.ok) return null;
   const text = await res.text();
 
+  // search results can lead to files that are not Python: they are shown, but the language server never sees them
+  if (!rel.endsWith('.py')) {
+    const lang = monaco.languages.getLanguages().find((l) => l.extensions?.some((x) => rel.toLowerCase().endsWith(x)))?.id ?? 'plaintext';
+    const plain = monaco.editor.createModel(text, lang, monaco.Uri.parse('pymagic:///' + rel));
+    models.set(key, plain);
+    serverUri.set(plain, uri);
+    relPathOf.set(key, rel);
+    savedText.set(rel, text);
+    return plain;
+  }
   const model = monaco.editor.createModel(text, 'python', monaco.Uri.parse('pymagic:///' + rel));
   models.set(key, model);
   serverUri.set(model, uri);
@@ -285,6 +296,7 @@ async function openFile(rel: string, reveal?: monaco.IRange) {
   if (!model) return;
   currentRel = rel;
   editor.setModel(model);
+  editor.updateOptions({ readOnly: !rel.endsWith('.py') });
   if (reveal) {
     editor.setSelection(reveal);
     editor.revealRangeInCenter(reveal);
@@ -335,7 +347,20 @@ async function main() {
   setupTests(common);
   setupInterpreters();
   setupPackages();
-  setupRefactor({ editor, lsp, modelForUri, uriOf: (model: monaco.editor.ITextModel) => serverUri.get(model) });
+  const refactor = setupRefactor({ editor, lsp, modelForUri, uriOf: (model: monaco.editor.ITextModel) => serverUri.get(model) });
+  setupSearch({
+    editor, lsp, openFile, uriFor,
+    applyEdits: refactor.applyEdits,
+    isEditable: (rel) => rel.endsWith('.py'),
+    unsavedTexts: () => {
+      const out: Record<string, string> = {};
+      for (const [key, model] of models) {
+        const rel = relPathOf.get(key);
+        if (rel && model.getValue() !== savedText.get(rel)) out[rel] = model.getValue();
+      }
+      return out;
+    },
+  });
   // code actions that need the page (not just a text edit) arrive as commands
   monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name: string) => {
     window.dispatchEvent(new CustomEvent('pymagic:install', { detail: name }));

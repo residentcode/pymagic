@@ -208,6 +208,8 @@ public sealed class Server
                 return _service.Refactor(UriOf(p), p!["kind"]!.GetValue<string>(), RangeOf(p), p["name"]?.GetValue<string>(), p["all"]?.GetValue<bool>() ?? false);
             case "textDocument/codeAction":
                 return _service.CodeActions(UriOf(p), RangeOf(p));
+            case "workspace/symbol":
+                return _service.WorkspaceSymbols(p?["query"]?.GetValue<string>() ?? "");
             case "textDocument/documentSymbol":
                 return _service.DocumentSymbols(UriOf(p));
             default:
@@ -243,6 +245,7 @@ public sealed class Server
                 definitionProvider = true,
                 completionProvider = new { triggerCharacters = new[] { "." } },
                 documentSymbolProvider = true,
+                workspaceSymbolProvider = true,
                 codeActionProvider = new { codeActionKinds = new[] { LanguageService.QuickFixKind, LanguageService.OrganizeImportsKind, LanguageService.RefactorKind, LanguageService.RefactorExtractKind, LanguageService.RefactorInlineKind } },
                 referencesProvider = true,
                 renameProvider = new { prepareProvider = true },

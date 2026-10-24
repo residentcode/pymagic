@@ -214,5 +214,5 @@ export function setupRefactor(deps: RefactorDeps) {
   editor.addCommand(M.CtrlCmd | M.Alt | K.KeyP, () => void trigger('inlineMethod'));
   editor.addCommand(K.F6, () => void trigger('moveSymbol'));
 
-  return { trigger };
+  return { trigger, applyEdits };
 }
