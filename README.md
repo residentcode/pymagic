@@ -15,7 +15,9 @@ written from scratch in C#.
 
 ## Try it on your PC
 
-Double-click `PyMagic.cmd` (or run `.\start.ps1`). It needs the .NET 9 SDK and Node.js. The first run installs the web packages, then it builds the page and the host, asks which project folder to open (Cancel opens `examples\demo`), uses PyCharm's typeshed when PyCharm is installed, picks a free port from 5180 and opens the browser. `.\start.ps1 C:\my\project` opens a folder directly, `-Rebuild` builds everything again, `-NoBrowser` skips the browser. Close the window to stop.
+PyMagic is a Windows app: an Electron window (`desktop/`, plain JavaScript) that starts the C# engine in the background. Double-click `PyMagic.cmd`. It needs the .NET 9 SDK and Node.js. The first run installs the packages; every start builds the editor and the engine when they changed, then opens the project you used last (or `examples\demo`). *File > Open Folder...* (Ctrl+Shift+O) switches project, `PyMagic.cmd C:\my\project` opens a folder directly. PyCharm's typeshed is used when PyCharm is installed.
+
+`PyMagic-web.cmd` (or `start.ps1`) runs the same editor in a browser tab instead.
 
 ## Layout
 
