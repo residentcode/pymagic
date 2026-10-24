@@ -16,7 +16,7 @@ public sealed class RunSession : IDisposable
 {
     static readonly HashSet<string> DebugCommands = new()
     {
-        "setBreakpoints", "continue", "next", "stepIn", "stepOut", "scopes", "variables", "evaluate",
+        "setBreakpoints", "setExceptionBreak", "continue", "next", "stepIn", "stepOut", "scopes", "variables", "evaluate", "setVariable",
     };
 
     readonly Action<JsonNode> _emit;
@@ -39,7 +39,13 @@ public sealed class RunSession : IDisposable
     /// <param name="script">The script path, absolute or relative to <paramref name="root"/>.</param>
     /// <param name="breakpoints">Initial breakpoints: absolute or root-relative file to line numbers (debug only).</param>
     public void Start(string root, string script, bool debug, IReadOnlyList<string> args,
-        IReadOnlyDictionary<string, List<int>>? breakpoints = null)
+        IReadOnlyDictionary<string, List<int>>? breakpoints = null) =>
+        StartWithBreakpoints(root, script, debug, args,
+            breakpoints?.ToDictionary(kv => kv.Key, kv => new JsonArray(kv.Value.Select(l => (JsonNode)l).ToArray())));
+
+    /// <param name="breakpoints">Per file, an array of line numbers or of objects {line, condition, hitCondition, logMessage}.</param>
+    public void StartWithBreakpoints(string root, string script, bool debug, IReadOnlyList<string> args,
+        IReadOnlyDictionary<string, JsonArray>? breakpoints)
     {
         string scriptPath = Path.GetFullPath(Path.Combine(root, script));
         if (!File.Exists(scriptPath)) { Error($"script not found: {script}"); return; }
@@ -65,7 +71,7 @@ public sealed class RunSession : IDisposable
 
     /// <param name="channel">Start the helper script and accept its socket (debugger and test runner); otherwise run the script directly.</param>
     void Launch(string root, bool channel, IReadOnlyList<string> leading, IReadOnlyList<string> args,
-        IReadOnlyDictionary<string, List<int>>? breakpoints, string helper = "pm_debug.py")
+        IReadOnlyDictionary<string, JsonArray>? breakpoints, string helper = "pm_debug.py")
     {
         string python = Python ?? Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python";
 
@@ -157,7 +163,7 @@ public sealed class RunSession : IDisposable
 
     // ------------------------------------------------------------ the debugger channel
 
-    void AcceptDebugger(string token, string root, IReadOnlyDictionary<string, List<int>>? breakpoints)
+    void AcceptDebugger(string token, string root, IReadOnlyDictionary<string, JsonArray>? breakpoints)
     {
         try
         {
@@ -180,7 +186,7 @@ public sealed class RunSession : IDisposable
                 _channel = stream;
                 if (breakpoints != null)
                     foreach (var (file, lines) in breakpoints)
-                        WriteLocked(new JsonObject { ["type"] = "setBreakpoints", ["file"] = Path.GetFullPath(Path.Combine(root, file)), ["lines"] = new JsonArray(lines.Select(l => (JsonNode)l).ToArray()) });
+                        WriteLocked(new JsonObject { ["type"] = "setBreakpoints", ["file"] = Path.GetFullPath(Path.Combine(root, file)), ["lines"] = JsonNode.Parse(lines.ToJsonString()) });
                 foreach (var line in _pending) WriteRawLocked(line);
                 _pending.Clear();
                 WriteLocked(new JsonObject { ["type"] = "go" });

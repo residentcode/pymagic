@@ -58,7 +58,7 @@ public class RunTests
             int id = ++_id;
             body["type"] = type; body["id"] = id;
             Session.Handle(body);
-            string reply = type switch { "scopes" => "scopes", "variables" => "variables", _ => "evaluated" };
+            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", _ => "evaluated" };
             return Next(e => e["type"]?.GetValue<string>() == reply && e["id"]?.GetValue<int>() == id);
         }
 
@@ -275,5 +275,121 @@ public class RunTests
         Assert.Equal(3, Line(h.Type("stopped")));
         h.Command("continue");
         h.Type("exited");
+    }
+
+    // ------------------------------------------------------------ breakpoint conditions, hit counts and log points
+
+    const string Loop =
+        "total = 0\n" +                      // 1
+        "for i in range(6):\n" +             // 2
+        "    total += i\n" +                 // 3
+        "print('total', total)\n";           // 4
+
+    static Dictionary<string, JsonArray> Spec(string file, JsonObject spec) => new() { [file] = new JsonArray(spec) };
+
+    string EvalInt(Harness h, string expression) => h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = expression })["result"]!.GetValue<string>();
+
+    [Fact]
+    public void ConditionalBreakpointStopsOnlyWhenTheConditionHolds()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("loop.py", Loop);
+        h.Session.StartWithBreakpoints(h.Root, "loop.py", true, Array.Empty<string>(), Spec("loop.py", new JsonObject { ["line"] = 3, ["condition"] = "i == 3" }));
+        var stopped = h.Type("stopped");
+        Assert.Equal(3, Line(stopped));
+        Assert.Equal("3", EvalInt(h, "i"));
+        Assert.Equal("3", EvalInt(h, "total"));   // 0 + 1 + 2 before this iteration
+        h.Command("continue");
+        h.Type("exited");   // it did not stop again for i == 4 or 5
+    }
+
+    [Fact]
+    public void HitCountsSelectTheIterations()
+    {
+        if (!HavePython) return;
+        using (var h = new Harness())
+        {
+            h.Script("loop.py", Loop);
+            h.Session.StartWithBreakpoints(h.Root, "loop.py", true, Array.Empty<string>(), Spec("loop.py", new JsonObject { ["line"] = 3, ["hitCondition"] = "3" }));
+            h.Type("stopped");
+            Assert.Equal("2", EvalInt(h, "i"));   // the third time the line is reached
+            h.Command("continue");
+            h.Type("exited");
+        }
+        using (var h = new Harness())
+        {
+            h.Script("loop.py", Loop);
+            h.Session.StartWithBreakpoints(h.Root, "loop.py", true, Array.Empty<string>(), Spec("loop.py", new JsonObject { ["line"] = 3, ["hitCondition"] = "%2" }));
+            h.Type("stopped"); Assert.Equal("1", EvalInt(h, "i"));
+            h.Command("continue");
+            h.Type("stopped"); Assert.Equal("3", EvalInt(h, "i"));
+            h.Command("continue");
+            h.Type("stopped"); Assert.Equal("5", EvalInt(h, "i"));
+            h.Command("continue");
+            h.Type("exited");
+        }
+    }
+
+    [Fact]
+    public void ALogPointPrintsAndDoesNotStop()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("loop.py", Loop);
+        h.Session.StartWithBreakpoints(h.Root, "loop.py", true, Array.Empty<string>(),
+            Spec("loop.py", new JsonObject { ["line"] = 3, ["condition"] = "i % 2 == 0", ["logMessage"] = "i={i} total={total} bad={nope}" }));
+        Assert.Equal(0, h.Type("exited")["code"]!.GetValue<int>());
+        string output = h.AllOutput();
+        Assert.Contains("i=0 total=0 bad=<NameError>", output);
+        Assert.Contains("i=4 total=6", output);
+        Assert.True(!output.Contains("i=1 "), "the condition filters the log point too");
+        Assert.Contains("total 15", output);
+    }
+
+    [Fact]
+    public void VariablesCanBeChangedWhilePaused()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("vars.py", "def f(a):\n    b = a + 1\n    return b\n\nx = 10\nprint('result', f(x), x)\n");
+        h.Session.Start(h.Root, "vars.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["vars.py"] = new() { 3 } });
+        h.Type("stopped");
+        var scopes = h.Request("scopes", new JsonObject { ["frameId"] = 0 })["scopes"]!.AsArray();
+        int locals = scopes.Single(sc => sc!["name"]!.GetValue<string>() == "Locals")!["ref"]!.GetValue<int>();
+        int globals = scopes.Single(sc => sc!["name"]!.GetValue<string>() == "Globals")!["ref"]!.GetValue<int>();
+        h.Request("variables", new JsonObject { ["ref"] = locals });   // the scope has to be listed once, as the page does
+        h.Request("variables", new JsonObject { ["ref"] = globals });
+
+        var local = h.Request("setVariable", new JsonObject { ["ref"] = locals, ["name"] = "b", ["expression"] = "a * 100" });
+        Assert.Equal("1000", local["value"]!.GetValue<string>());
+        var global = h.Request("setVariable", new JsonObject { ["ref"] = globals, ["name"] = "x", ["expression"] = "'changed'" });
+        Assert.Equal("'changed'", global["value"]!.GetValue<string>());
+        var bad = h.Request("setVariable", new JsonObject { ["ref"] = locals, ["name"] = "missing", ["expression"] = "1" });
+        Assert.True(bad["error"] != null, "unknown names are refused");
+        var bad2 = h.Request("setVariable", new JsonObject { ["ref"] = locals, ["name"] = "b", ["expression"] = "1 +" });
+        Assert.True(bad2["error"] != null, "bad expressions are reported");
+
+        h.Command("continue");
+        h.Type("exited");
+        Assert.Contains("result 1000 changed", h.AllOutput());
+    }
+
+    [Fact]
+    public void BreakingOnRaisedExceptionsStopsAtCaughtOnes()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("raised.py", "def risky(n):\n    if n > 1:\n        raise ValueError('too big')\n    return n\n\ntry:\n    risky(5)\nexcept ValueError:\n    print('handled')\nprint('end')\n");
+        h.Session.Start(h.Root, "raised.py", true, Array.Empty<string>());
+        // the setting arrives before the program runs far enough to matter: send it with the (empty) breakpoint list
+        h.Session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised" });
+        var stopped = h.Type("stopped");
+        Assert.Equal("exception", stopped["reason"]!.GetValue<string>());
+        Assert.Contains("ValueError: too big", stopped["message"]!.GetValue<string>());
+        Assert.Equal(3, Line(stopped));
+        h.Command("continue");
+        Assert.Equal(0, h.Type("exited")["code"]!.GetValue<int>());
+        Assert.Contains("handled", h.AllOutput());
     }
 }

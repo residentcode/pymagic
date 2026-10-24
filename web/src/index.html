@@ -45,6 +45,12 @@
     .col h2 { margin: 0; padding: 4px 10px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); background: var(--panel); }
     .col .body { flex: 1; overflow: auto; font: 12.5px/1.5 Consolas, "Cascadia Mono", monospace; padding: 2px 0; }
     #frames-col { width: 26%; } #vars-col { flex: 1; } #watch-col { width: 30%; }
+    #exc-label { display: block; padding: 2px 10px; color: var(--dim); font-size: 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    #watches-col { width: 24%; } #watches .w { display: flex; gap: 6px; padding: 1px 8px; white-space: nowrap; } #watches .wx { color: #9cdcfe; } #watches .wv { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    #watches .we { color: var(--red); } #watches .wn { color: var(--dim); } #watches .wd { color: var(--dim); cursor: pointer; visibility: hidden; } #watches .w:hover .wd { visibility: visible; }
+    #watch-add { border: 0; border-top: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 5px 8px; font: 12.5px Consolas, monospace; outline: none; }
+    #vars .val { cursor: text; } #vars input.edit { background: var(--bg); color: var(--fg); border: 1px solid var(--accent); font: inherit; padding: 0 3px; width: 14em; }
+    .bp-glyph.bp-cond { border-radius: 2px; transform: rotate(45deg) scale(.85); } .bp-glyph.bp-log { background: var(--amber); border-radius: 2px; }
     #frames div { padding: 1px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #frames div:hover { background: #ffffff10; } #frames div.sel { background: var(--accent); color: #fff; }
     #frames .loc { color: var(--dim); } #frames .sel .loc { color: #dbe6ff; }
@@ -160,8 +166,10 @@
         <input id="stdin" placeholder="Input for the running program (Enter sends a line)" autocomplete="off" spellcheck="false">
       </div>
       <div id="debug-tab" class="tab">
-        <div class="col" id="frames-col"><h2>Frames</h2><div class="body" id="frames"></div></div>
+        <div class="col" id="frames-col"><h2>Frames</h2><label id="exc-label" title="Stop at every exception raised in your code, also the ones that are caught"><input type="checkbox" id="exc-raised"> Break on raised exceptions</label><div class="body" id="frames"></div></div>
         <div class="col" id="vars-col"><h2>Variables</h2><div class="body" id="vars"></div></div>
+        <div class="col" id="watches-col"><h2>Watches</h2><div class="body" id="watches"></div>
+          <input id="watch-add" placeholder="Add a watch expression, Enter" autocomplete="off" spellcheck="false"></div>
         <div class="col" id="watch-col"><h2>Evaluate</h2><div class="body" id="watch-log"></div>
           <input id="watch-in" placeholder="Expression, Enter to evaluate" autocomplete="off" spellcheck="false"></div>
       </div>

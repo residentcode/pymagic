@@ -3,8 +3,13 @@
 A small debugger built on the standard bdb module (no third-party packages). The host (PyMagic.Server.RunSession)
 starts this script, which connects back over a local TCP socket and speaks JSON lines:
 
-  host -> helper   setBreakpoints, go, continue, next, stepIn, stepOut, scopes, variables, evaluate, stop
-  helper -> host   hello, stopped, running, scopes, variables, evaluated
+  host -> helper   setBreakpoints, setExceptionBreak, go, continue, next, stepIn, stepOut, scopes, variables, evaluate,
+                   setVariable, stop
+  helper -> host   hello, stopped, running, scopes, variables, evaluated, variableSet, output (log points)
+
+A breakpoint is a line number or {"line", "condition", "hitCondition", "logMessage"}: it stops only when the condition
+holds and the hit count matches ("5", ">=5", "%3"...); with a log message it prints the message ({expr} is evaluated
+in the frame) and does not stop.
 
 The program's own stdin/stdout/stderr are ordinary pipes handled by the host, not this channel.
 """
@@ -14,6 +19,7 @@ import builtins
 import json
 import os
 import queue
+import re
 import socket
 import sys
 import threading
@@ -67,6 +73,12 @@ class Debugger(bdb.Bdb):
         self.stepping_out = False
         self.go = threading.Event()
         self.main_thread = threading.main_thread()
+        self.meta = {}             # (path, line) -> {"hit": (operator, number) or None, "log": message or None}
+        self.scope_refs = {}       # scope variable reference -> ("locals" | "globals", frame id)
+        self.break_on_raise = False
+        self.raised = None         # the exception the program was last stopped on while it was being raised
+        self._hit_key = None
+        self._hit_value = False
 
     # ---------------------------------------------------------------- channel
 
@@ -88,6 +100,8 @@ class Debugger(bdb.Bdb):
             kind = msg.get("type")
             if kind == "setBreakpoints":
                 self.apply_breakpoints(msg.get("file", ""), msg.get("lines", []))
+            elif kind == "setExceptionBreak":
+                self.break_on_raise = msg.get("mode") == "raised"
             elif kind == "go":
                 self.go.set()
             elif kind == "stop":
@@ -96,14 +110,68 @@ class Debugger(bdb.Bdb):
                 self.commands.put(msg)
         os._exit(0)  # the host went away
 
+    HIT_CONDITION = re.compile(r"^\s*(==|>=|<=|>|<|%)?\s*(\d+)\s*$")
+
     def apply_breakpoints(self, filename, lines):
         path = os.path.abspath(filename)
         try:
             self.clear_all_file_breaks(path)
         except Exception:
             pass
-        for line in lines:
-            self.set_break(path, int(line))
+        canonical = self.canonic(path)
+        self.meta = {k: v for k, v in self.meta.items() if k[0] != canonical}
+        for item in lines:
+            spec = item if isinstance(item, dict) else {"line": item}
+            line = int(spec.get("line", 0))
+            condition = (spec.get("condition") or "").strip() or None
+            self.set_break(path, line, cond=condition)
+            hit = None
+            match = self.HIT_CONDITION.match(spec.get("hitCondition") or "")
+            if match:
+                hit = (match.group(1) or "==", int(match.group(2)))
+            log = spec.get("logMessage") or None
+            if hit or log:
+                self.meta[(canonical, line)] = {"hit": hit, "log": log}
+
+    def break_here(self, frame):
+        # bdb asks this twice for one line event (once to decide, once in user_line), and asking counts a hit
+        key = (id(frame), frame.f_lineno, self._line_event)
+        if key == self._hit_key:
+            return self._hit_value
+        result = super().break_here(frame)
+        if result:
+            canonical = self.canonic(frame.f_code.co_filename)
+            info = self.meta.get((canonical, frame.f_lineno))
+            if info:
+                bp = (bdb.Breakpoint.bplist.get((canonical, frame.f_lineno)) or [None])[0]
+                hits = bp.hits if bp is not None else 1
+                if info["hit"] and not self.hit_matches(info["hit"], hits):
+                    result = False
+                elif info["log"]:
+                    self.log(frame, info["log"])
+                    result = False
+        self._hit_key, self._hit_value = key, result
+        return result
+
+    @staticmethod
+    def hit_matches(condition, hits):
+        op, n = condition
+        return {"==": hits == n, ">=": hits >= n, "<=": hits <= n, ">": hits > n, "<": hits < n, "%": n > 0 and hits % n == 0}[op]
+
+    def log(self, frame, template):
+        def value(match):
+            try:
+                return str(eval(match.group(1), frame.f_globals, frame.f_locals))
+            except BaseException as e:
+                return "<%s>" % type(e).__name__
+        text = re.sub(r"\{([^{}]+)\}", value, template)
+        self.send({"type": "output", "stream": "stdout", "text": text + "\n"})
+
+    _line_event = 0
+
+    def dispatch_line(self, frame):
+        self._line_event += 1
+        return super().dispatch_line(frame)
 
     # ---------------------------------------------------------------- bdb hooks
 
@@ -141,8 +209,30 @@ class Debugger(bdb.Bdb):
         self.stack = self.collect(caller)
         self.stop("stopped", "step")
 
+    QUIET_EXCEPTIONS = (StopIteration, StopAsyncIteration, GeneratorExit, KeyboardInterrupt, SystemExit)
+
+    def break_anywhere(self, frame):
+        # a frame is only traced when something could stop in it; raising can stop anywhere in user code
+        if self.break_on_raise and self.is_user_file(frame.f_code.co_filename):
+            return True
+        return super().break_anywhere(frame)
+
+    def dispatch_exception(self, frame, arg):
+        # bdb only reports exceptions of the frame it is stepping in; "break on raised" wants every one in user code
+        if self.break_on_raise:
+            self.user_exception(frame, arg)
+        return super().dispatch_exception(frame, arg)
+
     def user_exception(self, frame, exc_info):
-        pass  # only uncaught exceptions stop the program (see run_script)
+        # by default only uncaught exceptions stop the program (see run_script); "raised" stops at every raise in user code
+        etype, value, _ = exc_info
+        if not self.break_on_raise or issubclass(etype, self.QUIET_EXCEPTIONS) or not self.is_user_file(frame.f_code.co_filename):
+            return
+        if value is self.raised:
+            return   # the same exception passing through the callers
+        self.raised = value
+        self.stack = self.collect(frame)
+        self.stop("stopped", "exception", "%s: %s" % (etype.__name__, value))
 
     def collect(self, frame):
         stack = []
@@ -160,6 +250,7 @@ class Debugger(bdb.Bdb):
 
     def stop(self, kind, reason, message=None):
         self.refs.clear()
+        self.scope_refs.clear()
         self.send({"type": kind, "reason": reason, "frames": self.frames_payload(), "message": message})
         self.wait_for_resume()
 
@@ -186,21 +277,50 @@ class Debugger(bdb.Bdb):
             ref = self.next_ref
             self.next_ref += 1
             self.refs[ref] = items
+            self.scope_refs[ref] = (title.lower(), frame_id)
             result.append({"name": title, "ref": ref})
         return result
 
-    def evaluate(self, frame_id, expression):
+    def evaluate(self, frame_id, expression, eval_only=False):
         frame = self.stack[frame_id][0]
         try:
             try:
                 code = compile(expression, "<watch>", "eval")
             except SyntaxError:
+                if eval_only:
+                    raise
                 exec(compile(expression, "<console>", "exec"), frame.f_globals, frame.f_locals)
                 return {"result": "", "valueType": "", "ref": 0}
             value = eval(code, frame.f_globals, frame.f_locals)
             return {"result": short_repr(value, 1000), "valueType": type(value).__name__, "ref": self.ref_for(value)}
         except BaseException as e:
             return {"error": "%s: %s" % (type(e).__name__, e)}
+
+    def set_variable(self, ref, name, expression):
+        """Assigns the value of an expression to a local or global variable of the scope that `ref` belongs to."""
+        scope = self.scope_refs.get(ref)
+        members = self.refs.get(ref)
+        if scope is None or members is None or name not in [n for n, _ in members]:
+            return {"error": "Only the variables of a frame can be changed here."}
+        kind, frame_id = scope
+        frame = self.stack[frame_id][0]
+        try:
+            value = eval(compile(expression, "<value>", "eval"), frame.f_globals, frame.f_locals)
+            if kind == "globals":
+                frame.f_globals[name] = value
+            else:
+                frame.f_locals[name] = value
+                try:
+                    import ctypes
+                    ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(0))
+                except Exception:
+                    pass   # newer Pythons write through f_locals themselves
+        except BaseException as e:
+            return {"error": "%s: %s" % (type(e).__name__, e)}
+        self.refs[ref] = [(n, value if n == name else v) for n, v in members]
+        described = self.describe(name, value)
+        described["type_"] = described.pop("type")
+        return {"name": name, "value": described["value"], "valueType": described["type_"], "ref": described["ref"]}
 
     def wait_for_resume(self):
         while True:
@@ -228,8 +348,13 @@ class Debugger(bdb.Bdb):
                            "items": [self.describe(n, v) for n, v in members]})
                 continue
             elif kind == "evaluate":
-                answer = self.evaluate(int(msg.get("frameId", 0)), msg.get("expression", ""))
+                answer = self.evaluate(int(msg.get("frameId", 0)), msg.get("expression", ""), bool(msg.get("evalOnly")))
                 answer.update({"type": "evaluated", "id": rid})
+                self.send(answer)
+                continue
+            elif kind == "setVariable":
+                answer = self.set_variable(int(msg.get("ref", 0)), msg.get("name", ""), msg.get("expression", ""))
+                answer.update({"type": "variableSet", "id": rid})
                 self.send(answer)
                 continue
             else:
@@ -276,6 +401,8 @@ class Debugger(bdb.Bdb):
             sys.settrace(None)
 
     def post_mortem(self, etype, value, tb):
+        if value is self.raised:
+            return   # the user already looked at it when it was raised
         frames = []
         while tb is not None:
             frames.append((tb.tb_frame, tb.tb_lineno))
@@ -297,8 +424,12 @@ class Debugger(bdb.Bdb):
                 self.send({"type": "variables", "id": rid, "ref": msg.get("ref"),
                            "items": [self.describe(n, v) for n, v in members]})
             elif kind == "evaluate":
-                answer = self.evaluate(int(msg.get("frameId", 0)), msg.get("expression", ""))
+                answer = self.evaluate(int(msg.get("frameId", 0)), msg.get("expression", ""), bool(msg.get("evalOnly")))
                 answer.update({"type": "evaluated", "id": rid})
+                self.send(answer)
+            elif kind == "setVariable":
+                answer = self.set_variable(int(msg.get("ref", 0)), msg.get("name", ""), msg.get("expression", ""))
+                answer.update({"type": "variableSet", "id": rid})
                 self.send(answer)
 
 

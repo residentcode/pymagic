@@ -15,7 +15,7 @@ export class RunClient {
     this.ws.onmessage = (ev) => {
       const m = JSON.parse(ev.data as string);
       const waiter = m.id !== undefined ? this.waiting.get(m.id) : undefined;
-      if (waiter && (m.type === 'scopes' || m.type === 'variables' || m.type === 'evaluated')) {
+      if (waiter && (m.type === 'scopes' || m.type === 'variables' || m.type === 'evaluated' || m.type === 'variableSet')) {
         this.waiting.delete(m.id);
         waiter(m);
       } else this.onMessage(m);

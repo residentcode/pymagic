@@ -364,15 +364,17 @@ app.Map("/run", async (HttpContext ctx) =>
             if (msg == null) continue;
             if (msg["type"]?.GetValue<string>() == "start")
             {
-                var bps = new Dictionary<string, List<int>>();
+                var bps = new Dictionary<string, JsonArray>();
                 if (msg["breakpoints"] is JsonObject bo)
                     foreach (var (file, lines) in bo)
-                        bps[file] = (lines as JsonArray)?.Select(l => l!.GetValue<int>()).ToList() ?? new List<int>();
+                        bps[file] = lines is JsonArray arr ? (JsonArray)JsonNode.Parse(arr.ToJsonString())! : new JsonArray();
                 var args = (msg["args"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
                 string file0 = msg["file"]!.GetValue<string>();
                 ResolveInRoot(file0);   // refuses paths outside the workspace
                 session.Python = interpreters.Current?.Path ?? python;
-                session.Start(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
+                session.StartWithBreakpoints(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
+                if (msg["exceptionBreak"]?.GetValue<string>() == "raised")
+                    session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised" });
             }
             else if (msg["type"]?.GetValue<string>() == "startTests")
             {
