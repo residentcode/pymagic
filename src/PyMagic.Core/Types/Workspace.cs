@@ -113,6 +113,10 @@ public sealed class Workspace
         Evaluator = new TypeEvaluator(this);
     }
 
+    /// <summary>The modules of the user's own code that the workspace has loaded: editor buffers and project files, not libraries.</summary>
+    public IEnumerable<ModuleInfo> UserModules =>
+        _modules.Values.OfType<ModuleInfo>().Where(m => m.Kind is ResolutionKind.InMemory or ResolutionKind.UserCode).Distinct();
+
     public ModuleInfo Builtins => GetModule("builtins")!;
     public ModuleInfo Typing => GetModule("typing")!;
 

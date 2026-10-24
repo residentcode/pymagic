@@ -28,7 +28,7 @@ public sealed partial class LanguageService
         switch (SiteAt(text, offset))
         {
             case CursorSite.Nothing:
-                return FixtureCompletion(doc, start, offset, prefix) ?? Array.Empty<CompletionItem>();   // `usefixtures("` is a string, and still completes
+                return FixtureCompletion(doc, start, offset, prefix) ?? DjangoStringCompletion(doc, start, offset) ?? Array.Empty<CompletionItem>();   // a few strings name things: a fixture, a URL, a template, a field
             case CursorSite.FStringField:
                 break;
         }
@@ -234,13 +234,14 @@ public sealed partial class LanguageService
         ModuleInfo m;
         TypeEvaluator ev;
         PyType? expected = null;
+        NameExpr? placeholder = null;
         string text = doc.Text;
         if (!decorator && MayHaveExpectation(text, start))
         {
             var (ws, patched) = PatchedModule(doc, start, end);
             m = patched; ev = ws.Evaluator; text = patched.Source;
             foreach (var n in AstChildren.Descendants(m.Ast))
-                if (n is NameExpr ne && ne.Name == CursorMark) { expected = ExpectedTypeOf(m, ev, ne); break; }
+                if (n is NameExpr ne && ne.Name == CursorMark) { expected = ExpectedTypeOf(m, ev, ne); placeholder = ne; break; }
         }
         else
         {
@@ -289,6 +290,10 @@ public sealed partial class LanguageService
             innermost = false;
             depth++;
         }
+
+        // the keywords of a query: filter(ti| offers title=, author__name=
+        if (placeholder != null)
+            foreach (var item in DjangoKeywordItems(m, ev, placeholder, prefix)) items.TryAdd("" + item.Label, item);
 
         // keywords: those that start statements only where one can start
         if (!decorator)
@@ -443,6 +448,7 @@ public sealed partial class LanguageService
             string t = earlier.TrimStart();
             if (t.Length == 0 || t.StartsWith('#')) continue;
             if (!t.StartsWith("from ")) { if (t.EndsWith(')') || !(t.EndsWith(',') || t.EndsWith('(') || Regex.IsMatch(t, @"^\w+(\s+as\s+\w+)?,?$"))) return null; continue; }
+            if (t.Count(c => c == '(') <= t.Count(c => c == ')')) return null;   // the list has to be opened on this very line
             string joined = Regex.Replace(text[cur..offset], @"\s*[\r\n]+\s*", " ").TrimStart();
             return joined.Count(c => c == '(') > joined.Count(c => c == ')') && joined.Contains(" import") ? joined : null;
         }

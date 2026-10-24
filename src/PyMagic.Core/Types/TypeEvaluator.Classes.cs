@@ -398,6 +398,7 @@ public sealed partial class TypeEvaluator
     /// </summary>
     PyType BoundMember(MemberHit hit, PyType receiver, bool receiverIsInstance)
     {
+        if (receiver is ClassType modelReceiver && DjangoBoundMember(hit, modelReceiver, receiverIsInstance) is { } fromDjango) return fromDjango;
         PyType? classLevel = hit.ClassSymbol != null ? TypeOfSymbol(hit.ClassSymbol) : null;
         if (classLevel != null && hit.ClassSymbol != null && IsStrongSymbol(hit.Owner.Info.Module, hit.ClassSymbol))
             return BindMember(classLevel, hit.Owner, receiver, receiverIsInstance);
@@ -530,6 +531,14 @@ public sealed partial class TypeEvaluator
             types.Add(BoundMember(hit, c, instance));
             if (hit.ClassSymbol != null) decls.AddRange(hit.ClassSymbol.Declarations);
             sites.AddRange(hit.InstanceAttrs.Select(a => (Node)a.Target));
+            return;
+        }
+        // what Django's metaclass adds to a model (objects, DoesNotExist, id, reverse relations), and the project's settings
+        if (IsDjangoModel(c.Info) && DjangoImplicitMember(c, name, instance) is { } djangoMember) { types.Add(djangoMember); return; }
+        if (instance && IsDjangoSettingsObject(c.Info) && DjangoSettingSymbol(name) is { } setting)
+        {
+            types.Add(TypeOfSymbol(setting));
+            decls.AddRange(setting.Declarations);
             return;
         }
         if (unknownBase) { types.Add(PyType.Unknown); return; }

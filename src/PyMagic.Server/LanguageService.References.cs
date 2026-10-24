@@ -25,6 +25,7 @@ public sealed partial class LanguageService
 
     public IReadOnlyList<Location> References(string uri, Position pos, bool includeDeclaration)
     {
+        if (DjangoReferences(uri, pos, includeDeclaration) is { Count: > 0 } djangoSites) return djangoSites;
         var snap = Full();
         if (snap.ByUri.TryGetValue(uri, out var fm))
         {
@@ -52,6 +53,7 @@ public sealed partial class LanguageService
     public PrepareRenameResult? PrepareRename(string uri, Position pos)
     {
         if (FixturePrepareRename(uri, pos) is { } fixture) return fixture;
+        if (UrlNameRenameTarget(uri, pos) is { } urlName) return urlName;
         var snap = Full();
         if (!snap.ByUri.TryGetValue(uri, out var m)) return null;
         var target = FindTarget(snap, m, Lines(m).OffsetOf(pos));
@@ -63,6 +65,7 @@ public sealed partial class LanguageService
     /// <exception cref="ServiceException">The thing cannot be renamed, or the new name is not valid.</exception>
     public WorkspaceEdit Rename(string uri, Position pos, string newName)
     {
+        if (DjangoRename(uri, pos, newName) is { } urlRename) return urlRename;
         var snap = Full();
         if (snap.ByUri.TryGetValue(uri, out var fm) && FixtureTargetAt(snap, fm, Lines(fm).OffsetOf(pos)) is { } fixture)
             return RenameFixture(snap, fixture, newName);

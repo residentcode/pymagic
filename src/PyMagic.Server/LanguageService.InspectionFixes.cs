@@ -16,6 +16,7 @@ public sealed partial class LanguageService
             if (!Suppressed(m.Source, f)) yield return AsDiag(f);
         foreach (var d in ClassDiagnostics(m, ev)) yield return d;
         foreach (var d in FixtureDiagnostics(m, ev)) yield return d;
+        foreach (var d in DjangoDiagnostics(m, ev)) yield return d;
     }
 
     /// <summary>A comment on the line says to leave it alone: `# noqa`, `# noqa: code, code` or `# noinspection ...`.</summary>

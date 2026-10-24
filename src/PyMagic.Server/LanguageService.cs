@@ -283,6 +283,7 @@ public sealed partial class LanguageService
         var ev = Current().Workspace.Evaluator;
 
         if (FixtureHover(Current(), m, offset) is { } fixtureHover) return fixtureHover;
+        if (DjangoHover(Current(), m, offset) is { } djangoHover) return djangoHover;
 
         // definition names: `def f`, `class C`
         foreach (var n in AstChildren.Descendants(m.Ast))
@@ -437,6 +438,7 @@ public sealed partial class LanguageService
         var found = new List<Location>();
 
         if (FixtureDefinition(uri, pos) is { Count: > 0 } fixtureLocations) return fixtureLocations;
+        if (DjangoDefinition(uri, pos) is { Count: > 0 } djangoLocations) return djangoLocations;
 
         void AddNode(ModuleInfo? module, Node node)
         {
@@ -503,7 +505,8 @@ public sealed partial class LanguageService
             {
                 var recv = ev.TypeOf(m, ae.Value);
                 var res = ev.AttributeType(recv, ae.Attr);
-                var candidates = CandidateModules(ev, m, recv);
+                // a declaration found through a hook (a setting, say) can lie in any module of the project
+                var candidates = CandidateModules(ev, m, recv).Concat(ws.UserModules).Distinct().ToList();
                 if (res.Declarations.Count > 0) AddDeclarations(res.Declarations, candidates);
                 else foreach (var site in res.InstanceSites) AddNode(OwnerModule(site, candidates), site);
                 if (found.Count == 0) AddTypeDefinition(res.Type, AddNode, AddModuleStart);

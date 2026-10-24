@@ -61,6 +61,38 @@ function ensureModel(rel: string): Promise<monaco.editor.ITextModel | null> {
   return p;
 }
 
+// Django and Jinja templates: HTML with {{ variables }}, {% tags %} and {# comments #}. Monaco's own HTML mode needs a language worker this page does not ship.
+monaco.languages.register({ id: 'django-html', extensions: ['.html', '.htm', '.jinja', '.jinja2', '.j2'], aliases: ['Django template'] });
+monaco.languages.setMonarchTokensProvider('django-html', {
+  tokenizer: {
+    root: [
+      [/\{#/, 'comment', '@djangoComment'],
+      [/\{%/, { token: 'keyword', next: '@djangoTag' }],
+      [/\{\{/, { token: 'variable', next: '@djangoVariable' }],
+      [/<!--/, 'comment', '@htmlComment'],
+      [/(<\/?)([\w:-]+)/, ['delimiter.html', 'tag']],
+      [/\/?>/, 'delimiter.html'],
+      [/([\w:-]+)(\s*=)/, ['attribute.name', 'delimiter']],
+      [/"[^"{]*/, { token: 'attribute.value', next: '@dq' }],
+      [/'[^'{]*/, { token: 'attribute.value', next: '@sq' }],
+    ],
+    dq: [[/\{%/, { token: 'keyword', next: '@djangoTag' }], [/\{\{/, { token: 'variable', next: '@djangoVariable' }], [/[^"{]+/, 'attribute.value'], [/"/, 'attribute.value', '@pop'], [/\{/, 'attribute.value']],
+    sq: [[/\{%/, { token: 'keyword', next: '@djangoTag' }], [/\{\{/, { token: 'variable', next: '@djangoVariable' }], [/[^'{]+/, 'attribute.value'], [/'/, 'attribute.value', '@pop'], [/\{/, 'attribute.value']],
+    djangoTag: [[/%\}/, { token: 'keyword', next: '@pop' }], [/"[^"]*"|'[^']*'/, 'string'], [/(?:if|elif|else|endif|for|endfor|empty|block|endblock|extends|include|load|url|with|endwith|csrf_token|comment|endcomment|autoescape|endautoescape|static|trans|blocktrans|endblocktrans|spaceless|endspaceless|now|firstof|cycle|in|not|and|or|as)/, 'keyword'], [/[^%"']+/, 'keyword']],
+    djangoVariable: [[/\}\}/, { token: 'variable', next: '@pop' }], [/"[^"]*"|'[^']*'/, 'string'], [/\|\s*\w+/, 'type'], [/[^}"'|]+/, 'variable'], [/[}|]/, 'variable']],
+    djangoComment: [[/#\}/, 'comment', '@pop'], [/[^#]+/, 'comment'], [/#/, 'comment']],
+    htmlComment: [[/-->/, 'comment', '@pop'], [/[^-]+/, 'comment'], [/-/, 'comment']],
+  },
+});
+
+/** The language of a file the page shows: Python, templates, and whatever Monaco has a plain highlighter for; the modes that bring a language service (a worker) stay plain text. */
+function languageFor(rel: string): string {
+  const lower = rel.toLowerCase();
+  if (/\.(html?|jinja2?|j2)$/.test(lower)) return 'django-html';
+  const id = monaco.languages.getLanguages().find((l) => l.extensions?.some((x) => lower.endsWith(x)))?.id ?? 'plaintext';
+  return ['css', 'scss', 'less', 'json', 'javascript', 'typescript', 'handlebars', 'razor'].includes(id) ? 'plaintext' : id;
+}
+
 async function loadModel(rel: string, key: string): Promise<monaco.editor.ITextModel | null> {
   const uri = uriFor(rel);
   const res = await fetch('/api/file?path=' + encodeURIComponent(rel));
@@ -69,7 +101,7 @@ async function loadModel(rel: string, key: string): Promise<monaco.editor.ITextM
 
   // search results can lead to files that are not Python: they are shown, but the language server never sees them
   if (!rel.endsWith('.py')) {
-    const lang = monaco.languages.getLanguages().find((l) => l.extensions?.some((x) => rel.toLowerCase().endsWith(x)))?.id ?? 'plaintext';
+    const lang = languageFor(rel);
     const plain = monaco.editor.createModel(text, lang, monaco.Uri.parse('pymagic:///' + rel));
     models.set(key, plain);
     serverUri.set(plain, uri);
