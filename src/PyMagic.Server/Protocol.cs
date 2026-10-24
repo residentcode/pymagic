@@ -17,9 +17,13 @@ public sealed record Hover(MarkupContent Contents, Range Range);
 public static class CompletionKind
 {
     public const int Method = 2, Function = 3, Field = 5, Variable = 6, Class = 7, Module = 9, Property = 10,
-        Keyword = 14, Constant = 21, TypeParameter = 25;
+        Keyword = 14, Snippet = 15, Constant = 21, TypeParameter = 25;
 }
-public sealed record CompletionItem(string Label, int Kind, string? Detail = null, string? SortText = null);
+
+/// <param name="InsertText">What to insert when it is not just the label; a snippet (with $1, ${2:name}, $0) when <paramref name="IsSnippet"/> is set.</param>
+/// <param name="AdditionalTextEdits">Edits elsewhere that come with the item: the import an auto-import item needs, or the removal of the expression a postfix template wraps.</param>
+public sealed record CompletionItem(string Label, int Kind, string? Detail = null, string? SortText = null, string? InsertText = null,
+    bool IsSnippet = false, List<TextEdit>? AdditionalTextEdits = null, string? FilterText = null, string? Documentation = null);
 
 public static class SymbolKind
 {

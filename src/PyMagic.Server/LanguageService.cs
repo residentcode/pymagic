@@ -576,58 +576,7 @@ public sealed partial class LanguageService
 
     // ------------------------------------------------------------ completion
 
-    static readonly string[] SoftKeywords = { "match", "case", "type", "_" };
-
-    public IReadOnlyList<CompletionItem> Completion(string uri, Position pos)
-    {
-        if (!_docs.TryGetValue(uri, out var doc)) return Array.Empty<CompletionItem>();
-        var lines = new LineMap(doc.Text);
-        int offset = lines.OffsetOf(pos);
-
-        // the identifier fragment being typed, and whether a dot precedes it
-        int start = offset;
-        while (start > 0 && IsIdentChar(doc.Text[start - 1])) start--;
-        string prefix = doc.Text[start..offset];
-        bool afterDot = start > 0 && doc.Text[start - 1] == '.' && !(start > 1 && doc.Text[start - 2] == '.');
-
-        if (!afterDot && FixtureCompletion(doc, start, offset, prefix) is { } fixtureItems) return fixtureItems;
-        if (afterDot) return MemberCompletion(doc, start, offset, prefix);
-        return NameCompletion(doc, start, offset, prefix);
-    }
-
     static bool IsIdentChar(char c) => char.IsLetterOrDigit(c) || c == '_';
-
-    IReadOnlyList<CompletionItem> MemberCompletion(Doc doc, int start, int end, string prefix)
-    {
-        // `recv.pre|` is usually a syntax error while typing, so analyse a copy with a complete attribute access
-        const string Placeholder = "__pymagic_cursor__";
-        string patched = doc.Text[..start] + Placeholder + doc.Text[end..];
-        var (ws, fixtures) = NewWorkspace();
-        foreach (var d in _docs.Values)
-            if (d.Uri != doc.Uri) fixtures.Register(ws.AddModule(d.ModuleName, d.Text, d.IsPackage), d.Uri, d.Path);
-        var m = ws.AddModule(doc.ModuleName, patched, doc.IsPackage, cached: false);
-        fixtures.Register(m, doc.Uri, doc.Path);
-
-        AttributeExpr? access = null;
-        foreach (var n in AstChildren.Descendants(m.Ast))
-            if (n is AttributeExpr a && a.Attr == Placeholder) { access = a; break; }
-        if (access == null) return Array.Empty<CompletionItem>();
-
-        var ev = ws.Evaluator;
-        var recv = ev.TypeOf(m, access.Value);
-        var items = new List<CompletionItem>();
-        foreach (var member in ev.MemberNames(recv))
-        {
-            if (!member.Name.StartsWith(prefix, StringComparison.Ordinal)) continue;
-            if (member.Name.StartsWith("__") && member.Name.EndsWith("__") && !prefix.StartsWith('_')) continue;
-            if (member.Name.StartsWith('_') && !prefix.StartsWith('_')) continue;
-            var attr = ev.AttributeType(recv, member.Name);
-            items.Add(new CompletionItem(member.Name, KindOf(attr.Type, member.IsInstanceAttribute),
-                FormatType(ev, attr.Type) is var t && t != "Unknown" ? t : null,
-                SortText: (member.Owner == "object" ? "z" : "a") + member.Name));
-        }
-        return items;
-    }
 
     static int KindOf(PyType t, bool instanceAttr)
     {
@@ -639,50 +588,6 @@ public sealed partial class LanguageService
             ModuleType => CompletionKind.Module,
             _ => CompletionKind.Property,
         };
-    }
-
-    IReadOnlyList<CompletionItem> NameCompletion(Doc doc, int start, int end, string prefix)
-    {
-        var m = Current().ByUri[doc.Uri];
-        var ev = Current().Workspace.Evaluator;
-        var items = new Dictionary<string, CompletionItem>();
-
-        void Add(string name, int kind, string? detail)
-        {
-            if (!name.StartsWith(prefix, StringComparison.Ordinal)) return;
-            if (name.StartsWith('_') && !prefix.StartsWith('_')) return;
-            items.TryAdd(name, new CompletionItem(name, kind, detail));
-        }
-
-        // enclosing scopes, innermost first; class scopes are only visible from their own body
-        var scope = ScopeAtCursor(m, doc.Text, start);
-        bool innermost = true;
-        for (var s = scope; s != null; s = s.Parent)
-        {
-            if (s.Kind == ScopeKind.Class && !innermost) continue;
-            foreach (var sym in s.Symbols.Values)
-            {
-                if (sym.Declarations.Count == 0) continue;
-                var type = ev.TypeOfSymbol(sym);
-                Add(sym.Name, sym.Declarations[0].Kind switch
-                {
-                    DeclKind.Function => s.Kind == ScopeKind.Class ? CompletionKind.Method : CompletionKind.Function,
-                    DeclKind.Class => CompletionKind.Class,
-                    DeclKind.Import => type is ModuleType ? CompletionKind.Module : KindOf(type, false),
-                    DeclKind.TypeParam => CompletionKind.TypeParameter,
-                    _ => CompletionKind.Variable,
-                }, type is UnknownType ? null : FormatType(ev, type));
-            }
-            innermost = false;
-        }
-
-        foreach (var kw in Lexer.Keywords) Add(kw, CompletionKind.Keyword, null);
-        foreach (var kw in SoftKeywords) if (kw != "_") Add(kw, CompletionKind.Keyword, null);
-
-        foreach (var name in Builtins.Names)
-            Add(name, char.IsUpper(name[0]) ? CompletionKind.Class : CompletionKind.Function, null);
-
-        return items.Values.ToList();
     }
 
     /// <summary>

@@ -71,14 +71,49 @@ public static class Program
         var svc = new PyMagic.Server.LanguageService { TypeshedPath = PyMagic.Core.Types.Workspace.DefaultTypeshedPath };
         svc.LibraryRoots.Add(dir);
         var uris = new List<(string Uri, string Name)>();
+        var texts = new Dictionary<string, string>();
         // PM_REAL_URIS=1 opens the files at their real paths, below the folder, so conftest.py files are found the way a project has them
         bool real = System.Environment.GetEnvironmentVariable("PM_REAL_URIS") != null;
         foreach (var f in Directory.EnumerateFiles(dir, "*.py", real ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly))
         {
             string name = Path.GetFileNameWithoutExtension(f);
             string uri = real ? PyMagic.Server.LanguageService.UriOfPath(f) : $"file:///c:/corpus_open/{name}.py";
-            svc.Open(uri, File.ReadAllText(f), 1);
+            string content = File.ReadAllText(f);
+            texts[uri] = content;
+            svc.Open(uri, content, 1);
             uris.Add((uri, name));
+        }
+        if (System.Environment.GetEnvironmentVariable("PM_COMPLETE") != null)
+        {
+            // completion latency at real positions: two letters of a statement, and two letters after a dot
+            var times = new List<(double Ms, string Where)>();
+            var rng = new Random(7);
+            int cases = 0;
+            foreach (var (uri, name) in uris)
+            {
+                string src = texts[uri];
+                var lines2 = src.Split('\n');
+                for (int n = 0; n < 6 && lines2.Length > 10; n++)
+                {
+                    int ln = rng.Next(5, lines2.Length - 1);
+                    string line = lines2[ln].TrimEnd('\r');
+                    var m1 = System.Text.RegularExpressions.Regex.Match(line, @"^(\s+)([A-Za-z_]\w{3,})");
+                    var m2 = System.Text.RegularExpressions.Regex.Match(line, @"\.([A-Za-z_]\w{3,})");
+                    foreach (var (col, kind) in new[] { (m1.Success ? m1.Groups[2].Index + 2 : -1, "name"), (m2.Success ? m2.Groups[1].Index + 2 : -1, "member") })
+                    {
+                        if (col < 0) continue;
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                        try { svc.Completion(uri, new PyMagic.Server.Position(ln, col)); }
+                        catch (Exception e) { Console.WriteLine($"CRASH {name}.py:{ln + 1} {kind}: {e.GetType().Name} {e.Message}"); }
+                        times.Add((sw.Elapsed.TotalMilliseconds, $"{name}.py:{ln + 1} {kind}"));
+                        cases++;
+                    }
+                }
+            }
+            var sorted = times.OrderBy(t => t.Ms).ToList();
+            Console.WriteLine($"completion: {cases} cases, median {sorted[sorted.Count / 2].Ms:F1} ms, p90 {sorted[sorted.Count * 9 / 10].Ms:F1} ms, max {sorted[^1].Ms:F0} ms ({sorted[^1].Where})");
+            foreach (var t in sorted.TakeLast(4)) Console.WriteLine($"   slow: {t.Ms:F0} ms  {t.Where}");
+            return 0;
         }
         if (System.Environment.GetEnvironmentVariable("PM_MARKERS") != null)
         {

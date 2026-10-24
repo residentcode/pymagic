@@ -29,7 +29,7 @@ const markerSeverity = (s: number | undefined) =>
 const K = monaco.languages.CompletionItemKind;
 const completionKinds: Record<number, monaco.languages.CompletionItemKind> = {
   2: K.Method, 3: K.Function, 5: K.Field, 6: K.Variable, 7: K.Class, 9: K.Module, 10: K.Property,
-  14: K.Keyword, 21: K.Constant, 25: K.TypeParameter,
+  14: K.Keyword, 15: K.Snippet, 21: K.Constant, 25: K.TypeParameter,
 };
 
 const S = monaco.languages.SymbolKind;
@@ -268,7 +268,12 @@ function registerProviders() {
           label: i.label,
           kind: completionKinds[i.kind] ?? K.Text,
           detail: i.detail,
-          insertText: i.label,
+          documentation: i.documentation ? { value: i.documentation } : undefined,
+          insertText: i.insertText ?? i.label,
+          insertTextRules: i.isSnippet ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
+          // an import to add, or the expression a postfix template takes over
+          additionalTextEdits: i.additionalTextEdits?.map((e: { range: LspRange; newText: string }) => ({ range: toRange(e.range), text: e.newText })),
+          filterText: i.filterText,
           sortText: i.sortText,
           range,
         })),
@@ -443,6 +448,10 @@ async function main() {
     quickSuggestions: { other: true, comments: false, strings: false },
     scrollBeyondLastLine: false,
     glyphMargin: true,
+    suggestSelection: 'recentlyUsed',   // what was picked for a prefix before comes first next time
+    wordBasedSuggestions: 'off',
+    snippetSuggestions: 'inline',
+    suggest: { showWords: false, insertMode: 'replace' },
   });
   (window as any).pymagic = { editor, monaco, openFile };
   const common = {
