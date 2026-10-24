@@ -12,13 +12,12 @@ namespace PyMagic.Server.Formatting;
 /// </summary>
 public static class PythonFormatter
 {
-    /// <summary>The formatted text, or null when the text has syntax errors, opts out (<c># fmt: off</c>) or the check failed.</summary>
+    /// <summary>The formatted text, or null when the text has syntax errors, or the check failed (<c># fmt: off</c> ... <c># fmt: on</c> regions and <c># fmt: skip</c> lines stay as they are).</summary>
     public static string? Format(string source, FormatOptions? options = null)
     {
         options ??= FormatOptions.Default;
         LastMismatch = null;
         if (source.Length == 0) return source;
-        if (source.Contains("fmt: off") || source.Contains("fmt:off") || source.Contains("fmt: skip")) return null;
         var tokens = Lexer.Tokenize(source);
         if (tokens.Any(t => t.Kind == TokenKind.Error)) return null;
         if (Parser.Parse(source).Diagnostics.Count > 0) return null;
@@ -78,7 +77,6 @@ public static class PythonFormatter
         if (options.UseTabs || options.Endings != LineEnding.Auto) return Format(source, options);
         LastMismatch = null;
         if (source.Length == 0) return source;
-        if (source.Contains("fmt: off") || source.Contains("fmt:off") || source.Contains("fmt: skip")) return null;
         var tokens = Lexer.Tokenize(source);
         if (tokens.Any(t => t.Kind == TokenKind.Error)) return null;
         var parsed = Parser.Parse(source);
@@ -265,6 +263,8 @@ public static class PythonFormatter
         public int PrevEnd;             // where the previous line ended (after its line break): the blank lines before this one start here
         public int EndPos;              // end of the last token (a comment after the code included)
         public string Text = "";
+        public bool Verbatim;           // inside # fmt: off ... # fmt: on, or marked # fmt: skip: written as it is
+        public int OrigBlank;           // the blank lines before it in the source
     }
 
     sealed class Renderer
@@ -286,21 +286,25 @@ public static class PythonFormatter
         {
             var lines = BuildLines();
             if (lines.Count == 0) return "";
+            MarkVerbatim(lines);
             for (int i = 0; i < lines.Count; i++)
             {
                 var l = lines[i];
+                if (l.Verbatim) { l.Text = _s[LineStart(l.Start)..l.EndPos]; continue; }
                 l.Text = l.IsComment ? NormaliseComment(_s[l.Tokens[0].Start..l.Tokens[0].End], l.Start == FirstNonBlank())
                     : IsDocstringStatement(lines, i) ? RenderDocstring(l)
                     : RenderCode(l);
             }
             ApplyBlankLines(lines);
+            foreach (var v in lines.Where(x => x.Verbatim)) v.BlankBefore = v.OrigBlank;
 
             var sb = new StringBuilder();
             for (int i = 0; i < lines.Count; i++)
             {
                 var l = lines[i];
                 if (i > 0) for (int b = 0; b < l.BlankBefore; b++) sb.Append(_nl);
-                sb.Append(new string(' ', l.Level * IndentWidth)).Append(l.Text).Append(_nl);
+                if (!l.Verbatim) sb.Append(new string(' ', l.Level * IndentWidth));
+                sb.Append(l.Text).Append(_nl);
             }
             return sb.ToString();
         }
@@ -310,16 +314,18 @@ public static class PythonFormatter
         {
             var lines = BuildLines();
             if (lines.Count == 0) return _s;
+            MarkVerbatim(lines);
             for (int i = 0; i < lines.Count; i++)
             {
                 var l = lines[i];
+                if (l.Verbatim) continue;
                 l.Text = l.IsComment ? NormaliseComment(_s[l.Tokens[0].Start..l.Tokens[0].End], l.Start == FirstNonBlank())
                     : IsDocstringStatement(lines, i) ? RenderDocstring(l)
                     : RenderCode(l);
             }
             ApplyBlankLines(lines);
 
-            bool Selected(Line l) => LineStart(l.Start) <= selEnd && l.EndPos >= selStart;
+            bool Selected(Line l) => !l.Verbatim && LineStart(l.Start) <= selEnd && l.EndPos >= selStart;
             var sb = new StringBuilder();
             int afterLast = 0;
             for (int i = 0; i < lines.Count; i++)
@@ -379,6 +385,31 @@ public static class PythonFormatter
         }
 
         // ---------------------------------------------------------- lines
+
+        /// <summary>`# fmt: off` on a line of its own up to `# fmt: on` (or the end), and lines ending in `# fmt: skip`, are left exactly as they are.</summary>
+        void MarkVerbatim(List<Line> lines)
+        {
+            static bool Is(string comment, string word)
+            {
+                string c = comment.TrimStart('#').Trim();
+                return c == "fmt: " + word || c == "fmt:" + word;
+            }
+            bool off = false;
+            foreach (var l in lines)
+            {
+                l.OrigBlank = l.BlankBefore;
+                string? comment = l.IsComment ? _s[l.Tokens[0].Start..l.Tokens[0].End] : null;
+                if (comment != null && Is(comment, "on")) { off = false; continue; }
+                if (off) { l.Verbatim = true; continue; }
+                if (comment != null && Is(comment, "off")) { off = true; continue; }
+                if (!l.IsComment && l.Tokens.Count > 0 && l.Tokens[^1].Kind == TokenKind.Comment)
+                {
+                    string trailing = _s[l.Tokens[^1].Start..l.Tokens[^1].End];
+                    if (trailing.Contains("fmt: skip") || trailing.Contains("fmt:skip")) l.Verbatim = true;
+                    else if (trailing.Contains("fmt: off") || trailing.Contains("fmt:off")) throw new InvalidOperationException("a trailing fmt: off");   // black reads it in ways we do not follow
+                }
+            }
+        }
 
         List<Line> BuildLines()
         {
