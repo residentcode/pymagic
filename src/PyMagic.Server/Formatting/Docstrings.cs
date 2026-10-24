@@ -6,18 +6,19 @@ namespace PyMagic.Server.Formatting;
 /// <summary>Docstrings the way black writes them: re-indented, trimmed, with the closing quotes after the text or on their own line.</summary>
 internal static class Docstrings
 {
-    const int LineLength = 88;
-
     /// <summary>The docstring literal <paramref name="token"/> of a statement that is indented by <paramref name="indentWidth"/>; continuation lines carry their indentation.</summary>
-    public static string Format(string token, int indentWidth, string nl)
+    public static string Format(string token, int indentWidth, string nl, FormatOptions options)
     {
+        // docstrings use triple double quotes whatever the style for other strings, unless quotes are to be left alone
+        var style = options.Quotes == QuoteStyle.Preserve ? QuoteStyle.Preserve : QuoteStyle.Double;
+        int LineLength = options.LineLength;
         int q = 0;
         while (q < token.Length && token[q] != '"' && token[q] != '\'') q++;
         if (q >= token.Length) return token;
         string prefix = token[..q];
-        if (prefix.IndexOfAny(new[] { 'b', 'B', 'f', 'F', 't', 'T' }) >= 0) return PythonFormatter.NormaliseString(token);
+        if (prefix.IndexOfAny(new[] { 'b', 'B', 'f', 'F', 't', 'T' }) >= 0) return PythonFormatter.NormaliseString(token, options.Quotes);
 
-        string normalised = PythonFormatter.NormaliseString(token);
+        string normalised = PythonFormatter.NormaliseString(token, style);
         string rest = normalised[q..];
         char quote = rest[0];
         int quoteLength = rest.Length >= 6 && rest[1] == quote && rest[2] == quote ? 3 : 1;

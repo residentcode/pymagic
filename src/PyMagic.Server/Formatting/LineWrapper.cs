@@ -30,8 +30,9 @@ internal readonly record struct OutLine(int Indent, string Text, string Comment 
 /// </summary>
 internal sealed class LineWrapper
 {
-    const int Width = 88;
-    const int Indent = 4;
+    readonly FormatOptions _options;
+    int Width => _options.LineLength;
+    int Indent => _options.IndentWidth;
     const int Comma = 18, Comprehension = 20, Ternary = 16, Logic = 14, StringConcat = 12, Comparator = 10, Dot = 1;
 
     readonly List<Piece> _p;
@@ -41,9 +42,11 @@ internal sealed class LineWrapper
     bool[] _atom = Array.Empty<bool>();      // an opening bracket that is not a call, subscript or parameter list
     int _preferred = -1;                     // a bracket pair chosen by the invisible-parenthesis logic for the next right-hand split
 
-    public LineWrapper(List<Piece> pieces)
+    public LineWrapper(List<Piece> pieces, FormatOptions options)
     {
         _p = pieces;
+        _options = options;
+        if (!options.MagicTrailingComma) RemoveTrailingCommas();
         RemoveRedundantParentheses();
         int n = _p.Count;
         _depth = new int[n];
@@ -51,6 +54,43 @@ internal sealed class LineWrapper
         _magic = new bool[n];
         _atom = new bool[n];
         Analyse();
+    }
+
+    // ------------------------------------------------------------ trailing commas
+
+    /// <summary>With skip-magic-trailing-comma a trailing comma is only kept in a one-element tuple or subscript; wrapping adds it back where lines are split.</summary>
+    void RemoveTrailingCommas()
+    {
+        var match = new int[_p.Count];
+        Array.Fill(match, -1);
+        var stack = new Stack<int>();
+        for (int i = 0; i < _p.Count; i++)
+        {
+            if (_p[i].IsOpen) stack.Push(i);
+            else if (_p[i].IsClose && stack.Count > 0) { int o = stack.Pop(); match[o] = i; match[i] = o; }
+        }
+
+        // backwards, so removing a comma does not move the pieces still to be looked at
+        for (int i = _p.Count - 2; i >= 1; i--)
+        {
+            var comma = _p[i];
+            if (comma.Standalone || comma.Kind != TokenKind.Operator || comma.Text != "," || !_p[i + 1].IsClose) continue;
+            int open = match[i + 1];
+            if (open < 0) continue;
+
+            int depth = 0, commas = 0;
+            for (int k = open + 1; k < i + 1; k++)
+            {
+                if (_p[k].IsOpen) depth++;
+                else if (_p[k].IsClose) depth--;
+                else if (depth == 0 && !_p[k].Standalone && _p[k].Kind == TokenKind.Operator && _p[k].Text == ",") commas++;
+            }
+            bool atom = open == 0 || !IsValueEnd(_p[open - 1]);
+            if (commas == 1 && ((_p[open].Text == "(" && atom) || (_p[open].Text == "[" && !atom))) continue;
+
+            _p[i - 1].Comments.AddRange(comma.Comments);
+            _p.RemoveAt(i);
+        }
     }
 
     // ------------------------------------------------------------ redundant parentheses

@@ -12,11 +12,10 @@ namespace PyMagic.Server.Formatting;
 /// </summary>
 public static class PythonFormatter
 {
-    const int IndentWidth = 4;
-
     /// <summary>The formatted text, or null when the text has syntax errors, opts out (<c># fmt: off</c>) or the check failed.</summary>
-    public static string? Format(string source)
+    public static string? Format(string source, FormatOptions? options = null)
     {
+        options ??= FormatOptions.Default;
         LastMismatch = null;
         if (source.Length == 0) return source;
         if (source.Contains("fmt: off") || source.Contains("fmt:off") || source.Contains("fmt: skip")) return null;
@@ -25,7 +24,7 @@ public static class PythonFormatter
         if (Parser.Parse(source).Diagnostics.Count > 0) return null;
 
         string result;
-        try { result = new Renderer(source, tokens).Run(); }
+        try { result = new Renderer(source, tokens, options).Run(); }
         catch (ArgumentException) { return null; }
         catch (InvalidOperationException) { return null; }
 
@@ -37,8 +36,9 @@ public static class PythonFormatter
     /// change the meaning (a re-indented header over an old-indented body), so the result is checked and, when it
     /// does not hold, the selection grows to the top-level statements it touches.
     /// </summary>
-    public static string? FormatRange(string source, int start, int end)
+    public static string? FormatRange(string source, int start, int end, FormatOptions? options = null)
     {
+        options ??= FormatOptions.Default;
         LastMismatch = null;
         if (source.Length == 0) return source;
         if (source.Contains("fmt: off") || source.Contains("fmt:off") || source.Contains("fmt: skip")) return null;
@@ -50,7 +50,7 @@ public static class PythonFormatter
         string? Attempt(int a, int b)
         {
             string result;
-            try { result = new Renderer(source, tokens).RunRange(a, b); }
+            try { result = new Renderer(source, tokens, options).RunRange(a, b); }
             catch (ArgumentException) { return null; }
             catch (InvalidOperationException) { return null; }
             return SameCode(source, result) ? result : null;
@@ -171,12 +171,28 @@ public static class PythonFormatter
 
     // ------------------------------------------------------------ quotes
 
-    /// <summary>Double quotes unless that needs more escapes: only literals without backslashes and double quotes are touched.</summary>
-    internal static string NormaliseString(string s)
+    /// <summary>
+    /// Double quotes (or single ones, or as written) unless that needs more escapes: only literals without backslashes
+    /// and without the other quote are touched. Triple-quoted strings always use double quotes unless the style preserves them.
+    /// </summary>
+    internal static string NormaliseString(string s, QuoteStyle style = QuoteStyle.Double)
     {
+        if (style == QuoteStyle.Preserve) return s;
         int q = 0;
         while (q < s.Length && s[q] != '"' && s[q] != '\'') q++;
-        if (q >= s.Length || s[q] != '\'') return s;
+        if (q >= s.Length) return s;
+        if (style == QuoteStyle.Single && s[q] == '"')
+        {
+            string r = s[q..];
+            bool isTriple = r.Length >= 6 && r.StartsWith("\"\"\"");
+            if (isTriple || r.Length < 2 || !r.EndsWith("\"")) return s;
+            string content = r[1..^1];
+            if (content.Contains('\'') || content.Contains('\\') || content.Contains('"')) return s;
+            return s[..q] + "'" + content + "'";
+        }
+        if (s[q] != '\'') return s;
+        // single quotes are what the style wants: only triple single quotes still become triple double quotes
+        if (style == QuoteStyle.Single && !s[q..].StartsWith("'''")) return s;
         string prefix = s[..q];
         string rest = s[q..];
         bool triple = rest.Length >= 6 && rest.StartsWith("'''") && rest.EndsWith("'''");
@@ -219,9 +235,12 @@ public static class PythonFormatter
         readonly string _s;
         readonly List<Token> _t;
         readonly string _nl;
+        readonly FormatOptions _o;
+        int IndentWidth => _o.IndentWidth;
 
-        public Renderer(string source, List<Token> tokens)
+        public Renderer(string source, List<Token> tokens, FormatOptions options)
         {
+            _o = options;
             _s = source; _t = tokens;
             _nl = source.Contains("\r\n") ? "\r\n" : "\n";
         }
@@ -310,7 +329,7 @@ public static class PythonFormatter
 
         string RenderDocstring(Line l)
         {
-            string text = Docstrings.Format(l.Tokens[0].Text(_s), l.Level * IndentWidth, _nl);
+            string text = Docstrings.Format(l.Tokens[0].Text(_s), l.Level * IndentWidth, _nl, _o);
             if (l.Tokens.Count > 1) text += "  " + NormaliseComment(l.Tokens[1].Text(_s), false);
             return text;
         }
@@ -636,7 +655,7 @@ public static class PythonFormatter
             if (legacyOnly || pieces.Count == 0) return sb.ToString().TrimEnd();
 
             // wrap what is too long, join what was wrapped by hand but fits
-            var lines = new LineWrapper(pieces).Wrap(newIndent);
+            var lines = new LineWrapper(pieces, _o).Wrap(newIndent);
             var result = new StringBuilder();
             for (int n = 0; n < lines.Count; n++)
             {
@@ -661,7 +680,7 @@ public static class PythonFormatter
 
         string Normalise(Token t, string text, Line line) => t.Kind switch
         {
-            TokenKind.String => NormaliseString(text),
+            TokenKind.String => NormaliseString(text, _o.Quotes),
             TokenKind.Comment => NormaliseComment(text, false),
             _ => text,
         };

@@ -134,6 +134,18 @@ async function refreshFormatters() {
       option.textContent = f.id === 'builtin' ? 'built-in' : f.label;
       option.disabled = !f.available;
     }
+    // what the built-in formatter will do for this file, as its project's pyproject.toml asks
+    const model = editor.getModel();
+    const uri = model && serverUri.get(model);
+    if (uri) {
+      const cfg: { lineLength: number; quotes: string; magicTrailingComma: boolean; indentWidth: number; source: string | null } | null = await lsp.request('pymagic/formatConfig', { textDocument: { uri } });
+      if (cfg) {
+        const quotes = cfg.quotes.toLowerCase() === 'preserve' ? 'quotes as written' : `${cfg.quotes.toLowerCase()} quotes`;
+        select.title = `Formatter. The built-in one uses line length ${cfg.lineLength}, ${quotes}`
+          + (cfg.magicTrailingComma ? '' : ', no magic trailing comma') + (cfg.indentWidth !== 4 ? `, indent ${cfg.indentWidth}` : '')
+          + (cfg.source ? ` (from ${cfg.source.split(/[\\/]/).pop()})` : ' (no pyproject.toml settings)');
+      }
+    }
     // a formatter that is gone (uninstalled, other interpreter) falls back to the built-in one
     const chosen = list.find((f) => f.id === select.value);
     if (chosen && !chosen.available) { select.value = 'builtin'; try { localStorage.setItem('pymagic.formatter', 'builtin'); } catch { /* storage unavailable */ } }

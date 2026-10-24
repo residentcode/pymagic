@@ -45,6 +45,10 @@ public sealed partial class LanguageService
     static string FilePathOf(string uri) =>
         uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ? new Uri(uri).LocalPath : "main.py";
 
+    /// <summary>The settings the built-in formatter uses for a file: from pyproject.toml or ruff.toml of its project, else black's defaults.</summary>
+    public FormatOptions FormatConfigOf(string uri) =>
+        uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ? FormatConfig.For(FilePathOf(uri)) : FormatOptions.Default;
+
     /// <summary>Formats text with black or ruff and checks that what came back is still Python.</summary>
     string RunExternal(string engine, string text, string uri, (int, int)? lines = null)
     {
@@ -64,9 +68,10 @@ public sealed partial class LanguageService
         if (!snap.ByUri.TryGetValue(uri, out var m)) throw new ServiceException("unknown document");
         if (m.SyntaxErrors.Count > 0) throw new ServiceException("Fix the syntax errors first: a file that does not parse cannot be formatted.");
         string text = m.Source;
-        if (sortImports) text = ImportSorter.Sort(text, ImportClassifier(snap)) ?? text;
+        var options = FormatConfigOf(uri);
+        if (sortImports) text = ImportSorter.Sort(text, ImportClassifier(snap), options.LineLength) ?? text;
         string formatted = engine is "builtin" or ""
-            ? PythonFormatter.Format(text) ?? throw new ServiceException("This file cannot be formatted (it has `fmt: off`, or the result could have changed the code).")
+            ? PythonFormatter.Format(text, options) ?? throw new ServiceException("This file cannot be formatted (it has `fmt: off`, or the result could have changed the code).")
             : RunExternal(engine, text, uri);
         return DiffEdit(m, formatted);
     }
@@ -89,7 +94,7 @@ public sealed partial class LanguageService
             formatted = RunExternal("black", m.Source, uri, (range.Start.Line + 1, Math.Max(last, range.Start.Line + 1)));
         }
         else
-            formatted = PythonFormatter.FormatRange(m.Source, start, end)
+            formatted = PythonFormatter.FormatRange(m.Source, start, end, FormatConfigOf(uri))
                 ?? throw new ServiceException("This selection cannot be formatted on its own (it has `fmt: off`, or formatting it would change the code): select whole statements, or format the file.");
         return DiffEdit(m, formatted);
     }

@@ -214,6 +214,8 @@ public sealed class Server
                 return _service.FormatRange(UriOf(p), RangeOf(p), EngineOf(p));
             case "pymagic/formatters":
                 return _service.Formatters();
+            case "pymagic/formatConfig":
+                return _service.FormatConfigOf(UriOf(p));
             case "pymagic/organizeImports":
                 return _service.OrganizeImports(UriOf(p));
             case "workspace/symbol":
