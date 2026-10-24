@@ -110,6 +110,10 @@
     #sigdialog button:disabled { opacity: .4; cursor: default; } #sigdialog button.primary { border-color: var(--accent); }
     #sigdialog .buttons { display: flex; gap: 8px; }
     #sigdialog .picklist { max-height: 260px; overflow: auto; min-width: 320px; } #sigdialog .pick { padding: 3px 8px; cursor: pointer; font: 13px Consolas, monospace; border-radius: 4px; } #sigdialog .pick.sel, #sigdialog .pick:hover { background: var(--accent); color: #fff; }
+    #sigdialog.preview .box { width: min(900px, 94vw); max-height: 80vh; } #sigdialog .pbody { overflow: auto; max-height: 52vh; display: flex; flex-direction: column; gap: 10px; }
+    #sigdialog .pname { color: var(--dim); padding: 2px 0; font-weight: 600; } #sigdialog pre { margin: 0; font: 12.5px Consolas, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 0; overflow-x: auto; }
+    #sigdialog pre div { padding: 0 8px; white-space: pre; } #sigdialog .hunk { color: var(--dim); background: #8882; } #sigdialog .add { background: #2ea04326; } #sigdialog .del { background: #f8514926; } #sigdialog .ctx { color: var(--dim); }
+    #sigdialog .warnings { color: #e3b341; font-size: 12.5px; } #sigdialog .buttons label { display: flex; align-items: center; gap: 4px; color: var(--dim); }
     @media (max-width: 700px) { #app { grid-template-columns: 1fr; } #sidebar { display: none; } }
   </style>
 </head>

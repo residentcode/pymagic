@@ -4,6 +4,7 @@ import * as monaco from 'monaco-editor';
 import type { LspClient } from './lsp';
 import { editSignature, fetchSignature, type SigInfo } from './signature';
 import { pickTarget } from './movepicker';
+import { previewAlways, previewChanges, type FileChange } from './preview';
 
 export interface RefactorDeps {
   editor: monaco.editor.IStandaloneCodeEditor;
@@ -76,14 +77,41 @@ export function setupRefactor(deps: RefactorDeps) {
     extractMethod: 'Name of the new function',
   };
 
-  async function applyEdits(changes: Record<string, { range: LspRange; newText: string }[]>) {
-    editor.pushUndoStop();
+  type Changes = Record<string, { range: LspRange; newText: string }[]>;
+
+  const displayName = (uri: string) => decodeURIComponent(uri.replace(/^file:\/\/\/?/, '')).split('/').slice(-2).join('/');
+
+  /**
+   * Applies the edits as one undo step. A refactoring that touches several files, one that was marked as always
+   * previewed, and the ones that change code elsewhere (`alwaysPreview`) are shown first; false means cancelled.
+   */
+  async function applyEdits(title: string, changes: Changes, opts: { warnings?: string[]; alwaysPreview?: boolean } = {}): Promise<boolean> {
+    const targets: { model: monaco.editor.ITextModel; uri: string; edits: monaco.editor.IIdentifiedSingleEditOperation[] }[] = [];
     for (const [target, list] of Object.entries(changes)) {
       const m = await deps.modelForUri(target);
       if (!m) continue;
-      m.pushEditOperations([], list.map((e) => ({ range: toRange(e.range), text: e.newText })), () => null);
+      targets.push({ model: m, uri: target, edits: list.map((e) => ({ range: toRange(e.range), text: e.newText })) });
+    }
+    const warnings = opts.warnings ?? [];
+    if (opts.alwaysPreview || previewAlways() || targets.length > 1 || warnings.length > 0) {
+      const files: FileChange[] = targets.map((t) => {
+        const oldText = t.model.getValue();
+        const ordered = [...t.edits].sort((a, b) => t.model.getOffsetAt({ lineNumber: (b.range as monaco.IRange).startLineNumber, column: (b.range as monaco.IRange).startColumn })
+          - t.model.getOffsetAt({ lineNumber: (a.range as monaco.IRange).startLineNumber, column: (a.range as monaco.IRange).startColumn }));
+        let text = oldText;
+        for (const e of ordered) {
+          const r = e.range as monaco.IRange;
+          text = text.slice(0, t.model.getOffsetAt({ lineNumber: r.startLineNumber, column: r.startColumn })) + (e.text ?? '')
+            + text.slice(t.model.getOffsetAt({ lineNumber: r.endLineNumber, column: r.endColumn }));
+        }
+        return { name: displayName(t.uri), oldText, newText: text };
+      }).filter((f) => f.oldText !== f.newText);
+      if (files.length > 0 && !(await previewChanges(title, files, warnings))) return false;
     }
     editor.pushUndoStop();
+    for (const t of targets) t.model.pushEditOperations([], t.edits, () => null);
+    editor.pushUndoStop();
+    return true;
   }
 
   async function changeSignature(uri: string, position: LspPosition) {
@@ -99,8 +127,7 @@ export function setupRefactor(deps: RefactorDeps) {
     try {
       const result: { changes: Record<string, { range: LspRange; newText: string }[]>; warnings: string[] } =
         await lsp.request('pymagic/changeSignature', { textDocument: { uri }, position, newName: edited.newName, parameters: edited.parameters });
-      await applyEdits(result.changes);
-      if (result.warnings?.length) toast(result.warnings.join('\n'), true);
+      await applyEdits('Change signature', result.changes, { warnings: result.warnings ?? [], alwaysPreview: true });
     } catch (e: any) {
       toast(e.message ?? 'The signature cannot be changed.', true);
     }
@@ -118,13 +145,17 @@ export function setupRefactor(deps: RefactorDeps) {
       if (!chosen) { editor.focus(); return; }
       const edit: { changes: Record<string, { range: LspRange; newText: string }[]> } =
         await lsp.request('pymagic/move', { textDocument: { uri }, position, target: chosen.uri });
-      await applyEdits(edit.changes);
-      toast(`Moved to ${chosen.module}`);
+      if (await applyEdits(`Move to ${chosen.module}`, edit.changes, { alwaysPreview: true })) toast(`Moved to ${chosen.module}`);
     } catch (e: any) {
       toast(e.message ?? 'The definition cannot be moved.', true);
     }
     editor.focus();
   }
+
+  const titleOf: Record<string, string> = {
+    extractVariable: 'Extract variable', extractConstant: 'Extract constant', extractMethod: 'Extract method', inlineVariable: 'Inline variable',
+    inlineMethod: 'Inline method', inlineMethodAll: 'Inline method and remove it', safeDelete: 'Safe delete',
+  };
 
   async function run(kind: string, uri: string, range: LspRange, defaultName: string, all: boolean) {
     if (kind === 'moveSymbol') { await moveSymbol(uri, range.start); return; }
@@ -150,13 +181,7 @@ export function setupRefactor(deps: RefactorDeps) {
       return;
     }
 
-    editor.pushUndoStop();
-    for (const [target, list] of Object.entries(edit.changes)) {
-      const m = await deps.modelForUri(target);
-      if (!m) continue;
-      m.pushEditOperations([], list.map((e) => ({ range: toRange(e.range), text: e.newText })), () => null);
-    }
-    editor.pushUndoStop();
+    await applyEdits(titleOf[kind] ?? 'Refactor', edit.changes, { alwaysPreview: kind === 'inlineMethodAll' || kind === 'safeDelete' });
   }
 
   monaco.editor.registerCommand('pymagic.refactor', (_accessor, kind: string, uri: string, range: LspRange, defaultName: string, all: boolean) => {
