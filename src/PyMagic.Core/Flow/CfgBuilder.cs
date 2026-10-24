@@ -142,6 +142,13 @@ internal sealed class CfgBuilder
                 }
                 if (op is not ("is" or "is not" or "==" or "!=")) return false;
 
+                // len(x) == 2
+                if (op is "==" or "!=" && left is CallExpr { Func: NameExpr { Name: "len" }, Args.Count: 1 } lc && lc.Args[0] is { Name: null, Stars: 0 } && IsChain(lc.Args[0].Value))
+                {
+                    reference = Referent(lc.Args[0].Value);
+                    return true;
+                }
+
                 // type(x) is C
                 if (left is CallExpr { Func: NameExpr { Name: "type" }, Args.Count: 1 } tc && tc.Args[0] is { Name: null, Stars: 0 } && IsChain(tc.Args[0].Value))
                 {
@@ -467,6 +474,8 @@ internal sealed class CfgBuilder
     static bool NarrowsSubject(Pattern p) => p switch
     {
         MatchClass => true,
+        MatchSequence => true,
+        MatchMapping => true,
         MatchValue => true,
         MatchOr o => o.Alternatives.All(NarrowsSubject),
         MatchAs a => NarrowsSubject(a.Pattern),

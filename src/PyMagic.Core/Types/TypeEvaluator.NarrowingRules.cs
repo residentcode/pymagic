@@ -32,6 +32,11 @@ public sealed partial class TypeEvaluator
         if (c.Left is CallExpr { Func: NameExpr { Name: "type" }, Args.Count: 1 } tc && IsReferenceSide(m, tc.Args[0].Value, assertion))
             return equal ? NarrowExactType(m, right, t) : t;
 
+        // len(x) == 2
+        if (c.Left is CallExpr { Func: NameExpr { Name: "len" }, Args.Count: 1 } lc && lc.Args[0] is { Name: null, Stars: 0 } && op is "==" or "!=" && IsReferenceSide(m, lc.Args[0].Value, assertion)
+            && LiteralOf(right) is ("int", long length))
+            return NarrowLength(t, length, equal);
+
         Expr other;
         if (IsReferenceSide(m, c.Left, assertion)) other = right;
         else if (IsReferenceSide(m, right, assertion)) other = c.Left;
@@ -47,6 +52,63 @@ public sealed partial class TypeEvaluator
             return equal ? NarrowToEnumMember(t, member, identity: op is "is" or "is not") : WithoutEnumMember(t, member);
 
         return t;
+    }
+
+    /// <summary>`len(x) == n`: a fixed tuple stays when its length is n (or is not n on the other branch); `tuple[X, ...]` becomes n of X.</summary>
+    PyType NarrowLength(PyType t, long n, bool equal)
+    {
+        var result = new List<PyType>();
+        foreach (var x in t.Members)
+        {
+            if (x is ClassType { IsInstance: true, Info.Name: "tuple" } tup && tup.Info.Module.Name == "builtins")
+            {
+                if (tup.TupleItems != null) { if ((tup.TupleItems.Count == n) == equal) result.Add(x); continue; }
+                if (equal && tup.Args.Count == 1 && n is >= 0 and <= 8) { result.Add(TupleOf(Enumerable.Repeat(tup.Args[0], (int)n).ToList())); continue; }
+            }
+            result.Add(x);
+        }
+        return result.Count == 0 ? PyType.Never : PyType.Union(result);
+    }
+
+    static readonly HashSet<string> NotSequences = new() { "str", "bytes", "bytearray", "int", "float", "bool", "complex", "dict", "set", "frozenset", "NoneType" };
+    static readonly HashSet<string> NotMappings = new() { "tuple", "list", "str", "bytes", "bytearray", "int", "float", "bool", "complex", "set", "frozenset", "range", "NoneType" };
+
+    static bool IsBuiltinInstance(PyType x, HashSet<string> names) =>
+        x is ClassType { IsInstance: true } c && (IsNone(c) ? names.Contains("NoneType") : c.Info.Module.Name == "builtins" && names.Contains(c.Info.Name));
+
+    /// <summary>`case [a, b]:`, `case (x, *rest):`: only sequences match, a tuple only when its length fits.</summary>
+    PyType NarrowSequence(MatchSequence p, PyType t, bool matched)
+    {
+        bool star = p.Items.Any(i => i is MatchStar);
+        int count = p.Items.Count(i => i is not MatchStar);
+        bool irrefutable = p.Items.All(i => i is MatchStar or MatchCapture);
+        var result = new List<PyType>();
+        foreach (var x in t.Members)
+        {
+            bool fits = x is ClassType { IsInstance: true, Info.Name: "tuple", TupleItems: { } items } tc && tc.Info.Module.Name == "builtins" ? (star ? items.Count >= count : items.Count == count) : true;
+            if (matched)
+            {
+                if (IsBuiltinInstance(x, NotSequences) || !fits) continue;
+                if (x is ClassType { IsInstance: true, Info.Name: "tuple", TupleItems: null, Args.Count: 1 } homogeneous && !star && homogeneous.Info.Module.Name == "builtins")
+                { result.Add(TupleOf(Enumerable.Repeat(homogeneous.Args[0], count).ToList())); continue; }
+                result.Add(x);
+            }
+            else
+            {
+                // only a pattern that cannot fail once the length fits leaves a fitting tuple out
+                if (irrefutable && x is ClassType { IsInstance: true, Info.Name: "tuple", TupleItems: not null } && fits) continue;
+                result.Add(x);
+            }
+        }
+        return result.Count == 0 ? PyType.Never : PyType.Union(result);
+    }
+
+    /// <summary>`case {"k": v}:`: only mappings match.</summary>
+    PyType NarrowMapping(PyType t, bool matched)
+    {
+        if (!matched) return t;
+        var kept = t.Members.Where(x => !IsBuiltinInstance(x, NotMappings)).ToList();
+        return kept.Count == 0 ? PyType.Never : PyType.Union(kept);
     }
 
     PyType NarrowToEnumMember(PyType t, ClassType member, bool identity)
@@ -277,6 +339,12 @@ public sealed partial class TypeEvaluator
                 // `case Point(x=0)` can fail for a Point: only a pattern without sub-patterns excludes the class
                 return c.Positional.Count == 0 && c.KeywordNames.Count == 0 ? IsInstanceNegative(t, classes) : t;
             }
+
+            case MatchSequence sq:
+                return NarrowSequence(sq, t, matched);
+
+            case MatchMapping:
+                return NarrowMapping(t, matched);
 
             case MatchValue v:
             {
