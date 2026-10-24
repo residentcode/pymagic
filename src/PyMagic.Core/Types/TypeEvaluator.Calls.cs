@@ -296,6 +296,14 @@ public sealed partial class TypeEvaluator
     CallTarget CallFunction(FunctionType f, IReadOnlyList<ArgInfo> args, Node? callNode) =>
         CallParams(f, CallableParameters(f), () => ReturnTypeOf(f), args, callNode);
 
+    /// <summary>The literal type a written constant has: "a" is Literal['a'], -1 is Literal[-1], True is Literal[True].</summary>
+    PyType? ConstantLiteral(Expr e) => e switch
+    {
+        ConstExpr { Kind: ConstKind.Int or ConstKind.Str or ConstKind.Bytes or ConstKind.True or ConstKind.False } or UnaryExpr { Op: "-", Operand: ConstExpr { Kind: ConstKind.Int } }
+            => LiteralType(null!, e, null) is ClassType { LiteralValue: not null } lit ? lit : null,
+        _ => null,
+    };
+
     /// <summary>Maps arguments to parameters, solves type variables from them and computes the call's result.</summary>
     CallTarget CallParams(PyType callee, IReadOnlyList<ParamInfo> ps, Func<PyType> returnType, IReadOnlyList<ArgInfo> args, Node? callNode)
     {
@@ -310,9 +318,12 @@ public sealed partial class TypeEvaluator
             evaluated.Add((arg, param, at));
             Unify(param.Type, at, solved);
         }
-        foreach (var (arg, param, at) in evaluated)
+        foreach (var (arg, param, at0) in evaluated)
         {
+            var at = at0;
             var expected = Substitute(param.Type, solved);
+            // a constant written in the call is the literal it spells where a Literal[...] is wanted
+            if (expected.Members.Any(x => x is ClassType { IsInstance: true, LiteralValue: not null }) && arg.Node?.Value is { } written && ConstantLiteral(written) is { } literal) at = literal;
             if (!IsAssignable(expected, at))
                 problems.Add(new CallProblem(CallProblemKind.Type, (Node?)arg.Node ?? callNode,
                     $"Expected type '{expected}', got '{at}' instead"));
