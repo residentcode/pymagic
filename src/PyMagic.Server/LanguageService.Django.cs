@@ -209,6 +209,7 @@ public sealed partial class LanguageService
     IReadOnlyList<Location>? DjangoReferences(string uri, Position pos, bool includeDeclaration)
     {
         var snap = Full();
+        if (TemplateUrlAt(uri, pos) is { } inTemplate) return UrlSites(snap, PlainUrlName(inTemplate.Value), includeDeclaration);
         if (!snap.ByUri.TryGetValue(uri, out var m)) return null;
         if (NamedStringAt(snap, m, Lines(m).OffsetOf(pos)) is not { Kind: DjangoNamed.UrlName } s) return NameDeclarationAt(snap, m, Lines(m).OffsetOf(pos)) is { } d ? UrlSites(snap, d.Plain, includeDeclaration) : null;
         var plain = s.Value.Contains(':') ? s.Value[(s.Value.LastIndexOf(':') + 1)..] : s.Value;
@@ -231,17 +232,23 @@ public sealed partial class LanguageService
                 string p = use.Value.Contains(':') ? use.Value[(use.Value.LastIndexOf(':') + 1)..] : use.Value;
                 if (p == plain && FixtureLocation(module, use.Start, use.End) is { } l) result.Add(l);
             }
+        foreach (var use in TemplateUrlUses())
+            if (PlainUrlName(use.Value) == plain) result.Add(new Location(use.Uri, new LineMap(use.Text).RangeOf(use.Start, use.End)));
         return result;
     }
 
     WorkspaceEdit? DjangoRename(string uri, Position pos, string newName)
     {
         var snap = Full();
-        if (!snap.ByUri.TryGetValue(uri, out var m)) return null;
-        int offset = Lines(m).OffsetOf(pos);
         string? plain = null;
-        if (NamedStringAt(snap, m, offset) is { Kind: DjangoNamed.UrlName } s) plain = s.Value.Contains(':') ? s.Value[(s.Value.LastIndexOf(':') + 1)..] : s.Value;
-        else if (NameDeclarationAt(snap, m, offset) is { } d) plain = d.Plain;
+        if (TemplateUrlAt(uri, pos) is { } inTemplate) plain = PlainUrlName(inTemplate.Value);
+        else
+        {
+            if (!snap.ByUri.TryGetValue(uri, out var m)) return null;
+            int offset = Lines(m).OffsetOf(pos);
+            if (NamedStringAt(snap, m, offset) is { Kind: DjangoNamed.UrlName } s) plain = s.Value.Contains(':') ? s.Value[(s.Value.LastIndexOf(':') + 1)..] : s.Value;
+            else if (NameDeclarationAt(snap, m, offset) is { } d) plain = d.Plain;
+        }
         if (plain == null) return null;
         if (!Regex.IsMatch(newName, @"^[\w\-]+$")) throw new ServiceException($"'{newName}' is not a valid URL name");
 
@@ -260,7 +267,31 @@ public sealed partial class LanguageService
                 string p = colon >= 0 ? use.Value[(colon + 1)..] : use.Value;
                 if (p == plain) Edit(module, use.Start, use.End, colon >= 0 ? use.Value[..(colon + 1)] + newName : newName);   // `blog:old` keeps its namespace
             }
+        foreach (var use in TemplateUrlUses())
+        {
+            if (PlainUrlName(use.Value) != plain) continue;
+            if (!changes.TryGetValue(use.Uri, out var list)) changes[use.Uri] = list = new List<TextEdit>();
+            int colon = use.Value.LastIndexOf(':');
+            list.Add(new TextEdit(new LineMap(use.Text).RangeOf(use.Start, use.End), colon >= 0 ? use.Value[..(colon + 1)] + newName : newName));
+        }
         return new WorkspaceEdit(changes);
+    }
+
+    static string PlainUrlName(string used) => used.Contains(':') ? used[(used.LastIndexOf(':') + 1)..] : used;
+
+    /// <summary>The name in `{% url 'name' %}` the cursor is on, in an open template.</summary>
+    (string Value, int Start, int End)? TemplateUrlAt(string uri, Position pos)
+    {
+        if (!_templateDocs.TryGetValue(uri, out var doc)) return null;
+        int offset = new LineMap(doc.Text).OffsetOf(pos);
+        foreach (var tag in DjangoTemplateParser.Parse(doc.Text).Tags.Where(t => t.Name == "url" && offset >= t.Start && offset <= t.End))
+        {
+            var args = DjangoTemplateParser.SplitArguments(tag.Args, tag.ArgsStart);
+            if (args.Count == 0 || DjangoTemplateParser.Unquote(args[0].Text) is not { } name) continue;
+            int start = args[0].Offset + 1, end = args[0].Offset + args[0].Text.Length - 1;
+            if (offset >= start && offset <= end) return (name, start, end);
+        }
+        return null;
     }
 
     // ------------------------------------------------------------ queries
@@ -490,6 +521,11 @@ public sealed partial class LanguageService
     PrepareRenameResult? UrlNameRenameTarget(string uri, Position pos)
     {
         var snap = Full();
+        if (TemplateUrlAt(uri, pos) is { } inTemplate)
+        {
+            int cut = inTemplate.Value.LastIndexOf(':');
+            return new PrepareRenameResult(new LineMap(_templateDocs[uri].Text).RangeOf(inTemplate.Start + cut + 1, inTemplate.End), inTemplate.Value[(cut + 1)..]);
+        }
         if (!snap.ByUri.TryGetValue(uri, out var m)) return null;
         int offset = Lines(m).OffsetOf(pos);
         if (NamedStringAt(snap, m, offset) is { Kind: DjangoNamed.UrlName } s)

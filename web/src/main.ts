@@ -100,7 +100,7 @@ async function loadModel(rel: string, key: string): Promise<monaco.editor.ITextM
   if (!res.ok) return null;
   const text = await res.text();
 
-  // search results can lead to files that are not Python: they are shown, but the language server never sees them
+  // search results can lead to files that are not Python: they are shown; only templates are known to the language server
   if (!rel.endsWith('.py')) {
     const lang = languageFor(rel);
     const plain = monaco.editor.createModel(text, lang, monaco.Uri.parse('pymagic:///' + rel));
@@ -108,6 +108,18 @@ async function loadModel(rel: string, key: string): Promise<monaco.editor.ITextM
     serverUri.set(plain, uri);
     relPathOf.set(key, rel);
     savedText.set(rel, text);
+    if (lang === 'django-html') {
+      lsp.notify('textDocument/didOpen', { textDocument: { uri, languageId: 'django-html', version: plain.getVersionId(), text } });
+      let templateTimer: number | undefined;
+      plain.onDidChangeContent(() => {
+        refreshDirty();
+        clearTimeout(templateTimer);
+        templateTimer = window.setTimeout(() => lsp.notify('textDocument/didChange', {
+          textDocument: { uri, version: plain.getVersionId() },
+          contentChanges: [{ text: plain.getValue() }],
+        }), 120);
+      });
+    }
     return plain;
   }
   const model = monaco.editor.createModel(text, 'python', monaco.Uri.parse('pymagic:///' + rel));
@@ -226,6 +238,9 @@ async function organizeImports() {
   }
 }
 
+/** Python and Django templates share hover, go to definition, completion, usages and rename. */
+const CODE_LANGUAGES = ['python', 'django-html'];
+
 function registerProviders() {
   monaco.languages.registerDocumentFormattingEditProvider('python', {
     async provideDocumentFormattingEdits(model) {
@@ -259,7 +274,7 @@ function registerProviders() {
     },
   });
 
-  monaco.languages.registerHoverProvider('python', {
+  monaco.languages.registerHoverProvider(CODE_LANGUAGES, {
     async provideHover(model, position) {
       const uri = serverUri.get(model);
       if (!uri) return null;
@@ -269,7 +284,7 @@ function registerProviders() {
     },
   });
 
-  monaco.languages.registerDefinitionProvider('python', {
+  monaco.languages.registerDefinitionProvider(CODE_LANGUAGES, {
     async provideDefinition(model, position) {
       const uri = serverUri.get(model);
       if (!uri) return null;
@@ -284,8 +299,8 @@ function registerProviders() {
     },
   });
 
-  monaco.languages.registerCompletionItemProvider('python', {
-    triggerCharacters: ['.'],
+  const completionProvider = (triggerCharacters: string[]): monaco.languages.CompletionItemProvider => ({
+    triggerCharacters,
     async provideCompletionItems(model, position) {
       const uri = serverUri.get(model);
       if (!uri) return { suggestions: [] };
@@ -314,8 +329,11 @@ function registerProviders() {
       };
     },
   });
+  monaco.languages.registerCompletionItemProvider('python', completionProvider(['.']));
+  // in a template the names after `{%`, `|` and a quote are what is typed next
+  monaco.languages.registerCompletionItemProvider('django-html', completionProvider(['.', '|', '"', "'", ' ', '%']));
 
-  monaco.languages.registerReferenceProvider('python', {
+  monaco.languages.registerReferenceProvider(CODE_LANGUAGES, {
     async provideReferences(model, position, context) {
       const uri = serverUri.get(model);
       if (!uri) return [];
@@ -331,7 +349,7 @@ function registerProviders() {
     },
   });
 
-  monaco.languages.registerRenameProvider('python', {
+  monaco.languages.registerRenameProvider(CODE_LANGUAGES, {
     async resolveRenameLocation(model, position) {
       const uri = serverUri.get(model);
       if (!uri) return { range: new monaco.Range(1, 1, 1, 1), text: '', rejectReason: 'not a workspace file' };
@@ -452,7 +470,7 @@ async function openFile(rel: string, reveal?: monaco.IRange) {
   if (!model) return;
   currentRel = rel;
   editor.setModel(model);
-  editor.updateOptions({ readOnly: !rel.endsWith('.py') });
+  editor.updateOptions({ readOnly: !(rel.endsWith('.py') || languageFor(rel) === 'django-html') });
   if (reveal) {
     editor.setSelection(reveal);
     editor.revealRangeInCenter(reveal);

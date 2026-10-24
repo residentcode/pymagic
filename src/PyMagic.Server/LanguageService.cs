@@ -59,7 +59,7 @@ public sealed partial class LanguageService
     public bool ReportTypeMismatches { get; set; }
 
     public IEnumerable<string> OpenUris => _docs.Keys;
-    public int? VersionOf(string uri) => _docs.TryGetValue(uri, out var d) ? d.Version : null;
+    public int? VersionOf(string uri) => _docs.TryGetValue(uri, out var d) ? d.Version : _templateDocs.TryGetValue(uri, out var t) ? t.Version : null;
 
     // ------------------------------------------------------------ documents
 
@@ -67,11 +67,14 @@ public sealed partial class LanguageService
     public void Change(string uri, string text, int version) => Set(uri, text, version);
     public void Close(string uri)
     {
+        if (_templateDocs.Remove(uri)) return;
         if (_docs.Remove(uri)) _snapshot = _full = null;
     }
 
     void Set(string uri, string text, int version)
     {
+        // a template file is read by the template features and never reaches the Python analysis
+        if (IsTemplateUri(uri)) { _templateDocs[uri] = (text, version); return; }
         string? path = PathOfUri(uri);
         var (name, isPackage) = ModuleNameOf(path);
         _docs[uri] = new Doc(uri, path, name, isPackage, text, version);
@@ -194,6 +197,7 @@ public sealed partial class LanguageService
 
     public IReadOnlyList<LspDiagnostic> Diagnostics(string uri)
     {
+        if (_templateDocs.ContainsKey(uri)) return TemplateDiagnostics(uri);
         var m = ModuleFor(uri);
         if (m == null) return Array.Empty<LspDiagnostic>();
         var lines = Lines(m);
@@ -276,6 +280,7 @@ public sealed partial class LanguageService
 
     public Hover? Hover(string uri, Position pos)
     {
+        if (_templateDocs.ContainsKey(uri)) return TemplateHover(uri, pos);
         var m = ModuleFor(uri);
         if (m == null) return null;
         var lines = Lines(m);
@@ -430,6 +435,7 @@ public sealed partial class LanguageService
 
     public IReadOnlyList<Location> Definition(string uri, Position pos)
     {
+        if (_templateDocs.ContainsKey(uri)) return TemplateDefinition(uri, pos);
         var m = ModuleFor(uri);
         if (m == null) return Array.Empty<Location>();
         var ws = Current().Workspace;
