@@ -214,6 +214,10 @@ public sealed partial class LanguageService
         : message.StartsWith("Cannot find reference") ? "missing-attribute"
         : message == "Unreachable code" ? "unreachable"
         : message.StartsWith("Local variable") ? "unbound-local"
+        : message.StartsWith("Expected type '") ? "argument-type"
+        : message.Contains("is not callable") ? "not-callable"
+        : message.StartsWith("Unexpected argument") || message.StartsWith("Multiple values for parameter") || message.EndsWith(" unfilled")
+          || message.StartsWith("No overload of") || message.EndsWith("takes no arguments") ? "call-arguments"
         : null;
 
     /// <summary>Every finding for a module with its severity and a stable code the quick fixes key on.</summary>
