@@ -32,10 +32,14 @@ if ($Rebuild -or -not (Test-Path $dist) -or $newest.LastWriteTime -gt (Get-Item 
     if ($LASTEXITCODE -ne 0) { Write-Host 'The web build failed.' -ForegroundColor Red; exit 1 }
 }
 
-# ---- the host ----
+# ---- the host: published to a fresh folder, so a PyMagic that is still running never blocks the build ----
 Step 'Building the host'
-dotnet build (Join-Path $repo 'src\PyMagic.Web\PyMagic.Web.csproj') -c Release --nologo -v quiet
+$runs = Join-Path $env:LOCALAPPDATA 'PyMagic\host'
+$out = Join-Path $runs (Get-Date -Format 'yyyyMMdd-HHmmss')
+dotnet build (Join-Path $repo 'src\PyMagic.Web\PyMagic.Web.csproj') -c Release -o $out --nologo -v quiet -p:UseAppHost=false
 if ($LASTEXITCODE -ne 0) { Write-Host 'The host build failed.' -ForegroundColor Red; exit 1 }
+# older copies are removed when nothing holds them
+Get-ChildItem $runs -Directory -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $out } | ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
 
 # ---- the project folder ----
 if (-not $Project) {
@@ -67,8 +71,7 @@ while (-not (PortIsFree $Port)) { $Port++ }
 $hostArgs = @('--root', $Project, '--www', (Join-Path $web 'dist'), '--port', $Port)
 if ($typeshed) { $hostArgs += @('--typeshed', $typeshed) }
 
-$exe = Get-ChildItem (Join-Path $repo 'src\PyMagic.Web\bin\Release') -Recurse -Filter 'pymagic-web.dll' | Select-Object -First 1
-if (-not $exe) { $exe = Get-ChildItem (Join-Path $repo 'src\PyMagic.Web\bin\Release') -Recurse -Filter 'PyMagic.Web.dll' | Select-Object -First 1 }
+$exe = Get-ChildItem $out -Filter '*.dll' | Where-Object { $_.Name -in 'pymagic-web.dll', 'PyMagic.Web.dll' } | Select-Object -First 1
 
 Step "Opening $Project on http://127.0.0.1:$Port/  (close this window to stop)"
 if ($typeshed) { Write-Host "typeshed: $typeshed" }
