@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -81,16 +82,76 @@ public sealed class Server
 
     public Server(LanguageService service, Action<JsonNode> send) { _service = service; _send = send; }
 
+    /// <summary>
+    /// When true, edits only mark documents as changed and <see cref="FlushDiagnostics"/> publishes later (the message
+    /// loop calls it once the input queue is empty, so a burst of keystrokes costs one analysis, not one per key).
+    /// </summary>
+    public bool Deferred { get; set; }
+
     /// <summary>Reads messages until the client exits or the input ends.</summary>
     public int Run(MessageChannel channel)
     {
+        var inbox = new BlockingCollection<JsonNode?>();
+        var reader = new Thread(() =>
+        {
+            try { while (channel.Read() is { } msg) inbox.Add(msg); }
+            catch (IOException) { }
+            inbox.Add(null);
+        }) { IsBackground = true };
+        reader.Start();
+        Pump(inbox);
+        return Exited ? ExitCode : 1;
+    }
+
+    /// <summary>
+    /// Handles queued messages until <paramref name="inbox"/> yields null (input ended), the client exits, or the queue is
+    /// completed. Everything that is waiting is taken at once so superseded edits can be dropped, requests are answered
+    /// before diagnostics are computed, and diagnostics are published only when no further message is waiting.
+    /// </summary>
+    public void Pump(BlockingCollection<JsonNode?> inbox)
+    {
+        Deferred = true;
         while (!Exited)
         {
-            var msg = channel.Read();
-            if (msg == null) break;
-            Handle(msg);
+            if (!inbox.TryTake(out var first, Timeout.Infinite) || first == null) break;
+            var batch = new List<JsonNode> { first };
+            bool ended = false;
+            while (inbox.TryTake(out var more))
+            {
+                if (more == null) { ended = true; break; }
+                batch.Add(more);
+            }
+            foreach (var msg in Coalesce(batch))
+            {
+                Handle(msg);
+                if (Exited) break;
+            }
+            try { FlushDiagnostics(); }
+            catch (Exception e) { Log($"error while publishing diagnostics: {e}"); }
+            if (ended) break;
         }
-        return Exited ? ExitCode : 1;
+    }
+
+    /// <summary>Drops a full-text edit when a later edit of the same document is queued and no request sits between them.</summary>
+    public static List<JsonNode> Coalesce(IReadOnlyList<JsonNode> batch)
+    {
+        var keep = new bool[batch.Count];
+        var nextEdit = new Dictionary<string, int>();   // uri -> index of a later didChange with no request in between
+        for (int i = batch.Count - 1; i >= 0; i--)
+        {
+            var m = batch[i];
+            string? method = m["method"]?.GetValue<string>();
+            keep[i] = true;
+            if (m["id"] != null) { nextEdit.Clear(); continue; }   // a request observes the text as of this point
+            if (method == "textDocument/didChange" && m["params"]?["textDocument"]?["uri"]?.GetValue<string>() is { } uri)
+            {
+                if (nextEdit.ContainsKey(uri)) keep[i] = false;
+                nextEdit[uri] = i;
+            }
+            else if (method is "textDocument/didOpen" or "textDocument/didClose" && m["params"]?["textDocument"]?["uri"]?.GetValue<string>() is { } other)
+                nextEdit.Remove(other);
+        }
+        return batch.Where((_, i) => keep[i]).ToList();
     }
 
     public void Handle(JsonNode message)
@@ -192,8 +253,10 @@ public sealed class Server
             case "textDocument/didOpen":
             {
                 var td = p!["textDocument"]!;
-                _service.Open(td["uri"]!.GetValue<string>(), td["text"]!.GetValue<string>(), td["version"]?.GetValue<int>() ?? 0);
-                PublishAll();
+                string uri = td["uri"]!.GetValue<string>();
+                _service.Open(uri, td["text"]!.GetValue<string>(), td["version"]?.GetValue<int>() ?? 0);
+                _dirty.Add(uri);
+                if (!Deferred) FlushDiagnostics();
                 break;
             }
             case "textDocument/didChange":
@@ -202,27 +265,49 @@ public sealed class Server
                 var changes = p["contentChanges"]!.AsArray();
                 // full-document sync: the last change carries the whole text
                 string text = changes[^1]!["text"]!.GetValue<string>();
-                _service.Change(td["uri"]!.GetValue<string>(), text, td["version"]?.GetValue<int>() ?? 0);
-                PublishAll();
+                string uri = td["uri"]!.GetValue<string>();
+                _service.Change(uri, text, td["version"]?.GetValue<int>() ?? 0);
+                _dirty.Add(uri);
+                if (!Deferred) FlushDiagnostics();
                 break;
             }
             case "textDocument/didClose":
             {
                 string uri = p!["textDocument"]!["uri"]!.GetValue<string>();
+                // files that import this one now see the version on disk: they need a fresh look
+                foreach (var d in _service.DependentsOf(new[] { uri })) _dirty.Add(d);
                 _service.Close(uri);
+                _dirty.Remove(uri);
+                _published.Remove(uri);
                 Send(new { jsonrpc = "2.0", method = "textDocument/publishDiagnostics", @params = new { uri, diagnostics = Array.Empty<object>() } });
-                PublishAll();
+                if (!Deferred) FlushDiagnostics();
                 break;
             }
         }
     }
 
-    /// <summary>An edit can change what other open files see, so every open document is re-analysed.</summary>
-    void PublishAll()
+    readonly HashSet<string> _dirty = new();
+    readonly Dictionary<string, string> _published = new();
+
+    /// <summary>
+    /// Publishes diagnostics for the documents edited since the last call and for the open documents that depend on
+    /// them (through imports), skipping any whose diagnostics did not change.
+    /// </summary>
+    public void FlushDiagnostics()
     {
-        foreach (var uri in _service.OpenUris.ToList())
+        if (_dirty.Count == 0) return;
+        var edited = _dirty.Where(u => _service.VersionOf(u) != null).ToList();
+        _dirty.Clear();
+        var affected = new List<string>(edited);
+        foreach (var d in _service.DependentsOf(edited))
+            if (!affected.Contains(d)) affected.Add(d);
+
+        foreach (var uri in affected)
         {
             var diags = _service.Diagnostics(uri);
+            string signature = JsonSerializer.Serialize(diags, Json);
+            if (_published.TryGetValue(uri, out var last) && last == signature) continue;
+            _published[uri] = signature;
             Send(new
             {
                 jsonrpc = "2.0",

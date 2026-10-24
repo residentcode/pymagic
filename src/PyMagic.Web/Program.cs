@@ -121,13 +121,8 @@ app.Map("/lsp", async (HttpContext ctx) =>
     // analysis recurses deeply on real code: a dedicated thread with a large stack handles this client's messages
     var worker = new Thread(() =>
     {
-        foreach (var msg in inbox.GetConsumingEnumerable())
-        {
-            if (msg == null) break;
-            try { server.Handle(msg); }
-            catch (Exception e) { Console.Error.WriteLine(e); }
-            if (server.Exited) break;
-        }
+        try { server.Pump(inbox); }
+        catch (Exception e) { Console.Error.WriteLine(e); }
         outbox.CompleteAdding();
     }, 512 * 1024 * 1024) { IsBackground = true };
     worker.Start();

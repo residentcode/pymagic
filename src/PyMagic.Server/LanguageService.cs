@@ -25,6 +25,10 @@ public sealed partial class LanguageService
     readonly Dictionary<string, Doc> _docs = new();
     readonly Dictionary<ModuleInfo, LineMap> _lineMaps = new(ReferenceEqualityComparer.Instance);
     Snapshot? _snapshot, _full;
+    readonly AnalysisCache _cache = new();
+
+    /// <summary>Parsed-module cache shared by all analysis snapshots of this session (exposed for tests and diagnostics).</summary>
+    public AnalysisCache Cache => _cache;
 
     public List<string> SourceRoots { get; } = new();
     public List<string> LibraryRoots { get; } = new();
@@ -110,15 +114,17 @@ public sealed partial class LanguageService
         }
     }
 
+    WorkspaceOptions WorkspaceOptionsNow() => new()
+    {
+        SourceRoots = SourceRoots.ToArray(),
+        LibraryRoots = LibraryRoots.ToArray(),
+        TypeshedPath = TypeshedPath,
+        Environment = Environment,
+    };
+
     Snapshot BuildSnapshot(bool includeProject)
     {
-        var ws = new Workspace(new WorkspaceOptions
-        {
-            SourceRoots = SourceRoots.ToArray(),
-            LibraryRoots = LibraryRoots.ToArray(),
-            TypeshedPath = TypeshedPath,
-            Environment = Environment,
-        });
+        var ws = new Workspace(WorkspaceOptionsNow(), _cache);
         var byUri = new Dictionary<string, ModuleInfo>();
         var uriOf = new Dictionary<ModuleInfo, string>(ReferenceEqualityComparer.Instance);
         foreach (var d in _docs.Values)
@@ -135,10 +141,9 @@ public sealed partial class LanguageService
             foreach (var path in ProjectFiles())
             {
                 if (openPaths.Contains(System.IO.Path.GetFullPath(path))) continue;
-                string text;
-                try { text = File.ReadAllText(path); } catch (IOException) { continue; }
                 var (name, isPackage) = ModuleNameOf(path);
-                var m = ws.AddModule(name, text, isPackage);
+                ModuleInfo m;
+                try { m = ws.AddDiskModule(name, path, isPackage); } catch (IOException) { continue; }
                 uriOf[m] = UriOfPath(path);
                 project.Add(m);
             }
@@ -548,14 +553,10 @@ public sealed partial class LanguageService
         // `recv.pre|` is usually a syntax error while typing, so analyse a copy with a complete attribute access
         const string Placeholder = "__pymagic_cursor__";
         string patched = doc.Text[..start] + Placeholder + doc.Text[end..];
-        var ws = new Workspace(new WorkspaceOptions
-        {
-            SourceRoots = SourceRoots.ToArray(), LibraryRoots = LibraryRoots.ToArray(),
-            TypeshedPath = TypeshedPath, Environment = Environment,
-        });
+        var ws = new Workspace(WorkspaceOptionsNow(), _cache);
         foreach (var d in _docs.Values)
             if (d.Uri != doc.Uri) ws.AddModule(d.ModuleName, d.Text, d.IsPackage);
-        var m = ws.AddModule(doc.ModuleName, patched, doc.IsPackage);
+        var m = ws.AddModule(doc.ModuleName, patched, doc.IsPackage, cached: false);
 
         AttributeExpr? access = null;
         foreach (var n in AstChildren.Descendants(m.Ast))

@@ -90,6 +90,7 @@ public sealed class Workspace
     readonly Dictionary<string, ModuleInfo?> _modules = new();
     readonly Dictionary<Scope, ModuleInfo> _byRootScope = new(ReferenceEqualityComparer.Instance);
     readonly ModuleResolver _resolver;
+    readonly AnalysisCache _cache;
 
     public WorkspaceOptions Options { get; }
     public TypeEvaluator Evaluator { get; }
@@ -98,10 +99,12 @@ public sealed class Workspace
     public Workspace(params string[] sourceRoots)
         : this(new WorkspaceOptions { SourceRoots = sourceRoots, TypeshedPath = DefaultTypeshedPath }) { }
 
-    public Workspace(WorkspaceOptions options)
+    /// <param name="cache">Parsed modules kept between workspaces (see <see cref="AnalysisCache"/>); a private one is used when omitted.</param>
+    public Workspace(WorkspaceOptions options, AnalysisCache? cache = null)
     {
         Options = options;
-        _resolver = new ModuleResolver(options);
+        _cache = cache ?? new AnalysisCache();
+        _resolver = _cache.ResolverFor(options);
         Evaluator = new TypeEvaluator(this);
     }
 
@@ -109,9 +112,20 @@ public sealed class Workspace
     public ModuleInfo Typing => GetModule("typing")!;
 
     /// <summary>Adds (or replaces) a module from source text.</summary>
-    public ModuleInfo AddModule(string name, string source, bool isPackage = false)
+    /// <param name="cached">False for throw-away variants of a buffer (they must not evict the real buffer's cache entry).</param>
+    public ModuleInfo AddModule(string name, string source, bool isPackage = false, bool cached = true)
     {
-        var m = new ModuleInfo(name, null, source, false, isPackage, ResolutionKind.InMemory, Environment);
+        Func<ModuleInfo> create = () => new ModuleInfo(name, null, source, false, isPackage, ResolutionKind.InMemory, Environment);
+        var m = cached ? _cache.Buffer(name, source, isPackage, create) : create();
+        Register(name, m);
+        return m;
+    }
+
+    /// <summary>A user file that is part of the project but not open in an editor; parsed once while the file stays unchanged.</summary>
+    public ModuleInfo AddDiskModule(string name, string path, bool isPackage = false)
+    {
+        var m = _cache.File(name, path,
+            text => new ModuleInfo(name, path, text, path.EndsWith(".pyi"), isPackage, ResolutionKind.UserCode, Environment));
         Register(name, m);
         return m;
     }
@@ -147,8 +161,10 @@ public sealed class Workspace
         {
             try
             {
-                string text = found.Kind == ResolutionKind.NamespacePackage ? "" : File.ReadAllText(found.Path!);
-                return new ModuleInfo(name, found.Path, text, found.IsStub, found.IsPackage, found.Kind, Environment);
+                if (found.Kind == ResolutionKind.NamespacePackage)
+                    return new ModuleInfo(name, found.Path, "", found.IsStub, found.IsPackage, found.Kind, Environment);
+                return _cache.File(name, found.Path!,
+                    text => new ModuleInfo(name, found.Path, text, found.IsStub, found.IsPackage, found.Kind, Environment));
             }
             catch (IOException) { /* fall through to the bundled stubs */ }
         }
@@ -183,12 +199,15 @@ public sealed class Workspace
     ModuleInfo? LoadBundled(string name)
     {
         string resource = BundledAliases.GetValueOrDefault(name, name);
-        using var s = Assembly.GetExecutingAssembly().GetManifestResourceStream($"Stubs/{resource}.pyi");
-        if (s == null) return null;
         if (resource != name && _modules.TryGetValue(resource, out var existing) && existing != null) return existing;
-        using var reader = new StreamReader(s);
-        var m = new ModuleInfo(resource, null, reader.ReadToEnd(), true, false, ResolutionKind.Bundled, Environment);
-        if (resource != name) { _modules[resource] = m; _byRootScope[m.Semantics.ModuleScope] = m; }
+        var m = _cache.Bundled(resource, () =>
+        {
+            using var s = Assembly.GetExecutingAssembly().GetManifestResourceStream($"Stubs/{resource}.pyi");
+            if (s == null) return null;
+            using var reader = new StreamReader(s);
+            return new ModuleInfo(resource, null, reader.ReadToEnd(), true, false, ResolutionKind.Bundled, Environment);
+        });
+        if (m != null && resource != name) { _modules[resource] = m; _byRootScope[m.Semantics.ModuleScope] = m; }
         return m;
     }
 }

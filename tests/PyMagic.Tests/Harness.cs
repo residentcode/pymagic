@@ -220,6 +220,7 @@ public static class Program
 
     public static int Main(string[] args)
     {
+        if (args.Length >= 3 && args[0] == "bench") return OnBigStack(() => BenchCommand.Run(args));
         if (args.Length == 2 && args[0] == "corpus") return Corpus(args[1]);
         if (args.Length == 2 && args[0] == "semantic") return SemanticCorpus(args[1]);
         if (args.Length == 2 && args[0] == "flow") return FlowCorpus(args[1]);
