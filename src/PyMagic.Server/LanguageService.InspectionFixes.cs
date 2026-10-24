@@ -213,7 +213,9 @@ public sealed partial class LanguageService
         var first = cd.Body[0];
         if (text[LineStart(text, first.Start)..first.Start].Any(c => c is not (' ' or '\t'))) return;   // `class A(B): pass`
         string indent = LineIndent(text, first.Start);
-        int at = LineEndInclusive(text, cd.End);
+        int last = cd.End;   // a class ends after its last line break: step back so the insertion goes right after that line
+        while (last > first.Start && text[last - 1] is '\n' or '\r') last--;
+        int at = LineEndInclusive(text, last);
         var sb = new System.Text.StringBuilder();
         if (at == 0 || text[at - 1] is not ('\n' or '\r')) sb.Append('\n');
         foreach (var a in missing)

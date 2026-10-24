@@ -241,6 +241,14 @@ public class MoreInspectionTests
     }
 
     [Fact]
+    public void ImplementedMethodsGoRightAfterTheClassBody()
+    {
+        string src = Shapes + "class Square(Shape):\n    pass\n\n\nclass Other:\n    pass\n";
+        string expected = Shapes + "class Square(Shape):\n    pass\n\n    def area(self):\n        raise NotImplementedError\n\n    def name(self, x: int) -> str:\n        raise NotImplementedError\n\n\nclass Other:\n    pass\n";
+        Assert.Equal(expected, Fix("Implement abstract methods", src));
+    }
+
+    [Fact]
     public void ImplementOneAbstractMethodKeepsDecoratorsAndAsync()
     {
         string src = "from abc import ABC, abstractmethod\nclass B(ABC):\n    @property\n    @abstractmethod\n    def size(self) -> int: ...\n    @abstractmethod\n    async def go(self, a, *, k=1): ...\nclass C(B):\n    async def go(self, a, *, k=1):\n        pass\n";
