@@ -57,6 +57,9 @@ public sealed partial class LanguageService
                 case "missing-attribute":
                     MissingAttributeFixes(snap, m, ds, de, Add);
                     break;
+                case "unresolved-import" or "unresolved-import-name" or "package-not-installed":
+                    ImportFixes(snap, m, ev, ds, actions, Add);
+                    break;
                 case "unreachable":
                 {
                     var stmt = AstChildren.Descendants(m.Ast).OfType<Stmt>().FirstOrDefault(s => s.Start == ds);

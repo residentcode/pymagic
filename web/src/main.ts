@@ -212,12 +212,16 @@ function registerProviders() {
       const actions: monaco.languages.CodeAction[] = [];
       for (const a of found) {
         const edits: monaco.languages.IWorkspaceTextEdit[] = [];
-        for (const [target, list] of Object.entries<any[]>(a.edit.changes)) {
+        for (const [target, list] of Object.entries<any[]>(a.edit?.changes ?? {})) {
           const m = await modelForUri(target);
           if (!m) continue;
           for (const e of list) edits.push({ resource: m.uri, versionId: undefined, textEdit: { range: toRange(e.range), text: e.newText } });
         }
-        actions.push({ title: a.title, kind: a.kind, isPreferred: a.isPreferred, edit: { edits } });
+        actions.push({
+          title: a.title, kind: a.kind, isPreferred: a.isPreferred,
+          edit: edits.length ? { edits } : undefined,
+          command: a.command ? { id: a.command.command, title: a.command.title, arguments: a.command.arguments } : undefined,
+        });
       }
       return { actions, dispose() {} };
     },
@@ -330,6 +334,10 @@ async function main() {
   setupTests(common);
   setupInterpreters();
   setupPackages();
+  // code actions that need the page (not just a text edit) arrive as commands
+  monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name: string) => {
+    window.dispatchEvent(new CustomEvent('pymagic:install', { detail: name }));
+  });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void save());
   editor.onDidChangeCursorPosition((e) => { $('cursor').textContent = `Ln ${e.position.lineNumber}, Col ${e.position.column}`; });
 

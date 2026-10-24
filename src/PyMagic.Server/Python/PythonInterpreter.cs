@@ -20,7 +20,8 @@ public sealed record PythonInterpreter(
     string BasePrefix,
     string? Stdlib,
     IReadOnlyList<string> SysPath,
-    IReadOnlyList<string> SitePackages)
+    IReadOnlyList<string> SitePackages,
+    IReadOnlySet<string> StdlibModules)
 {
     public string Version => $"{Major}.{Minor}.{Micro}";
 

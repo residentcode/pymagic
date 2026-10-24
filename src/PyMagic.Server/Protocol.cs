@@ -35,4 +35,8 @@ public sealed record PrepareRenameResult(Range Range, string Placeholder);
 /// <summary>A request the server understood but cannot satisfy (for example renaming a library symbol).</summary>
 public sealed class ServiceException(string message) : Exception(message);
 
-public sealed record CodeAction(string Title, string Kind, WorkspaceEdit Edit, bool IsPreferred = false);
+/// <summary>A command the client runs when the action is chosen (the PyMagic page handles pymagic.* commands).</summary>
+public sealed record LspCommand(string Title, string Command, object[]? Arguments = null);
+
+/// <summary>A fix: either text edits, or a command, or both.</summary>
+public sealed record CodeAction(string Title, string Kind, WorkspaceEdit? Edit, bool IsPreferred = false, LspCommand? Command = null);

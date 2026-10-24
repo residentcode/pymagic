@@ -208,17 +208,20 @@ public class PackageTests
         svc.Open(uri, code, 1);
         svc.ConfigureInterpreter(manager.Current);
         Assert.True(!svc.Diagnostics(uri).Any(d => d.Message.Contains("missing")), "not installed yet: the module is unknown");
+        Assert.True(svc.Diagnostics(uri).Any(d => d.Message == "No module named 'demopkg'"), "the import itself is reported while the package is missing");
 
         Assert.Equal(0, p.Module(python, "pip", "install", "--no-index", "--disable-pip-version-check", "--no-input", p.Wheel()).Code);
         var reloaded = manager.Reload();
         Assert.Equal(1, announced);                       // the host forwards this to every open editor
         svc.ConfigureInterpreter(reloaded);
         Assert.True(svc.Diagnostics(uri).Any(d => d.Message.Contains("missing")), "demopkg resolves from site-packages after the install");
+        Assert.True(!svc.Diagnostics(uri).Any(d => d.Code == "unresolved-import"), "the import is fine once the package is installed");
         Assert.Contains("int", svc.Hover(uri, new PyMagic.Server.Position(1, 9))!.Contents.Value);
 
         Assert.Equal(0, p.Module(python, "pip", "uninstall", "-y", "--disable-pip-version-check", "demopkg").Code);
         svc.ConfigureInterpreter(manager.Reload());
         Assert.True(!svc.Diagnostics(uri).Any(d => d.Message.Contains("missing")), "gone again after the uninstall");
+        Assert.True(svc.Diagnostics(uri).Any(d => d.Code == "unresolved-import"), "and reported again after the uninstall");
     }
 
     [Fact]

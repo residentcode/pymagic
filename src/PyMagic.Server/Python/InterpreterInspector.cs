@@ -17,6 +17,19 @@ public static class InterpreterInspector
     const string Script = @"
 import sys, os, json, sysconfig
 p = sysconfig.get_paths()
+names = set(sys.builtin_module_names) | set(getattr(sys, 'stdlib_module_names', ()))
+if not hasattr(sys, 'stdlib_module_names'):
+    std = p.get('stdlib')
+    if std and os.path.isdir(std):
+        for n in os.listdir(std):
+            if n.endswith('.py'): names.add(n[:-3])
+            elif os.path.isdir(os.path.join(std, n)) and n.isidentifier(): names.add(n)
+        for extra in ('lib-dynload', os.path.join(os.path.dirname(std), 'DLLs')):
+            d = os.path.join(std, extra) if not os.path.isabs(extra) else extra
+            if os.path.isdir(d):
+                for n in os.listdir(d):
+                    base = n.split('.')[0]
+                    if base.isidentifier(): names.add(base)
 print(json.dumps({
   'version': list(sys.version_info[:3]),
   'releaselevel': sys.version_info.releaselevel,
@@ -27,6 +40,7 @@ print(json.dumps({
   'stdlib': p.get('stdlib'),
   'site': [x for x in {p.get('purelib'), p.get('platlib')} if x],
   'path': [x for x in sys.path if x and os.path.isdir(x)],
+  'stdlib_modules': sorted(names),
 }))";
 
     static readonly ConcurrentDictionary<string, (long Ticks, long Length, string Site, InspectResult Result)> Cache = new(StringComparer.OrdinalIgnoreCase);
@@ -93,12 +107,23 @@ print(json.dumps({
                 j["prefix"]!.GetValue<string>(),
                 j["base_prefix"]!.GetValue<string>(),
                 j["stdlib"]?.GetValue<string>(),
-                j["path"]!.AsArray().Select(x => x!.GetValue<string>()).ToList(),
-                j["site"]!.AsArray().Select(x => x!.GetValue<string>()).ToList());
+                MergeEditableRoots(j["path"]!.AsArray().Select(x => x!.GetValue<string>()).ToList(), j["site"]!.AsArray().Select(x => x!.GetValue<string>()).ToList()),
+                j["site"]!.AsArray().Select(x => x!.GetValue<string>()).ToList(),
+                j["stdlib_modules"]!.AsArray().Select(x => x!.GetValue<string>()).ToHashSet(StringComparer.Ordinal));
             return new InspectResult(interpreter, null);
         }
         catch (System.ComponentModel.Win32Exception e) { return new InspectResult(null, e.Message); }
         catch (System.Text.Json.JsonException e) { return new InspectResult(null, "unexpected answer: " + e.Message); }
+    }
+
+    /// <summary>sys.path plus the folders that editable installs map their packages from.</summary>
+    static List<string> MergeEditableRoots(List<string> path, List<string> sitePackages)
+    {
+        var seen = new HashSet<string>(path, StringComparer.OrdinalIgnoreCase);
+        foreach (var site in sitePackages)
+            foreach (var root in EditableInstalls.RootsIn(site))
+                if (seen.Add(root)) path.Add(root);
+        return path;
     }
 
     static string? FirstLine(string text) => text.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.Length > 0);

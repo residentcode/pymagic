@@ -257,5 +257,10 @@ export function setupPackages() {
   $('pk-outdated').onclick = () => void checkUpdates();
   $('pk-filter').oninput = renderTable;
   $('t-packages').onclick = () => { showTab('packages'); if (!loaded) void load(); };
+  window.addEventListener('pymagic:install', (e) => {
+    showTab('packages');
+    if (!loaded) void load();
+    void run('install', [(e as CustomEvent<string>).detail]);
+  });
   window.addEventListener('pymagic:interpreter', () => { outdated = new Map(); $('pk-outdated').textContent = 'Check updates'; if (loaded) void load(); });
 }

@@ -134,7 +134,7 @@ public sealed partial class LanguageService
 
     WorkspaceOptions WorkspaceOptionsNow() => new()
     {
-        SourceRoots = SourceRoots.ToArray(),
+        SourceRoots = SourceRoots.Concat(ImplicitSourceRoots()).ToArray(),
         LibraryRoots = EffectiveLibraryRoots().ToArray(),
         TypeshedPath = TypeshedPath,
         Environment = Environment,
@@ -217,6 +217,8 @@ public sealed partial class LanguageService
                 ? new Diag(d, Severity.Hint, new[] { DiagnosticTag.Unnecessary }, "unreachable")
                 : new Diag(d, Severity.Warning, null, Classify(d.Message)));
         foreach (var d in ev.Inspect(m, ReportTypeMismatches)) r.Add(new Diag(d, Severity.Warning, null, Classify(d.Message)));
+        foreach (var p in ImportProblems(m, ev))
+            r.Add(new Diag(new Diagnostic(p.Start, Math.Max(p.End - p.Start, 1), p.Message), Severity.Warning, null, p.Code));
         foreach (var u in UnusedImports(m))
             r.Add(new Diag(new Diagnostic(u.Start, Math.Max(u.End - u.Start, 1), $"Unused import '{u.Name}'"),
                 Severity.Hint, new[] { DiagnosticTag.Unnecessary }, "unused-import"));
