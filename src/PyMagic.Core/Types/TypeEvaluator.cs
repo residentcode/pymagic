@@ -358,6 +358,8 @@ public sealed partial class TypeEvaluator
             {
                 if (m.Name == "typing" && a.Annotation is NameExpr { Name: "_SpecialForm" })
                     return new SpecialFormType(sym.Name);
+                if (a.Annotation is NameExpr { Name: "TypeAlias" } or AttributeExpr { Attr: "TypeAlias" })
+                    return null;   // `M: TypeAlias = Literal[...]` names the value's type, like `M = Literal[...]`
                 if (a.Annotation is NameExpr { Name: "Final" } or AttributeExpr { Attr: "Final" })
                     return a.Value == null ? null : ConstantLiteral(a.Value);   // no type of its own: the value's, a constant keeping its literal
                 return AnnotationType(m, a.Annotation);
@@ -469,6 +471,9 @@ public sealed partial class TypeEvaluator
                 // `MODE: Final = "r"`: the type is what the value is, a constant keeping its literal
                 if (an.Value != null && an.Annotation is NameExpr { Name: "Final" } or AttributeExpr { Attr: "Final" })
                     return ConstantLiteral(an.Value) ?? TypeOf(m, an.Value);
+                // `M: TypeAlias = Literal["r", "w"]` is the alias of its value, as `M = Literal["r", "w"]` is
+                if (an.Value != null && an.Annotation is NameExpr { Name: "TypeAlias" } or AttributeExpr { Attr: "TypeAlias" })
+                    return an.Value is BinaryExpr { Op: "|" } ? AnnotationToValue(Annotation(m, an.Value, null)) : TypeOf(m, an.Value);
                 return AnnotationType(m, an.Annotation);
 
             case ForStmt f when ReferenceEquals(f.Target, child):
