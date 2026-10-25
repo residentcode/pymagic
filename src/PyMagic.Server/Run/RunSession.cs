@@ -164,7 +164,7 @@ public sealed class RunSession : IDisposable
 
     void Error(string message) => _emit(new JsonObject { ["type"] = "error", ["message"] = message });
 
-    static string ExtractHelper(string name)
+    internal static string ExtractHelper(string name)
     {
         using var s = typeof(RunSession).Assembly.GetManifestResourceStream(name)
             ?? throw new InvalidOperationException("debug helper missing from the assembly");

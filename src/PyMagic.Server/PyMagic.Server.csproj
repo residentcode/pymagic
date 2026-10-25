@@ -16,6 +16,7 @@
     <EmbeddedResource Include="Run\pm_debug.py" LogicalName="pm_debug.py" />
     <EmbeddedResource Include="Run\pm_tests.py" LogicalName="pm_tests.py" />
     <EmbeddedResource Include="Run\pm_profile.py" LogicalName="pm_profile.py" />
+    <EmbeddedResource Include="Run\pm_kernel.py" LogicalName="pm_kernel.py" />
   </ItemGroup>
 
 </Project>

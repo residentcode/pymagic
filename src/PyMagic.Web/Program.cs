@@ -165,7 +165,8 @@ app.MapGet("/api/file", (string path) =>
     {
         string full = ResolveInRoot(path);
         var bytes = File.ReadAllBytes(full);
-        if (bytes.Length > 5 * 1024 * 1024) return Results.StatusCode(413);
+        // notebooks carry their images and tables inside the file, so they may be larger than source files
+        if (bytes.Length > (full.EndsWith(".ipynb", StringComparison.OrdinalIgnoreCase) ? 60 : 5) * 1024 * 1024) return Results.StatusCode(413);
         if (Array.IndexOf(bytes, (byte)0, 0, Math.Min(bytes.Length, 4096)) >= 0) return Results.StatusCode(415);
         return Results.Text(new UTF8Encoding(false).GetString(bytes), "text/plain; charset=utf-8");
     }
@@ -507,6 +508,68 @@ app.Map("/term", async (HttpContext ctx) =>
     catch (WebSocketException) { }
     done:
     term.Kill();
+    outbox.CompleteAdding();
+    await sender;
+    if (ws.State == WebSocketState.Open || ws.State == WebSocketState.CloseReceived)
+        try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); } catch (WebSocketException) { }
+});
+
+// ---- notebooks: one kernel per open notebook; execute / interrupt / restart in, the kernel's messages out -------------------
+
+app.Map("/nb", async (HttpContext ctx) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+    var outbox = new BlockingCollection<string>();
+    void Send(JsonNode msg) { if (!outbox.IsAddingCompleted) try { outbox.Add(msg.ToJsonString()); } catch (InvalidOperationException) { } }
+    NotebookKernel? kernel = null;
+    int generation = 0;
+    void StartKernel()
+    {
+        kernel?.Dispose();
+        int mine = ++generation;
+        // messages of a kernel that was replaced (restart) must not reach the page
+        kernel = new NotebookKernel(msg => { if (mine == generation) Send(msg); }) { Python = interpreters.Current?.Path ?? python };
+        kernel.Start(root);
+    }
+
+    var sender = Task.Run(async () =>
+    {
+        foreach (var text in outbox.GetConsumingEnumerable())
+        {
+            if (ws.State != WebSocketState.Open) break;
+            try { await ws.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, CancellationToken.None); }
+            catch (WebSocketException) { break; }
+        }
+    });
+
+    StartKernel();
+    var buffer = new byte[64 * 1024];
+    try
+    {
+        while (ws.State == WebSocketState.Open)
+        {
+            using var ms = new MemoryStream();
+            WebSocketReceiveResult r;
+            do
+            {
+                r = await ws.ReceiveAsync(buffer, CancellationToken.None);
+                if (r.MessageType == WebSocketMessageType.Close) goto done;
+                ms.Write(buffer, 0, r.Count);
+            } while (!r.EndOfMessage);
+            var msg = JsonNode.Parse(ms.ToArray());
+            switch (msg?["type"]?.GetValue<string>())
+            {
+                case "execute": kernel?.Execute(msg["id"]?.GetValue<string>() ?? "", msg["code"]?.GetValue<string>() ?? ""); break;
+                case "interrupt": kernel?.Interrupt(); break;
+                case "restart": StartKernel(); break;
+            }
+        }
+    }
+    catch (WebSocketException) { }
+    done:
+    generation++;
+    kernel?.Dispose();
     outbox.CompleteAdding();
     await sender;
     if (ws.State == WebSocketState.Open || ws.State == WebSocketState.CloseReceived)

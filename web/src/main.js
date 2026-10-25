@@ -12,6 +12,7 @@ import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
 import { setupProfiler } from './profiler';
+import { setupNotebook } from './notebook';
 import { setupExplorer } from './explorer';
 import { setupTabs } from './tabs';
 import { setupInspections } from './inspections';
@@ -476,9 +477,11 @@ function updateProblems() {
 }
 let explorer = null;
 let tabs = null;
+let notebook = null;
 const isDirtyRel = (rel) => { const m = models.get(normalise(uriFor(rel))); return !!m && m.getValue() !== savedText.get(rel); };
 /** Writes one open file to disk (a tab being closed with Save). */
 async function saveFile(rel) {
+    notebook?.flushAll();
     const m = models.get(normalise(uriFor(rel)));
     if (!m)
         return;
@@ -505,6 +508,7 @@ async function forgetPath(rel) {
             editor.setModel(null);
         model.dispose();
     }
+    notebook?.close(rel);
     tabs?.drop(rel);
     refreshDirty();
 }
@@ -519,6 +523,7 @@ async function syncPyModels() {
 }
 function showNothing() {
     currentRel = '';
+    notebook?.hide();
     editor.setModel(null);
     refreshDirty();
 }
@@ -538,6 +543,10 @@ async function openFile(rel, reveal) {
     currentRel = rel;
     editor.setModel(model);
     editor.updateOptions({ readOnly: false });
+    if (rel.endsWith('.ipynb'))
+        notebook?.show(rel, model);
+    else
+        notebook?.hide();
     explorer?.reveal(rel);
     tabs?.opened(rel);
     if (reveal) {
@@ -548,6 +557,7 @@ async function openFile(rel, reveal) {
     refreshDirty();
 }
 async function save() {
+    notebook?.flushAll();
     if ($('fmt-save').checked && currentRel.endsWith('.py'))
         await formatCurrent(true);
     const model = editor.getModel();
@@ -597,13 +607,15 @@ async function main() {
         snippetSuggestions: 'inline',
         suggest: { showWords: false, insertMode: 'replace' },
     });
-    window.pymagic = { editor, monaco, openFile };
+    notebook = setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+    window.pymagic = { editor, monaco, openFile, notebook };
     const common = {
         editor,
         modelFor: ensureModel,
         relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')),
         openFile,
         saveAll: async () => {
+            notebook?.flushAll();
             for (const [key, model] of models) {
                 const rel = relPathOf.get(key);
                 if (rel && model.getValue() !== savedText.get(rel)) {
