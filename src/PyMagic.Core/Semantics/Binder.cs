@@ -437,6 +437,11 @@ internal sealed class Binder
     void Record(NameExpr n, Access access)
     {
         var sym = _scope.Lookup(n.Name);
+        // a class-level name is not bound yet where it is read above its definition (BaseModel.model_dump
+        // returns dict[...] before its own `def dict`): the use means the enclosing or builtin name
+        if (sym != null && (access & Access.Read) != 0 && sym.Scope.Kind == ScopeKind.Class && ReferenceEquals(sym.Scope, _scope)
+            && sym.Declarations.Count > 0 && sym.Declarations.All(d => d.Node.Start > n.Start))
+            sym = _scope.Parent?.Lookup(n.Name);
         bool builtin = false;
         if (sym == null)
         {

@@ -60,6 +60,14 @@ public class TypeVarClassTests
         Assert.Equal("Any", Last(src + "f()"));
     }
 
+    [Fact]
+    public void AClassMethodNamedLikeABuiltinDoesNotShadowItAboveItsDefinition()
+    {
+        string src = "class B:\n    def dump(self) -> dict[str, int]: ...\n    def dict(self) -> int: ...\n\n\nB().dump()";
+        Assert.Equal("dict[str, int]", Last(src));
+        Assert.Equal("int", Last(src.Replace("B().dump()", "B().dict()")));
+    }
+
     // ------------------------------------------------------------ frozen classes
 
     static List<string> Problems(string src)
