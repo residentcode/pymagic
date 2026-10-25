@@ -453,6 +453,7 @@ app.MapGet("/api/pypi", async (string name) =>
     catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return Results.Json(new { error = "the package index is not reachable" }, statusCode: 502); }
 });
 app.MapGet("/api/tests", () => TestDiscovery.Discover(root));
+app.MapGet("/api/django", () => DjangoProject.Scan(root));
 
 // the lines the last coverage run executed, from .pymagic/coverage.json
 app.MapGet("/api/coverage", () =>

@@ -331,6 +331,59 @@ public class RunTests
         }
     }
 
+    const string Threaded =
+        "import threading\n" +                       // 1
+        "\n" +                                        // 2
+        "def work(n):\n" +                            // 3
+        "    result = n * 10\n" +                     // 4
+        "    return result\n" +                       // 5
+        "\n" +                                        // 6
+        "t = threading.Thread(target=work, args=(7,), name='worker-1')\n" +  // 7
+        "t.start()\n" +                               // 8
+        "t.join()\n" +                                // 9
+        "print('joined')\n";                          // 10
+
+    [Fact]
+    public void ABreakpointInAThreadStopsThere()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("threads.py", Threaded);
+        h.Session.StartWithBreakpoints(h.Root, "threads.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray> { ["threads.py"] = new JsonArray(4) });
+        var stopped = h.Type("stopped");
+        Assert.Equal(4, Line(stopped));
+        Assert.Equal("worker-1", stopped["thread"]!.GetValue<string>());
+        Assert.Equal("7", EvalInt(h, "n"));
+        h.Command("next");
+        Assert.Equal(5, Line(h.Type("stopped")));
+        Assert.Equal("70", EvalInt(h, "result"));
+        h.Command("continue");
+        h.Type("exited");
+        Assert.Contains("joined", h.AllOutput());
+    }
+
+    [Fact]
+    public void ThreadsThatHitABreakpointAtTheSameTimeAreStoppedOneAfterTheOther()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("pool.py",
+            "import threading\n\ndef work(n):\n    value = n\n    return value\n\n" +
+            "ts = [threading.Thread(target=work, args=(i,), name=f'w{i}') for i in range(3)]\n" +
+            "for t in ts:\n    t.start()\nfor t in ts:\n    t.join()\nprint('done')\n");
+        h.Session.StartWithBreakpoints(h.Root, "pool.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray> { ["pool.py"] = new JsonArray(4) });
+        var seen = new List<string>();
+        for (int i = 0; i < 3; i++)
+        {
+            var stopped = h.Type("stopped");
+            Assert.Equal(4, Line(stopped));
+            seen.Add(EvalInt(h, "n"));
+            h.Command("continue");
+        }
+        h.Type("exited");
+        Assert.Equal("0,1,2", string.Join(",", seen.OrderBy(x => x)));
+    }
+
     [Fact]
     public void ALogPointPrintsAndDoesNotStop()
     {

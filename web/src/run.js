@@ -390,6 +390,8 @@ export function setupRun(deps) {
                 frames = m.frames;
                 if (m.reason === 'exception')
                     append(`Paused on exception: ${m.message}\n`, 'err');
+                if (m.thread && m.thread !== 'MainThread')
+                    append(`Paused in thread ${m.thread}\n`, 'info');
                 renderFrames();
                 showTab('debug');
                 setButtons();
@@ -431,6 +433,12 @@ export function setupRun(deps) {
         const rel = model && deps.relOf(model);
         if (!rel)
             return;
+        await launch(rel, debug, profile, []);
+    }
+    // runs a file of the project with arguments (the Django tab runs manage.py this way); false when a run is going
+    async function launch(rel, debug, profile, args) {
+        if (run)
+            return false;
         await deps.saveAll();
         const breakpoints = {};
         for (const m of monaco.editor.getModels()) {
@@ -444,13 +452,14 @@ export function setupRun(deps) {
         profiling = profile;
         paused = false;
         showTab('output');
-        run = new RunClient({ type: 'start', file: rel, debug, profile, args: [], breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught' });
+        run = new RunClient({ type: 'start', file: rel, debug, profile, args, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught' });
         run.onMessage = handle;
         run.onClose = () => { if (run) {
             append('\nConnection to the host lost.\n', 'err');
             finish();
         } };
         setButtons();
+        return true;
     }
     const raisedBox = $('exc-raised');
     try {
@@ -522,5 +531,5 @@ export function setupRun(deps) {
     };
     // which interpreter will be used
     setButtons();
-    return { onModelCreated };
+    return { onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null };
 }

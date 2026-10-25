@@ -73,6 +73,8 @@ class Debugger(bdb.Bdb):
         self.stepping_out = False
         self.go = threading.Event()
         self.main_thread = threading.main_thread()
+        self.stop_lock = threading.RLock()   # one thread at a time is stopped; the others wait here until it is resumed
+        self.last_thread = None              # the thread the user last stopped in: stepping follows it, not the other threads
         self.meta = {}             # (path, line) -> {"hit": (operator, number) or None, "log": message or None}
         self.scope_refs = {}       # scope variable reference -> ("locals" | "globals", frame id)
         self.break_on_raise = False
@@ -195,19 +197,25 @@ class Debugger(bdb.Bdb):
 
     def user_line(self, frame):
         reason = "breakpoint" if self.break_here(frame) else "step"
-        self.stack = self.collect(frame)
-        self.stop("stopped", reason)
+        if reason == "step" and self.last_thread not in (None, threading.get_ident()):
+            return   # a step of another thread (a web server's worker, say) while the user is stepping in this one
+        with self.stop_lock:
+            self.stack = self.collect(frame)
+            self.stop("stopped", reason)
 
     def user_return(self, frame, return_value):
         # "step out" ends in the caller right after the call returns, while its line is still being completed
         if not self.stepping_out:
             return
+        if self.last_thread not in (None, threading.get_ident()):
+            return
         self.stepping_out = False
         caller = frame.f_back
         if caller is None or caller is self.botframe or not self.is_user_file(caller.f_code.co_filename):
             return
-        self.stack = self.collect(caller)
-        self.stop("stopped", "step")
+        with self.stop_lock:
+            self.stack = self.collect(caller)
+            self.stop("stopped", "step")
 
     QUIET_EXCEPTIONS = (StopIteration, StopAsyncIteration, GeneratorExit, KeyboardInterrupt, SystemExit)
 
@@ -231,8 +239,9 @@ class Debugger(bdb.Bdb):
         if value is self.raised:
             return   # the same exception passing through the callers
         self.raised = value
-        self.stack = self.collect(frame)
-        self.stop("stopped", "exception", "%s: %s" % (etype.__name__, value))
+        with self.stop_lock:
+            self.stack = self.collect(frame)
+            self.stop("stopped", "exception", "%s: %s" % (etype.__name__, value))
 
     def collect(self, frame):
         stack = []
@@ -249,10 +258,13 @@ class Debugger(bdb.Bdb):
                 for i, (f, line) in enumerate(self.stack)]
 
     def stop(self, kind, reason, message=None):
-        self.refs.clear()
-        self.scope_refs.clear()
-        self.send({"type": kind, "reason": reason, "frames": self.frames_payload(), "message": message})
-        self.wait_for_resume()
+        with self.stop_lock:
+            self.refs.clear()
+            self.scope_refs.clear()
+            self.last_thread = threading.get_ident()
+            self.send({"type": kind, "reason": reason, "frames": self.frames_payload(), "message": message,
+                       "thread": threading.current_thread().name})
+            self.wait_for_resume()
 
     def ref_for(self, value):
         members = children(value)
@@ -378,6 +390,7 @@ class Debugger(bdb.Bdb):
         self.botframe = sys._getframe()
         self.set_continue()
         sys.settrace(self.trace_dispatch)
+        threading.settrace(self.trace_dispatch)   # threads the program starts (a web server's workers) are debugged too
         try:
             exec(code, globs)
             return 0

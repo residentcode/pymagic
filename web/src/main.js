@@ -8,6 +8,7 @@ import { setupRefactor } from './refactor';
 import { setupSearch } from './search';
 import { setupHierarchy } from './hierarchy';
 import { setupRoutes } from './routes';
+import { setupDjango } from './django';
 import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
@@ -687,6 +688,7 @@ async function main() {
     });
     setupInspections(lsp);
     setupRoutes({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
+    setupDjango({ openFile, run: runHooks });
     setupProblems({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
     setupTodo({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
     setupTerminal();

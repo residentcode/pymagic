@@ -175,6 +175,23 @@
     .insp-row { display: flex; gap: 12px; align-items: center; padding: 1px 10px 1px 22px; }
     .insp-row .insp-title { min-width: 300px; } .insp-row.changed .insp-title { font-weight: 600; }
     .insp-row select { margin-left: auto; background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; }
+    #django-bar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
+    #django-bar button, .dj-btn { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; font: inherit; cursor: pointer; }
+    .dj-btn:hover, #django-bar button:hover { color: var(--fg); border-color: var(--dim); }
+    #django-body { padding: 4px 8px; }
+    .dj-section { margin-bottom: 10px; }
+    .dj-title { font-weight: 600; color: var(--dim); margin: 4px 0; }
+    .dj-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
+    .dj-label, .dj-note { color: var(--dim); }
+    .dj-input { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 1px 6px; min-width: 360px; }
+    .dj-input.short { min-width: 160px; }
+    .dj-app { display: flex; gap: 8px; align-items: center; padding: 2px 4px; cursor: pointer; }
+    .dj-app:hover, .dj-migration:hover { background: var(--hover, rgba(128,128,128,.15)); }
+    .dj-twisty { width: 10px; color: var(--dim); }
+    .dj-appname { font-weight: 600; }
+    .dj-actions { margin-left: auto; display: flex; gap: 4px; }
+    .dj-migration { padding: 1px 4px 1px 30px; cursor: pointer; font-family: var(--mono, monospace); }
+    .dj-migration.dim { color: var(--dim); cursor: default; }
     #routes-bar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
     #routes-bar input { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 1px 6px; min-width: 220px; }
     #routes-bar button { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; font: inherit; cursor: pointer; }
@@ -363,6 +380,7 @@
         <button id="t-git">Git</button>
         <button id="t-hier">Hierarchy</button>
         <button id="t-routes">Endpoints</button>
+        <button id="t-django">Django</button>
         <button id="t-terminal" title="Terminal (Ctrl+`)">Terminal</button>
         <button id="t-coverage">Coverage</button>
         <button id="t-profiler">Profiler</button>
@@ -553,6 +571,15 @@
             <button id="routes-refresh" title="Read the routes again">Refresh</button>
           </div>
           <div class="body" id="routes-list"></div>
+        </div>
+      </div>
+      <div id="django-tab" class="tab">
+        <div class="col" id="django-main">
+          <div id="django-bar">
+            <span id="django-summary"></span>
+            <button id="django-refresh" title="Read the project again">Refresh</button>
+          </div>
+          <div class="body" id="django-body"></div>
         </div>
       </div>
       <div id="hier-tab" class="tab">
