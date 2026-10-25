@@ -15,6 +15,7 @@ public sealed partial class LanguageService
         foreach (var f in CodeInspections.Run(m))
             if (!Suppressed(m.Source, f)) yield return AsDiag(f);
         foreach (var d in ClassDiagnostics(m, ev)) yield return d;
+        foreach (var d in MoreTypedDiagnostics(m, ev)) yield return d;
         foreach (var d in FixtureDiagnostics(m, ev)) yield return d;
         foreach (var d in DjangoDiagnostics(m, ev)) yield return d;
         foreach (var d in WebRouteDiagnostics(m, ev)) yield return d;
@@ -151,7 +152,7 @@ public sealed partial class LanguageService
                 break;
             }
             default:
-                StyleFix(code, m, start, end, add);
+                if (!MoreFix(code, m, uri, start, end, add, actions)) StyleFix(code, m, start, end, add);
                 break;
         }
     }

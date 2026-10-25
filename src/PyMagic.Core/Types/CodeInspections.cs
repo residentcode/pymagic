@@ -59,6 +59,7 @@ public static class CodeInspections
         }
         StyleInspections.Run(m, found);
         TypeHintInspections.Run(m, found);
+        MoreInspections.Run(m, found);
         return found;
     }
 
