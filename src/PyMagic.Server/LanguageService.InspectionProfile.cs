@@ -61,6 +61,12 @@ public sealed partial class LanguageService
         ("pep8-comments", "PEP 8", "Comments (E261, E262, E265)", "Two spaces before an inline comment, a space after the hash.", "weak"),
         ("pep8-statements", "PEP 8", "Statements (E401, E701, E702, E731)", "Several imports or statements on one line, a lambda assigned to a name.", "weak"),
         ("pep8-ambiguous-name", "PEP 8", "Ambiguous variable name (E741)", "l, O or I as a name.", "weak"),
+        ("protected-member", "Python", "Access to a protected member", "x._name used on an object or module from outside its class.", "weak"),
+        ("tuple-item-assignment", "Python", "Tuple item assignment", "t[0] = 1 where t is a tuple.", "warning"),
+        ("none-function-assignment", "Python", "Function returns nothing", "x = f() where f has no return value.", "weak"),
+        ("except-clauses-order", "Python", "Exception clause already handled", "An except clause for a class an earlier clause already catches.", "warning"),
+        ("exception-inherit", "Python", "Not an exception class", "raise or except of something that does not derive from BaseException.", "warning"),
+        ("property-access", "Python classes", "Property cannot be set", "Assignment to a property that has no setter.", "warning"),
         ("naming-class", "PEP 8 naming", "Class names", "Classes are written CapWords.", "weak"),
         ("naming-function", "PEP 8 naming", "Function and method names", "Functions are written snake_case.", "weak"),
         ("naming-argument", "PEP 8 naming", "Parameter names", "Parameters are written snake_case.", "weak"),
@@ -145,6 +151,10 @@ public sealed partial class LanguageService
 
     /// <summary>The URIs of every open document, Python and templates.</summary>
     public IEnumerable<string> AllOpenUris => _docs.Keys.Concat(_templateDocs.Keys);
+
+    /// <summary>The severity an inspection has without a profile: the default of its catalog entry.</summary>
+    static int DefaultSeverity(string? code) =>
+        code != null && InspectionCatalog.FirstOrDefault(i => i.Code == code) is { Code: not null } entry ? SeverityOf(entry.Default) : Severity.Warning;
 
     static int SeverityOf(string level) => level switch { "error" => Severity.Error, "warning" => Severity.Warning, "weak" => Severity.Information, _ => Severity.Hint };
 

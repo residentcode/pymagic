@@ -17,6 +17,7 @@ public sealed partial class TypeEvaluator
 
         foreach (var node in AstChildren.Descendants(m.Ast))
         {
+            InspectTyped(m, node, diags);
             switch (node)
             {
                 case CallExpr call:

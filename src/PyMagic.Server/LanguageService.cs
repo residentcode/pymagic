@@ -214,6 +214,12 @@ public sealed partial class LanguageService
         : message.StartsWith("Cannot find reference") ? "missing-attribute"
         : message == "Unreachable code" ? "unreachable"
         : message.StartsWith("Local variable") ? "unbound-local"
+        : message.StartsWith("Access to a protected member") ? "protected-member"
+        : message.EndsWith("does not support item assignment") ? "tuple-item-assignment"
+        : message.EndsWith("doesn't return anything") ? "none-function-assignment"
+        : message.Contains("is already handled by an earlier clause") ? "except-clauses-order"
+        : message.StartsWith("Exceptions must derive") ? "exception-inherit"
+        : message.StartsWith("Property '") && message.EndsWith("cannot be set") ? "property-access"
         : message.StartsWith("Expected type '") ? "argument-type"
         : message.Contains("is not callable") ? "not-callable"
         : message.StartsWith("Unexpected argument") || message.StartsWith("Multiple values for parameter") || message.EndsWith(" unfilled")
@@ -230,7 +236,11 @@ public sealed partial class LanguageService
             r.Add(d.Message == "Unreachable code"
                 ? new Diag(d, Severity.Hint, new[] { DiagnosticTag.Unnecessary }, "unreachable")
                 : new Diag(d, Severity.Warning, null, Classify(d.Message)));
-        foreach (var d in ev.Inspect(m, ReportTypeMismatches)) r.Add(new Diag(d, Severity.Warning, null, Classify(d.Message)));
+        foreach (var d in ev.Inspect(m, ReportTypeMismatches))
+        {
+            string? code = Classify(d.Message);
+            r.Add(new Diag(d, DefaultSeverity(code), null, code));
+        }
         foreach (var p in ImportProblems(m, ev))
             r.Add(new Diag(new Diagnostic(p.Start, Math.Max(p.End - p.Start, 1), p.Message), Severity.Warning, null, p.Code));
         foreach (var u in UnusedImports(m))
