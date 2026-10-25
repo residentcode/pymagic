@@ -53,7 +53,7 @@ public sealed partial class LanguageService
     {
         Interpreter = interpreter;
         Environment = interpreter == null ? PythonEnvironment.Default : new PythonEnvironment(interpreter.Major, interpreter.Minor, interpreter.Platform);
-        _snapshot = _full = null;
+        Invalidate();
     }
     /// <summary>Report argument-type mismatches too (noisier than the default arity/keyword checks).</summary>
     public bool ReportTypeMismatches { get; set; }
@@ -68,7 +68,7 @@ public sealed partial class LanguageService
     public void Close(string uri)
     {
         if (_templateDocs.Remove(uri)) return;
-        if (_docs.Remove(uri)) _snapshot = _full = null;
+        if (_docs.Remove(uri)) Invalidate();
     }
 
     void Set(string uri, string text, int version)
@@ -78,7 +78,7 @@ public sealed partial class LanguageService
         string? path = PathOfUri(uri);
         var (name, isPackage) = ModuleNameOf(path);
         _docs[uri] = new Doc(uri, path, name, isPackage, text, version);
-        _snapshot = _full = null;
+        Invalidate();
     }
 
     static string? PathOfUri(string uri)
@@ -110,7 +110,57 @@ public sealed partial class LanguageService
     Snapshot Current() => _snapshot ??= BuildSnapshot(false);
 
     /// <summary>Open buffers plus every .py file under the source roots (for project-wide queries such as find usages and rename).</summary>
-    Snapshot Full() => _full ??= BuildSnapshot(true);
+    Snapshot Full()
+    {
+        if (_needle == null) return _full ??= BuildSnapshot(true, null);
+        if (_filtered != null && _filteredNeedle == _needle) return _filtered;
+        _filteredNeedle = _needle;
+        return _filtered = BuildSnapshot(true, _needle);
+    }
+
+    void Invalidate()
+    {
+        _snapshot = _full = _filtered = null;
+        _filteredNeedle = null;
+    }
+
+    // Find usages and rename only need the project files that mention the name: the others are not read into the analysis
+    // (a 2,000-file project took 6 s and 750 MB to answer one query before this).
+    Snapshot? _filtered;
+    string? _filteredNeedle, _needle;
+
+    /// <summary>While alive, <see cref="Full"/> covers only the project files whose text contains the identifier under the cursor.</summary>
+    IDisposable Searching(string uri, Position pos)
+    {
+        string? word = _docs.TryGetValue(uri, out var doc) ? WordAt(doc.Text, new LineMap(doc.Text).OffsetOf(pos)) : null;
+        var before = _needle;
+        _needle = word;
+        return new Restore(() => _needle = before);
+    }
+
+    sealed class Restore : IDisposable
+    {
+        readonly Action _done;
+        public Restore(Action done) { _done = done; }
+        public void Dispose() => _done();
+    }
+
+    static string? WordAt(string text, int offset)
+    {
+        if (offset < 0 || offset > text.Length) return null;
+        static bool Part(char c) => char.IsLetterOrDigit(c) || c == '_';
+        int s = offset, e = offset;
+        while (s > 0 && Part(text[s - 1])) s--;
+        while (e < text.Length && Part(text[e])) e++;
+        return e > s ? text[s..e] : null;
+    }
+
+    static bool FileMentions(string path, string needle)
+    {
+        try { return File.ReadAllText(path).Contains(needle, StringComparison.Ordinal); }
+        catch (IOException) { return true; }
+        catch (UnauthorizedAccessException) { return true; }
+    }
 
     static readonly HashSet<string> SkippedDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -147,7 +197,7 @@ public sealed partial class LanguageService
         ParameterTypes = parameterTypes,
     };
 
-    Snapshot BuildSnapshot(bool includeProject)
+    Snapshot BuildSnapshot(bool includeProject, string? needle = null)
     {
         var (ws, fixtures) = NewWorkspace();
         var byUri = new Dictionary<string, ModuleInfo>();
@@ -167,6 +217,7 @@ public sealed partial class LanguageService
             foreach (var path in ProjectFiles())
             {
                 if (openPaths.Contains(System.IO.Path.GetFullPath(path))) continue;
+                if (needle != null && !FileMentions(path, needle)) continue;
                 var (name, isPackage) = ModuleNameOf(path);
                 ModuleInfo m;
                 try { m = ws.AddDiskModule(name, path, isPackage); } catch (IOException) { continue; }
@@ -190,6 +241,7 @@ public sealed partial class LanguageService
     {
         if (Current().UriOf.TryGetValue(m, out var u)) return u;
         if (_full != null && _full.UriOf.TryGetValue(m, out u)) return u;
+        if (_filtered != null && _filtered.UriOf.TryGetValue(m, out u)) return u;
         return m.Path != null ? UriOfPath(m.Path) : null;
     }
 
