@@ -58,6 +58,7 @@ public static class CodeInspections
             Naming(m, scope, found);
         }
         StyleInspections.Run(m, found);
+        TypeHintInspections.Run(m, found);
         return found;
     }
 
