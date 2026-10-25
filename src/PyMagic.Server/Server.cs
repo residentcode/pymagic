@@ -206,6 +206,10 @@ public sealed class Server
                 return _service.Subtypes(HierarchyItemOf(p!["item"]));
             case "pymagic/routes":
                 return _service.Routes();
+            case "pymagic/problems":
+                return _service.Problems(p?["leastSevere"]?.GetValue<int>() ?? 3);
+            case "pymagic/todos":
+                return _service.Todos();
             case "pymagic/inheritance":
                 return _service.InheritanceMarkers(UriOf(p));
             case "textDocument/references":

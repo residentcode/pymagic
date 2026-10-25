@@ -131,6 +131,17 @@
     .verb-get { color: #3fa9f5; } .verb-post { color: #4cbb6c; } .verb-put { color: #e0a030; } .verb-patch { color: #b58cf0; }
     .verb-delete { color: #e5534b; } .verb-ws { color: #38c0c0; }
     .route .rpath { font-family: var(--mono, monospace); }
+    .listbar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
+    .listbar input, .listbar select { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 1px 6px; }
+    .listbar input { min-width: 220px; }
+    .listbar button { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; font: inherit; cursor: pointer; }
+    .prob-file { padding: 4px 10px 1px; font-weight: 600; color: var(--dim); }
+    .prob { display: flex; gap: 10px; align-items: baseline; padding: 1px 10px 1px 22px; cursor: pointer; }
+    .prob:hover { background: var(--hover, rgba(128,128,128,.15)); }
+    .prob .mark { width: 14px; text-align: center; } .prob .ptext { flex: 1; }
+    .sev-error .mark { color: #e5534b; } .sev-warning .mark { color: #e0a030; } .sev-weak .mark { color: #7aa7d9; } .sev-hint .mark { color: var(--dim); }
+    .todo-tag { min-width: 56px; font-weight: 700; font-size: 11px; color: #e0a030; }
+    .tag-fixme, .tag-bug { color: #e5534b; } .tag-hack, .tag-xxx { color: #b58cf0; }
     #hier-bar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
     #hier-title { font-weight: 600; } #hier-modes { margin-left: auto; display: flex; gap: 4px; }
     #hier-modes button { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; font: inherit; cursor: pointer; }
@@ -223,6 +234,8 @@
         <button id="t-git">Git</button>
         <button id="t-hier">Hierarchy</button>
         <button id="t-routes">Endpoints</button>
+        <button id="t-problems">Problems</button>
+        <button id="t-todo">TODO</button>
         <button id="t-insp">Inspections</button>
         <span class="spacer"></span>
         <button id="t-close" class="close" title="Hide panel">✕</button>
@@ -315,6 +328,32 @@
             <button id="insp-reset" title="Back to the defaults (deletes .pymagic/inspections.json)">Reset all</button>
           </div>
           <div class="body" id="insp-list"></div>
+        </div>
+      </div>
+      <div id="problems-tab" class="tab">
+        <div class="col" id="problems-main">
+          <div id="problems-bar" class="listbar">
+            <span id="problems-summary"></span>
+            <select id="problems-level" title="Which findings to list">
+              <option value="1">Errors</option>
+              <option value="2">Warnings</option>
+              <option value="3" selected>Weak warnings</option>
+              <option value="4">Hints too</option>
+            </select>
+            <input id="problems-filter" type="text" placeholder="Filter by text, code or file" spellcheck="false" autocomplete="off">
+            <button id="problems-refresh" title="Check the whole project again">Refresh</button>
+          </div>
+          <div class="body" id="problems-list"></div>
+        </div>
+      </div>
+      <div id="todo-tab" class="tab">
+        <div class="col" id="todo-main">
+          <div id="todo-bar" class="listbar">
+            <span id="todo-summary"></span>
+            <input id="todo-filter" type="text" placeholder="Filter" spellcheck="false" autocomplete="off">
+            <button id="todo-refresh" title="Read the comments again">Refresh</button>
+          </div>
+          <div class="body" id="todo-list"></div>
         </div>
       </div>
       <div id="routes-tab" class="tab">
