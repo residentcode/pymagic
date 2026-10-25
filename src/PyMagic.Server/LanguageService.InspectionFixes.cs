@@ -150,6 +150,9 @@ public sealed partial class LanguageService
                 if (first != null) add($"Remove the first definition of '{name}'", false, new[] { DeleteStatement(m, first) });
                 break;
             }
+            default:
+                StyleFix(code, m, start, end, add);
+                break;
         }
     }
 
