@@ -299,6 +299,10 @@ export function setupTests(deps) {
     function finish() {
         client?.close();
         client = null;
+        if (coverageRun) {
+            coverageRun = false;
+            window.dispatchEvent(new CustomEvent('pymagic:coverage'));
+        }
         for (const n of byId.values())
             if (n.status === 'queued' || n.status === 'running')
                 setStatus(n, 'idle');
@@ -308,14 +312,16 @@ export function setupTests(deps) {
             showDetail(selected);
     }
     function setButtons() {
-        for (const id of ['tests-all', 'tests-sel', 'tests-here'])
+        for (const id of ['tests-all', 'tests-cov', 'tests-sel', 'tests-here'])
             $(id).disabled = client !== null;
         $('tests-rerun').disabled = client !== null;
     }
     // ------------------------------------------------------------ running
-    async function run(ids) {
+    let coverageRun = false;
+    async function run(ids, coverage = false) {
         if (client)
             return;
+        coverageRun = coverage;
         showTab('tests');
         await deps.saveAll();
         await load();
@@ -332,7 +338,7 @@ export function setupTests(deps) {
         }
         started = performance.now();
         const framework = $('tests-fw').value;
-        client = new RunClient({ type: 'startTests', ids, framework });
+        client = new RunClient({ type: 'startTests', ids, framework, coverage });
         client.onMessage = handle;
         client.onClose = () => { if (client) {
             appendConsole('\nConnection to the host lost.\n', 'err');
@@ -366,6 +372,7 @@ export function setupTests(deps) {
         }
     }
     $('tests-all').onclick = () => void run([]);
+    $('tests-cov').onclick = () => void run([], true);
     $('tests-sel').onclick = () => { if (selected)
         void run([selected.id]); };
     $('tests-here').onclick = runAtCursor;

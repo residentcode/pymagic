@@ -324,6 +324,21 @@ app.MapGet("/api/pypi", async (string name) =>
 });
 app.MapGet("/api/tests", () => TestDiscovery.Discover(root));
 
+// the lines the last coverage run executed, from .pymagic/coverage.json
+app.MapGet("/api/coverage", () =>
+{
+    string path = RunSession.CoveragePath(root);
+    if (!File.Exists(path)) return Results.NotFound();
+    try
+    {
+        var data = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
+        if (data == null) return Results.NotFound();
+        data["when"] = File.GetLastWriteTimeUtc(path).ToString("o");
+        return Results.Json(data);
+    }
+    catch (Exception e) when (e is IOException or System.Text.Json.JsonException) { return Results.NotFound(); }
+});
+
 // ---- the terminal: one command line at a time in the project folder -------------------------------------------------
 
 app.Map("/term", async (HttpContext ctx) =>
@@ -440,7 +455,7 @@ app.Map("/run", async (HttpContext ctx) =>
             {
                 var ids = (msg["ids"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
                 session.Python = interpreters.Current?.Path ?? python;
-                session.StartTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto");
+                session.StartTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto", msg["coverage"]?.GetValue<bool>() == true);
             }
             else if (msg["type"]?.GetValue<string>() == "startPip")
             {

@@ -266,12 +266,126 @@ def run_unittest(channel, root, ids):
     return 0 if result.wasSuccessful() and not failed_loads else 1
 
 
+# ---------------------------------------------------------------- line coverage (no dependency: sys.monitoring, else sys.settrace)
+
+SKIP_DIRS = {".git", ".hg", ".venv", "venv", "env", ".env", "node_modules", "__pycache__", "site-packages", ".tox", ".mypy_cache", ".pytest_cache", "build", "dist", ".pymagic"}
+
+
+class Coverage:
+    """Records the lines of the project's own files that run, and knows which lines could run."""
+
+    def __init__(self, root):
+        self.root = os.path.normcase(os.path.abspath(root))
+        self.executed = {}
+        self._tracked = {}
+        self._monitoring = hasattr(sys, "monitoring") and hasattr(sys.monitoring, "COVERAGE_ID") and not os.environ.get("PYMAGIC_COVERAGE_TRACE")
+
+    def _wanted(self, filename):
+        wanted = self._tracked.get(filename)
+        if wanted is None:
+            full = os.path.normcase(os.path.abspath(filename)) if filename and not filename.startswith("<") else ""
+            wanted = bool(full) and full.startswith(self.root + os.sep) and filename.endswith(".py")                 and not any(part in SKIP_DIRS for part in full[len(self.root) + 1:].split(os.sep)[:-1])
+            self._tracked[filename] = wanted
+        return wanted
+
+    def start(self):
+        if self._monitoring:
+            mon = sys.monitoring
+            tool = mon.COVERAGE_ID
+            try:
+                mon.use_tool_id(tool, "pymagic")
+            except ValueError:
+                self._monitoring = False
+        if self._monitoring:
+            def on_line(code, line):
+                if self._wanted(code.co_filename):
+                    self.executed.setdefault(code.co_filename, set()).add(line)
+                else:
+                    return mon.DISABLE
+            mon.register_callback(tool, mon.events.LINE, on_line)
+            mon.set_events(tool, mon.events.LINE)
+        else:
+            def local(frame, event, arg):
+                if event == "line":
+                    self.executed.setdefault(frame.f_code.co_filename, set()).add(frame.f_lineno)
+                return local
+
+            def global_trace(frame, event, arg):
+                if self._wanted(frame.f_code.co_filename):
+                    self.executed.setdefault(frame.f_code.co_filename, set()).add(frame.f_lineno)
+                    return local
+                return None
+            sys.settrace(global_trace)
+            threading.settrace(global_trace)
+
+    def stop(self):
+        if self._monitoring:
+            mon = sys.monitoring
+            mon.set_events(mon.COVERAGE_ID, 0)
+            mon.register_callback(mon.COVERAGE_ID, mon.events.LINE, None)
+            mon.free_tool_id(mon.COVERAGE_ID)
+        else:
+            sys.settrace(None)
+            threading.settrace(None)
+
+    @staticmethod
+    def _lines_of(source, path):
+        import ast
+        try:
+            code = compile(source, path, "exec")
+            tree = ast.parse(source)
+        except (SyntaxError, ValueError, MemoryError):
+            return None
+        lines = set()
+        stack = [code]
+        while stack:
+            c = stack.pop()
+            for _start, _end, line in c.co_lines():
+                if line is not None and line > 0:
+                    lines.add(line)
+            stack.extend(k for k in c.co_consts if hasattr(k, "co_lines"))
+        # a docstring is not a statement that can be missed
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
+                first = node.body[0]
+                if isinstance(first, ast.Expr) and isinstance(getattr(first, "value", None), ast.Constant) and isinstance(first.value.value, str):
+                    for n in range(first.lineno, (first.end_lineno or first.lineno) + 1):
+                        lines.discard(n)
+        for number, text in enumerate(source.splitlines(), 1):
+            if "pragma: no cover" in text:
+                lines.discard(number)
+        return lines
+
+    def report(self):
+        files = {}
+        executed_by_norm = {os.path.normcase(os.path.abspath(k)): v for k, v in self.executed.items()}
+        for folder, dirs, names in os.walk(self.root):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+            for name in names:
+                if not name.endswith(".py"):
+                    continue
+                path = os.path.join(folder, name)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        source = f.read()
+                except (OSError, UnicodeDecodeError):
+                    continue
+                executable = self._lines_of(source, path)
+                if executable is None:
+                    continue
+                ran = executed_by_norm.get(os.path.normcase(os.path.abspath(path)), set()) & executable
+                rel = os.path.relpath(path, self.root).replace(os.sep, "/")
+                files[rel] = {"executable": sorted(executable), "executed": sorted(ran)}
+        return {"files": files}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--token", required=True)
     parser.add_argument("--root", required=True)
     parser.add_argument("--framework", default="auto", choices=["auto", "pytest", "unittest"])
+    parser.add_argument("--coverage", default=None, help="write the lines that ran to this JSON file")
     parser.add_argument("ids", nargs="*")
     options = parser.parse_args()
 
@@ -291,11 +405,23 @@ def main():
             framework = "unittest"
             print("pytest is not installed: running unittest tests only", file=sys.stderr)
 
+    coverage = None
+    if options.coverage:
+        coverage = Coverage(root)
+        coverage.start()
     try:
         code = run_pytest(channel, root, options.ids) if framework == "pytest" else run_unittest(channel, root, options.ids)
     except ImportError as e:
         print("cannot run tests with %s: %s" % (framework, e), file=sys.stderr)
         code = 2
+    if coverage is not None:
+        coverage.stop()
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(options.coverage)), exist_ok=True)
+            with open(options.coverage, "w", encoding="utf-8") as f:
+                json.dump(coverage.report(), f)
+        except OSError as e:
+            print("cannot write the coverage data: %s" % e, file=sys.stderr)
     sys.stdout.flush()
     sys.stderr.flush()
     sys.exit(code)

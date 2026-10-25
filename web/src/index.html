@@ -131,6 +131,14 @@
     .verb-get { color: #3fa9f5; } .verb-post { color: #4cbb6c; } .verb-put { color: #e0a030; } .verb-patch { color: #b58cf0; }
     .verb-delete { color: #e5534b; } .verb-ws { color: #38c0c0; }
     .route .rpath { font-family: var(--mono, monospace); }
+    .cov-row { display: flex; gap: 10px; align-items: center; padding: 1px 10px; cursor: pointer; }
+    .cov-row:hover { background: var(--hover, rgba(128,128,128,.15)); }
+    .cov-bar { width: 90px; height: 8px; background: rgba(128,128,128,.25); border-radius: 2px; overflow: hidden; display: inline-block; flex: none; }
+    .cov-bar span { display: block; height: 100%; } .cov-bar .good { background: #4cbb6c; } .cov-bar .fair { background: #e0a030; } .cov-bar .poor { background: #e5534b; }
+    .cov-name { flex: 1; }
+    .cov-hit { border-left: 3px solid #4cbb6c; margin-left: 3px; } .cov-miss { border-left: 3px solid #e5534b; margin-left: 3px; }
+    .cov-miss-line { background: rgba(229,83,75,.10); }
+    .listbar label { color: var(--dim); display: flex; gap: 4px; align-items: center; }
     #terminal-main { flex: 1; }
     #term-output { flex: 1; margin: 0; padding: 4px 10px; overflow: auto; font: 12.5px/1.45 Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; word-break: break-all; }
     #term-output .err { color: var(--red); } #term-output .info { color: var(--dim); } #term-output .cmd { color: #7aa7d9; }
@@ -241,6 +249,7 @@
         <button id="t-hier">Hierarchy</button>
         <button id="t-routes">Endpoints</button>
         <button id="t-terminal" title="Terminal (Ctrl+`)">Terminal</button>
+        <button id="t-coverage">Coverage</button>
         <button id="t-problems">Problems</button>
         <button id="t-todo">TODO</button>
         <button id="t-insp">Inspections</button>
@@ -263,6 +272,7 @@
         <div class="col" id="tree-col">
           <div id="tests-bar">
             <button id="tests-all" title="Run all tests">▶ All</button>
+            <button id="tests-cov" title="Run all the tests and mark the lines that ran">▶ Coverage</button>
             <button id="tests-sel" title="Run the selected node">▶ Selected</button>
             <button id="tests-here" title="Run the test at the cursor (Ctrl+Shift+F10)">▶ At cursor</button>
             <button id="tests-rerun" title="Run the failed tests again" disabled>↻ Failed</button>
@@ -346,6 +356,18 @@
           </div>
           <pre id="term-output" class="body"></pre>
           <div id="term-line"><span id="term-prompt"></span><input id="term-input" autocomplete="off" spellcheck="false" placeholder="Type a command, for example: python -m pytest"></div>
+        </div>
+      </div>
+      <div id="coverage-tab" class="tab">
+        <div class="col" id="coverage-main">
+          <div id="cov-bar" class="listbar">
+            <span id="cov-summary"></span>
+            <label title="Mark the lines in the editor"><input id="cov-show" type="checkbox" checked> in editor</label>
+            <input id="cov-filter" type="text" placeholder="Filter by file" spellcheck="false" autocomplete="off">
+            <button id="cov-refresh" title="Read the last coverage run again">Refresh</button>
+            <button id="cov-clear" title="Forget the result and remove the marks">Clear</button>
+          </div>
+          <div class="body" id="cov-list"></div>
         </div>
       </div>
       <div id="problems-tab" class="tab">

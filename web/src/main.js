@@ -10,6 +10,7 @@ import { setupHierarchy } from './hierarchy';
 import { setupRoutes } from './routes';
 import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
+import { setupCoverage } from './coverage';
 import { setupInspections } from './inspections';
 import { setupGit } from './git';
 import { toast } from './toast';
@@ -590,6 +591,7 @@ async function main() {
     setupProblems({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
     setupTodo({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
     setupTerminal();
+    setupCoverage(common);
     // code actions that need the page (not just a text edit) arrive as commands
     monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name) => {
         window.dispatchEvent(new CustomEvent('pymagic:install', { detail: name }));

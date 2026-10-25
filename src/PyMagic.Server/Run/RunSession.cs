@@ -59,9 +59,14 @@ public sealed class RunSession : IDisposable
     /// Runs the tests with ids like <c>tests/test_a.py::TestX::test_y</c> (a whole file or class is a prefix of those;
     /// no ids means everything). Results arrive as <c>testStarted</c> / <c>testResult</c> / <c>collectError</c> messages.
     /// </summary>
-    public void StartTests(string root, IReadOnlyList<string> ids, string framework = "auto")
+    /// <summary>Where a coverage run leaves the lines that ran.</summary>
+    public static string CoveragePath(string root) => Path.Combine(root, ".pymagic", "coverage.json");
+
+    public void StartTests(string root, IReadOnlyList<string> ids, string framework = "auto", bool coverage = false)
     {
-        var helperArgs = new List<string> { "--framework", framework, "--" };
+        var helperArgs = new List<string> { "--framework", framework };
+        if (coverage) { helperArgs.Add("--coverage"); helperArgs.Add(CoveragePath(root)); }
+        helperArgs.Add("--");
         Launch(root, true, helperArgs, ids, null, helper: "pm_tests.py");
     }
 
