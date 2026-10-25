@@ -19,11 +19,16 @@ public sealed partial class TypeEvaluator
                     if (target is SubscriptExpr sub && TypeOf(m, sub.Value) is ClassType { IsInstance: true, Info: { Name: "tuple", Module.Name: "builtins" } })
                         diags.Add(new Diagnostic(sub.Start, Math.Max(sub.End - sub.Start, 1), "'tuple' object does not support item assignment"));
                     if (target is AttributeExpr pa) { ReadOnlyProperty(m, pa, diags); FrozenAssignment(m, pa, diags); }
+                    FinalReassignment(m, target, diags);
                 }
                 if (assign.Targets is [NameExpr] && assign.Value is CallExpr call) NoneFunction(m, call, diags);
                 break;
-            case AugAssignStmt { Target: AttributeExpr augTarget }:
-                FrozenAssignment(m, augTarget, diags);
+            case AugAssignStmt aug:
+                if (aug.Target is AttributeExpr augTarget) FrozenAssignment(m, augTarget, diags);
+                FinalReassignment(m, aug.Target, diags);
+                break;
+            case FunctionDef fd:
+                MethodOverride(m, fd, diags);
                 break;
             case TryStmt t:
                 ExceptOrder(m, t, diags);
@@ -74,6 +79,106 @@ public sealed partial class TypeEvaluator
             if (DataclassOf(e.Info) is { Frozen: true })
             {
                 diags.Add(new Diagnostic(target.End - target.Attr.Length, target.Attr.Length, $"Cannot assign to attribute '{target.Attr}': '{recv.Info.Name}' is frozen"));
+                return;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ overriding methods
+
+    static readonly HashSet<string> PlainDecorators = new() { "staticmethod", "classmethod", "abstractmethod" };
+
+    static bool IsPlainMethod(FunctionDef f) =>
+        !f.IsAsync && f.Decorators.All(d => d is NameExpr { Name: var n } && PlainDecorators.Contains(n) || d is AttributeExpr { Attr: "abstractmethod" });
+
+    /// <summary>The parameters a caller can fill, without self/cls: positional ones with their defaults, and the shape of the rest.</summary>
+    static (List<Parameter> Positional, List<Parameter> KeywordOnly, bool VarArgs, bool KwArgs) Shape(FunctionDef f, bool bound)
+    {
+        var pos = new List<Parameter>();
+        var kw = new List<Parameter>();
+        bool var = false, kwargs = false, afterStar = false;
+        foreach (var p in f.Params)
+        {
+            switch (p.Kind)
+            {
+                case ParamKind.VarArgs: var = true; afterStar = true; break;
+                case ParamKind.KwOnlySeparator: afterStar = true; break;
+                case ParamKind.KwArgs: kwargs = true; break;
+                case ParamKind.Slash: break;
+                default: (afterStar ? kw : pos).Add(p); break;
+            }
+        }
+        if (bound && pos.Count > 0) pos.RemoveAt(0);
+        return (pos, kw, var, kwargs);
+    }
+
+    /// <summary>A method that overrides one of a user base class with a signature callers of the base would not fit.</summary>
+    void MethodOverride(ModuleInfo m, FunctionDef f, List<Diagnostic> diags)
+    {
+        string name = f.Name;
+        if (name.StartsWith("__")) return;                          // dunder methods and private names
+        var info = FunctionOf(m, f);
+        if (info.Owner == null) return;
+        if (!IsPlainMethod(f)) return;
+        foreach (var entry in Mro(info.Owner).Skip(1))
+        {
+            if (entry is not ClassType e) return;
+            if (e.Info.Module.IsStub || !e.Info.Scope.Symbols.TryGetValue(name, out var sym)) continue;
+            if (sym.Declarations.Count != 1 || sym.Declarations[0] is not { Kind: DeclKind.Function, Node: FunctionDef b } || !IsPlainMethod(b)) return;
+            var baseInfo = FunctionOf(_ws.ModuleOf(sym) ?? m, b);
+            if (baseInfo.IsStatic != info.IsStatic || baseInfo.IsClassMethod != info.IsClassMethod) return;
+            var (dp, dk, dVar, dKw) = Shape(f, !info.IsStatic);
+            var (bp, bk, bVar, bKw) = Shape(b, !baseInfo.IsStatic);
+            bool bad = false;
+            if (!dVar && dp.Count < bp.Count && !bVar) bad = true;
+            if (!bad && !bVar && dp.Count(p => p.Default == null) > bp.Count) bad = true;
+            if (!bad && bp.Count > 0) bad = dp.Zip(bp, (x, y) => x.Name != y.Name).Any(x => x) && !dVar;
+            if (!bad && !dKw && bk.Any(k => !dk.Any(x => x.Name == k.Name) && !dp.Any(x => x.Name == k.Name))) bad = true;
+            if (!bad && dk.Any(k => k.Default == null && !bk.Any(x => x.Name == k.Name)) && !bKw) bad = true;
+            if (bad)
+                diags.Add(new Diagnostic(f.NameStart, name.Length, $"Signature of method '{info.Owner.Name}.{name}()' does not match signature of the base method in class '{e.Info.Name}'"));
+            return;
+        }
+    }
+
+    // ------------------------------------------------------------ Final names
+
+    static bool IsFinalAnnotation(Expr a) =>
+        a is NameExpr { Name: "Final" } or AttributeExpr { Attr: "Final" }
+        || a is SubscriptExpr { Value: NameExpr { Name: "Final" } or AttributeExpr { Attr: "Final" } };
+
+    /// <summary>The declaration of `X: Final = value` among the declarations of a symbol, when it has a value.</summary>
+    AnnAssignStmt? FinalDeclaration(ModuleInfo m, Symbol sym)
+    {
+        foreach (var d in sym.Declarations)
+            if (d.Kind == DeclKind.Variable && m.ParentOf(d.Node) is AnnAssignStmt { Value: not null } a && ReferenceEquals(a.Target, d.Node) && IsFinalAnnotation(a.Annotation))
+                return a;
+        return null;
+    }
+
+    /// <summary>`MAX: Final = 3` followed by `MAX = 4`, or `Cls.MAX = 4` / `self.MAX = 4` for a Final class attribute.</summary>
+    void FinalReassignment(ModuleInfo m, Expr target, List<Diagnostic> diags)
+    {
+        switch (target)
+        {
+            case NameExpr n:
+            {
+                var sym = m.Semantics.ReferenceOf(n)?.Symbol;
+                if (sym == null || FinalDeclaration(m, sym) is not { } decl || ReferenceEquals(decl.Target, n)) return;
+                diags.Add(new Diagnostic(n.Start, Math.Max(n.End - n.Start, 1), $"Cannot assign to final name '{n.Name}'"));
+                return;
+            }
+            case AttributeExpr a:
+            {
+                if (TypeOf(m, a.Value) is not ClassType recv || recv.Info.Module.IsStub) return;
+                foreach (var entry in Mro(recv.Info))
+                {
+                    if (entry is not ClassType e) return;
+                    if (e.Info.Module.IsStub || !e.Info.Scope.Symbols.TryGetValue(a.Attr, out var sym)) continue;
+                    if (FinalDeclaration(_ws.ModuleOf(sym) ?? m, sym) != null)
+                        diags.Add(new Diagnostic(a.End - a.Attr.Length, a.Attr.Length, $"Cannot assign to final attribute '{a.Attr}'"));
+                    return;
+                }
                 return;
             }
         }
