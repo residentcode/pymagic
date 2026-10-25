@@ -170,6 +170,22 @@
     .cov-bar { width: 90px; height: 8px; background: rgba(128,128,128,.25); border-radius: 2px; overflow: hidden; display: inline-block; flex: none; }
     .cov-bar span { display: block; height: 100%; } .cov-bar .good { background: #4cbb6c; } .cov-bar .fair { background: #e0a030; } .cov-bar .poor { background: #e5534b; }
     .cov-name { flex: 1; }
+    .prof-row { display: flex; gap: 12px; align-items: center; padding: 1px 10px; cursor: pointer; }
+    .prof-row:hover, .prof-caller:hover { background: var(--hover, rgba(128,128,128,.15)); }
+    .prof-row.open { background: var(--hover, rgba(128,128,128,.15)); }
+    .prof-head { cursor: default; color: var(--dim); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+    .prof-head:hover { background: var(--panel); }
+    .prof-name { flex: 1 1 220px; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, monospace); }
+    .prof-row .detail { flex: 0 0 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .prof-num { flex: 0 0 90px; text-align: right; font-variant-numeric: tabular-nums; }
+    .prof-bar { flex: 0 0 110px; height: 8px; background: rgba(128,128,128,.2); border-radius: 2px; overflow: hidden; display: flex; }
+    .prof-bar .self { background: #e5534b; } .prof-bar .rest { background: #e0a030; }
+    .prof-callers { padding: 2px 10px 6px 34px; border-bottom: 1px solid var(--line); }
+    .prof-caller { display: flex; gap: 12px; padding: 0 4px; cursor: pointer; }
+    .prof-caller .detail { flex: 0 0 180px; }
+    .prof-caller::after { content: ""; flex: 0 0 110px; }
+    #prof-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #prof-bar label { white-space: nowrap; }
     .cov-hit { border-left: 3px solid #4cbb6c; margin-left: 3px; } .cov-miss { border-left: 3px solid #e5534b; margin-left: 3px; }
     .cov-miss-line { background: rgba(229,83,75,.10); }
     .listbar label { color: var(--dim); display: flex; gap: 4px; align-items: center; }
@@ -259,6 +275,7 @@
     <div id="toolbar">
       <button id="b-run" class="run" title="Run (Ctrl+F5)">▶ Run</button>
       <button id="b-debug" class="dbg" title="Debug / Resume (F5)">🐞 Debug</button>
+      <button id="b-profile" title="Run the file under the profiler and list where the time went">⏱ Profile</button>
       <button id="b-stop" class="stop" title="Stop (Shift+F5)" disabled>■ Stop</button>
       <span class="sep"></span>
       <button id="b-format" title="Format the file and sort its imports, or the selection (Shift+Alt+F, Ctrl+Alt+L)">✎ Format</button>
@@ -291,6 +308,7 @@
         <button id="t-routes">Endpoints</button>
         <button id="t-terminal" title="Terminal (Ctrl+`)">Terminal</button>
         <button id="t-coverage">Coverage</button>
+        <button id="t-profiler">Profiler</button>
         <button id="t-problems">Problems</button>
         <button id="t-todo">TODO</button>
         <button id="t-insp">Inspections</button>
@@ -409,6 +427,24 @@
             <button id="cov-clear" title="Forget the result and remove the marks">Clear</button>
           </div>
           <div class="body" id="cov-list"></div>
+        </div>
+      </div>
+      <div id="profiler-tab" class="tab">
+        <div class="col" id="profiler-main">
+          <div id="prof-bar" class="listbar">
+            <span id="prof-summary"></span>
+            <label title="Leave out libraries and built-in functions"><input id="prof-project" type="checkbox" checked> project code only</label>
+            <select id="prof-sort" title="Order of the list">
+              <option value="cumulative">With callees</option>
+              <option value="own">Itself</option>
+              <option value="calls">Calls</option>
+              <option value="name">Name</option>
+            </select>
+            <input id="prof-filter" type="text" placeholder="Filter by name or file" spellcheck="false" autocomplete="off">
+            <button id="prof-refresh" title="Read the last profile again">Refresh</button>
+            <button id="prof-clear" title="Forget the result">Clear</button>
+          </div>
+          <div class="body" id="prof-list"></div>
         </div>
       </div>
       <div id="problems-tab" class="tab">

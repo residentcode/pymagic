@@ -151,12 +151,13 @@ export function setupRun(deps) {
     function setButtons() {
         const active = run !== null;
         $('b-run').disabled = active;
+        $('b-profile').disabled = active;
         $('b-debug').disabled = active && !paused;
         $('b-debug').textContent = paused ? '▶ Resume' : '🐞 Debug';
         $('b-stop').disabled = !active;
         for (const id of ['b-over', 'b-into', 'b-out'])
             $(id).disabled = !paused;
-        $('runstate').textContent = !active ? '' : paused ? 'paused' : debugging ? 'debugging…' : 'running…';
+        $('runstate').textContent = !active ? '' : paused ? 'paused' : debugging ? 'debugging…' : profiling ? 'profiling…' : 'running…';
     }
     function relOfAbsolute(file) {
         const n = norm(file);
@@ -403,6 +404,10 @@ export function setupRun(deps) {
                 break;
             case 'exited':
                 append(`\nProcess finished with exit code ${m.code}\n`, 'info');
+                if (profiling) {
+                    profiling = false;
+                    window.dispatchEvent(new CustomEvent('pymagic:profile'));
+                }
                 finish();
                 break;
         }
@@ -418,7 +423,8 @@ export function setupRun(deps) {
         setButtons();
     }
     // ------------------------------------------------------------ commands
-    async function start(debug) {
+    let profiling = false;
+    async function start(debug, profile = false) {
         if (run)
             return;
         const model = editor.getModel();
@@ -435,9 +441,10 @@ export function setupRun(deps) {
         }
         output.textContent = '';
         debugging = debug;
+        profiling = profile;
         paused = false;
         showTab('output');
-        run = new RunClient({ type: 'start', file: rel, debug, args: [], breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught' });
+        run = new RunClient({ type: 'start', file: rel, debug, profile, args: [], breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught' });
         run.onMessage = handle;
         run.onClose = () => { if (run) {
             append('\nConnection to the host lost.\n', 'err');
@@ -460,6 +467,7 @@ export function setupRun(deps) {
     const resume = (type) => { if (run && paused)
         run.send({ type }); };
     $('b-run').onclick = () => void start(false);
+    $('b-profile').onclick = () => void start(false, true);
     $('b-debug').onclick = () => (paused ? resume('continue') : void start(true));
     $('b-stop').onclick = () => run?.send({ type: 'stop' });
     $('b-over').onclick = () => resume('next');

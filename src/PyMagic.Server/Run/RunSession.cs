@@ -70,6 +70,18 @@ public sealed class RunSession : IDisposable
         Launch(root, true, helperArgs, ids, null, helper: "pm_tests.py");
     }
 
+    /// <summary>Where a profiler run leaves what it measured.</summary>
+    public static string ProfilePath(string root) => Path.Combine(root, ".pymagic", "profile.json");
+
+    /// <summary>Runs the script under cProfile (pm_profile.py): its output streams like a normal run, the timings land in <see cref="ProfilePath"/>.</summary>
+    public void StartProfile(string root, string script, IReadOnlyList<string> args)
+    {
+        string scriptPath = Path.GetFullPath(Path.Combine(root, script));
+        if (!File.Exists(scriptPath)) { Error($"script not found: {script}"); return; }
+        try { File.Delete(ProfilePath(root)); } catch (IOException) { }
+        Launch(root, false, new[] { ExtractHelper("pm_profile.py"), "--out", ProfilePath(root), "--script", scriptPath, "--" }, args, null);
+    }
+
     /// <summary>Runs <c>python -m module args</c> (pip, ensurepip, venv...) and streams its output like a script run.</summary>
     public void StartModule(string root, string module, IReadOnlyList<string> args) =>
         Launch(root, false, new[] { "-m", module }, args, null);

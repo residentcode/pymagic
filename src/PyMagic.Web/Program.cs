@@ -424,6 +424,36 @@ app.MapGet("/api/coverage", () =>
     catch (Exception e) when (e is IOException or System.Text.Json.JsonException) { return Results.NotFound(); }
 });
 
+// what the last profiler run measured, from .pymagic/profile.json; "rel" is the path inside the project (null for other code)
+app.MapGet("/api/profile", () =>
+{
+    string path = RunSession.ProfilePath(root);
+    if (!File.Exists(path)) return Results.NotFound();
+    try
+    {
+        var data = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
+        if (data == null) return Results.NotFound();
+        string prefix = Path.GetFullPath(root).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        string? Rel(string? file)
+        {
+            if (file == null || !Path.IsPathRooted(file)) return null;
+            string full = Path.GetFullPath(file);
+            return full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !full.Contains($"{Path.DirectorySeparatorChar}.venv{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                && !full.Contains($"{Path.DirectorySeparatorChar}site-packages{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                ? full[prefix.Length..].Replace('\\', '/') : null;
+        }
+        foreach (var f in data["functions"]!.AsArray())
+        {
+            f!["rel"] = Rel(f["file"]?.GetValue<string>());
+            foreach (var c in f["callers"]!.AsArray()) c!["rel"] = Rel(c["file"]?.GetValue<string>());
+        }
+        data["rel"] = Rel(data["script"]?.GetValue<string>());
+        data["when"] = File.GetLastWriteTimeUtc(path).ToString("o");
+        return Results.Json(data);
+    }
+    catch (Exception e) when (e is IOException or System.Text.Json.JsonException or NullReferenceException) { return Results.NotFound(); }
+});
+
 // ---- the terminal: one command line at a time in the project folder -------------------------------------------------
 
 app.Map("/term", async (HttpContext ctx) =>
@@ -532,7 +562,8 @@ app.Map("/run", async (HttpContext ctx) =>
                 string file0 = msg["file"]!.GetValue<string>();
                 ResolveInRoot(file0);   // refuses paths outside the workspace
                 session.Python = interpreters.Current?.Path ?? python;
-                session.StartWithBreakpoints(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
+                if (msg["profile"]?.GetValue<bool>() == true) session.StartProfile(root, file0, args);
+                else session.StartWithBreakpoints(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
                 if (msg["exceptionBreak"]?.GetValue<string>() == "raised")
                     session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised" });
             }

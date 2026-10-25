@@ -11,6 +11,7 @@ import { setupRoutes } from './routes';
 import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
+import { setupProfiler } from './profiler';
 import { setupExplorer } from './explorer';
 import { setupTabs } from './tabs';
 import { setupInspections } from './inspections';
@@ -655,6 +656,7 @@ async function main() {
     setupTodo({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
     setupTerminal();
     setupCoverage(common);
+    setupProfiler(common);
     // code actions that need the page (not just a text edit) arrive as commands
     monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name) => {
         window.dispatchEvent(new CustomEvent('pymagic:install', { detail: name }));
