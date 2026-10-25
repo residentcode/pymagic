@@ -290,7 +290,7 @@ public class ImportTests
         var server = new PyMagic.Server.Server(new LanguageService(), sent.Add);
         const string uri = "file:///c:/proj/main.py";
         server.Handle(System.Text.Json.Nodes.JsonNode.Parse("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + uri +
-            "\",\"languageId\":\"python\",\"version\":1,\"text\":\"import definitely_not_here\\ndefinitely_not_here\\n\"}}}")!);
+            "\",\"languageId\":\"python\",\"version\":1,\"text\":\"import definitely_not_here\\nprint(definitely_not_here)\\n\"}}}")!);
         int Problems() => sent.Last(m => m["method"]?.GetValue<string>() == "textDocument/publishDiagnostics")["params"]!["diagnostics"]!.AsArray().Count;
         Assert.Equal(0, Problems());
 

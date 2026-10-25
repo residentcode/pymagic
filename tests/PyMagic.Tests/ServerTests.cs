@@ -75,7 +75,7 @@ public class ServerTests
     public void CleanFileHasNoDiagnostics()
     {
         var svc = new LanguageService();
-        svc.Open(Main, "class A:\n    def __init__(self):\n        self.x = 1\n\nprint(A().x)\n", 1);
+        svc.Open(Main, "class A:\n    def __init__(self):\n        self.x = 1\n\n\nprint(A().x)\n", 1);
         Assert.Equal(0, svc.Diagnostics(Main).Count);
     }
 

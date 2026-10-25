@@ -57,6 +57,7 @@ public static class CodeInspections
             Shadowing(m, scope, found);
             Naming(m, scope, found);
         }
+        StyleInspections.Run(m, found);
         return found;
     }
 
