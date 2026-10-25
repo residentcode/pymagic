@@ -8,6 +8,10 @@ const http = require('node:http');
 
 const repo = path.resolve(__dirname, '..');
 const packaged = app.isPackaged;
+const icon = path.join(__dirname, 'icon', 'pymagic.ico');
+// the id the installer gives the shortcuts (build-config.mjs), so the running app and a pinned shortcut share a taskbar button;
+// a run from the repo keeps Electron's own, so it is not taken for an installed copy
+if (process.platform === 'win32' && packaged) app.setAppUserModelId('io.github.residentcode.pymagic');
 const www = packaged ? path.join(process.resourcesPath, 'www') : path.join(repo, 'web', 'dist');
 const demo = packaged ? path.join(process.resourcesPath, 'demo') : path.join(repo, 'examples', 'demo');
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
@@ -147,7 +151,7 @@ function splash(text) {
 }
 
 app.whenReady().then(async () => {
-  win = new BrowserWindow({ width: 1400, height: 900, backgroundColor: '#1e1e1e', title: 'PyMagic', autoHideMenuBar: false, webPreferences: { contextIsolation: true } });
+  win = new BrowserWindow({ width: 1400, height: 900, backgroundColor: '#1e1e1e', title: 'PyMagic', icon, autoHideMenuBar: false, webPreferences: { contextIsolation: true } });
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
   menu();
   const report = t => win.webContents.executeJavaScript(`document.getElementById('t') && (document.getElementById('t').textContent = ${JSON.stringify(t)})`).catch(() => {});
