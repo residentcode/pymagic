@@ -792,6 +792,8 @@ public sealed partial class TypeEvaluator
                 {
                     if (dc.Info.Name == "float" && s.Info.Name is "int" or "bool") return true;
                     if (dc.Info.Name == "complex" && s.Info.Name is "float" or "int" or "bool") return true;
+                    // bytes accepts the other byte buffers, as the typing spec's old promotion (and PyCharm) does
+                    if (dc.Info.Name == "bytes" && s.Info.Name is "bytearray" or "memoryview") return true;
                 }
 
                 // a dict literal where a TypedDict is expected: its keys are not checked here

@@ -281,7 +281,9 @@ public sealed partial class TypeEvaluator
     {
         if (r.UseScope == null) return null;
         var flow = m.Flow.For(r.UseScope);
-        if (flow == null || !flow.HasAssertions(sym, "")) return null;
+        // a declared name that is assigned again (`url: URL | str` ... `url = URL(url)`) takes the assigned type from there on
+        bool reassigned = sym.Declarations.Count > 1 && DeclaredType(_ws.ModuleOf(sym) ?? m, sym) != null;
+        if (flow == null || !(reassigned || flow.HasAssertions(sym, ""))) return null;
         var reads = flow.ReadInstructions(n);
         if (reads == null || reads.Count == 0) return null;
 
