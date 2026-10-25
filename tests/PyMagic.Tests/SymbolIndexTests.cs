@@ -109,6 +109,7 @@ public class SymbolIndexTests
             Assert.Equal(4, first.Parsed);
         }
         Assert.True(File.Exists(store), "saved");
+        Assert.True(File.ReadAllText(Path.Combine(root, ".pymagic", ".gitignore")).Contains("index.json"), "the cache stays out of version control");
 
         using (var second = new SymbolIndex(files, p => Path.GetFileNameWithoutExtension(p), store))
         {
