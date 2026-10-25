@@ -190,3 +190,45 @@ export function collapseCarriageReturns(text) {
         return '';
     }).join('\n');
 }
+
+// ------------------------------------------------------------ the notebook as one Python file (for completion, hover and diagnostics)
+
+/** `!shell` lines and `%magic` lines are not Python: in the file the language server sees they become `pass`. */
+export function maskMagics(code) {
+    return code.split('\n').map((line) => {
+        const body = line.trimStart();
+        return body.startsWith('!') || body.startsWith('%') ? line.slice(0, line.length - body.length) + 'pass' : line;
+    }).join('\n');
+}
+
+/**
+ * All code cells one after the other as one Python file, so a name defined in an earlier cell is known in a later one.
+ * Returns { text, cells: [{ index, start, lines }] }: `index` is the cell's place in the notebook, `start` its first
+ * line in the file (0-based) and `lines` how many lines it takes there (an empty cell takes one).
+ */
+export function virtualDocument(nb) {
+    const parts = [];
+    const cells = [];
+    let line = 0;
+    nb.cells.forEach((cell, index) => {
+        if (cell.cell_type !== 'code') return;
+        const code = maskMagics(sourceOf(cell).replace(/\r\n?/g, '\n'));
+        const lines = code.split('\n').length;
+        parts.push(code);
+        cells.push({ index, start: line, lines });
+        line += lines;
+    });
+    return { text: parts.join('\n'), cells };
+}
+
+/** The cell a line of the virtual file belongs to, and the line inside that cell; null when there is none. */
+export function cellOfLine(doc, line) {
+    for (const c of doc.cells) if (line >= c.start && line < c.start + c.lines) return { index: c.index, line: line - c.start };
+    return null;
+}
+
+/** The line in the virtual file of a line (0-based) in the cell with this notebook index; null when it is not a code cell. */
+export function virtualLine(doc, cellIndex, line) {
+    const c = doc.cells.find((x) => x.index === cellIndex);
+    return c ? c.start + line : null;
+}

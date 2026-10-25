@@ -279,23 +279,30 @@ function registerProviders() {
     });
     monaco.languages.registerHoverProvider(CODE_LANGUAGES, {
         async provideHover(model, position) {
-            const uri = serverUri.get(model);
+            const cell = notebook?.targetOf(model, position); // a notebook cell: the position is in the notebook's file
+            const uri = cell ? cell.uri : serverUri.get(model);
             if (!uri)
                 return null;
-            const h = await lsp.request('textDocument/hover', { textDocument: { uri }, position: toPos(position) });
+            const h = await lsp.request('textDocument/hover', { textDocument: { uri }, position: cell ? cell.position : toPos(position) });
             if (!h)
                 return null;
-            return { range: toRange(h.range), contents: [{ value: h.contents.value }] };
+            return { range: toRange(cell ? cell.fromServer(h.range) : h.range), contents: [{ value: h.contents.value }] };
         },
     });
     monaco.languages.registerDefinitionProvider(CODE_LANGUAGES, {
         async provideDefinition(model, position) {
-            const uri = serverUri.get(model);
+            const cell = notebook?.targetOf(model, position);
+            const uri = cell ? cell.uri : serverUri.get(model);
             if (!uri)
                 return null;
-            const locs = (await lsp.request('textDocument/definition', { textDocument: { uri }, position: toPos(position) })) ?? [];
+            const locs = (await lsp.request('textDocument/definition', { textDocument: { uri }, position: cell ? cell.position : toPos(position) })) ?? [];
             const result = [];
             for (const l of locs) {
+                const inCell = notebook?.locate(l.uri, l.range); // defined in a cell of a notebook
+                if (inCell) {
+                    result.push({ uri: inCell.model.uri, range: toRange(inCell.range) });
+                    continue;
+                }
                 const target = await modelForUri(l.uri);
                 if (target)
                     result.push({ uri: target.uri, range: toRange(l.range) });
@@ -306,17 +313,19 @@ function registerProviders() {
     const completionProvider = (triggerCharacters) => ({
         triggerCharacters,
         async provideCompletionItems(model, position) {
-            const uri = serverUri.get(model);
+            const cell = notebook?.targetOf(model, position); // targetOf also brings the notebook's file up to date
+            const uri = cell ? cell.uri : serverUri.get(model);
             if (!uri)
                 return { suggestions: [] };
             const word = model.getWordUntilPosition(position);
             const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
             // make sure the server has the text the cursor is in, not the debounced previous version
-            lsp.notify('textDocument/didChange', {
-                textDocument: { uri, version: model.getVersionId() },
-                contentChanges: [{ text: model.getValue() }],
-            });
-            const res = await lsp.request('textDocument/completion', { textDocument: { uri }, position: toPos(position) });
+            if (!cell)
+                lsp.notify('textDocument/didChange', {
+                    textDocument: { uri, version: model.getVersionId() },
+                    contentChanges: [{ text: model.getValue() }],
+                });
+            const res = await lsp.request('textDocument/completion', { textDocument: { uri }, position: cell ? cell.position : toPos(position) });
             return {
                 suggestions: (res?.items ?? []).map((i) => ({
                     label: i.label,
@@ -326,7 +335,8 @@ function registerProviders() {
                     insertText: i.insertText ?? i.label,
                     insertTextRules: i.isSnippet ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
                     // an import to add, or the expression a postfix template takes over
-                    additionalTextEdits: i.additionalTextEdits?.map((e) => ({ range: toRange(e.range), text: e.newText })),
+                    // an import added at the top of a notebook's file would land in another cell: no edits there
+                    additionalTextEdits: cell ? undefined : i.additionalTextEdits?.map((e) => ({ range: toRange(e.range), text: e.newText })),
                     filterText: i.filterText,
                     sortText: i.sortText,
                     range,
@@ -445,6 +455,17 @@ function registerProviders() {
     });
 }
 lsp.on('textDocument/publishDiagnostics', (p) => {
+    // the findings of a notebook's file go to its cells (their lines are `start` too far down)
+    if (notebook?.diagnostics(p, (d, start) => ({
+        ...toRange({ start: { line: d.range.start.line - start, character: d.range.start.character }, end: { line: d.range.end.line - start, character: d.range.end.character } }),
+        severity: markerSeverity(d.severity),
+        message: d.message,
+        source: d.source,
+        tags: d.tags?.includes(1) ? [monaco.MarkerTag.Unnecessary] : undefined,
+    }))) {
+        updateProblems();
+        return;
+    }
     const model = models.get(normalise(p.uri));
     if (!model)
         return;
@@ -607,7 +628,7 @@ async function main() {
         snippetSuggestions: 'inline',
         suggest: { showWords: false, insertMode: 'replace' },
     });
-    notebook = setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+    notebook = setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, lsp, rootUri: () => rootUri, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     window.pymagic = { editor, monaco, openFile, notebook };
     const common = {
         editor,

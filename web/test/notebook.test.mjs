@@ -203,3 +203,32 @@ test('collapseCarriageReturns keeps the last rewrite of a line', () => {
     assert.equal(m.collapseCarriageReturns('x\r'), 'x');
     assert.equal(m.collapseCarriageReturns('plain'), 'plain');
 });
+
+const nbOf = (...cells) => ({ cells: cells.map(([cell_type, text]) => ({ cell_type, source: text, metadata: {} })) });
+
+test('virtualDocument joins the code cells and leaves out the text cells', () => {
+    const doc = m.virtualDocument(nbOf(['code', 'a = 1\nb = 2'], ['markdown', '# not code'], ['code', ''], ['code', 'print(a)']));
+    assert.equal(doc.text, 'a = 1\nb = 2\n\nprint(a)');
+    assert.deepEqual(doc.cells, [{ index: 0, start: 0, lines: 2 }, { index: 2, start: 2, lines: 1 }, { index: 3, start: 3, lines: 1 }]);
+});
+
+test('magics and shell lines become pass, keeping their indent', () => {
+    assert.equal(m.maskMagics('%matplotlib inline\nx = 1\n!pip install y\n  %time f()'), 'pass\nx = 1\npass\n  pass');
+    assert.equal(m.virtualDocument(nbOf(['code', '!ls\nprint(1)'])).text, 'pass\nprint(1)');
+});
+
+test('lines map between a cell and the virtual file, both ways', () => {
+    const doc = m.virtualDocument(nbOf(['code', 'a = 1\nb = 2'], ['markdown', 'text'], ['code', 'c = 3\nd = 4']));
+    assert.deepEqual(m.cellOfLine(doc, 0), { index: 0, line: 0 });
+    assert.deepEqual(m.cellOfLine(doc, 1), { index: 0, line: 1 });
+    assert.deepEqual(m.cellOfLine(doc, 3), { index: 2, line: 1 });
+    assert.equal(m.cellOfLine(doc, 4), null);
+    assert.equal(m.virtualLine(doc, 2, 1), 3);
+    assert.equal(m.virtualLine(doc, 1, 0), null);
+});
+
+test('line endings in a cell do not change the line count', () => {
+    const doc = m.virtualDocument(nbOf(['code', 'a\r\nb\r\nc'], ['code', 'd']));
+    assert.equal(doc.cells[1].start, 3);
+    assert.equal(doc.text, 'a\nb\nc\nd');
+});

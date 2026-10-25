@@ -3,7 +3,7 @@
 // when a cell changes. Code cells run in a Python kernel on the host (the /nb WebSocket, one kernel per notebook).
 import {
     ansiSegments, applyKernelMessage, changeType, clearOutputs, collapseCarriageReturns, deleteCell, describeOutput, insertCell,
-    lastExecutionCount, moveCell, parseNotebook, serializeNotebook, setSource, sourceOf,
+    cellOfLine, lastExecutionCount, moveCell, parseNotebook, serializeNotebook, setSource, sourceOf, virtualDocument, virtualLine,
 } from './notebook-model';
 import { blocksOf, inlineOf } from './markdown-lite';
 import { toast } from './toast';
@@ -94,12 +94,41 @@ export function renderOutput(o) {
 
 // ------------------------------------------------------------ the view
 
-export function setupNotebook({ monaco, area, editorEl, save, relOf }) {
+/** Findings that only get in the way in a notebook: layout rules between cells, and the value a cell ends with (it is shown). */
+const NOISE = new Set(['pep8-blank-lines', 'pep8-imports']);
+const NOISE_MESSAGE = /^PEP 8: (W29\d|W391|E30\d)/;   // no newline at the end, blank lines between cells
+
+export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUri }) {
     const root = el('div', 'nb-root');
     root.id = 'notebook';
     area.append(root);
     const states = new Map();      // rel -> state of one open notebook
+    const cellModels = new WeakMap();   // the Monaco model of a cell's editor -> { state, view }
     let shown = null;              // the state on screen
+
+    // ---- the notebook as one Python file for the language server
+
+    /** A file name inside .pymagic that no project file can have; it is never written to disk. */
+    function virtualUri(rel) {
+        const name = rel.replace(/[\/]/g, '__').replace(/\./g, '_');
+        return `${rootUri().replace(/\/$/, '')}/.pymagic/notebooks/${encodeURIComponent(name)}.py`;
+    }
+
+    function syncVirtual(state) {
+        clearTimeout(state.vtimer);
+        state.vtimer = 0;
+        if (!state.nb) return;
+        state.vdoc = virtualDocument(state.nb);
+        state.vversion++;
+        if (!state.vopen) {
+            state.vopen = true;
+            lsp.notify('textDocument/didOpen', { textDocument: { uri: state.vuri, languageId: 'python', version: state.vversion, text: state.vdoc.text } });
+        } else {
+            lsp.notify('textDocument/didChange', { textDocument: { uri: state.vuri, version: state.vversion }, contentChanges: [{ text: state.vdoc.text }] });
+        }
+    }
+
+    const virtualSoon = (state) => { clearTimeout(state.vtimer); state.vtimer = setTimeout(() => syncVirtual(state), 150); };
 
     function showRoot(on) {
         root.classList.toggle('active', on);
@@ -112,6 +141,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf }) {
         const state = {
             rel, model, nb: null, views: [], selected: 0, pushing: false, timer: 0, ws: null, status: 'off', busy: false, queue: [], ids: new Map(), nextId: 1,
             dom: el('div', 'nb-doc'), listEl: el('div', 'nb-cells'), barEl: el('div', 'nb-bar'), errorEl: el('div', 'nb-error-box'), observer: null,
+            vuri: virtualUri(rel), vdoc: { text: '', cells: [] }, vversion: 0, vopen: false, vtimer: 0, diags: new Map(),
         };
         states.set(rel, state);
         state.observer = new IntersectionObserver((entries) => {
@@ -187,6 +217,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf }) {
 
     function render(state) {
         for (const v of state.views) v.editor?.dispose();
+        state.observer.disconnect();
         // the cells being run or waiting to run keep their place across a rebuild (the kernel is still writing into those cells)
         const before = new Map(state.views.map((v) => [v.cell, v]));
         state.views = state.nb.cells.map((cell) => ({ cell, el: null, editor: null, running: before.get(cell)?.running, queued: before.get(cell)?.queued }));
@@ -195,6 +226,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf }) {
         for (const [id, v] of state.ids) state.ids.set(id, now.get(v.cell) ?? v);
         state.listEl.replaceChildren(...state.views.map((v, i) => buildCell(state, v, i)));
         select(state, Math.min(state.selected, state.views.length - 1), false);
+        virtualSoon(state);
     }
 
     function select(state, index, scroll = true) {
@@ -249,7 +281,8 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf }) {
     }
 
     function createEditor(state, view, focus = false) {
-        if (view.editor) return;
+        // a callback of a cell that has since been rebuilt (the notebook was re-rendered) must not make an editor nobody owns
+        if (view.editor || !state.views.includes(view)) return;
         const { cell } = view;
         const language = cell.cell_type === 'code' ? 'python' : 'markdown';
         view.inputEl.replaceChildren();
@@ -265,7 +298,9 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf }) {
         const fit = () => { host.style.height = `${Math.max(34, editor.getContentHeight())}px`; editor.layout(); };
         editor.onDidContentSizeChange(fit);
         fit();
-        editor.onDidChangeModelContent(() => { setSource(cell, editor.getValue()); pushSoon(state); });
+        editor.onDidChangeModelContent(() => { setSource(cell, editor.getValue()); pushSoon(state); virtualSoon(state); });
+        cellModels.set(editor.getModel(), { state, view });
+        applyMarkers(state, view);
         editor.onDidFocusEditorText(() => select(state, indexOf(state, view), false));
         const K = monaco.KeyCode, M = monaco.KeyMod;
         editor.addCommand(M.Shift | K.Enter, () => runSelected(state, true));
@@ -432,6 +467,86 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf }) {
         else connect(state);
     }
 
+    // ---- what the language server says about a cell
+
+    /** Shows the findings the server made for a cell on the cell's editor (they wait here until the editor exists). */
+    function applyMarkers(state, view) {
+        const model = view.editor?.getModel();
+        if (model) monaco.editor.setModelMarkers(model, 'pymagic', state.diags.get(indexOf(state, view)) ?? []);
+    }
+
+    /**
+     * Where a position of a cell editor is in the notebook's virtual file: { uri, position, start, fromServer } or null for
+     * an editor that is not a notebook cell. The file is brought up to date first, so an answer never lags behind typing.
+     */
+    function targetOf(model, position) {
+        const entry = cellModels.get(model);
+        if (!entry) return null;
+        const { state, view } = entry;
+        if (state.vtimer) syncVirtual(state);
+        const cellIndex = indexOf(state, view);
+        const line = virtualLine(state.vdoc, cellIndex, position.lineNumber - 1);
+        if (line === null) return null;
+        const start = line - (position.lineNumber - 1);
+        return {
+            uri: state.vuri,
+            position: { line, character: position.column - 1 },
+            start,
+            /** A range the server sent about this notebook's file, as a range inside the cell. */
+            fromServer: (r) => ({ start: { line: r.start.line - start, character: r.start.character }, end: { line: r.end.line - start, character: r.end.character } }),
+            /** The cell's own text the server has for it (the cell's editor value as the virtual file holds it). */
+            sync: () => syncVirtual(state),
+        };
+    }
+
+    /** A location in a notebook's virtual file as a place in a cell: { model, range } or null. */
+    function locate(uri, range) {
+        for (const state of states.values()) {
+            if (state.vuri !== uri) continue;
+            const at = cellOfLine(state.vdoc, range.start.line);
+            if (!at) return null;
+            const view = state.views[at.index];
+            if (!view) return null;
+            if (!view.editor) createEditor(state, view);
+            const delta = range.start.line - at.line;
+            return { model: view.editor.getModel(), range: { start: { line: range.start.line - delta, character: range.start.character }, end: { line: range.end.line - delta, character: range.end.character } } };
+        }
+        return null;
+    }
+
+    /**
+     * Findings of the language server for a notebook's virtual file become markers on the cells. `toMarker(d, start)` makes a
+     * Monaco marker from a finding whose lines are `start` lines too far down. Returns false when the file is not a notebook's.
+     */
+    function diagnostics(p, toMarker) {
+        const state = [...states.values()].find((s) => s.vuri === p.uri);
+        if (!state) return false;
+        const byCell = new Map();
+        for (const d of p.diagnostics) {
+            const at = cellOfLine(state.vdoc, d.range.start.line);
+            if (!at) continue;
+            const view = state.views[at.index];
+            if (!view) continue;
+            if (NOISE.has(d.code) || NOISE_MESSAGE.test(d.message)) continue;
+            // the last expression of a cell is its shown value, not a statement without effect
+            if (d.code === 'statement-effect' && d.range.end.line - (d.range.start.line - at.line) >= lastCodeLine(view.cell)) continue;
+            const start = d.range.start.line - at.line;
+            if (!byCell.has(at.index)) byCell.set(at.index, []);
+            byCell.get(at.index).push(toMarker(d, start));
+        }
+        state.diags = byCell;
+        state.views.forEach((v) => applyMarkers(state, v));
+        return true;
+    }
+
+    /** The index of the last line of a cell that is not blank. */
+    function lastCodeLine(cell) {
+        const lines = sourceOf(cell).split('\n');
+        let i = lines.length - 1;
+        while (i > 0 && lines[i].trim() === '') i--;
+        return i;
+    }
+
     return {
         /** Shows the notebook of a file (an open editor model) in place of the code editor. */
         show(rel, model) {
@@ -448,11 +563,15 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf }) {
             const s = states.get(rel);
             if (!s) return;
             flush(s);
+            if (s.vopen) lsp.notify('textDocument/didClose', { textDocument: { uri: s.vuri } });
             dispose(s);
             states.delete(rel);
             if (shown === s) this.hide();
         },
         isShown: () => shown !== null,
+        targetOf,
+        locate,
+        diagnostics,
         flushAll() { for (const s of states.values()) flush(s); },
         /** For tests and the page: the number of the last execution, the state of a notebook. */
         stateOf: (rel) => states.get(rel),
