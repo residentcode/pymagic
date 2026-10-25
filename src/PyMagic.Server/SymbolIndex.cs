@@ -281,9 +281,7 @@ public sealed class SymbolIndex : IDisposable
             string folder = Path.GetDirectoryName(_storePath)!;
             Directory.CreateDirectory(folder);
             string ignore = Path.Combine(folder, ".gitignore");   // the index is a cache: the other files of the folder (the inspection profile) are the project's, this one is not
-            if (!File.Exists(ignore)) File.WriteAllText(ignore, "index.json
-index.json.tmp
-");
+            if (!File.Exists(ignore)) File.WriteAllText(ignore, "index.json\nindex.json.tmp\n");
             string temp = _storePath + ".tmp";
             KeyValuePair<string, FileEntry>[] copy;
             lock (_gate) copy = _files.ToArray();
