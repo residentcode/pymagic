@@ -70,7 +70,7 @@ public class NarrowingTests
     public void ReassignmentResetsNarrowing()
     {
         Assert.Equal("int", T("def f(x: Optional[int]):\n    if x is None:\n        x = 5\n    x"));
-        Same("int | None", T("def f(x: Optional[int]):\n    if x is not None:\n        x = g()\n    x").Replace("Unknown", "None"));
+        Same("None | Unknown", T("def f(x: Optional[int]):\n    if x is not None:\n        x = g()\n    x"));
         Assert.Equal("int", T("def f():\n    x = None\n    x = 1\n    x"));
     }
 

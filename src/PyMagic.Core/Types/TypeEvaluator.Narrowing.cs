@@ -75,6 +75,8 @@ public sealed partial class TypeEvaluator
                         if (_declared == null) return _ev.TypeOfDeclaration(_symModule, p.Declaration);
                         // a declared variable takes the type of the value assigned to it, if that fits and is fully known
                         var assigned = _ev.AssignedType(_symModule, p.Declaration);
+                        // a value nothing is known about (an unresolved call) says nothing against the declaration: no reports from it
+                        if (assigned is UnknownType { Explicit: false, FromCycle: false }) return assigned;
                         return assigned != null && !ContainsDynamic(assigned) && _ev.IsAssignable(_declared, assigned) ? assigned : _declared;
                     }
                     return _entry; // the member (or its owner) was reassigned: back to the unnarrowed type

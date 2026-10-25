@@ -251,6 +251,15 @@ public sealed partial class TypeEvaluator
         if (IsTypedDictFunctionalCall(callee, call))
             return Single(new CallTarget(callee, TypedDictFromCall(m, call), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 
+        // typing.cast(T, value) is T, with T read as a type (a quoted one included)
+        if ((callee as FunctionType ?? (callee as OverloadedType)?.Overloads[0]) is { Info: { Name: "cast" } ci } && ci.Module.Name is "typing" or "typing_extensions"
+            && call.Args is [{ Name: null, Stars: 0 } castType, { Stars: 0 }])
+        {
+            var target = AnnotationType(m, castType.Value);
+            if (!target.IsDynamic)
+                return Single(new CallTarget(callee, target, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
+        }
+
         if (TypedDictGet(m, call) is PyType tdGet)
             return Single(new CallTarget(callee, tdGet, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 
