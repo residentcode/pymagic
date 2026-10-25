@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using PyMagic.Core.Syntax;
 
 namespace PyMagic.Server.Formatting;
@@ -111,10 +112,10 @@ public static class PythonFormatter
     /// <summary>The comments are the same, in the same order, and the syntax trees are equal (positions, quote style and redundant parentheses aside).</summary>
     static bool SameCode(string before, string after)
     {
-        if (!Comments(before).SequenceEqual(Comments(after))) return false;
+        if (!Comments(before).SequenceEqual(Comments(after))) { LastMismatch ??= "comments"; return false; }
         var a = Parser.Parse(before);
         var b = Parser.Parse(after);
-        if (b.Diagnostics.Count > 0) return false;
+        if (b.Diagnostics.Count > 0) { LastMismatch ??= "syntax: " + b.Diagnostics[0]; return false; }
         return AstEqual(a.Module, b.Module);
     }
 
@@ -129,7 +130,7 @@ public static class PythonFormatter
     {
         if (ReferenceEquals(x, y)) return true;
         if (x == null || y == null) return false;
-        if (x is string sx) return y is string sy && sx == sy;
+        if (x is string sx) { if (y is string sy && sx == sy) return true; LastMismatch ??= "string " + sx; return false; }
         if (x is ConstExpr cx)
         {
             if (y is not ConstExpr cy || cx.Kind != cy.Kind || cx.IsFString != cy.IsFString) return false;
@@ -170,7 +171,7 @@ public static class PythonFormatter
         {
             var (pa, ba) = Parts(ta[i]);
             var (pb, bb) = Parts(tb[i]);
-            if (pa != pb || Docstrings.Clean(ba) != Docstrings.Clean(bb)) return false;
+            if (pa != pb || Docstrings.Clean(Canonical(pa, ba)) != Docstrings.Clean(Canonical(pb, bb))) return false;
         }
         return true;
     }
@@ -181,7 +182,7 @@ public static class PythonFormatter
         while (q < s.Length && s[q] != '"' && s[q] != '\'') q++;
         string rest = s[q..];
         int n = rest.Length >= 6 && (rest.StartsWith("\"\"\"") || rest.StartsWith("'''")) ? 3 : 1;
-        return (s[..q].ToLowerInvariant(), rest.Length >= 2 * n ? rest[n..^n] : rest);
+        return (CanonPrefix(s[..q]), rest.Length >= 2 * n ? rest[n..^n] : rest);
     }
 
     /// <summary>Adjacent string literals: the same literals, whatever lies between them and whichever quotes they use.</summary>
@@ -197,11 +198,66 @@ public static class PythonFormatter
     {
         int q = 0;
         while (q < s.Length && s[q] != '"' && s[q] != '\'') q++;
-        string prefix = s[..q].ToLowerInvariant();
+        string prefix = CanonPrefix(s[..q]);
         string rest = s[q..];
         int n = rest.Length >= 6 && (rest.StartsWith("\"\"\"") || rest.StartsWith("'''")) ? 3 : 1;
         if (rest.Length < 2 * n) return s;
-        return prefix + "|" + rest[n..^n];
+        return prefix + "|" + Canonical(prefix, rest[n..^n]);
+    }
+
+    static string CanonPrefix(string prefix) => new string(prefix.ToLowerInvariant().Where(c => c != 'u').OrderBy(c => c).ToArray());
+
+    static readonly Regex EscapeSequence = new(@"(?<bs>\\+)(?:u(?<u>[a-fA-F0-9]{4})|U(?<U>[a-fA-F0-9]{8})|x(?<x>[a-fA-F0-9]{2})|N\{(?<N>[^}]+)\})", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Black's spelling of the prefix (raw first, <c>f</c> and <c>b</c> in lower case, no <c>u</c>) and of the escapes (hex digits
+    /// of <c>\x</c>, <c>\u</c> and <c>\U</c> in lower case, names of <c>\N{...}</c> in upper case); raw strings keep their text.
+    /// </summary>
+    internal static string NormalisePrefixAndEscapes(string s)
+    {
+        int q = 0;
+        while (q < s.Length && s[q] != '"' && s[q] != '\'') q++;
+        if (q >= s.Length) return s;
+        string prefix = s[..q];
+        string raw = new(prefix.Where(c => c is 'r' or 'R').ToArray());
+        string rest = new(prefix.Where(c => c is not ('r' or 'R' or 'u' or 'U')).Select(char.ToLowerInvariant).ToArray());
+        string body = s[q..];
+        if (raw.Length == 0) body = NormaliseEscapes(prefix, body);
+        return raw + rest + body;
+    }
+
+    /// <summary>The escapes of a non-raw string in black's spelling; in bytes only <c>\x</c> is an escape.</summary>
+    static string NormaliseEscapes(string prefix, string text)
+    {
+        if (!text.Contains('\\') || prefix.Contains('r', StringComparison.OrdinalIgnoreCase)) return text;
+        bool bytes = prefix.Contains('b', StringComparison.OrdinalIgnoreCase);
+        return EscapeSequence.Replace(text, m =>
+        {
+            string slashes = m.Groups["bs"].Value;
+            if (slashes.Length % 2 == 0) return m.Value;
+            if (m.Groups["x"].Success) return slashes + "x" + m.Groups["x"].Value.ToLowerInvariant();
+            if (bytes) return m.Value;
+            if (m.Groups["u"].Success) return slashes + "u" + m.Groups["u"].Value.ToLowerInvariant();
+            if (m.Groups["U"].Success) return slashes + "U" + m.Groups["U"].Value.ToLowerInvariant();
+            return slashes + "N{" + m.Groups["N"].Value.ToUpperInvariant() + "}";
+        });
+    }
+
+    /// <summary>The body of a string without the backslashes that are only there for a quote: they do not change the string.</summary>
+    static string Canonical(string prefix, string body)
+    {
+        if (prefix.Contains('r', StringComparison.OrdinalIgnoreCase)) return body;
+        var sb = new StringBuilder();
+        for (int i = 0; i < body.Length; i++)
+        {
+            if (body[i] == '\\' && i + 1 < body.Length)
+            {
+                if (body[i + 1] is '"' or '\'') sb.Append(body[i + 1]); else sb.Append(body[i]).Append(body[i + 1]);
+                i++;
+            }
+            else sb.Append(body[i]);
+        }
+        return NormaliseEscapes(prefix, sb.ToString());
     }
 
     // ------------------------------------------------------------ quotes
@@ -243,6 +299,7 @@ public static class PythonFormatter
             if (content.Contains('\'') || content.Contains('\\') || content.Contains('"')) return s;
             return s[..q] + "'" + content + "'";
         }
+        if (style == QuoteStyle.Double) return BlackQuotes(s, q);
         if (s[q] != '\'') return s;
         // single quotes are what the style wants: only triple single quotes still become triple double quotes
         if (style == QuoteStyle.Single && !s[q..].StartsWith("'''")) return s;
@@ -257,6 +314,55 @@ public static class PythonFormatter
         if (!triple && inner.Contains('\'')) return s;   // a stray quote means the token is not what it looks like
         string quote = triple ? "\"\"\"" : "\"";
         return prefix + quote + inner + quote;
+    }
+
+    /// <summary>
+    /// Black's quote normalisation: the other quote is used when it needs fewer escapes (equal counts prefer double quotes), escapes of
+    /// the quote that is going away are dropped, and an f-string whose replacement field has a backslash is left alone.
+    /// </summary>
+    static string BlackQuotes(string s, int q)
+    {
+        string prefix = s[..q], v = s[q..];
+        if (v.StartsWith("\"\"\"")) return s;
+        string origQ, newQ;
+        if (v.StartsWith("'''")) { origQ = "'''"; newQ = "\"\"\""; }
+        else if (v[0] == '"') { origQ = "\""; newQ = "'"; }
+        else { origQ = "'"; newQ = "\""; }
+        if (v.Length < 2 * origQ.Length || !v.EndsWith(origQ)) return s;
+        string body = v[origQ.Length..^origQ.Length];
+        string newBody;
+        if (prefix.Contains('r') || prefix.Contains('R'))
+        {
+            if (Regex.IsMatch(body, @"(([^\\]|^)(\\\\)*)" + Regex.Escape(newQ))) return s;   // a quote that is not escaped (an even number of backslashes before it)
+            newBody = body;
+        }
+        else
+        {
+            string eq = Regex.Escape(newQ), eo = Regex.Escape(origQ);
+            newBody = SubTwice(@"([^\\]|^)\\((?:\\\\)*)" + eq, "${1}${2}" + newQ, body);
+            if (body != newBody) { body = newBody; s = prefix + origQ + body + origQ; }
+            newBody = SubTwice(@"([^\\]|^)\\((?:\\\\)*)" + eo, "${1}${2}" + origQ, newBody);
+            newBody = SubTwice(@"(([^\\]|^)(\\\\)*)" + eq, "${1}\\" + newQ, newBody);
+        }
+        if ((prefix.Contains('f') || prefix.Contains('F')) && Regex.IsMatch(v[origQ.Length..^origQ.Length], @"(([^\\]|^)(\\\\)*)" + Regex.Escape(origQ))) return s;   // a nested f-string with the same quotes
+        if (prefix.Contains('f') || prefix.Contains('F'))
+            foreach (Match m in Regex.Matches(newBody, @"(?:(?<!\{)|^)\{([^{].*?)\}(?:(?!\})|$)"))
+                if (m.Groups[1].Value.Contains('\\')) return s;
+        if (newQ == "\"\"\"" && newBody.EndsWith('"')) newBody = newBody[..^1] + "\\\"";
+        int origEscapes = CountOf(body, "\\"), newEscapes = CountOf(newBody, "\\");
+        if (newEscapes > origEscapes) return s;
+        if (newEscapes == origEscapes && origQ == "\"") return s;
+        return prefix + newQ + newBody + newQ;
+    }
+
+    static string SubTwice(string pattern, string replacement, string input) =>
+        Regex.Replace(Regex.Replace(input, pattern, replacement), pattern, replacement);
+
+    static int CountOf(string text, string part)
+    {
+        int n = 0;
+        for (int i = text.IndexOf(part, StringComparison.Ordinal); i >= 0; i = text.IndexOf(part, i + part.Length, StringComparison.Ordinal)) n++;
+        return n;
     }
 
     internal static string NormaliseComment(string c, bool firstLine)
@@ -628,6 +734,9 @@ public static class PythonFormatter
             return false;
         }
 
+        /// <summary>An else, elif, except or finally (or the like): a clause that belongs to the statement above, not a new one.</summary>
+        bool DependentClause(Line l) => EndsWithColon(l) && FirstWord(l) is not ("with" or "try" or "for" or "while" or "if" or "match");
+
         bool EndsWithColon(Line l) => !l.IsComment && l.Tokens.Count > 0 &&
             l.Tokens.Where(t => t.Kind != TokenKind.Comment).Select(t => t.Text(_s)).LastOrDefault() == ":";
 
@@ -648,7 +757,8 @@ public static class PythonFormatter
                 int blank = Math.Min(l.BlankBefore, max);
 
                 bool leftDef = false;
-                while (defs.Count > 0 && defs.Peek() >= l.Level) { defs.Pop(); leftDef = true; }
+                int poppedLevel = -1;
+                while (defs.Count > 0 && defs.Peek() >= l.Level) { poppedLevel = defs.Pop(); leftDef = true; }
 
                 bool afterDecorator = IsDecorator(prev) && !prev.IsComment;
                 bool firstInBlock = prev.Level < l.Level;
@@ -656,8 +766,9 @@ public static class PythonFormatter
                 bool startsDefinition = StartsDefinition(lines, i);
                 bool attachedToComment = l.BlankBefore == 0 && prev.IsComment && prev.Level == l.Level && StartsDefinition(lines, i - 1);
 
-                if (afterDecorator || firstInBlock) blank = 0;
-                else if (i == 1 && moduleDoc) blank = 1;
+                if (afterDecorator) blank = 0;
+                else if (firstInBlock && !(startsDefinition && !l.IsComment && !(IsDef(prev) && !prev.IsComment))) blank = prev.IsComment || IsDocstringStatement(lines, i) ? 0 : Math.Min(l.BlankBefore, 1);   // black keeps one blank line at the start of a block, but not before a docstring
+                else if (i == 1 && moduleDoc && (!startsDefinition || (IsDecorator(l) && !l.IsComment))) blank = 1;   // black: one blank line after the module docstring, two before a def or class (but a decorator still gets one)
                 else if (startsDefinition)
                 {
                     if (attachedToComment) blank = 0;
@@ -665,8 +776,8 @@ public static class PythonFormatter
                     else blank = l.Level == 0 ? 2 : 1;
                 }
                 else if (IsClassDocstring(lines, i - 1) && prev.Level == l.Level) blank = 1;
-                else if (leftDef) blank = l.Level == 0 ? 2 : 1;
-                else if (IsImport(prev) && !IsImport(l) && prev.Level == l.Level) blank = Math.Max(blank, 1);
+                else if (leftDef) blank = l.Level == 0 && !(poppedLevel > 0 && DependentClause(l)) ? 2 : 1;
+                else if (IsImport(prev) && !IsImport(l) && prev.Level == l.Level) blank = 1;   // black: exactly one blank line after the imports, even when there were two
 
                 l.BlankBefore = blank;
                 Track(l);
@@ -743,10 +854,13 @@ public static class PythonFormatter
                 }
                 if (backslash || (t.Kind == TokenKind.String && text.Contains('\n'))) legacyOnly = true;
 
+                bool sliceBefore = false, sliceAfter = false;
+                if (sliceColon) (sliceBefore, sliceAfter) = SliceSpacing(toks, k);
                 bool space = false;
                 if (k > 0 && t.Kind != TokenKind.Comment && !backslash && ps.HasValue)
                     space = NeedSpace(t, text, ps.Value, psText, toks, k, frames, unary, kwargEq, hugPow, sliceColon, lambdaColon,
                         lastNoSpaceAfter, lastWasSliceColon, sliceSpaced, lineBreak ? " " : gap, startsWithFrom, ref inRelativeDots);
+                if (sliceColon && !backslash && !lineBreak) space = sliceBefore;
                 if (t.Kind != TokenKind.Comment)
                     pieces.Add(new Piece
                     {
@@ -804,8 +918,7 @@ public static class PythonFormatter
                             if (lambdaColon) lambdaDepths.Pop();
                             else if (sliceColon)
                             {
-                                string after = k + 1 < toks.Count ? _s[t.End..toks[k + 1].Start] : "";
-                                sliceSpaced = gap.Length > 0 && after.Length > 0 && !after.Contains('\n');
+                                sliceSpaced = sliceAfter;
                                 lastWasSliceColon = true;
                             }
                             else if (top && frames.Peek().Open == '(') frames.Peek().SawColon = true;
@@ -843,7 +956,7 @@ public static class PythonFormatter
 
         string Normalise(Token t, string text, Line line) => t.Kind switch
         {
-            TokenKind.String => NormaliseString(text, _o.Quotes),
+            TokenKind.String => _o.Quotes == QuoteStyle.Preserve ? text : NormaliseString(NormalisePrefixAndEscapes(text), _o.Quotes),
             TokenKind.Number => NormaliseNumber(text),
             TokenKind.Comment => NormaliseComment(text, false),
             _ => text,
@@ -935,6 +1048,59 @@ public static class PythonFormatter
                 return true;
             }
             return true;
+        }
+
+        /// <summary>
+        /// Black's slice spacing: a subscript element with anything but names, numbers, strings and signs in it ("complex": arithmetic, a call,
+        /// an attribute, a comparison, a condition...) has spaces around its colons like around an operator, as in <c>x[a + 1 : b]</c>;
+        /// a colon with nothing before it hugs the bracket or comma, one with nothing after it does not take a space after it,
+        /// and a simple element has no spaces at all.
+        /// </summary>
+        (bool Before, bool After) SliceSpacing(List<Token> toks, int k)
+        {
+            bool Is(int j, string text) => j >= 0 && j < toks.Count && toks[j].Kind == TokenKind.Operator && toks[j].Text(_s) == text;
+            bool Ends(int j) => j >= toks.Count || Is(j, "]") || Is(j, ",");
+            int start = k, end = k;
+            for (int j = k - 1, depth = 0; j >= 0; j--)
+            {
+                if (toks[j].Kind == TokenKind.Operator)
+                {
+                    string x = toks[j].Text(_s);
+                    if (x is ")" or "]" or "}") depth++;
+                    else if (x is "(" or "[" or "{") { if (depth == 0) break; depth--; }
+                    else if (x == "," && depth == 0) break;
+                }
+                start = j;
+            }
+            for (int j = k + 1, depth = 0; j < toks.Count; j++)
+            {
+                if (toks[j].Kind == TokenKind.Operator)
+                {
+                    string x = toks[j].Text(_s);
+                    if (x is "(" or "[" or "{") depth++;
+                    else if (x is ")" or "]" or "}") { if (depth == 0) break; depth--; }
+                    else if (x == "," && depth == 0) break;
+                }
+                end = j;
+            }
+            bool complex = false;
+            for (int j = start; j <= end && !complex; j++)
+            {
+                var tk = toks[j];
+                string x = tk.Text(_s);
+                bool afterValue = j > start && IsValueEnd(toks[j - 1], toks[j - 1].Text(_s));
+                if (tk.Kind == TokenKind.Keyword) complex = x is "and" or "or" or "not" or "in" or "is" or "if" or "else" or "lambda";
+                else if (tk.Kind == TokenKind.Operator)
+                    complex = x is "." or "<" or ">" or "==" or "!=" or "<=" or ">=" or ":="
+                        || (x is "(" or "[" && afterValue)
+                        || (x is "+" or "-" or "*" or "/" or "//" or "%" or "**" or "@" or "<<" or ">>" or "&" or "|" or "^" && afterValue);
+            }
+            if (!complex) return (Is(k - 1, ","), false);   // after a comma the space is the comma's
+            bool leading = k == 0 || Is(k - 1, "[") || Is(k - 1, ",");
+            bool prevColon = Is(k - 1, ":"), nextColon = Is(k + 1, ":");
+            bool before = Is(k - 1, ",") || (!leading && !(prevColon && !Ends(k + 1)));
+            bool after = !Ends(k + 1) && !(nextColon && !Ends(k + 2));
+            return (before, after);
         }
 
         bool SpacedAfter(List<Token> toks, int k)

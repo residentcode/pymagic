@@ -70,7 +70,21 @@ public sealed partial class LanguageService
         if (m.SyntaxErrors.Count > 0) throw new ServiceException("Fix the syntax errors first: a file that does not parse cannot be formatted.");
         string text = m.Source;
         var options = FormatConfigOf(uri);
-        if (sortImports) text = ImportSorter.Sort(text, ImportClassifier(snap), options.LineLength, options.Imports) ?? text;
+        if (sortImports)
+        {
+            string? sorted = null;
+            if (engine == "ruff")
+            {
+                // ruff's own sorter, with the isort settings of the project; ours when ruff cannot be run or returns something that does not parse
+                try
+                {
+                    sorted = ExternalFormatter.SortImports(FormatterPython, text, FilePathOf(uri), FormatterTarget);
+                    if (PyMagic.Core.Syntax.Parser.Parse(sorted).Diagnostics.Count > 0) sorted = null;
+                }
+                catch (ServiceException) { sorted = null; }
+            }
+            text = sorted ?? ImportSorter.Sort(text, ImportClassifier(snap), options.LineLength, options.Imports) ?? text;
+        }
         string formatted = engine is "builtin" or ""
             ? PythonFormatter.Format(text, options) ?? throw new ServiceException("This file cannot be formatted (it has `fmt: off`, or the result could have changed the code).")
             : RunExternal(engine, text, uri);

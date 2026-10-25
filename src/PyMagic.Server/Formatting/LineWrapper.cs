@@ -48,6 +48,7 @@ internal sealed class LineWrapper
         _options = options;
         if (!options.MagicTrailingComma) RemoveTrailingCommas();
         RemoveRedundantParentheses();
+        ParenthesiseSingleTuples();
         int n = _p.Count;
         _depth = new int[n];
         _before = new int[n];
@@ -114,7 +115,7 @@ internal sealed class LineWrapper
                 StripRange(1, inAt, allowTuple: true);
             }
         }
-        else if (first == "del") StripRange(1, _p.Count, allowTuple: true);
+        else if (first == "del") StripRange(1, _p.Count, allowTuple: false);
         else if (first == "assert")
         {
             int comma = -1, depth = 0;
@@ -137,6 +138,62 @@ internal sealed class LineWrapper
                 else if (depth == 0 && _p[i].Kind == TokenKind.Operator && !_p[i].KwargEquals && IsAssignOperator(_p[i].Text)) assign = i;
             }
             if (assign > 0) StripRange(assign + 1, _p.Count, allowTuple: false);
+        }
+    }
+
+    // ------------------------------------------------------------ one-element tuples
+
+    /// <summary>`x = 1,` is `x = (1,)` (and `x = 1, 2,` is the tuple in parentheses, one item to a line), `a, = y` is `(a,) = y`, `for a, in b` is `for (a,) in b` and `return 1,` is `return (1,)`, as in black.</summary>
+    void ParenthesiseSingleTuples()
+    {
+        int n = _p.Count;
+        if (n < 3 || _p.Any(p => p.Standalone)) return;
+        string first = _p[0].Text;
+        var segments = new List<(int Start, int End)>();
+        if (first is "return" or "del") segments.Add((1, n));
+        else if (first == "for" && _p[^1].Kind == TokenKind.Operator && _p[^1].Text == ":")
+        {
+            int inAt = IndexAtDepth0("in", 1);
+            if (inAt > 0) { segments.Add((1, inAt)); segments.Add((inAt + 1, n - 1)); }
+        }
+        else if (_p[0].Kind != TokenKind.Keyword || first is "None" or "True" or "False")
+        {
+            int depth = 0, from = 0;
+            var found = new List<(int Start, int End)>();
+            for (int i = 0; i < n; i++)
+            {
+                if (_p[i].IsOpen) depth++;
+                else if (_p[i].IsClose) depth--;
+                else if (depth == 0 && _p[i].Kind == TokenKind.Operator && !_p[i].KwargEquals && IsAssignOperator(_p[i].Text))
+                {
+                    found.Add((from, i));
+                    from = i + 1;
+                }
+            }
+            if (found.Count == 0) return;
+            found.Add((from, n));
+            segments.AddRange(found);
+        }
+
+        // from the right, so the positions still to be looked at stay valid
+        foreach (var (start, end) in segments.OrderByDescending(x => x.Start))
+        {
+            if (end - start < 2) continue;
+            int depth = 0, commas = 0;
+            bool unsuitable = false;
+            for (int i = start; i < end; i++)
+            {
+                if (_p[i].IsOpen) depth++;
+                else if (_p[i].IsClose) depth--;
+                else if (depth == 0 && _p[i].Kind == TokenKind.Operator && _p[i].Text == ",") commas++;
+                else if (depth == 0 && _p[i].Kind == TokenKind.Keyword && _p[i].Text is "lambda" or "yield") unsuitable = true;
+            }
+            if (unsuitable || commas == 0 || (commas > 1 && !_options.MagicTrailingComma) || _p[end - 1].Kind != TokenKind.Operator || _p[end - 1].Text != ",") continue;   // a trailing comma makes the tuple a magic one
+            _p.Insert(end, new Piece { Text = ")", Kind = TokenKind.Operator, IsClose = true });
+            if (end + 1 < _p.Count && _p[end + 1].Kind == TokenKind.Operator && _p[end + 1].Text == ":") _p[end + 1].Space = false;
+            var open = new Piece { Text = "(", Kind = TokenKind.Operator, IsOpen = true, Space = _p[start].Space };
+            _p[start].Space = false;
+            _p.Insert(start, open);
         }
     }
 

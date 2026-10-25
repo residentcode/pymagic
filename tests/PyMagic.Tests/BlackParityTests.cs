@@ -77,7 +77,7 @@ public class BlackParityTests
     [Fact]
     public void ParenthesesAroundAWholeValueAreRemoved()
     {
-        Same(Src("def f():", "    return x", "", "", "if a:", "    pass", "while a and b:", "    pass", "x = 1", "assert x, y", "del a", "del a, b"),
+        Same(Src("def f():", "    return x", "", "", "if a:", "    pass", "while a and b:", "    pass", "x = 1", "assert x, y", "del a", "del (a, b)"),
             Src("def f():", "    return (x)", "if (a):", "    pass", "while (a and b):", "    pass", "x = (1)", "assert (x), (y)", "del (a)", "del (a, b)"));
         Same(Src("for x in y:", "    pass", "for a, b in c:", "    pass", "x = 1"), Src("for (x) in (y):", "    pass", "for (a, b) in c:", "    pass", "x = ((1))"));
     }

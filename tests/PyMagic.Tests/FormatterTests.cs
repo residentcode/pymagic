@@ -45,9 +45,9 @@ public class FormatterTests
     }
 
     [Fact]
-    public void BlankLinesAreCappedAndRemovedAtTheStartOfBlocks()
+    public void BlankLinesAreCappedAndOneIsKeptAtTheStartOfBlocks()
     {
-        Assert.Equal(Src("x = 1", "", "", "y = 2", "", "", "def f():", "    a = 1", "", "    b = 2"),
+        Assert.Equal(Src("x = 1", "", "", "y = 2", "", "", "def f():", "", "    a = 1", "", "    b = 2"),
             Fmt(Src("", "", "x = 1", "", "", "", "", "y = 2", "", "def f():", "", "", "    a = 1", "", "", "    b = 2")));
     }
 
@@ -74,7 +74,7 @@ public class FormatterTests
     [Fact]
     public void QuotesBecomeDoubleWhenThatNeedsNoEscapes()
     {
-        Assert.Equal(Src("a = \"a\"", "b = 'it\"s'", "c = f\"{x}\"", "d = b\"x\"", "e = \"\"\"doc\"\"\"", "f = 'it\\'s'", "g = r'\\d'"),
+        Assert.Equal(Src("a = \"a\"", "b = 'it\"s'", "c = f\"{x}\"", "d = b\"x\"", "e = \"\"\"doc\"\"\"", "f = \"it's\"", "g = r\"\\d\""),
             Fmt(Src("a = 'a'", "b = 'it\"s'", "c = f'{x}'", "d = b'x'", "e = '''doc'''", "f = 'it\\'s'", "g = r'\\d'")));
     }
 

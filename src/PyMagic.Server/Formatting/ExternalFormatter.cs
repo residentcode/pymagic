@@ -67,6 +67,23 @@ public static class ExternalFormatter
             : r.Output.Replace("\r\n", "\n");
     }
 
+    /// <summary>The text with its imports sorted by ruff's own sorter (rule I, with the project's isort settings); only that rule is applied.</summary>
+    /// <exception cref="ServiceException">ruff is not installed, rejects the text, or takes too long.</exception>
+    public static string SortImports(string python, string source, string filePath, ExecutionTarget? target = null)
+    {
+        var args = new List<string> { "-m", "ruff", "check", "--select", "I", "--fix", "--exit-zero", "--quiet", "--stdin-filename", filePath, "-" };
+        var r = Run(python, args, source, TimeSpan.FromSeconds(30), target);
+        if (r.ExitCode != 0)
+        {
+            string error = (r.Error.Trim().Length > 0 ? r.Error : r.Output).Trim();
+            if (error.Contains("No module named ruff") || error.Contains("No module named 'ruff'")) throw NotInstalled(python, "ruff");
+            throw new ServiceException(error.Length == 0 ? "ruff failed." : string.Join(" ", error.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).Take(3)));
+        }
+        return source.Contains("\r\n")
+            ? Regex.Replace(r.Output, "(?<!\r)\n", "\r\n")
+            : r.Output.Replace("\r\n", "\n");
+    }
+
     static ServiceException NotInstalled(string python, string tool) =>
         new($"{tool} is not installed for {python}. Install it from the Packages tab.");
 
