@@ -101,6 +101,28 @@ public class TerminalTests
     }
 
     [Fact]
+    public void TerminalsOnOneProjectAreIndependent()
+    {
+        // each terminal tab of the panel is a session of its own: its own folder, and its command holds up no other
+        string root = TempFolder();
+        Directory.CreateDirectory(Path.Combine(root, "sub"));
+        using var a = new TerminalSession(root, () => null);
+        using var b = new TerminalSession(root, () => null);
+        Assert.Equal(0, Run(a, "cd sub").Code);
+        Assert.Equal(Path.Combine(root, "sub"), a.Cwd);
+        Assert.Equal(root, b.Cwd);
+        var slow = Start(a, Windows ? "Start-Sleep 60" : "sleep 60");
+        Thread.Sleep(Windows ? 1500 : 300);
+        var quick = Run(b, "echo still-here");
+        Assert.Equal(0, quick.Code);
+        Assert.Contains("still-here", quick.Out.ToString());
+        Assert.Equal(root, quick.Cwd);
+        Assert.True(a.IsRunning && !b.IsRunning, "only the first terminal is busy");
+        a.Kill();
+        Assert.True(slow.Done.Wait(TimeSpan.FromSeconds(20)), "killed");
+    }
+
+    [Fact]
     public void OnlyOneCommandAtATime()
     {
         using var t = new TerminalSession(TempFolder(), () => null);

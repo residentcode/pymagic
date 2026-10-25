@@ -263,8 +263,17 @@
     .cov-miss-line { background: rgba(229,83,75,.10); }
     .listbar label { color: var(--dim); display: flex; gap: 4px; align-items: center; }
     #terminal-main { flex: 1; }
-    #term-output { flex: 1; margin: 0; padding: 4px 10px; overflow: auto; font: 12.5px/1.45 Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; word-break: break-all; }
-    #term-output .err { color: var(--red); } #term-output .info { color: var(--dim); } #term-output .cmd { color: #7aa7d9; }
+    #terminal-main .term-output { flex: 1; margin: 0; padding: 4px 10px; overflow: auto; font: 12.5px/1.45 Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; word-break: break-all; }
+    #terminal-main .term-output:not(.active) { display: none; }
+    .term-output .err { color: var(--red); } .term-output .info { color: var(--dim); } .term-output .cmd { color: #7aa7d9; }
+    #term-tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+    .ttab { display: flex; align-items: center; gap: 4px; padding: 1px 3px 1px 8px; border: 1px solid var(--line); border-radius: 3px; color: var(--dim); cursor: pointer; white-space: nowrap; user-select: none; }
+    .ttab:hover { color: var(--fg); background: #ffffff10; }
+    .ttab.active { color: var(--fg); border-color: var(--accent); }
+    .ttab.busy .ttab-name::before { content: "● "; color: #e0a030; }
+    .ttab-close { width: 14px; text-align: center; font-size: 9px; border-radius: 3px; opacity: .55; }
+    .ttab-close:hover { background: #ffffff25; opacity: 1; }
+    .listbar .ttab-rename { min-width: 0; background: var(--bg); border-color: var(--accent); padding: 0 4px; }
     #term-line { display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--line); padding: 3px 10px; font: 12.5px Consolas, "Cascadia Mono", monospace; }
     #term-prompt { color: #7aa7d9; white-space: nowrap; } #term-prompt.busy { color: #e0a030; }
     #term-input { flex: 1; border: 0; background: transparent; color: var(--fg); font: inherit; outline: none; }
@@ -499,11 +508,12 @@
       <div id="terminal-tab" class="tab">
         <div class="col" id="terminal-main">
           <div id="term-bar" class="listbar">
+            <div id="term-tabs"></div>
+            <button id="term-new" title="New terminal (Ctrl+Shift+`)">+</button>
             <span id="term-status"></span>
             <button id="term-stop" title="Stop the running command (Ctrl+C)" disabled>Stop</button>
             <button id="term-clear" title="Clear the output">Clear</button>
           </div>
-          <pre id="term-output" class="body"></pre>
           <div id="term-line"><span id="term-prompt"></span><input id="term-input" autocomplete="off" spellcheck="false" placeholder="Type a command, for example: python -m pytest"></div>
         </div>
       </div>
