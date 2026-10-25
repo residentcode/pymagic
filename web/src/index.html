@@ -129,6 +129,15 @@
     #git-bar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
     #git-bar #git-branch { font-weight: 600; } #git-bar select, #git-bar input[type=text], #git-new-name { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 1px 4px; }
     #git-state { margin-left: auto; color: var(--dim); } #git-none { padding: 8px 12px; color: var(--dim); }
+    #git-lines { display: none; position: fixed; inset: 8vh 10vw; z-index: 60; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 30px rgba(0,0,0,.5); flex-direction: column; }
+    #git-lines.open { display: flex; } #git-lines-head { display: flex; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    #git-lines-title { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #git-lines-count { color: var(--dim); }
+    #git-lines-head button { background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 0 10px; font: inherit; cursor: pointer; } #git-lines-head button:hover { background: #8882; }
+    #git-lines-body { overflow: auto; flex: 1; font-family: var(--mono, Consolas, monospace); font-size: 13px; }
+    .hl-head { display: flex; gap: 8px; align-items: center; padding: 2px 10px; background: #8882; font-weight: 600; position: sticky; top: 0; } .hl-head .dim { color: var(--dim); font-weight: normal; }
+    .hl-row { display: flex; gap: 6px; padding: 0 10px; white-space: pre-wrap; word-break: break-all; } .hl-row input { margin: 3px 4px 0 0; flex: none; } .hl-row .sp { width: 17px; flex: none; }
+    .hl-num { width: 34px; text-align: right; color: var(--dim); flex: none; user-select: none; } .hl-add { background: rgba(76,187,108,.16); } .hl-del { background: rgba(229,83,75,.16); } .hl-ctx { color: var(--dim); }
+    .gc .part { color: var(--dim); font-size: 11px; margin-left: 6px; }
     #git-sync { display: flex; gap: 6px; align-items: center; padding: 2px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
     #git-sync button, #git-op button, .gs-row button, .git-acts button, #git-stash-new { background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 0 8px; font: inherit; cursor: pointer; }
     #git-sync button:hover, #git-op button:hover, .gs-row button:hover, .git-acts button:hover, #git-stash-new:hover { background: #8882; }
@@ -587,6 +596,7 @@
     </footer>
   </div>
   <script src="main.js"></script>
+<div id="git-lines"><div id="git-lines-head"><span id="git-lines-title"></span><span id="git-lines-count"></span><button id="git-lines-all">All</button><button id="git-lines-none">None</button><button id="git-lines-done">Done</button></div><div id="git-lines-body"></div></div>
 <div id="git-diff"><div id="git-diff-head"><span id="git-diff-title"></span><button id="git-diff-close">Close (Esc)</button></div><div id="git-diff-body"></div></div>
 </body>
 </html>

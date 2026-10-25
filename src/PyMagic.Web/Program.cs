@@ -778,10 +778,28 @@ app.MapGet("/api/git/commit", (string hash) => GitCall(r => r.Show(hash)));
 app.MapGet("/api/git/blame", (string path) => GitCall(r => r.Blame(path)));
 app.MapGet("/api/git/branches", () => GitCall(r => r.Branches()));
 
+// a file's changes as hunks and lines, for choosing which ones to commit
+app.MapGet("/api/git/diff", (string path) => GitCall(r => r.DiffOf(path)));
+
+// "paths" are committed whole; "partial" maps a path to { id, hunks: { "0": [line, ...] } } for the lines of it to commit
 app.MapPost("/api/git/commit", async (HttpRequest req) =>
 {
     var body = await JsonNode.ParseAsync(req.Body);
-    return await GitCall(r => new { hash = r.Commit(StringsOf(body?["paths"]), body?["message"]?.GetValue<string>() ?? "", body?["amend"]?.GetValue<bool>() ?? false) });
+    string message = body?["message"]?.GetValue<string>() ?? "";
+    bool amend = body?["amend"]?.GetValue<bool>() ?? false;
+    var partial = new Dictionary<string, LineSelection>();
+    if (body?["partial"] is JsonObject chosen)
+        foreach (var (file, node) in chosen)
+        {
+            var sel = new LineSelection { Id = node?["id"]?.GetValue<string>() ?? "" };
+            if (node?["hunks"] is JsonObject hunks)
+                foreach (var (index, lines) in hunks)
+                    if (int.TryParse(index, out int h) && lines is JsonArray arr) sel.Hunks[h] = arr.Select(x => x?.GetValue<int>() ?? -1).ToHashSet();
+            partial[file] = sel;
+        }
+    if (partial.Count == 0)
+        return await GitCall(r => new { hash = r.Commit(StringsOf(body?["paths"]), message, amend) });
+    return await GitCall(r => new { hash = r.CommitSelection(StringsOf(body?["paths"]), partial, message, amend) });
 });
 
 app.MapPost("/api/git/discard", async (HttpRequest req) =>

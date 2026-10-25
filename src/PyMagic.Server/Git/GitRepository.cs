@@ -91,7 +91,7 @@ public sealed partial class GitRepository
     static string Message((int Code, string Out, string Err) r) =>
         (r.Err.Trim().Length > 0 ? r.Err.Trim() : r.Out.Trim()) is { Length: > 0 } text ? text : $"git failed (exit code {r.Code})";
 
-    static (int Code, string Out, string Err) Execute(string git, string dir, IEnumerable<string> args, string? stdin, int timeoutMs)
+    static (int Code, string Out, string Err) Execute(string git, string dir, IEnumerable<string> args, string? stdin, int timeoutMs, IReadOnlyDictionary<string, string>? env = null)
     {
         var psi = new ProcessStartInfo(git)
         {
@@ -109,6 +109,7 @@ public sealed partial class GitRepository
         psi.Environment["GIT_TERMINAL_PROMPT"] = "0";     // never wait for a password nobody can type
         psi.Environment["GIT_OPTIONAL_LOCKS"] = "0";      // reading the status must not fight the user's own git for the index lock
         psi.Environment["GIT_EDITOR"] = "true";
+        if (env != null) foreach (var (k, v) in env) psi.Environment[k] = v;
         using var p = Process.Start(psi) ?? throw new InvalidOperationException("git did not start");
         var stdout = p.StandardOutput.ReadToEndAsync();
         var stderr = p.StandardError.ReadToEndAsync();

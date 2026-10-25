@@ -4,6 +4,7 @@ import * as monaco from 'monaco-editor';
 import { diffLines } from './preview';
 import { showTab } from './panel';
 import { toast } from './toast';
+import { changedLines, counts, hunkState, numbering, payload, selectAll, selectNone, stateOf, toggleHunk, toggleLine } from './hunks';
 const $ = (id) => document.getElementById(id);
 async function api(url, init) {
     const res = await fetch(url, init);
@@ -69,6 +70,7 @@ export function setupGit(deps) {
     let hunksFor = '';
     const decorations = editor.createDecorationsCollection();
     const unchecked = new Set();
+    const partial = new Map(); // rel -> { diff, sel }: a file of which only some lines are to be committed
     let logSkip = 0;
     let logEnd = false;
     let selectedCommit = '';
@@ -79,6 +81,7 @@ export function setupGit(deps) {
     document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') {
         closePopup();
         closeDiff();
+        closeLines(false);
     } }, true);
     const fileStatus = (rel) => status.files?.find((f) => f.path === rel);
     // ------------------------------------------------------------------ status
@@ -90,6 +93,9 @@ export function setupGit(deps) {
             status = { available: false, reason: String(e.message ?? e) };
         }
         baseText.clear();
+        for (const rel of Array.from(partial.keys()))
+            if (!status.files?.some((f) => f.path === rel))
+                partial.delete(rel);
         renderStatus();
         paintFileList();
         void paint();
@@ -150,11 +156,16 @@ export function setupGit(deps) {
             const box1 = document.createElement('input');
             box1.type = 'checkbox';
             box1.checked = !unchecked.has(f.path);
+            box1.indeterminate = partial.has(f.path);
             box1.onclick = (ev) => ev.stopPropagation();
-            box1.onchange = () => { if (box1.checked)
-                unchecked.delete(f.path);
-            else
-                unchecked.add(f.path); syncAll(); };
+            box1.onchange = () => {
+                partial.delete(f.path); // ticking the file takes all of it again
+                if (box1.checked)
+                    unchecked.delete(f.path);
+                else
+                    unchecked.add(f.path);
+                renderChanges();
+            };
             const st = document.createElement('span');
             st.className = `st st-${letter(f)}`;
             st.textContent = letter(f);
@@ -162,12 +173,25 @@ export function setupGit(deps) {
             path.className = 'path';
             path.textContent = f.originalPath ? `${f.originalPath} → ${f.path}` : f.path;
             path.title = path.textContent;
+            const lines = document.createElement('button');
+            lines.className = 'roll';
+            lines.textContent = '☰';
+            lines.title = 'Choose the hunks or lines of this file to commit';
+            lines.onclick = (ev) => { ev.stopPropagation(); void chooseLines(f); };
+            if (partial.has(f.path)) {
+                const c = counts(partial.get(f.path).diff, partial.get(f.path).sel);
+                const badge = document.createElement('span');
+                badge.className = 'part';
+                badge.textContent = `${c.chosen}/${c.total} lines`;
+                path.append(badge);
+                lines.style.visibility = 'visible';
+            }
             const roll = document.createElement('button');
             roll.className = 'roll';
             roll.textContent = '↶';
             roll.title = 'Roll back this file to the last commit (cannot be undone)';
             roll.onclick = (ev) => { ev.stopPropagation(); void rollback([f]); };
-            row.append(box1, st, path, roll);
+            row.append(box1, st, path, lines, roll);
             row.onclick = () => void showChange(f);
             row.ondblclick = () => { if (f.worktree !== 'D' && f.index !== 'D')
                 void deps.openFile(f.path); };
@@ -179,8 +203,10 @@ export function setupGit(deps) {
         const all = $('git-all');
         const files = status.files ?? [];
         all.checked = files.length > 0 && files.every((f) => !unchecked.has(f.path));
+        all.indeterminate = partial.size > 0;
     }
     $('git-all').onchange = () => {
+        partial.clear();
         const on = $('git-all').checked;
         for (const f of status.files ?? []) {
             if (on)
@@ -208,9 +234,12 @@ export function setupGit(deps) {
     const result = (text, bad = false) => { $('git-result').textContent = text; $('git-result').className = bad ? 'bad' : ''; };
     async function commit() {
         const amend = $('git-amend').checked;
-        const paths = (status.files ?? []).filter((f) => !unchecked.has(f.path)).map((f) => f.path);
+        const paths = (status.files ?? []).filter((f) => !unchecked.has(f.path) && !partial.has(f.path)).map((f) => f.path);
         const message = $('git-message').value;
-        if (!amend && paths.length === 0) {
+        const chosen = {};
+        for (const [rel, p] of partial)
+            chosen[rel] = payload(p.sel);
+        if (!amend && paths.length === 0 && partial.size === 0) {
             result('Select the files to commit.', true);
             return;
         }
@@ -222,7 +251,8 @@ export function setupGit(deps) {
         $('git-commit').disabled = true;
         try {
             await deps.saveAll();
-            const { hash } = await post('/api/git/commit', { paths, message, amend });
+            const { hash } = await post('/api/git/commit', { paths, message, amend, ...(partial.size ? { partial: chosen } : {}) });
+            partial.clear();
             $('git-message').value = '';
             $('git-amend').checked = false;
             result('');
@@ -232,7 +262,11 @@ export function setupGit(deps) {
             $('git-log').replaceChildren();
         }
         catch (e) {
-            result(String(e.message ?? e), true);
+            const text = String(e.message ?? e);
+            result(text, true);
+            // a file that changed under a selection of its lines: that selection is void
+            if (/changed since its lines were chosen/.test(text))
+                partial.clear();
         }
         finally {
             $('git-commit').disabled = false;
@@ -251,6 +285,106 @@ export function setupGit(deps) {
         }
         catch { /* no commit to amend */ }
     };
+    // ------------------------------------------------------------------ choosing lines
+    let choosing = null; // { f, diff, sel }
+    function paintLines() {
+        const { diff, sel } = choosing;
+        const body = $('git-lines-body');
+        body.replaceChildren();
+        diff.hunks.forEach((hunk, h) => {
+            const head = document.createElement('div');
+            head.className = 'hl-head';
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            const st = hunkState(diff, sel, h);
+            box.checked = st === 'all';
+            box.indeterminate = st === 'partial';
+            box.title = 'The whole hunk';
+            box.onchange = () => { toggleHunk(diff, sel, h); paintLines(); };
+            const c = changedLines(hunk).length;
+            const label = document.createElement('span');
+            label.textContent = `@@ -${hunk.oldStart} +${hunk.newStart} @@`;
+            const sec = document.createElement('span');
+            sec.className = 'dim';
+            sec.textContent = `${hunk.section}  (${c} change${c === 1 ? '' : 's'})`;
+            head.append(box, label, sec);
+            body.append(head);
+            const nums = numbering(hunk);
+            hunk.lines.forEach((l, i) => {
+                const row = document.createElement('div');
+                row.className = 'hl-row ' + (l.kind === '+' ? 'hl-add' : l.kind === '-' ? 'hl-del' : 'hl-ctx');
+                if (l.kind === ' ') {
+                    const sp = document.createElement('span');
+                    sp.className = 'sp';
+                    row.append(sp);
+                }
+                else {
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.checked = !!sel.hunks.get(h)?.has(i);
+                    cb.onchange = () => { toggleLine(diff, sel, h, i); paintLines(); };
+                    row.append(cb);
+                }
+                const [o, n] = nums[i];
+                const no = document.createElement('span');
+                no.className = 'hl-num';
+                no.textContent = o ?? '';
+                const nn = document.createElement('span');
+                nn.className = 'hl-num';
+                nn.textContent = n ?? '';
+                const text = document.createElement('span');
+                text.textContent = l.kind + l.text.replace(/\r$/, '');
+                row.append(no, nn, text);
+                if (l.kind !== ' ')
+                    row.onclick = (ev) => { if (ev.target.tagName !== 'INPUT') { toggleLine(diff, sel, h, i); paintLines(); } };
+                body.append(row);
+            });
+        });
+        const k = counts(diff, sel);
+        $('git-lines-count').textContent = `${k.chosen} of ${k.total} changed lines`;
+    }
+    async function chooseLines(f) {
+        let diff;
+        try {
+            await deps.saveAll();
+            diff = await api('/api/git/diff?path=' + encodeURIComponent(f.path));
+        }
+        catch (e) {
+            toast(String(e.message ?? e), true);
+            return;
+        }
+        if (diff.isBinary || diff.isDeleted || diff.hunks.length === 0) {
+            toast(diff.isBinary ? 'A binary file can only be committed whole.' : diff.isDeleted ? 'A deleted file can only be committed whole.' : 'There are no changed lines to choose.', true);
+            return;
+        }
+        const known = partial.get(f.path);
+        const sel = known && known.sel.id === diff.id ? known.sel : unchecked.has(f.path) ? selectNone(diff) : selectAll(diff);
+        choosing = { f, diff, sel };
+        $('git-lines-title').textContent = `${f.path} — choose what to commit`;
+        $('git-lines').classList.add('open');
+        paintLines();
+    }
+    function closeLines(keep) {
+        if (keep && choosing) {
+            const { f, diff, sel } = choosing;
+            const st = stateOf(diff, sel);
+            if (st === 'partial')
+                partial.set(f.path, { diff, sel });
+            else {
+                partial.delete(f.path);
+                if (st === 'all')
+                    unchecked.delete(f.path);
+                else
+                    unchecked.add(f.path);
+            }
+            renderChanges();
+        }
+        choosing = null;
+        $('git-lines').classList.remove('open');
+    }
+    $('git-lines-all').onclick = () => { if (choosing) { choosing.sel = selectAll(choosing.diff); paintLines(); } };
+    $('git-lines-none').onclick = () => { if (choosing) { choosing.sel = selectNone(choosing.diff); paintLines(); } };
+    $('git-lines-done').onclick = () => closeLines(true);
     // ------------------------------------------------------------------ diffs
     let diffEditor = null;
     let diffModels = [];
