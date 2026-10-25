@@ -117,6 +117,39 @@ public sealed partial class TypeEvaluator
         return _functions[node] = new FunctionInfo("<lambda>", m, node, scope);
     }
 
+    /// <summary>Decorators the engine models through flags, not by calling them.</summary>
+    static readonly HashSet<string> FlagDecorators = new()
+    {
+        "staticmethod", "classmethod", "property", "cached_property", "setter", "getter", "deleter", "abstractmethod",
+        "overload", "final", "override", "abstractproperty", "abstractclassmethod", "abstractstaticmethod",
+    };
+
+    /// <summary>
+    /// What a name bound by `@deco def f` is: f passed through each decorator, the nearest first. Only decorators that say
+    /// what they return are applied (a typed `Callable[..., R]`, a class), and only when the result is known; otherwise f stays as written.
+    /// </summary>
+    PyType ApplyDecorators(ModuleInfo m, FunctionDef def, PyType fn)
+    {
+        var current = fn;
+        for (int i = def.Decorators.Count - 1; i >= 0; i--)
+        {
+            var dec = def.Decorators[i];
+            string? name = dec switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, CallExpr { Func: NameExpr cn } => cn.Name, CallExpr { Func: AttributeExpr ca } => ca.Attr, _ => null };
+            if (name != null && FlagDecorators.Contains(name)) continue;
+            var decType = TypeOf(m, dec);
+            if (decType.IsDynamic || !(decType.Members.All(x => x is FunctionType { Info: var fi } && DeclaredReturn(fi) != null
+                                                              || x is OverloadedType || x is ClassType { IsInstance: false } || x is SignatureType)))
+                continue;
+            var arg = current;
+            var targets = CallValue(decType, new[] { new ArgInfo(null, null, 0, () => arg) }, null);
+            if (targets.Count == 0 || targets.Any(t => t.Problems.Count > 0)) continue;
+            var result = PyType.Union(targets.Select(t => t.Returns));
+            if (result.IsDynamic || result.Members.Any(x => x.IsDynamic)) continue;
+            current = result;
+        }
+        return current;
+    }
+
     static FuncFlags DecoratorFlags(FunctionDef f)
     {
         var flags = FuncFlags.None;
@@ -374,7 +407,12 @@ public sealed partial class TypeEvaluator
         switch (d.Kind)
         {
             case DeclKind.Class: return new ClassType(ClassOf(m, (ClassDef)d.Node), false);
-            case DeclKind.Function: return new FunctionType(FunctionOf(m, (FunctionDef)d.Node), false);
+            case DeclKind.Function:
+            {
+                var def = (FunctionDef)d.Node;
+                PyType fn = new FunctionType(FunctionOf(m, def), false);
+                return def.Decorators.Count == 0 ? fn : ApplyDecorators(m, def, fn);
+            }
             case DeclKind.Parameter: return ParameterType(m, (Parameter)d.Node);
             case DeclKind.Variable: return d.Node is Expr target ? InferTargetType(m, target) : PyType.Unknown;
             case DeclKind.Import: return ImportType(m, (ImportAlias)d.Node);

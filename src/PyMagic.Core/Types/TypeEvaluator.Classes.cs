@@ -253,15 +253,30 @@ public sealed partial class TypeEvaluator
     }
 
     /// <summary>Type variables left unsolved become Unknown.</summary>
-    PyType EraseTypeVars(PyType t) => t switch
+    PyType EraseTypeVars(PyType t) => EraseTypeVars(t, null);
+
+    /// <summary>
+    /// A callable that is returned and takes type variables as parameters keeps them (`lru_cache(maxsize=None)` is
+    /// `(Callable[..., T]) -> _lru_cache_wrapper[T]`, solved when it is applied to the function it decorates).
+    /// </summary>
+    PyType EraseTypeVars(PyType t, IReadOnlySet<string>? keep) => t switch
     {
-        TypeVarType => PyType.Unknown,
+        TypeVarType tv => keep != null && keep.Contains(tv.Name) ? tv : PyType.Unknown,
         ClassType c when c.Args.Count > 0 || c.TupleItems != null =>
-            new ClassType(c.Info, c.Args.Select(EraseTypeVars).ToList(), c.IsInstance, c.TupleItems?.Select(EraseTypeVars).ToList()),
-        UnionType u => PyType.Union(u.MemberList.Select(EraseTypeVars)),
-        SignatureType s => new SignatureType(s.Params?.Select(p => p with { Type = EraseTypeVars(p.Type) }).ToList(), EraseTypeVars(s.Return)),
+            new ClassType(c.Info, c.Args.Select(a => EraseTypeVars(a, keep)).ToList(), c.IsInstance, c.TupleItems?.Select(a => EraseTypeVars(a, keep)).ToList()),
+        UnionType u => PyType.Union(u.MemberList.Select(x => EraseTypeVars(x, keep))),
+        SignatureType s => EraseSignature(s, keep),
         _ => t,
     };
+
+    PyType EraseSignature(SignatureType s, IReadOnlySet<string>? keep)
+    {
+        var own = new List<TypeVarType>();
+        if (s.Params != null) foreach (var p in s.Params) CollectTypeVars(p.Type, own);
+        var all = new HashSet<string>(keep ?? (IReadOnlySet<string>)new HashSet<string>());
+        foreach (var tv in own) all.Add(tv.Name);
+        return new SignatureType(s.Params?.Select(p => p with { Type = EraseTypeVars(p.Type, all) }).ToList(), EraseTypeVars(s.Return, all));
+    }
 
     // ------------------------------------------------------------ members
 
