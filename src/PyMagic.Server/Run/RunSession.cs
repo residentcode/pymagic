@@ -27,6 +27,7 @@ public sealed class RunSession : IDisposable
     readonly List<string> _pending = new(); // debugger messages sent before it connected
     bool _disposed;
     string? _root;
+    string? _runId;     // names the program on a machine where killing the local process is not enough
 
     /// <summary>Interpreter to run, as its target names it; falls back to the PYMAGIC_PYTHON environment variable, then "python".</summary>
     public string? Python { get; set; }
@@ -70,7 +71,11 @@ public sealed class RunSession : IDisposable
     public void StartTests(string root, IReadOnlyList<string> ids, string framework = "auto", bool coverage = false)
     {
         var helperArgs = new List<string> { "--framework", framework };
-        if (coverage) { helperArgs.Add("--coverage"); helperArgs.Add(CoveragePath(root)); }
+        if (coverage)
+        {
+            helperArgs.Add("--coverage"); helperArgs.Add(CoveragePath(root));
+            _afterExit = () => { if (!Target.IsLocal) Target.Fetch(Target.ToTarget(CoveragePath(root)), CoveragePath(root)); };
+        }
         helperArgs.Add("--");
         Launch(root, true, helperArgs, ids, null, helper: "pm_tests.py");
     }
@@ -85,7 +90,12 @@ public sealed class RunSession : IDisposable
         if (!File.Exists(scriptPath)) { Error($"script not found: {script}"); return; }
         try { File.Delete(ProfilePath(root)); } catch (IOException) { }
         // a profile made in WSL or Docker names its files as that system does: the panel needs them as paths of this machine
-        _afterExit = () => { if (!Target.IsLocal) MapProfilePaths(ProfilePath(root)); };
+        _afterExit = () =>
+        {
+            if (Target.IsLocal) return;
+            Target.Fetch(Target.ToTarget(ProfilePath(root)), ProfilePath(root));    // only a machine that does not share the folder has anything to bring
+            MapProfilePaths(ProfilePath(root));
+        };
         Launch(root, false, new[] { ExtractHelper("pm_profile.py"), "--out", ProfilePath(root), "--script", scriptPath, "--" }, args, null);
     }
 
@@ -149,7 +159,12 @@ public sealed class RunSession : IDisposable
         string? existing = Environment.GetEnvironmentVariable("PYTHONPATH");
         env["PYTHONPATH"] = Target.IsLocal && !string.IsNullOrEmpty(existing) ? root + Path.PathSeparator + existing : root;
 
+        // a target that does not share the project's files gets them first (the changed ones only)
+        try { Target.Prepare(root, helperDirs.Distinct().ToList(), text => _emit(new JsonObject { ["type"] = "output", ["stream"] = "stdout", ["text"] = text })); }
+        catch (ServiceException e) { _listener?.Stop(); Error(e.Message); return; }
+
         var psi = Target.Start(python, root, args2, env, helperDirs.Distinct().ToList());
+        _runId = psi.Environment.TryGetValue("PYMAGIC_RUN_ID", out var runId) ? runId : null;
         psi.RedirectStandardInput = true;
         psi.RedirectStandardOutput = true;
         psi.RedirectStandardError = true;
@@ -254,6 +269,9 @@ public sealed class RunSession : IDisposable
                     foreach (var f in frames) if (f is JsonObject fo && fo["file"]?.GetValue<string>() is { } file) fo["file"] = Target.ToHost(file);
                 _emit(msg);
             }
+            // the helper hung up: close our end now (a tunnel through ssh keeps the session alive until both ends are closed)
+            lock (_gate) { try { _channel?.Dispose(); } catch (IOException) { } _channel = null; }
+            client.Dispose();
         }
         catch (IOException) { }
         catch (ObjectDisposedException) { }
@@ -319,6 +337,8 @@ public sealed class RunSession : IDisposable
         try { if (_process is { HasExited: false }) _process.Kill(entireProcessTree: true); }
         catch (InvalidOperationException) { }
         catch (System.ComponentModel.Win32Exception) { }
+        // the program on another machine keeps running when only the local end of the connection is gone
+        if (_runId is { } id) { var target = Target; Task.Run(() => target.Stop(id)); }
     }
 
     void Cleanup()

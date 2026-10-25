@@ -339,9 +339,23 @@ app.MapPost("/api/interpreter", async (HttpRequest req) =>
 app.MapGet("/api/interpreter/targets", async () => await Task.Run(() => new
 {
     wsl = WslTarget.Distros(),
+    ssh = new { installed = SshTarget.Installed(), hosts = SshConfigHosts() },
     docker = new { available = DockerTarget.Available() },
     dockerImages = DockerTarget.Available() ? DockerTarget.Images() : Array.Empty<string>(),
 }));
+
+// the names in the user's ~/.ssh/config that can be connected to (wildcard entries are patterns, not hosts)
+string[] SshConfigHosts()
+{
+    try
+    {
+        string file = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh", "config");
+        if (!File.Exists(file)) return Array.Empty<string>();
+        return File.ReadAllLines(file).Select(l => l.Trim()).Where(l => l.StartsWith("Host ", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(l => l[5..].Split(' ', StringSplitOptions.RemoveEmptyEntries)).Where(h => !h.Contains('*') && !h.Contains('?') && !h.Contains('!')).Distinct().Take(200).ToArray();
+    }
+    catch (IOException) { return Array.Empty<string>(); }
+}
 
 // add an interpreter of a WSL distribution ({kind:"wsl", name:"Ubuntu-24.04", python:"python3"}) or a Docker image and use it
 app.MapPost("/api/interpreter/remote", async (HttpRequest req) =>
@@ -350,8 +364,15 @@ app.MapPost("/api/interpreter/remote", async (HttpRequest req) =>
     string kind = body?["kind"]?.GetValue<string>() ?? "", name = body?["name"]?.GetValue<string>()?.Trim() ?? "";
     string py = body?["python"]?.GetValue<string>()?.Trim() is { Length: > 0 } given ? given : kind == "wsl" ? "python3" : "python";
     if (name.Length == 0 || name.Contains('|') || py.Contains('|') || py.StartsWith('-')) return Results.BadRequest(new { error = "give the distribution or image, and the interpreter in it" });
-    ExecutionTarget target = kind switch { "wsl" => new WslTarget(name), "docker" => new DockerTarget(name), _ => null! };
-    if (target == null) return Results.BadRequest(new { error = "the kind is wsl or docker" });
+    string identity = body?["identity"]?.GetValue<string>()?.Trim() ?? "", knownHosts = body?["knownHosts"]?.GetValue<string>()?.Trim() ?? "";
+    ExecutionTarget target = kind switch
+    {
+        "wsl" => new WslTarget(name),
+        "docker" => new DockerTarget(name),
+        "ssh" => SshTarget.FromHead(name + (identity.Length > 0 || knownHosts.Length > 0 ? "?" + string.Join("&", new[] { identity.Length > 0 ? "i=" + identity : "", knownHosts.Length > 0 ? "kh=" + knownHosts : "" }.Where(x => x.Length > 0)) : ""))!,
+        _ => null!,
+    };
+    if (target == null) return Results.BadRequest(new { error = kind == "ssh" ? "that is not an address: write user@host or user@host:port" : "the kind is wsl, docker or ssh" });
     try { return Results.Json(Describe(await Task.Run(() => interpreters.AddRemote(target, py)))); }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
 });

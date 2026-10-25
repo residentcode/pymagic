@@ -19,6 +19,7 @@ public sealed class InterpreterManager
     {
         _root = Path.GetFullPath(root);
         DockerTarget.DefaultProject = _root;
+        SshTarget.DefaultProject = _root;
         _env = env ?? DiscoveryEnvironment.FromProcess(_root);
     }
 
@@ -74,6 +75,7 @@ public sealed class InterpreterManager
     PythonInterpreter? Set(PythonInterpreter? interpreter, bool save)
     {
         if (interpreter?.Target is DockerTarget docker) docker.Project = _root;   // what a container sees as /workspace
+        if (interpreter?.Target is SshTarget ssh) ssh.Project = _root;            // what is copied to the remote machine
         lock (_gate) _current = interpreter;
         if (save && interpreter != null) Save(interpreter.Path);
         Changed?.Invoke(interpreter);
@@ -131,6 +133,8 @@ public sealed class InterpreterManager
         if (!withPip) args.Add("--without-pip");
         if (!target.IsLocal) args.Add("--copies");       // links do not work on the Windows drive that WSL mounts
         args.Add(dir);
+        try { target.Prepare(_root, null, null); }       // a machine that does not share the folder needs it first
+        catch (ServiceException) { throw; }
         var psi = target.Start(python, _root, args);
         psi.RedirectStandardOutput = true; psi.RedirectStandardError = true; psi.UseShellExecute = false; psi.CreateNoWindow = true;
         try
@@ -146,7 +150,7 @@ public sealed class InterpreterManager
         if (!target.IsLocal)
         {
             string inside = target.ToTarget(dir) + "/bin/python";
-            if (!File.Exists(Path.Combine(dir, "bin", "python"))) throw new ServiceException("the environment was created but has no interpreter");
+            if (!target.Exists(inside)) throw new ServiceException("the environment was created but has no interpreter");
             return target.Spec(inside);
         }
         string exe = OperatingSystem.IsWindows() ? Path.Combine(dir, "Scripts", "python.exe") : Path.Combine(dir, "bin", "python");

@@ -35,6 +35,7 @@ public abstract class ExecutionTarget
         if (python.Length == 0) return null;
         if (head.StartsWith("wsl:", StringComparison.Ordinal) && head.Length > 4) return (new WslTarget(head[4..]), python);
         if (head.StartsWith("docker:", StringComparison.Ordinal) && head.Length > 7) return (new DockerTarget(head[7..]), python);
+        if (head.StartsWith("ssh:", StringComparison.Ordinal) && head.Length > 4 && SshTarget.FromHead(head[4..]) is { } ssh) return (ssh, python);
         return null;
     }
 
@@ -64,6 +65,24 @@ public abstract class ExecutionTarget
     /// Loopback for the local machine; the address of the virtual switch for WSL.
     /// </summary>
     public abstract (IPAddress Listen, string Connect) HelperAddress();
+
+    // ---- what a target that does not share the project's files has to do (this computer, WSL and Docker share them: nothing)
+
+    /// <summary>Gets the project (and the folders of helper scripts) to where the interpreter can read them. Nothing to do when the files are shared.</summary>
+    /// <exception cref="ServiceException">The copy failed.</exception>
+    public virtual void Prepare(string projectRoot, IReadOnlyList<string>? mounts, Action<string>? progress) { }
+
+    /// <summary>Stops a program that <see cref="Start"/> began (<paramref name="runId"/> is the value it put in PYMAGIC_RUN_ID), where killing the local process is not enough.</summary>
+    public virtual void Stop(string runId) { }
+
+    /// <summary>Brings a file the program made (a profile, a coverage result) back to this machine. False when it is not there or the target shares the files anyway.</summary>
+    public virtual bool Fetch(string targetPath, string hostPath) => false;
+
+    /// <summary>Whether a file of the target exists.</summary>
+    public virtual bool Exists(string targetPath) => File.Exists(ToHost(targetPath));
+
+    /// <summary>Makes folders of the target readable from here (a copy of their source files); returns those that could not be copied.</summary>
+    public virtual IReadOnlyList<string> Mirror(IEnumerable<string> targetFolders) => Array.Empty<string>();
 
     protected static readonly Regex HostPath = new(@"^(?:[A-Za-z]:[\\/]|\\\\)", RegexOptions.Compiled);
 
@@ -277,7 +296,7 @@ public sealed class DockerTarget : ExecutionTarget
     /// Copies the image's library folders out with <c>docker create</c> and <c>docker cp</c> (once; a copy that exists is kept),
     /// so the editor can read the packages the code imports. Returns the folders that could not be copied.
     /// </summary>
-    public IReadOnlyList<string> Mirror(IEnumerable<string> targetFolders)
+    public override IReadOnlyList<string> Mirror(IEnumerable<string> targetFolders)
     {
         var failed = new List<string>();
         var wanted = targetFolders.Where(f => f.StartsWith('/') && !Directory.Exists(MirrorPathOf(f))).Distinct().ToList();

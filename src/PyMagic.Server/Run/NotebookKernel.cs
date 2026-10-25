@@ -21,6 +21,7 @@ public sealed class NotebookKernel : IDisposable
     Stream? _channel;
     readonly List<string> _pending = new();   // messages sent before the kernel connected
     bool _disposed;
+    string? _runId;
 
     /// <summary>Interpreter to run; falls back to PYMAGIC_PYTHON, then "python".</summary>
     public string? Python { get; set; }
@@ -50,7 +51,11 @@ public sealed class NotebookKernel : IDisposable
         string? existing = Environment.GetEnvironmentVariable("PYTHONPATH");
         env["PYTHONPATH"] = Target.IsLocal && !string.IsNullOrEmpty(existing) ? root + Path.PathSeparator + existing : root;
 
+        try { Target.Prepare(root, new[] { Path.GetDirectoryName(helper)! }, null); }
+        catch (ServiceException e) { _listener.Stop(); Fail(e.Message); return; }
+
         var psi = Target.Start(python, root, args, env, new[] { Path.GetDirectoryName(helper)! });
+        _runId = psi.Environment.TryGetValue("PYMAGIC_RUN_ID", out var runId) ? runId : null;
         psi.RedirectStandardInput = true;
         psi.RedirectStandardOutput = true;
         psi.RedirectStandardError = true;
@@ -120,6 +125,8 @@ public sealed class NotebookKernel : IDisposable
                 var msg = JsonNode.Parse(text);
                 if (msg != null) _emit(msg);
             }
+            lock (_gate) { try { _channel?.Dispose(); } catch (IOException) { } _channel = null; }
+            client.Dispose();
         }
         catch (IOException) { }
         catch (ObjectDisposedException) { }
@@ -181,6 +188,7 @@ public sealed class NotebookKernel : IDisposable
         try { if (_process is { HasExited: false }) _process.Kill(entireProcessTree: true); }
         catch (InvalidOperationException) { }
         catch (System.ComponentModel.Win32Exception) { }
+        if (_runId is { } id) { var target = Target; Task.Run(() => target.Stop(id)); }
         Cleanup();
     }
 }

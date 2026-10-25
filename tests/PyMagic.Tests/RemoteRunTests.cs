@@ -32,6 +32,7 @@ public class RemoteRunTests
         catch { }
         try { if (DockerTarget.Available() && DockerTarget.Images().Contains(DockerImage)) found.Add(("docker " + DockerImage, () => new DockerTarget(DockerImage), "python")); }
         catch { }
+        if (SshTestServer.Make() is { } ssh) found.Add(("ssh " + ssh.Destination, () => SshTestServer.Make()!, "python"));
         return found;
     }
 
@@ -56,6 +57,7 @@ public class RemoteRunTests
         {
             Directory.CreateDirectory(Root);
             if (target is DockerTarget d) d.Project = Root;
+            if (target is SshTarget ssh) ssh.Project = Root;
             Session = new RunSession(Events.Add) { Python = python, Target = target };
         }
 
@@ -149,6 +151,7 @@ public class RemoteRunTests
         string root = Path.Combine(Path.GetTempPath(), "pm_rrk_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         if (target is DockerTarget d) d.Project = root;
+        if (target is SshTarget sshTarget) sshTarget.Project = root;
         var events = new BlockingCollection<JsonNode>();
         using var kernel = new NotebookKernel(events.Add) { Python = python, Target = target };
         kernel.Start(root);
@@ -192,6 +195,7 @@ public class RemoteRunTests
         string root = Path.Combine(Path.GetTempPath(), "pm_rri_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         DockerTarget.DefaultProject = root;
+        SshTarget.DefaultProject = root;
         var r = InterpreterInspector.Inspect(target.Spec(python));
         Assert.True(r.Interpreter != null, r.Error);
         var i = r.Interpreter!;

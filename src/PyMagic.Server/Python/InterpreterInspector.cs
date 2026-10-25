@@ -83,8 +83,7 @@ print(json.dumps({
         var run = Run(null, target.Kind, source, timeoutMs, target, python);
         if (run.Interpreter is not { } raw) return run;
 
-        if (target is DockerTarget docker)
-            docker.Mirror(raw.SysPath.Concat(raw.SitePackages).Concat(raw.Stdlib is { } sl ? new[] { sl } : Array.Empty<string>()));
+        target.Mirror(raw.SysPath.Concat(raw.SitePackages).Concat(raw.Stdlib is { } sl ? new[] { sl } : Array.Empty<string>()));
         string? Map(string? p) => p == null ? null : target.Readable(p);
         var site = raw.SitePackages.Select(Map).Where(x => x != null).Select(x => x!).ToList();
         var path = raw.SysPath.Select(Map).Where(x => x != null).Select(x => x!).ToList();
