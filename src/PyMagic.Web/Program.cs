@@ -128,9 +128,47 @@ app.MapGet("/api/files", () =>
     return list;
 });
 
+// everything the explorer shows: folders and files (what the language server needs is /api/files)
+app.MapGet("/api/tree", () =>
+{
+    var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", "node_modules", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".pymagic", ".idea", ".vs", ".tox", ".eggs" };
+    var dirs = new List<string>();
+    var files = new List<(string Path, long Size)>();
+    int budget = 20000;
+    void Walk(string dir)
+    {
+        IEnumerable<string> subdirs, names;
+        try { subdirs = Directory.EnumerateDirectories(dir).ToList(); names = Directory.EnumerateFiles(dir).ToList(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
+        foreach (var f in names)
+        {
+            if (budget-- <= 0) return;
+            long size = 0;
+            try { size = new FileInfo(f).Length; } catch (IOException) { }
+            files.Add((Path.GetRelativePath(root, f).Replace('\\', '/'), size));
+        }
+        foreach (var d in subdirs)
+        {
+            string name = Path.GetFileName(d);
+            if (skip.Contains(name) || name.EndsWith(".egg-info", StringComparison.OrdinalIgnoreCase)) continue;
+            dirs.Add(Path.GetRelativePath(root, d).Replace('\\', '/'));
+            Walk(d);
+        }
+    }
+    Walk(root);
+    return Results.Json(new { dirs = dirs.OrderBy(x => x, StringComparer.Ordinal), files = files.OrderBy(f => f.Path, StringComparer.Ordinal).Select(f => new { path = f.Path, size = f.Size }) });
+});
+
 app.MapGet("/api/file", (string path) =>
 {
-    try { return Results.Text(File.ReadAllText(ResolveInRoot(path)), "text/plain; charset=utf-8"); }
+    try
+    {
+        string full = ResolveInRoot(path);
+        var bytes = File.ReadAllBytes(full);
+        if (bytes.Length > 5 * 1024 * 1024) return Results.StatusCode(413);
+        if (Array.IndexOf(bytes, (byte)0, 0, Math.Min(bytes.Length, 4096)) >= 0) return Results.StatusCode(415);
+        return Results.Text(new UTF8Encoding(false).GetString(bytes), "text/plain; charset=utf-8");
+    }
     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.NotFound(); }
 });
 
@@ -139,13 +177,60 @@ app.MapPut("/api/file", async (string path, HttpRequest req) =>
     try
     {
         string full = ResolveInRoot(path);
-        if (!full.EndsWith(".py", StringComparison.OrdinalIgnoreCase)) return Results.BadRequest("only .py files");
+        if (IsInsideGit(full)) return Results.BadRequest("the .git folder is not edited here");
         using var reader = new StreamReader(req.Body, Encoding.UTF8);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         await File.WriteAllTextAsync(full, await reader.ReadToEndAsync(), new UTF8Encoding(false));
         return Results.NoContent();
     }
     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.BadRequest(e.Message); }
+});
+
+bool IsInsideGit(string full) =>
+    Path.GetRelativePath(root, full).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(p => string.Equals(p, ".git", StringComparison.OrdinalIgnoreCase));
+
+// create, rename and delete files and folders of the project
+app.MapPost("/api/fs", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
+    string? op = body?["op"]?.GetValue<string>();
+    try
+    {
+        switch (op)
+        {
+            case "create":
+            {
+                string full = ResolveInRoot(body!["path"]!.GetValue<string>());
+                if (IsInsideGit(full)) return Results.BadRequest(new { error = "not inside .git" });
+                if (File.Exists(full) || Directory.Exists(full)) return Results.Conflict(new { error = "it exists already" });
+                if (body["dir"]?.GetValue<bool>() == true) Directory.CreateDirectory(full);
+                else { Directory.CreateDirectory(Path.GetDirectoryName(full)!); await File.WriteAllTextAsync(full, "", new UTF8Encoding(false)); }
+                return Results.NoContent();
+            }
+            case "rename":
+            {
+                string from = ResolveInRoot(body!["from"]!.GetValue<string>()), to = ResolveInRoot(body["to"]!.GetValue<string>());
+                if (IsInsideGit(from) || IsInsideGit(to)) return Results.BadRequest(new { error = "not inside .git" });
+                if (File.Exists(to) || Directory.Exists(to)) return Results.Conflict(new { error = "the target exists already" });
+                Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+                if (Directory.Exists(from)) Directory.Move(from, to);
+                else if (File.Exists(from)) File.Move(from, to);
+                else return Results.NotFound();
+                return Results.NoContent();
+            }
+            case "delete":
+            {
+                string full = ResolveInRoot(body!["path"]!.GetValue<string>());
+                if (IsInsideGit(full)) return Results.BadRequest(new { error = "not inside .git" });
+                if (Directory.Exists(full)) Directory.Delete(full, true);
+                else if (File.Exists(full)) File.Delete(full);
+                else return Results.NotFound();
+                return Results.NoContent();
+            }
+        }
+        return Results.BadRequest(new { error = "unknown operation" });
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NullReferenceException) { return Results.BadRequest(new { error = e is NullReferenceException ? "bad request" : e.Message }); }
 });
 
 // Find in files: the page sends the texts of its unsaved editors so that results match what is on screen.

@@ -13,7 +13,24 @@
     #sidebar { grid-row: 1 / 5; background: var(--panel); border-right: 1px solid var(--line); overflow: auto; }
     #sidebar h1 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 0; padding: 10px 12px; }
     #files { list-style: none; margin: 0; padding: 0 0 8px; }
-    #files li { padding: 4px 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #files li { padding: 3px 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none; }
+    #files { outline: none; min-height: 60px; }
+    #files li .twisty { display: inline-block; width: 12px; color: var(--dim); }
+    #files li .ficon { display: inline-block; width: 18px; font-size: 12px; text-align: center; margin-right: 4px; }
+    #files li.sel:not(.active) { background: #ffffff18; }
+    #explorer-tools { display: flex; gap: 4px; padding: 0 8px 6px; }
+    #explorer-tools button { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px; font: inherit; font-size: 11px; cursor: pointer; }
+    #explorer-tools button:hover { color: var(--fg); }
+    .ask-shade { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-start; justify-content: center; padding-top: 18vh; z-index: 50; }
+    .ask-box { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; width: 380px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+    .ask-title { font-weight: 600; margin-bottom: 8px; } .ask-hint { color: var(--dim); font-size: 12px; margin: 6px 0 4px; }
+    .ask-box input { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 4px 6px; font: inherit; }
+    .ask-buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+    .ask-buttons button { background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 2px 14px; font: inherit; cursor: pointer; }
+    .ask-buttons button.danger { background: #b3443d; border-color: #b3443d; color: #fff; }
+    .ctx-menu { position: fixed; z-index: 60; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 3px 0; min-width: 170px; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
+    .ctx-item { padding: 3px 14px; cursor: pointer; white-space: nowrap; } .ctx-item:hover { background: var(--accent); color: #fff; }
+    .ctx-sep { height: 1px; background: var(--line); margin: 3px 0; }
     #files li:hover { background: #ffffff10; }
     #files li.active { background: var(--accent); color: #fff; }
     #files li.dirty::after { content: " ●"; color: var(--amber); }
@@ -214,7 +231,14 @@
 </head>
 <body>
   <div id="app">
-    <aside id="sidebar"><h1>Workspace</h1><ul id="files"></ul></aside>
+    <aside id="sidebar"><h1>Workspace</h1>
+      <div id="explorer-tools">
+        <button id="ex-new-file" title="New file">＋ File</button>
+        <button id="ex-new-folder" title="New folder">＋ Folder</button>
+        <button id="ex-refresh" title="Read the folder again">⟳</button>
+        <button id="ex-collapse" title="Close all folders">⊟</button>
+      </div>
+      <ul id="files"></ul></aside>
     <div id="toolbar">
       <button id="b-run" class="run" title="Run (Ctrl+F5)">▶ Run</button>
       <button id="b-debug" class="dbg" title="Debug / Resume (F5)">🐞 Debug</button>

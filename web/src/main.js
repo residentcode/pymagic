@@ -11,6 +11,7 @@ import { setupRoutes } from './routes';
 import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
+import { setupExplorer } from './explorer';
 import { setupInspections } from './inspections';
 import { setupGit } from './git';
 import { toast } from './toast';
@@ -469,13 +470,53 @@ function updateProblems() {
     const errors = all.filter((m) => m.severity === monaco.MarkerSeverity.Error).length;
     $('problems').textContent = `${errors} errors, ${all.length - errors} warnings`;
 }
+let explorer = null;
+/** Closes the models of a file, or of a folder and what is in it (after it was renamed or deleted). */
+async function forgetPath(rel) {
+    for (const [key, model] of Array.from(models)) {
+        const path = relPathOf.get(key);
+        if (!path || (path !== rel && !path.startsWith(rel + '/')))
+            continue;
+        if (path.endsWith('.py') || languageFor(path) === 'django-html')
+            lsp.notify('textDocument/didClose', { textDocument: { uri: serverUri.get(model) ?? uriFor(path) } });
+        models.delete(key);
+        loading.delete(key);
+        relPathOf.delete(key);
+        savedText.delete(path);
+        if (editor.getModel() === model)
+            editor.setModel(null);
+        model.dispose();
+    }
+    refreshDirty();
+}
+/** Opens the Python files that are new on disk, so the language server sees the whole project. */
+async function syncPyModels() {
+    const files = await (await fetch('/api/files')).json();
+    const wanted = new Set(files.map((f) => normalise(uriFor(f))));
+    for (const [key] of Array.from(models))
+        if (!wanted.has(key) && relPathOf.get(key)?.endsWith('.py'))
+            await forgetPath(relPathOf.get(key));
+    await Promise.all(files.map((f) => ensureModel(f)));
+}
+async function openAnother() {
+    const files = await (await fetch('/api/files')).json();
+    if (files.length)
+        await openFile(files[0]);
+    else {
+        currentRel = '';
+        editor.setModel(null);
+    }
+}
 async function openFile(rel, reveal) {
     const model = await ensureModel(rel);
-    if (!model)
+    if (!model) {
+        toast(`${rel} cannot be shown here (binary or very large).`, true);
         return;
+    }
     currentRel = rel;
     editor.setModel(model);
-    editor.updateOptions({ readOnly: !(rel.endsWith('.py') || languageFor(rel) === 'django-html') });
+    editor.updateOptions({ readOnly: false });
+    explorer?.reveal(rel);
     if (reveal) {
         editor.setSelection(reveal);
         editor.revealRangeInCenter(reveal);
@@ -484,7 +525,7 @@ async function openFile(rel, reveal) {
     refreshDirty();
 }
 async function save() {
-    if ($('fmt-save').checked)
+    if ($('fmt-save').checked && currentRel.endsWith('.py'))
         await formatCurrent(true);
     const model = editor.getModel();
     const rel = model && relPathOf.get(normalise(serverUri.get(model)));
@@ -640,16 +681,11 @@ async function main() {
     registerProviders();
     void refreshFormatters();
     const files = await (await fetch('/api/files')).json();
-    const list = $('files');
-    for (const rel of files) {
-        const li = document.createElement('li');
-        li.textContent = rel;
-        li.title = rel;
-        li.dataset.path = rel;
-        li.onclick = () => void openFile(rel);
-        list.appendChild(li);
-    }
-    window.dispatchEvent(new Event('pymagic:files'));
+    explorer = setupExplorer({
+        openFile, refreshDirty, saveAll: common.saveAll, forget: forgetPath, synced: syncPyModels,
+        current: () => currentRel, openAnother,
+    });
+    await explorer.refresh();
     // open everything so cross-file diagnostics and navigation see the whole project
     await Promise.all(files.map((f) => ensureModel(f)));
     if (files.length)
