@@ -823,9 +823,29 @@ public sealed partial class TypeEvaluator
             {
                 if (kv.Value.Declarations.Count == 0) continue;
                 if (NotProtocolMember.Contains(kv.Key)) continue;
-                if (FindMember(src, kv.Key, true, null, out bool unk) == null && !unk) return false;
+                var hit = FindMember(src, kv.Key, true, null, out bool unk);
+                if (hit == null) { if (!unk) return false; continue; }
+                if (hit.InstanceAttrs.Count == 0 && !MethodFits(kv.Value, hit.ClassSymbol)) return false;
             }
         }
+        return true;
+    }
+
+    /// <summary>A method of the source fits the protocol's when a call written for the protocol's signature works on it (plain defs only).</summary>
+    bool MethodFits(Symbol proto, Symbol? src)
+    {
+        if (src == null || proto.Declarations.Count != 1 || src.Declarations.Count != 1) return true;
+        if (proto.Declarations[0].Node is not FunctionDef pd || src.Declarations[0].Node is not FunctionDef sd) return true;
+        if (!IsPlainMethod(pd) || !IsPlainMethod(sd)) return true;
+        var pi = FunctionOf(_ws.ModuleOf(proto) ?? throw new InvalidOperationException(), pd);
+        var si = FunctionOf(_ws.ModuleOf(src) ?? throw new InvalidOperationException(), sd);
+        if (pi.IsStatic != si.IsStatic || pi.IsClassMethod != si.IsClassMethod) return true;
+        var (pp, pk, pVar, pKw) = Shape(pd, !pi.IsStatic);
+        var (sp, sk, sVar, sKw) = Shape(sd, !si.IsStatic);
+        if (!sVar && sp.Count < pp.Count) return false;
+        if (!pVar && sp.Count(p => p.Default == null) > pp.Count) return false;
+        if (!sKw && pk.Any(k => !sk.Any(x => x.Name == k.Name) && !sp.Any(x => x.Name == k.Name))) return false;
+        if (!pKw && sk.Any(k => k.Default == null && !pk.Any(x => x.Name == k.Name))) return false;
         return true;
     }
 }
