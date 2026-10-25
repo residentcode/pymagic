@@ -3,12 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "description": "PyMagic - Python IDE for Windows",
+  "author": "PyMagic contributors",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "icon": "electron icon/make-icon.js"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
-    "electron": "45.0.0"
+    "electron": "45.0.0",
+    "electron-builder": "26.17.0"
   }
 }

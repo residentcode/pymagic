@@ -1,13 +1,23 @@
-// Builds a self-contained Windows app: desktop/out/PyMagic-win32-x64/PyMagic.exe (nothing else needs to be installed).
+// Builds a self-contained Windows app, desktop/out/PyMagic-win32-x64/PyMagic.exe (nothing else needs to be installed),
+// and its installer, desktop/out/PyMagic-Setup-<version>.exe. `--no-installer` stops after the app folder.
 import { execFileSync } from 'node:child_process';
 import { cpSync, rmSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { packager } from '@electron/packager';
+import { Arch, Platform, build } from 'electron-builder';
+import { installerConfig, packagerOptions } from './build-config.mjs';
 
 const desktop = resolve(import.meta.dirname);
 const repo = resolve(desktop, '..');
 const stage = resolve(desktop, 'stage');
 const sh = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, stdio: 'inherit', shell: true });
+const installer = !process.argv.includes('--no-installer');
+
+// NSIS reads "$" in a path as one of its own variables, so it cannot find the icon; say so before the long build
+if (installer && desktop.includes('$')) {
+  console.error(`The installer cannot be built from a folder whose path contains "$" (${desktop}). Move the checkout, or use --no-installer.`);
+  process.exit(1);
+}
 
 rmSync(stage, { recursive: true, force: true });
 mkdirSync(stage, { recursive: true });
@@ -21,15 +31,11 @@ sh('dotnet', ['publish', `"${resolve(repo, 'src', 'PyMagic.Web', 'PyMagic.Web.cs
 cpSync(resolve(repo, 'examples', 'demo'), resolve(stage, 'demo'), { recursive: true });
 
 console.log('== app');
-const paths = await packager({
-  dir: desktop,
-  out: resolve(desktop, 'out'),
-  name: 'PyMagic',
-  platform: 'win32',
-  arch: 'x64',
-  overwrite: true,
-  prune: true,
-  ignore: [/^\/out/, /^\/stage/, /^\/package\.mjs$/],
-  extraResource: [resolve(stage, 'www'), resolve(stage, 'host'), resolve(stage, 'demo')],
-});
+const paths = await packager(packagerOptions(desktop, stage));
 console.log('Done:', paths.join(', '));
+
+if (installer) {
+  console.log('== installer (the first run downloads NSIS into electron-builder\'s cache)');
+  const made = await build({ projectDir: desktop, prepackaged: paths[0], targets: Platform.WINDOWS.createTarget('nsis', Arch.x64), config: installerConfig() });
+  console.log('Done:', made.filter(f => f.endsWith('.exe')).join(', '));
+}

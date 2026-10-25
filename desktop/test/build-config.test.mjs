@@ -1,0 +1,69 @@
+// Checks of desktop/build-config.mjs: what goes into the app folder and what the installer does
+// (`node desktop/test/build-config.test.mjs`; tests/PyMagic.Tests/WebScriptTests.cs runs it).
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { APP_ID, ICON, PRODUCT, installerConfig, packagerOptions } from '../build-config.mjs';
+
+const desktop = resolve(import.meta.dirname, '..');
+const opts = packagerOptions(desktop, resolve(desktop, 'stage'));
+const kept = p => !opts.ignore.some(re => re.test(p));
+
+test('the installer is a wizard that installs for the current user unless told otherwise', () => {
+  const { nsis } = installerConfig();
+  assert.equal(nsis.oneClick, false);
+  assert.equal(nsis.perMachine, false);
+});
+
+test('the installer has no folder page, so it can never take over a folder that holds other files', () => {
+  // electron-builder keeps a chosen folder as it is when its path contains "PyMagic", and uninstalling deletes it whole
+  assert.equal(installerConfig().nsis.allowToChangeInstallationDirectory, false);
+});
+
+test('the installer makes a Start menu entry and a desktop shortcut named after the app', () => {
+  const { nsis } = installerConfig();
+  assert.equal(nsis.createStartMenuShortcut, true);
+  assert.equal(nsis.createDesktopShortcut, true);
+  assert.equal(nsis.shortcutName, PRODUCT);
+  assert.equal(nsis.uninstallDisplayName, PRODUCT);
+});
+
+test('the installer file carries the version, and nothing is published', () => {
+  const c = installerConfig();
+  assert.match(c.nsis.artifactName, /^PyMagic-Setup-\$\{version\}\.\$\{ext\}$/);
+  assert.equal(c.publish, null);
+  assert.equal(c.productName, PRODUCT);
+});
+
+test('every icon the app and the installer name exists', () => {
+  const c = installerConfig();
+  for (const p of [c.win.icon, c.nsis.installerIcon, c.nsis.uninstallerIcon]) assert.ok(existsSync(resolve(desktop, p)), p);
+  assert.ok(existsSync(opts.icon), opts.icon);
+  assert.equal(opts.icon, resolve(desktop, ICON));
+});
+
+test('the installed app uses the same app id as the shortcuts (a run from the repo does not), and the icon for its window', () => {
+  const main = readFileSync(resolve(desktop, 'main.js'), 'utf8');
+  assert.equal(installerConfig().appId, APP_ID);
+  assert.ok(main.includes(`if (process.platform === 'win32' && packaged) app.setAppUserModelId('${APP_ID}');`), 'main.js sets another app id, or sets it for a run from the repo too');
+  assert.match(main, /path\.join\(__dirname, 'icon', 'pymagic\.ico'\)/);
+  assert.match(main, /new BrowserWindow\(\{[^}]*\bicon\b/);
+});
+
+test('package.mjs builds the installer from the packaged folder, and the tools are pinned', () => {
+  const script = readFileSync(resolve(desktop, 'package.mjs'), 'utf8');
+  for (const part of ['packager(packagerOptions(desktop, stage))', 'prepackaged: paths[0]', 'config: installerConfig()', "'--no-installer'"])
+    assert.ok(script.includes(part), `package.mjs no longer has ${part}`);
+  const pkg = JSON.parse(readFileSync(resolve(desktop, 'package.json'), 'utf8'));
+  assert.match(pkg.devDependencies['electron-builder'], /^\d+\.\d+\.\d+$/, 'electron-builder is not pinned to one version');
+  assert.ok(pkg.author, 'package.json has no author (the publisher shown in Settings > Apps)');
+});
+
+test('the app folder takes the shell and its icon, and leaves out the build tools, tests and icon source', () => {
+  for (const p of ['/main.js', '/package.json', '/icon', '/icon/pymagic.ico']) assert.ok(kept(p), `${p} is left out`);
+  for (const p of ['/out', '/out/PyMagic-win32-x64/PyMagic.exe', '/stage/host', '/test/build-config.test.mjs',
+    '/package.mjs', '/build-config.mjs', '/icon/pymagic.svg', '/icon/pymagic.ico.sha256', '/icon/make-icon.js']) assert.ok(!kept(p), `${p} is packaged`);
+  assert.deepEqual(opts.extraResource.map(p => p.split(/[\\/]/).pop()), ['www', 'host', 'demo']);
+  assert.equal(opts.name, PRODUCT);
+});

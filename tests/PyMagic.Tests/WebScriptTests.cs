@@ -5,7 +5,8 @@ using System.Text.RegularExpressions;
 namespace PyMagic.Tests;
 
 /// <summary>
-/// Runs the checks of the page's own scripts: every <c>web/test/*.test.mjs</c>, with Node's test runner.
+/// Runs the checks of the JavaScript side with Node's test runner: every <c>web/test/*.test.mjs</c> (the page) and
+/// <c>desktop/test/*.test.mjs</c> (the Windows shell and its installer).
 /// Skipped when Node is not installed (PYMAGIC_NODE, else <c>node</c> on the PATH).
 /// </summary>
 public class WebScriptTests
@@ -54,12 +55,17 @@ public class WebScriptTests
         Assert.True(ok, $"{name} failed (exit {p.ExitCode}):\n{output}\n{stderr.Result}");
     }
 
-    [Fact]
-    public void PageScripts()
+    static void RunAll(string dir)
     {
         if (!HasNode) return;
-        var files = Directory.GetFiles(RepoDir("web/test"), "*.test.mjs").OrderBy(f => f, StringComparer.Ordinal).ToList();
-        Assert.True(files.Count > 0, "no web/test/*.test.mjs files");
+        var files = Directory.GetFiles(RepoDir(dir), "*.test.mjs").OrderBy(f => f, StringComparer.Ordinal).ToList();
+        Assert.True(files.Count > 0, $"no {dir}/*.test.mjs files");
         foreach (var file in files) RunChecks(file);
     }
+
+    [Fact]
+    public void PageScripts() => RunAll("web/test");
+
+    [Fact]
+    public void DesktopScripts() => RunAll("desktop/test");
 }
