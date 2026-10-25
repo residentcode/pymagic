@@ -129,7 +129,16 @@
     #git-bar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
     #git-bar #git-branch { font-weight: 600; } #git-bar select, #git-bar input[type=text], #git-new-name { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 1px 4px; }
     #git-state { margin-left: auto; color: var(--dim); } #git-none { padding: 8px 12px; color: var(--dim); }
-    #git-split { display: flex; flex: 1; min-height: 0; } #git-left, #git-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; } #git-left { flex: 0 0 42%; border-right: 1px solid var(--line); } #git-right { flex: 1; }
+    #git-sync { display: flex; gap: 6px; align-items: center; padding: 2px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+    #git-sync button, #git-op button, .gs-row button, .git-acts button, #git-stash-new { background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 0 8px; font: inherit; cursor: pointer; }
+    #git-sync button:hover, #git-op button:hover, .gs-row button:hover, .git-acts button:hover, #git-stash-new:hover { background: #8882; }
+    #git-sync select { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 0 2px; }
+    #git-sync-out { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 80px; } #git-sync-out.bad { color: #e5534b; }
+    #git-op { border-bottom: 1px solid var(--line); background: rgba(224,160,48,.10); } #git-op-bar { display: flex; gap: 8px; align-items: center; padding: 3px 8px; font-weight: 600; } #git-op-text { flex: 1; }
+    .gs-row { display: flex; gap: 8px; align-items: baseline; padding: 1px 8px; white-space: nowrap; } .gs-row:hover { background: #8882; } .gs-row .path, .gs-row .what { flex: 1; overflow: hidden; text-overflow: ellipsis; } .gs-row .dim { color: var(--dim); }
+    .git-acts { display: flex; gap: 6px; padding: 3px 8px; flex-wrap: wrap; }
+    #git-stashes { max-height: 120px; overflow: auto; }
+    #git-split { flex: 1; min-height: 0; } #git-left, #git-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; } #git-left { flex: 0 0 42%; border-right: 1px solid var(--line); } #git-right { flex: 1; }
     .git-head { display: flex; justify-content: space-between; padding: 2px 8px; background: #8881; font-weight: 600; } .git-head label { font-weight: normal; color: var(--dim); }
     #git-changes, #git-log { flex: 1; overflow: auto; min-height: 40px; } #git-detail { max-height: 38%; overflow: auto; border-top: 1px solid var(--line); }
     .gc { display: flex; gap: 6px; align-items: baseline; padding: 1px 8px; cursor: pointer; white-space: nowrap; } .gc:hover { background: #8882; }
@@ -415,6 +424,19 @@
             <label title="Show who changed the current line, after it"><input type="checkbox" id="git-inline"> Inline blame</label>
             <span id="git-state"></span>
           </div>
+          <div id="git-sync">
+            <button id="git-fetch" title="Get what is new on the remotes (changes no branch of yours)">⇣ Fetch</button>
+            <button id="git-pull" title="Fetch and join the upstream into this branch">⇩ Pull</button>
+            <select id="git-pull-mode" title="How to join"><option value="merge">merge</option><option value="rebase">rebase</option><option value="ff-only">fast-forward only</option></select>
+            <button id="git-push" title="Send this branch to its upstream (the first push of a branch sets one)">⇧ Push</button>
+            <button id="git-manage" title="Merge, rename, delete and check out branches; tags">Branches &amp; tags…</button>
+            <button id="git-remotes" title="Add or remove remotes">Remotes…</button>
+            <span id="git-sync-out"></span>
+          </div>
+          <div id="git-op" style="display:none">
+            <div id="git-op-bar"><span id="git-op-text"></span><button id="git-op-abort">Abort</button><button id="git-op-continue">Continue</button></div>
+            <div id="git-conflicts"></div>
+          </div>
           <div id="git-none" style="display:none"><span id="git-none-text"></span> <button id="git-init" style="display:none">Create a repository here</button></div>
           <div id="git-split">
             <div id="git-left">
@@ -426,6 +448,8 @@
                 <button id="git-commit">Commit</button>
                 <span id="git-result"></span>
               </div>
+              <div class="git-head"><span>Stashes <span id="git-stash-count"></span></span><button id="git-stash-new" title="Put the changes away and get a clean working tree">Stash changes…</button></div>
+              <div id="git-stashes"></div>
             </div>
             <div id="git-right">
               <div class="git-head"><span>History</span><label><input type="checkbox" id="git-file-log"> current file</label></div>

@@ -90,6 +90,7 @@ public class ExecutionTargetTests
     {
         var d = new DockerTarget("img");
         string root = Path.Combine(Path.GetTempPath(), "proj"), helpers = Path.Combine(Path.GetTempPath(), "helpers");
+        d.Project = root;
         d.Start("python", root, new string[0], null, new[] { helpers });
         Assert.Equal("/workspace/src/a.py", d.ToTarget(Path.Combine(root, "src", "a.py")));
         Assert.Equal("/workspace", d.ToTarget(root));

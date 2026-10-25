@@ -802,5 +802,53 @@ app.MapPost("/api/git/branch", async (HttpRequest req) =>
     return await GitCall(r => { r.CreateBranch(body?["name"]?.GetValue<string>() ?? ""); return new { ok = true }; });
 });
 
+// ---- remotes, branch management, conflicts, stash, tags, commit actions ------------------------------------------------
+
+app.MapGet("/api/git/remotes", () => GitCall(r => r.Remotes()));
+app.MapGet("/api/git/stashes", () => GitCall(r => r.Stashes()));
+app.MapGet("/api/git/tags", () => GitCall(r => r.Tags()));
+app.MapGet("/api/git/stash/files", (int index) => GitCall(r => r.StashFiles(index)));
+// what is waiting for you: a merge, rebase, cherry-pick or revert that stopped, and the files that have conflicts
+app.MapGet("/api/git/operation", () => GitCall(r => new { operation = r.Operation(), conflicts = r.Conflicts() }));
+app.MapGet("/api/git/conflict", (string path) => GitCall(r => r.ConflictStages(path)));
+
+app.MapPost("/api/git/action", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    string op = body?["op"]?.GetValue<string>() ?? "";
+    string Str(string key) => body?[key]?.GetValue<string>() ?? "";
+    bool Flag(string key) => body?[key]?.GetValue<bool>() ?? false;
+    int Int(string key) => body?[key]?.GetValue<int>() ?? -1;
+    return await GitCall(r =>
+    {
+        object? Ok() => new { ok = true };
+        switch (op)
+        {
+            case "fetch": return new { ok = true, output = r.Fetch(string.IsNullOrEmpty(Str("remote")) ? null : Str("remote"), Flag("prune")) };
+            case "pull": return r.Pull(Str("mode"));
+            case "push": return new { ok = true, output = r.Push(Flag("force")) };
+            case "addRemote": r.AddRemote(Str("name"), Str("url")); return Ok();
+            case "removeRemote": r.RemoveRemote(Str("name")); return Ok();
+            case "deleteBranch": r.DeleteBranch(Str("name"), Flag("force")); return Ok();
+            case "renameBranch": r.RenameBranch(Str("name"), Str("newName")); return Ok();
+            case "checkoutRemote": r.CheckoutRemoteBranch(Str("branch")); return Ok();
+            case "merge": return r.Merge(Str("branch"), Flag("noFf"));
+            case "abort": r.Abort(); return Ok();
+            case "continue": return r.Continue();
+            case "resolve": r.Resolve(Str("path"), Str("side")); return Ok();
+            case "markResolved": r.MarkResolved(Str("path")); return Ok();
+            case "stash": return new { ok = true, output = r.Stash(Str("message"), Flag("untracked")) };
+            case "applyStash": return r.ApplyStash(Int("index"), Flag("drop"));
+            case "dropStash": r.DropStash(Int("index")); return Ok();
+            case "revert": return r.Revert(Str("hash"));
+            case "cherryPick": return r.CherryPick(Str("hash"));
+            case "reset": r.Reset(Str("hash"), Str("mode")); return Ok();
+            case "createTag": r.CreateTag(Str("name"), Str("hash"), Str("message")); return Ok();
+            case "deleteTag": r.DeleteTag(Str("name")); return Ok();
+            default: throw new GitException($"'{op}' is not something to do");
+        }
+    });
+});
+
 Console.WriteLine($"PyMagic on http://127.0.0.1:{port}/   workspace: {root}   typeshed: {typeshed ?? "(bundled stubs)"}");
 app.Run();

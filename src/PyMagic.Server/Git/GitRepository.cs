@@ -22,7 +22,11 @@ public sealed record GitCommitDetail(GitCommit Commit, string Body, List<GitChan
 
 public sealed record GitBlameLine(string Hash, string Author, long Time, string Summary);
 
-public sealed record GitBranches(string? Current, bool Detached, List<string> Local);
+public sealed record GitBranches(string? Current, bool Detached, List<string> Local)
+{
+    /// <summary>Branches of the remotes as last fetched, "origin/main".</summary>
+    public List<string> Remote { get; init; } = new();
+}
 
 /// <summary>Git said no, or git is not there; the message is meant for the user.</summary>
 public sealed class GitException(string message) : Exception(message);
@@ -32,7 +36,7 @@ public sealed class GitException(string message) : Exception(message);
 /// Arguments always go as a list (never through a shell), and what a caller supplies (paths, revisions, branch names) is checked before it can
 /// reach a command line.
 /// </summary>
-public sealed class GitRepository
+public sealed partial class GitRepository
 {
     readonly string _dir;
     readonly string _git;
@@ -386,7 +390,7 @@ public sealed class GitRepository
         var status = Status();
         if (status.Branch != null && current.Length == 0) current = status.Branch;   // a branch without commits is not listed yet
         if (current.Length > 0 && !local.Contains(current)) local.Insert(0, current);
-        return new GitBranches(current.Length > 0 ? current : null, status.Detached, local);
+        return new GitBranches(current.Length > 0 ? current : null, status.Detached, local) { Remote = RemoteBranches() };
     }
 
     public void Checkout(string branch) => RunOrThrow("switch", CheckBranch(branch));

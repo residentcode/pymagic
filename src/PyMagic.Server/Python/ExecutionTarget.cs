@@ -199,18 +199,32 @@ public sealed class DockerTarget : ExecutionTarget
     public override string Name => $"Docker: {Image}";
     public override string Spec(string python) => $"docker:{Image}|{python}";
 
-    // the folders shared with the container, set by Start (a helper's folder is /pymagic/0, the next /pymagic/1, ...)
-    string? _workspace;
+    /// <summary>The project folder, shared with the container as /workspace. Set by whoever owns the project; until then the first folder a process is started in.</summary>
+    public string? Project { get; set; }
+
+    /// <summary>The project of this program when a target was made from a spec (one project per host), used while <see cref="Project"/> is not set.</summary>
+    public static string? DefaultProject { get; set; }
+
+    // folders shared read-only besides the project (helper scripts): /pymagic/0, /pymagic/1, ... in the order they were first needed, for good
     readonly List<string> _mounts = new();
+
+    string Workspace_ => (Project ?? DefaultProject) is { } project ? Path.GetFullPath(project) : (_workspace ??= Path.GetTempPath());
+    string? _workspace;
 
     public override ProcessStartInfo Start(string python, string workDir, IEnumerable<string> args, IReadOnlyDictionary<string, string>? env = null, IReadOnlyList<string>? mounts = null)
     {
-        _workspace = Path.GetFullPath(workDir);
-        _mounts.Clear();
-        if (mounts != null) _mounts.AddRange(mounts.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase));
+        if (Project == null && DefaultProject == null && _workspace == null) _workspace = Path.GetFullPath(workDir);
+        string share = Workspace_;
+        if (mounts != null)
+            foreach (var m in mounts.Select(Path.GetFullPath))
+                if (!_mounts.Contains(m, StringComparer.OrdinalIgnoreCase)) _mounts.Add(m);
+
+        // a folder outside the project (a throw-away one for asking pip) cannot be entered: work in /workspace
+        string cwd = ToTarget(workDir);
+        if (!cwd.StartsWith(DockerTarget.Workspace, StringComparison.Ordinal)) cwd = DockerTarget.Workspace;
 
         var psi = new ProcessStartInfo("docker") { WorkingDirectory = Directory.Exists(workDir) ? workDir : Path.GetTempPath() };
-        foreach (var a in new[] { "run", "--rm", "-i", "--add-host", "host.docker.internal:host-gateway", "-v", $"{_workspace}:{Workspace}", "-w", Workspace })
+        foreach (var a in new[] { "run", "--rm", "-i", "--add-host", "host.docker.internal:host-gateway", "-v", $"{share}:{Workspace}", "-w", cwd })
             psi.ArgumentList.Add(a);
         for (int i = 0; i < _mounts.Count; i++) { psi.ArgumentList.Add("-v"); psi.ArgumentList.Add($"{_mounts[i]}:/pymagic/{i}:ro"); }
         if (env != null)
@@ -223,7 +237,7 @@ public sealed class DockerTarget : ExecutionTarget
 
     public override string ToTarget(string hostPath)
     {
-        if (_workspace == null || !HostPath.IsMatch(hostPath)) return hostPath;
+        if (!HostPath.IsMatch(hostPath)) return hostPath;
         string full = Path.GetFullPath(hostPath);
         string? Under(string folder, string at)
         {
@@ -232,14 +246,14 @@ public sealed class DockerTarget : ExecutionTarget
             return full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? at + "/" + full[prefix.Length..].Replace('\\', '/') : null;
         }
         for (int i = 0; i < _mounts.Count; i++) if (Under(_mounts[i], $"/pymagic/{i}") is { } m) return m;
-        return Under(_workspace, Workspace) ?? hostPath;
+        return Under(Workspace_, Workspace) ?? hostPath;
     }
 
     public override string ToHost(string targetPath)
     {
-        if (_workspace == null) return targetPath;
-        if (targetPath == Workspace) return _workspace;
-        if (targetPath.StartsWith(Workspace + "/", StringComparison.Ordinal)) return Path.Combine(_workspace, targetPath[(Workspace.Length + 1)..].Replace('/', Path.DirectorySeparatorChar));
+        string share = Workspace_;
+        if (targetPath == Workspace) return share;
+        if (targetPath.StartsWith(Workspace + "/", StringComparison.Ordinal)) return Path.Combine(share, targetPath[(Workspace.Length + 1)..].Replace('/', Path.DirectorySeparatorChar));
         var m = Regex.Match(targetPath, @"^/pymagic/(\d+)(?:/(.*))?$");
         if (m.Success && int.Parse(m.Groups[1].Value) < _mounts.Count)
             return m.Groups[2].Success ? Path.Combine(_mounts[int.Parse(m.Groups[1].Value)], m.Groups[2].Value.Replace('/', Path.DirectorySeparatorChar)) : _mounts[int.Parse(m.Groups[1].Value)];

@@ -94,6 +94,7 @@ export function setupGit(deps) {
         paintFileList();
         void paint();
         void loadBranches();
+        window.dispatchEvent(new Event('pymagic:git-refreshed'));
         if (annotate)
             void loadBlame();
     }
@@ -634,6 +635,21 @@ export function setupGit(deps) {
             msg.className = 'msg';
             msg.textContent = d.commit.subject + (d.body ? '\n\n' + d.body : '');
             box.append(meta, msg);
+            const acts = document.createElement('div');
+            acts.className = 'git-acts';
+            for (const [label, title, run] of [
+                ['Revert', 'Make a new commit that undoes this one', () => commitAction({ op: 'revert', hash }, 'Reverted')],
+                ['Cherry-pick', 'Apply this commit on top of the current branch', () => commitAction({ op: 'cherryPick', hash }, 'Cherry-picked')],
+                ['Reset to here…', 'Move the current branch to this commit', () => resetTo(hash)],
+                ['Tag…', 'Put a tag on this commit', () => tagCommit(hash)],
+            ]) {
+                const b = document.createElement('button');
+                b.textContent = label;
+                b.title = title;
+                b.onclick = () => void run();
+                acts.append(b);
+            }
+            box.append(acts);
             for (const f of d.files) {
                 const row = document.createElement('div');
                 row.className = 'gc';
@@ -652,6 +668,40 @@ export function setupGit(deps) {
             box.textContent = String(e.message ?? e);
         }
     }
+    // ------------------------------------------------------------------ actions on a commit
+    async function commitAction(body, done) {
+        try {
+            await deps.saveAll();
+            const r = await post('/api/git/action', body);
+            await deps.reloadAll();
+            toast(r.conflicts ? `${done}: stopped on conflicts, resolve them above` : done);
+        }
+        catch (e) {
+            toast(String(e.message ?? e), true);
+        }
+        logEnd = false;
+        $('git-log').replaceChildren();
+        await refresh();
+    }
+    async function resetTo(hash) {
+        const mode = window.prompt(`Move the current branch to ${hash.slice(0, 7)}.\n\nsoft: keep the changes staged\nmixed: keep the changes as changes\nhard: throw the changes away (cannot be undone)\n\nWhich?`, 'mixed');
+        if (!mode)
+            return;
+        if (!['soft', 'mixed', 'hard'].includes(mode.trim())) {
+            toast('Type soft, mixed or hard.', true);
+            return;
+        }
+        if (mode.trim() === 'hard' && !window.confirm('A hard reset throws away every change that is not committed, and the commits after this one.\n\nContinue?'))
+            return;
+        await commitAction({ op: 'reset', hash, mode: mode.trim() }, `Reset (${mode.trim()}) to ${hash.slice(0, 7)}`);
+    }
+    async function tagCommit(hash) {
+        const name = window.prompt(`Tag for ${hash.slice(0, 7)}:`);
+        if (!name)
+            return;
+        const message = window.prompt('Message (leave empty for a plain tag):') ?? '';
+        await commitAction({ op: 'createTag', name: name.trim(), hash, message }, `Tagged ${name.trim()}`);
+    }
     // ------------------------------------------------------------------ branches
     async function loadBranches() {
         const select = $('git-branches');
@@ -666,6 +716,19 @@ export function setupGit(deps) {
                 o.selected = name === b.current;
                 return o;
             }));
+            // branches of the remotes: choosing one makes a local branch that follows it
+            const others = (b.remote ?? []).filter((r) => !b.local.some((l) => r.endsWith('/' + l)));
+            if (others.length) {
+                const group = document.createElement('optgroup');
+                group.label = 'Remote branches';
+                for (const name of others) {
+                    const o = document.createElement('option');
+                    o.value = 'remote:' + name;
+                    o.textContent = name;
+                    group.append(o);
+                }
+                select.append(group);
+            }
             if (b.detached) {
                 const o = document.createElement('option');
                 o.textContent = '(detached)';
@@ -677,10 +740,14 @@ export function setupGit(deps) {
         catch { /* the list stays as it was */ }
     }
     $('git-branches').onchange = async () => {
-        const name = $('git-branches').value;
+        const chosen = $('git-branches').value;
+        const name = chosen.replace(/^remote:/, '');
         try {
             await deps.saveAll();
-            await post('/api/git/checkout', { branch: name });
+            if (chosen.startsWith('remote:'))
+                await post('/api/git/action', { op: 'checkoutRemote', branch: name });
+            else
+                await post('/api/git/checkout', { branch: name });
             await deps.reloadAll();
             toast(`Switched to ${name}`);
         }
@@ -745,5 +812,5 @@ export function setupGit(deps) {
     $('git-annotate').checked = annotate;
     $('git-inline').checked = inline;
     void refresh();
-    return { refresh };
+    return { refresh, showDiff, status: () => status };
 }

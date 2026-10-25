@@ -13,6 +13,7 @@ import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
 import { setupProfiler } from './profiler';
 import { setupNotebook } from './notebook';
+import { setupGitSync } from './git-sync';
 import { setupExplorer } from './explorer';
 import { setupTabs } from './tabs';
 import { setupInspections } from './inspections';
@@ -668,7 +669,7 @@ async function main() {
             return out;
         },
     });
-    setupGit({
+    const git = setupGit({
         editor,
         relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')),
         currentRel: () => currentRel,
@@ -678,6 +679,7 @@ async function main() {
         reload: reloadFromDisk,
         reloadAll: reloadAllFromDisk,
     });
+    setupGitSync({ git, deps: { saveAll: common.saveAll, reloadAll: reloadAllFromDisk, openFile } });
     setupHierarchy({
         editor, lsp, openFile, modelForUri,
         uriOf: (model) => serverUri.get(model),

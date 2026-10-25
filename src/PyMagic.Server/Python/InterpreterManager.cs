@@ -18,6 +18,7 @@ public sealed class InterpreterManager
     public InterpreterManager(string root, DiscoveryEnvironment? env = null)
     {
         _root = Path.GetFullPath(root);
+        DockerTarget.DefaultProject = _root;
         _env = env ?? DiscoveryEnvironment.FromProcess(_root);
     }
 
@@ -72,6 +73,7 @@ public sealed class InterpreterManager
 
     PythonInterpreter? Set(PythonInterpreter? interpreter, bool save)
     {
+        if (interpreter?.Target is DockerTarget docker) docker.Project = _root;   // what a container sees as /workspace
         lock (_gate) _current = interpreter;
         if (save && interpreter != null) Save(interpreter.Path);
         Changed?.Invoke(interpreter);
