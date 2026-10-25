@@ -12,6 +12,7 @@ import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
 import { setupExplorer } from './explorer';
+import { setupTabs } from './tabs';
 import { setupInspections } from './inspections';
 import { setupGit } from './git';
 import { toast } from './toast';
@@ -96,6 +97,7 @@ async function loadModel(rel, key) {
         serverUri.set(plain, uri);
         relPathOf.set(key, rel);
         savedText.set(rel, text);
+        plain.onDidChangeContent(() => refreshDirty());
         if (lang === 'django-html') {
             lsp.notify('textDocument/didOpen', { textDocument: { uri, languageId: 'django-html', version: plain.getVersionId(), text } });
             let templateTimer;
@@ -464,6 +466,7 @@ function refreshDirty() {
         li.classList.toggle('dirty', !!m && m.getValue() !== savedText.get(rel));
         li.classList.toggle('active', rel === currentRel);
     }
+    tabs?.refresh();
 }
 function updateProblems() {
     const all = monaco.editor.getModelMarkers({}).filter((m) => m.severity >= monaco.MarkerSeverity.Warning);
@@ -471,6 +474,20 @@ function updateProblems() {
     $('problems').textContent = `${errors} errors, ${all.length - errors} warnings`;
 }
 let explorer = null;
+let tabs = null;
+const isDirtyRel = (rel) => { const m = models.get(normalise(uriFor(rel))); return !!m && m.getValue() !== savedText.get(rel); };
+/** Writes one open file to disk (a tab being closed with Save). */
+async function saveFile(rel) {
+    const m = models.get(normalise(uriFor(rel)));
+    if (!m)
+        return;
+    const res = await fetch('/api/file?path=' + encodeURIComponent(rel), { method: 'PUT', body: m.getValue() });
+    if (res.ok) {
+        savedText.set(rel, m.getValue());
+        refreshDirty();
+        window.dispatchEvent(new Event('pymagic:saved'));
+    }
+}
 /** Closes the models of a file, or of a folder and what is in it (after it was renamed or deleted). */
 async function forgetPath(rel) {
     for (const [key, model] of Array.from(models)) {
@@ -487,6 +504,7 @@ async function forgetPath(rel) {
             editor.setModel(null);
         model.dispose();
     }
+    tabs?.drop(rel);
     refreshDirty();
 }
 /** Opens the Python files that are new on disk, so the language server sees the whole project. */
@@ -498,14 +516,17 @@ async function syncPyModels() {
             await forgetPath(relPathOf.get(key));
     await Promise.all(files.map((f) => ensureModel(f)));
 }
+function showNothing() {
+    currentRel = '';
+    editor.setModel(null);
+    refreshDirty();
+}
 async function openAnother() {
-    const files = await (await fetch('/api/files')).json();
-    if (files.length)
-        await openFile(files[0]);
-    else {
-        currentRel = '';
-        editor.setModel(null);
-    }
+    const next = tabs?.mruFirst();
+    if (next)
+        await openFile(next);
+    else
+        showNothing();
 }
 async function openFile(rel, reveal) {
     const model = await ensureModel(rel);
@@ -517,6 +538,7 @@ async function openFile(rel, reveal) {
     editor.setModel(model);
     editor.updateOptions({ readOnly: false });
     explorer?.reveal(rel);
+    tabs?.opened(rel);
     if (reveal) {
         editor.setSelection(reveal);
         editor.revealRangeInCenter(reveal);
@@ -686,11 +708,13 @@ async function main() {
         current: () => currentRel, openAnother,
     });
     await explorer.refresh();
+    tabs = setupTabs({ openFile, isDirty: isDirtyRel, save: saveFile, revert: reloadFromDisk, empty: showNothing });
     // open everything so cross-file diagnostics and navigation see the whole project
     await Promise.all(files.map((f) => ensureModel(f)));
-    if (files.length)
+    const restored = tabs.restore((rel) => explorer.has(rel));
+    if (restored)
+        await openFile(restored);
+    else if (files.length)
         await openFile(files[0]);
-    else
-        $('editor').textContent = 'No .py files in the workspace folder.';
 }
 main().catch((e) => { $('conn').textContent = String(e.message ?? e); $('conn').className = 'bad'; });

@@ -292,7 +292,7 @@ export function setupExplorer(deps) {
     $('ex-collapse').onclick = () => { open.clear(); remember(); paint(); };
     window.addEventListener('focus', () => void refresh());
 
-    return { refresh, reveal, select: (path) => { selected = path; reveal(path); paint(); } };
+    return { refresh, reveal, has: (path) => files.some((f) => f.path === path), select: (path) => { selected = path; reveal(path); paint(); } };
 }
 
 export { BINARY };
