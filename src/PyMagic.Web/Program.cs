@@ -318,7 +318,7 @@ app.Map("/lsp", async (HttpContext ctx) =>
 object Describe(PythonInterpreter i) => new
 {
     path = i.Path, label = i.Label, kind = i.Kind, source = i.Source, version = i.Version, platform = i.Platform,
-    implementation = i.Implementation, prefix = i.Prefix, isVenv = i.IsVenv,
+    implementation = i.Implementation, prefix = i.Prefix, isVenv = i.IsVenv, target = i.Target.Kind, where = i.Target.Name,
     current = interpreters.Current != null && string.Equals(interpreters.Current.Path, i.Path, StringComparison.OrdinalIgnoreCase),
 };
 
@@ -334,6 +334,29 @@ app.MapPost("/api/interpreter", async (HttpRequest req) =>
     try { return Results.Json(Describe(await Task.Run(() => interpreters.Select(path)))); }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
 });
+
+// WSL distributions and Docker images an interpreter can be taken from
+app.MapGet("/api/interpreter/targets", async () => await Task.Run(() => new
+{
+    wsl = WslTarget.Distros(),
+    docker = new { available = DockerTarget.Available() },
+    dockerImages = DockerTarget.Available() ? DockerTarget.Images() : Array.Empty<string>(),
+}));
+
+// add an interpreter of a WSL distribution ({kind:"wsl", name:"Ubuntu-24.04", python:"python3"}) or a Docker image and use it
+app.MapPost("/api/interpreter/remote", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    string kind = body?["kind"]?.GetValue<string>() ?? "", name = body?["name"]?.GetValue<string>()?.Trim() ?? "";
+    string py = body?["python"]?.GetValue<string>()?.Trim() is { Length: > 0 } given ? given : kind == "wsl" ? "python3" : "python";
+    if (name.Length == 0 || name.Contains('|') || py.Contains('|') || py.StartsWith('-')) return Results.BadRequest(new { error = "give the distribution or image, and the interpreter in it" });
+    ExecutionTarget target = kind switch { "wsl" => new WslTarget(name), "docker" => new DockerTarget(name), _ => null! };
+    if (target == null) return Results.BadRequest(new { error = "the kind is wsl or docker" });
+    try { return Results.Json(Describe(await Task.Run(() => interpreters.AddRemote(target, py)))); }
+    catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
+});
+
+app.MapDelete("/api/interpreter/remote", (string spec) => { interpreters.ForgetRemote(spec); return Results.NoContent(); });
 
 app.MapPost("/api/venv", async (HttpRequest req) =>
 {
@@ -355,7 +378,7 @@ app.MapGet("/api/packages", async () =>
 {
     var current = interpreters.Current;
     if (current == null) return Results.Json(new { error = "no interpreter selected", hasPip = false, packages = Array.Empty<object>() });
-    var list = await Task.Run(() => PackageManager.List(current.Path));
+    var list = await Task.Run(() => PackageManager.List(current.Python, target: current.Target));
     return Results.Json(new
     {
         interpreter = Describe(current), hasPip = list.HasPip, error = list.Error, packages = list.Packages,
@@ -364,19 +387,19 @@ app.MapGet("/api/packages", async () =>
 });
 
 app.MapGet("/api/packages/outdated", async () =>
-    interpreters.Current is { } c ? Results.Json(await Task.Run(() => PackageManager.Outdated(c.Path))) : Results.Json(Array.Empty<object>()));
+    interpreters.Current is { } c ? Results.Json(await Task.Run(() => PackageManager.Outdated(c.Python, target: c.Target))) : Results.Json(Array.Empty<object>()));
 
 app.MapGet("/api/packages/info", async (string name) =>
 {
     if (interpreters.Current is not { } c || !PackageManager.IsSafeSpec(name)) return Results.NotFound();
-    var info = await Task.Run(() => PackageManager.Show(c.Path, name));
+    var info = await Task.Run(() => PackageManager.Show(c.Python, name, target: c.Target));
     return info == null ? Results.NotFound() : Results.Json(info);
 });
 
 app.MapGet("/api/requirements", async () =>
 {
     var files = RequirementsScanner.Scan(root);
-    var installed = interpreters.Current is { } c ? (await Task.Run(() => PackageManager.List(c.Path))).Packages : Array.Empty<InstalledPackage>();
+    var installed = interpreters.Current is { } c ? (await Task.Run(() => PackageManager.List(c.Python, target: c.Target))).Packages : Array.Empty<InstalledPackage>();
     var byName = installed.ToDictionary(p => PackageManager.Normalize(p.Name), p => p.Version);
     return files.Select(f => new
     {
@@ -463,7 +486,7 @@ app.Map("/term", async (HttpContext ctx) =>
     using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
     var outbox = new BlockingCollection<string>();
     void Send(JsonObject o) { if (!outbox.IsAddingCompleted) try { outbox.Add(o.ToJsonString()); } catch (InvalidOperationException) { } }
-    using var term = new TerminalSession(root, () => interpreters.Current?.Path);
+    using var term = new TerminalSession(root, () => interpreters.Current is { Target.IsLocal: true } c ? c.Path : null);   // the terminal is this computer's shell
     var sender = Task.Run(async () =>
     {
         foreach (var text in outbox.GetConsumingEnumerable())
@@ -529,7 +552,7 @@ app.Map("/nb", async (HttpContext ctx) =>
         kernel?.Dispose();
         int mine = ++generation;
         // messages of a kernel that was replaced (restart) must not reach the page
-        kernel = new NotebookKernel(msg => { if (mine == generation) Send(msg); }) { Python = interpreters.Current?.Path ?? python };
+        kernel = new NotebookKernel(msg => { if (mine == generation) Send(msg); }) { Python = interpreters.Current?.Python ?? python, Target = interpreters.Current?.Target ?? ExecutionTarget.Local };
         kernel.Start(root);
     }
 
@@ -624,7 +647,7 @@ app.Map("/run", async (HttpContext ctx) =>
                 var args = (msg["args"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
                 string file0 = msg["file"]!.GetValue<string>();
                 ResolveInRoot(file0);   // refuses paths outside the workspace
-                session.Python = interpreters.Current?.Path ?? python;
+                session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
                 if (msg["profile"]?.GetValue<bool>() == true) session.StartProfile(root, file0, args);
                 else session.StartWithBreakpoints(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
                 if (msg["exceptionBreak"]?.GetValue<string>() == "raised")
@@ -633,7 +656,7 @@ app.Map("/run", async (HttpContext ctx) =>
             else if (msg["type"]?.GetValue<string>() == "startTests")
             {
                 var ids = (msg["ids"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
-                session.Python = interpreters.Current?.Path ?? python;
+                session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
                 session.StartTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto", msg["coverage"]?.GetValue<bool>() == true);
             }
             else if (msg["type"]?.GetValue<string>() == "startPip")
@@ -676,7 +699,7 @@ app.Map("/run", async (HttpContext ctx) =>
                 }
                 if (refusal != null) { outbox.Add(new JsonObject { ["type"] = "error", ["message"] = refusal }.ToJsonString()); continue; }
                 packageOperation = true;
-                session.Python = target.Path;
+                session.Python = target.Python; session.Target = target.Target;
                 session.StartModule(root, module, pipArgs);
             }
             else session.Handle(msg);

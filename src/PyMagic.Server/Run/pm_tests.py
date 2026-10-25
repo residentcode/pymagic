@@ -22,8 +22,8 @@ import traceback
 
 
 class Channel:
-    def __init__(self, port, token):
-        self.sock = socket.create_connection(("127.0.0.1", port))
+    def __init__(self, port, token, host="127.0.0.1"):
+        self.sock = socket.create_connection((host, port))
         self.lock = threading.Lock()
         self.go = threading.Event()
         self.send({"type": "hello", "token": token})
@@ -382,6 +382,7 @@ class Coverage:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--host", default="127.0.0.1", help="where the host listens (WSL and Docker reach it by another address)")
     parser.add_argument("--token", required=True)
     parser.add_argument("--root", required=True)
     parser.add_argument("--framework", default="auto", choices=["auto", "pytest", "unittest"])
@@ -389,7 +390,7 @@ def main():
     parser.add_argument("ids", nargs="*")
     options = parser.parse_args()
 
-    channel = Channel(options.port, options.token)
+    channel = Channel(options.port, options.token, options.host)
     channel.go.wait()
     root = os.path.abspath(options.root)
     os.chdir(root)

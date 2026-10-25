@@ -239,11 +239,12 @@ def main():
     global _sock_file, _current_id, _running
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--host", default="127.0.0.1", help="where the host listens (WSL and Docker reach it by another address)")
     parser.add_argument("--token", required=True)
     parser.add_argument("--root", default=os.getcwd())
     args = parser.parse_args()
 
-    connection = socket.create_connection(("127.0.0.1", args.port), timeout=15)
+    connection = socket.create_connection((args.host, args.port), timeout=15)
     connection.settimeout(None)
     _sock_file = connection.makefile("rwb", buffering=0)
     _sock_file.write((json.dumps({"token": args.token}) + "\n").encode("utf-8"))

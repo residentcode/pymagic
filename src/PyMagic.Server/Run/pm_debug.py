@@ -436,6 +436,7 @@ class Debugger(bdb.Bdb):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--host", default="127.0.0.1", help="where the host listens (WSL and Docker reach it by another address)")
     parser.add_argument("--token", required=True)
     parser.add_argument("--root", required=True)
     parser.add_argument("--script", required=True)
@@ -443,7 +444,7 @@ def main():
     parser.add_argument("args", nargs="*")
     options = parser.parse_args()
 
-    sock = socket.create_connection(("127.0.0.1", options.port))
+    sock = socket.create_connection((options.host, options.port))
     dbg = Debugger(sock, options.root, just_my_code=not options.all_code)
     dbg.send({"type": "hello", "token": options.token})
     threading.Thread(target=dbg.read_loop, daemon=True).start()

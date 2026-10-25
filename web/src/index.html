@@ -24,6 +24,7 @@
     .ask-shade { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-start; justify-content: center; padding-top: 18vh; z-index: 50; }
     .ask-box { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; width: 380px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
     .ask-title { font-weight: 600; margin-bottom: 8px; } .ask-hint { color: var(--dim); font-size: 12px; margin: 6px 0 4px; }
+    .ask-box select { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 4px 6px; font: inherit; }
     .ask-box input { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 4px 6px; font: inherit; }
     .ask-buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
     .ask-buttons button { background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 2px 14px; font: inherit; cursor: pointer; }
@@ -331,6 +332,7 @@
       <span id="interp-note"></span>
       <select id="interp" title="Python interpreter"></select>
       <button id="b-venv" title="Create a .venv in the project with the selected interpreter">＋ venv</button>
+      <button id="b-remote" title="Use a Python interpreter from a WSL distribution or a Docker image">＋ WSL / Docker</button>
     </div>
     <div id="editor-area"><div id="tabs-bar"></div><div id="editor"></div></div>
     <section id="panel">

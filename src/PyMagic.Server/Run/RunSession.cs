@@ -26,9 +26,13 @@ public sealed class RunSession : IDisposable
     Stream? _channel;                       // the debugger socket once it connected
     readonly List<string> _pending = new(); // debugger messages sent before it connected
     bool _disposed;
+    string? _root;
 
-    /// <summary>Interpreter to run; falls back to the PYMAGIC_PYTHON environment variable, then "python".</summary>
+    /// <summary>Interpreter to run, as its target names it; falls back to the PYMAGIC_PYTHON environment variable, then "python".</summary>
     public string? Python { get; set; }
+
+    /// <summary>Where the interpreter runs (this computer, WSL or Docker).</summary>
+    public ExecutionTarget Target { get; set; } = ExecutionTarget.Local;
     public bool IsDebug { get; private set; }
 
     public RunSession(Action<JsonNode> emit) { _emit = emit; }
@@ -47,6 +51,7 @@ public sealed class RunSession : IDisposable
     public void StartWithBreakpoints(string root, string script, bool debug, IReadOnlyList<string> args,
         IReadOnlyDictionary<string, JsonArray>? breakpoints)
     {
+        _root = root;
         string scriptPath = Path.GetFullPath(Path.Combine(root, script));
         if (!File.Exists(scriptPath)) { Error($"script not found: {script}"); return; }
         IsDebug = debug;
@@ -79,7 +84,32 @@ public sealed class RunSession : IDisposable
         string scriptPath = Path.GetFullPath(Path.Combine(root, script));
         if (!File.Exists(scriptPath)) { Error($"script not found: {script}"); return; }
         try { File.Delete(ProfilePath(root)); } catch (IOException) { }
+        // a profile made in WSL or Docker names its files as that system does: the panel needs them as paths of this machine
+        _afterExit = () => { if (!Target.IsLocal) MapProfilePaths(ProfilePath(root)); };
         Launch(root, false, new[] { ExtractHelper("pm_profile.py"), "--out", ProfilePath(root), "--script", scriptPath, "--" }, args, null);
+    }
+
+    Action? _afterExit;
+
+    void MapProfilePaths(string file)
+    {
+        try
+        {
+            if (!File.Exists(file) || JsonNode.Parse(File.ReadAllText(file)) is not JsonObject data) return;
+            void Fix(JsonNode? n)
+            {
+                if (n is JsonObject o && o["builtin"]?.GetValue<bool>() != true && o["file"]?.GetValue<string>() is { } f && f.StartsWith('/')) o["file"] = Target.ToHost(f);
+            }
+            Fix(data);
+            if (data["script"]?.GetValue<string>() is { } script) data["script"] = Target.ToHost(script);
+            foreach (var fn in data["functions"]?.AsArray() ?? new JsonArray())
+            {
+                Fix(fn);
+                foreach (var c in fn?["callers"]?.AsArray() ?? new JsonArray()) Fix(c);
+            }
+            File.WriteAllText(file, data.ToJsonString());
+        }
+        catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidOperationException) { /* the profile keeps the paths it has */ }
     }
 
     /// <summary>Runs <c>python -m module args</c> (pip, ensurepip, venv...) and streams its output like a script run.</summary>
@@ -90,44 +120,48 @@ public sealed class RunSession : IDisposable
     void Launch(string root, bool channel, IReadOnlyList<string> leading, IReadOnlyList<string> args,
         IReadOnlyDictionary<string, JsonArray>? breakpoints, string helper = "pm_debug.py")
     {
+        _root = root;
         string python = Python ?? Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python";
 
-        var psi = new ProcessStartInfo(python)
-        {
-            WorkingDirectory = root,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardInputEncoding = new UTF8Encoding(false),
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-        };
-        psi.ArgumentList.Add("-u");
-        psi.Environment["PYTHONIOENCODING"] = "utf-8";
-        psi.Environment["PYTHONUNBUFFERED"] = "1";
-        string? existing = Environment.GetEnvironmentVariable("PYTHONPATH");
-        psi.Environment["PYTHONPATH"] = string.IsNullOrEmpty(existing) ? root : root + Path.PathSeparator + existing;
-
         string? token = null;
+        var args2 = new List<string> { "-u" };
+        var helperDirs = new List<string>();
         if (channel)
         {
             token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
-            _listener = new TcpListener(IPAddress.Loopback, 0);
+            // a helper in WSL or Docker reaches this program at another address than 127.0.0.1
+            var (listen, connect) = Target.HelperAddress();
+            _listener = new TcpListener(listen, 0);
             _listener.Start();
             int port = ((IPEndPoint)_listener.LocalEndpoint).Port;
-            psi.ArgumentList.Add(ExtractHelper(helper));
-            psi.ArgumentList.Add("--port"); psi.ArgumentList.Add(port.ToString());
-            psi.ArgumentList.Add("--token"); psi.ArgumentList.Add(token);
-            psi.ArgumentList.Add("--root"); psi.ArgumentList.Add(root);
+            string helperPath = ExtractHelper(helper);
+            helperDirs.Add(Path.GetDirectoryName(helperPath)!);
+            args2.Add(helperPath);
+            args2.Add("--port"); args2.Add(port.ToString());
+            if (connect != "127.0.0.1") { args2.Add("--host"); args2.Add(connect); }
+            args2.Add("--token"); args2.Add(token);
+            args2.Add("--root"); args2.Add(root);
         }
-        foreach (var a in leading) psi.ArgumentList.Add(a);
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        foreach (var a in leading) { args2.Add(a); if (a.EndsWith(".py", StringComparison.OrdinalIgnoreCase) && Path.GetDirectoryName(a) is { Length: > 0 } d && d.StartsWith(Path.Combine(Path.GetTempPath(), "pymagic"), StringComparison.OrdinalIgnoreCase)) helperDirs.Add(d); }
+        args2.AddRange(args);
+
+        var env = new Dictionary<string, string> { ["PYTHONIOENCODING"] = "utf-8", ["PYTHONUNBUFFERED"] = "1" };
+        string? existing = Environment.GetEnvironmentVariable("PYTHONPATH");
+        env["PYTHONPATH"] = Target.IsLocal && !string.IsNullOrEmpty(existing) ? root + Path.PathSeparator + existing : root;
+
+        var psi = Target.Start(python, root, args2, env, helperDirs.Distinct().ToList());
+        psi.RedirectStandardInput = true;
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        psi.StandardInputEncoding = new UTF8Encoding(false);
+        psi.StandardOutputEncoding = Encoding.UTF8;
+        psi.StandardErrorEncoding = Encoding.UTF8;
 
         try { _process = Process.Start(psi); }
-        catch (System.ComponentModel.Win32Exception e) { Error($"cannot start '{python}': {e.Message}"); return; }
-        if (_process == null) { Error($"cannot start '{python}'"); return; }
+        catch (System.ComponentModel.Win32Exception e) { Error($"cannot start '{psi.FileName}': {e.Message}"); return; }
+        if (_process == null) { Error($"cannot start '{psi.FileName}'"); return; }
 
         _emit(new JsonObject { ["type"] = "started", ["pid"] = _process.Id, ["debug"] = IsDebug });
 
@@ -144,6 +178,7 @@ public sealed class RunSession : IDisposable
             Task.WaitAll(readers.Select(r => r).ToArray(), TimeSpan.FromSeconds(2));
             // messages the helper sent just before exiting must reach the UI before the exit does
             try { channelTask?.Wait(TimeSpan.FromSeconds(3)); } catch (AggregateException) { }
+            try { _afterExit?.Invoke(); } catch (Exception e) when (e is IOException or InvalidOperationException) { }
             _emit(new JsonObject { ["type"] = "exited", ["code"] = _process.ExitCode });
             Cleanup();
         });
@@ -213,14 +248,23 @@ public sealed class RunSession : IDisposable
             while ((text = reader.ReadLine()) != null)
             {
                 var msg = JsonNode.Parse(text);
-                if (msg != null) _emit(msg);
+                if (msg == null) continue;
+                // the debugger names files as its target does (/mnt/c/proj/a.py in WSL): the editor knows them as paths of this machine
+                if (!Target.IsLocal && msg["frames"] is JsonArray frames)
+                    foreach (var f in frames) if (f is JsonObject fo && fo["file"]?.GetValue<string>() is { } file) fo["file"] = Target.ToHost(file);
+                _emit(msg);
             }
         }
         catch (IOException) { }
         catch (ObjectDisposedException) { }
     }
 
-    void WriteLocked(JsonNode msg) => WriteRawLocked(msg.ToJsonString());
+    void WriteLocked(JsonNode msg)
+    {
+        if (!Target.IsLocal && msg["type"]?.GetValue<string>() == "setBreakpoints" && msg["file"]?.GetValue<string>() is { } file)
+            msg["file"] = Target.ToTarget(file);
+        WriteRawLocked(msg.ToJsonString());
+    }
 
     void WriteRawLocked(string json)
     {
@@ -260,6 +304,8 @@ public sealed class RunSession : IDisposable
                 {
                     lock (_gate)
                     {
+                        if (!Target.IsLocal && type == "setBreakpoints" && msg["file"]?.GetValue<string>() is { } bpFile)
+                            msg["file"] = Target.ToTarget(Path.GetFullPath(Path.Combine(_root ?? "", bpFile)));
                         string json = msg.ToJsonString();
                         if (_channel == null) _pending.Add(json); else WriteRawLocked(json);
                     }

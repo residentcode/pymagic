@@ -51,6 +51,7 @@ print(json.dumps({
 
     public static InspectResult Inspect(string path, string kind = "system", string source = "", int timeoutMs = 15000)
     {
+        if (ExecutionTarget.Parse(path) is var (target, python)) return InspectRemote(target, python, source, Math.Max(timeoutMs, 60000));
         string full;
         try { full = Path.GetFullPath(path); } catch (ArgumentException e) { return new InspectResult(null, e.Message); }
         if (!File.Exists(full)) return new InspectResult(null, $"not found: {path}");
@@ -65,21 +66,64 @@ print(json.dumps({
         return result;
     }
 
-    static InspectResult Run(string exe, string kind, string source, int timeoutMs)
+    // an interpreter in WSL or Docker is asked again after this long (there is no executable file to watch)
+    static readonly ConcurrentDictionary<string, (DateTime At, InspectResult Result)> RemoteCache = new();
+
+    /// <summary>
+    /// An interpreter of another target: run it there once. Its folders come back as paths of that target, so each one is
+    /// turned into a path this machine can read (a WSL distribution's network share, or a copy made from a Docker image);
+    /// folders that cannot be read from here are left out.
+    /// </summary>
+    static InspectResult InspectRemote(ExecutionTarget target, string python, string source, int timeoutMs)
     {
-        var psi = new ProcessStartInfo(exe)
+        string spec = target.Spec(python);
+        if (RemoteCache.TryGetValue(spec, out var hit) && DateTime.UtcNow - hit.At < TimeSpan.FromSeconds(30) && hit.Result.Interpreter != null)
+            return new InspectResult(hit.Result.Interpreter with { Source = source }, null);
+
+        var run = Run(null, target.Kind, source, timeoutMs, target, python);
+        if (run.Interpreter is not { } raw) return run;
+
+        if (target is DockerTarget docker)
+            docker.Mirror(raw.SysPath.Concat(raw.SitePackages).Concat(raw.Stdlib is { } sl ? new[] { sl } : Array.Empty<string>()));
+        string? Map(string? p) => p == null ? null : target.Readable(p);
+        var site = raw.SitePackages.Select(Map).Where(x => x != null).Select(x => x!).ToList();
+        var path = raw.SysPath.Select(Map).Where(x => x != null).Select(x => x!).ToList();
+        var mapped = raw with
         {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
+            Path = spec,
+            Prefix = Map(raw.Prefix) ?? raw.Prefix,
+            BasePrefix = Map(raw.BasePrefix) ?? raw.BasePrefix,
+            Stdlib = Map(raw.Stdlib),
+            SysPath = MergeEditableRoots(path, site),
+            SitePackages = site,
+            Kind = target.Kind,
+            Source = source,
+            Target = target,
+            TargetPython = python,
         };
-        psi.ArgumentList.Add("-I");
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(Script);
-        psi.Environment["PYTHONIOENCODING"] = "utf-8";
+        var result = new InspectResult(mapped, null);
+        RemoteCache[spec] = (DateTime.UtcNow, result);
+        return result;
+    }
+
+    static InspectResult Run(string? exe, string kind, string source, int timeoutMs, ExecutionTarget? target = null, string? targetPython = null)
+    {
+        var args = new[] { "-I", "-c", Script };
+        ProcessStartInfo psi;
+        if (target == null)
+        {
+            psi = new ProcessStartInfo(exe!);
+            foreach (var a in args) psi.ArgumentList.Add(a);
+            psi.Environment["PYTHONIOENCODING"] = "utf-8";
+        }
+        else psi = target.Start(targetPython!, Path.GetTempPath(), args, new Dictionary<string, string> { ["PYTHONIOENCODING"] = "utf-8" });
+        exe ??= targetPython!;
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        psi.StandardOutputEncoding = Encoding.UTF8;
+        psi.StandardErrorEncoding = Encoding.UTF8;
 
         try
         {

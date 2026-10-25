@@ -23,9 +23,9 @@ public static class PackageManager
     public static bool IsSafeSpec(string spec) =>
         spec.Length is > 0 and <= 200 && Regex.IsMatch(spec, @"^[A-Za-z0-9][A-Za-z0-9._\-\[\],<>=!~*+]*$");
 
-    public static PackageList List(string python, int timeoutMs = 60000)
+    public static PackageList List(string python, int timeoutMs = 60000, ExecutionTarget? target = null)
     {
-        var (code, output, error) = Exec(python, new[] { "-m", "pip", "list", "--format=json", "--disable-pip-version-check" }, timeoutMs);
+        var (code, output, error) = Exec(python, new[] { "-m", "pip", "list", "--format=json", "--disable-pip-version-check" }, timeoutMs, target);
         if (code != 0)
         {
             bool noPip = error.Contains("No module named pip", StringComparison.OrdinalIgnoreCase);
@@ -46,9 +46,9 @@ public static class PackageManager
     }
 
     /// <summary>Packages with a newer release (asks the package index, so it needs the network and can take a while).</summary>
-    public static IReadOnlyList<OutdatedPackage> Outdated(string python, int timeoutMs = 120000)
+    public static IReadOnlyList<OutdatedPackage> Outdated(string python, int timeoutMs = 120000, ExecutionTarget? target = null)
     {
-        var (code, output, _) = Exec(python, new[] { "-m", "pip", "list", "--outdated", "--format=json", "--disable-pip-version-check" }, timeoutMs);
+        var (code, output, _) = Exec(python, new[] { "-m", "pip", "list", "--outdated", "--format=json", "--disable-pip-version-check" }, timeoutMs, target);
         if (code != 0) return Array.Empty<OutdatedPackage>();
         try
         {
@@ -59,10 +59,10 @@ public static class PackageManager
         catch (Exception e) when (e is System.Text.Json.JsonException or InvalidOperationException) { return Array.Empty<OutdatedPackage>(); }
     }
 
-    public static PackageInfo? Show(string python, string name, int timeoutMs = 30000)
+    public static PackageInfo? Show(string python, string name, int timeoutMs = 30000, ExecutionTarget? target = null)
     {
         if (!IsSafeSpec(name)) return null;
-        var (code, output, _) = Exec(python, new[] { "-m", "pip", "show", "--disable-pip-version-check", name }, timeoutMs);
+        var (code, output, _) = Exec(python, new[] { "-m", "pip", "show", "--disable-pip-version-check", name }, timeoutMs, target);
         if (code != 0) return null;
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var line in output.Split('\n'))
@@ -95,15 +95,11 @@ public static class PackageManager
 
     // ------------------------------------------------------------ plumbing
 
-    public static (int Code, string Output, string Error) Exec(string python, IEnumerable<string> args, int timeoutMs)
+    public static (int Code, string Output, string Error) Exec(string python, IEnumerable<string> args, int timeoutMs, ExecutionTarget? target = null)
     {
-        var psi = new ProcessStartInfo(python)
-        {
-            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        psi.Environment["PYTHONIOENCODING"] = "utf-8";
+        var psi = (target ?? ExecutionTarget.Local).Start(python, Path.GetTempPath(), args, new Dictionary<string, string> { ["PYTHONIOENCODING"] = "utf-8" });
+        psi.RedirectStandardOutput = true; psi.RedirectStandardError = true; psi.UseShellExecute = false; psi.CreateNoWindow = true;
+        psi.StandardOutputEncoding = Encoding.UTF8; psi.StandardErrorEncoding = Encoding.UTF8;
         try
         {
             using var p = Process.Start(psi);

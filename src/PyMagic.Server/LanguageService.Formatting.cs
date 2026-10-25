@@ -26,7 +26,8 @@ public sealed partial class LanguageService
     }
 
     /// <summary>The interpreter that runs black and ruff: the project's, else PYMAGIC_PYTHON, else whatever `python` is.</summary>
-    string FormatterPython => Interpreter?.Path ?? System.Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python";
+    string FormatterPython => Interpreter?.Python ?? System.Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python";
+    ExecutionTarget FormatterTarget => Interpreter?.Target ?? ExecutionTarget.Local;
 
     /// <summary>The built-in formatter, and black and ruff with what is known of them for the project's interpreter.</summary>
     public IReadOnlyList<FormatterInfo> Formatters()
@@ -35,7 +36,7 @@ public sealed partial class LanguageService
         foreach (var tool in ExternalFormatter.Tools)
         {
             FormatterInfo info;
-            try { info = ExternalFormatter.Probe(FormatterPython, tool); }
+            try { info = ExternalFormatter.Probe(FormatterPython, tool, FormatterTarget); }
             catch (ServiceException) { info = new FormatterInfo(tool, tool, false, null); }
             list.Add(info with { Label = info.Available ? $"{tool} {info.Version}" : $"{tool} (not installed)" });
         }
@@ -53,7 +54,7 @@ public sealed partial class LanguageService
     string RunExternal(string engine, string text, string uri, (int, int)? lines = null)
     {
         if (!ExternalFormatter.Tools.Contains(engine)) throw new ServiceException($"Unknown formatter '{engine}'.");
-        string result = ExternalFormatter.Format(FormatterPython, engine, text, FilePathOf(uri), lines);
+        string result = ExternalFormatter.Format(FormatterPython, engine, text, FilePathOf(uri), lines, FormatterTarget);
         if (PyMagic.Core.Syntax.Parser.Parse(result).Diagnostics.Count > 0)
             throw new ServiceException($"{engine} returned text that does not parse; the file was left as it is.");
         return result;

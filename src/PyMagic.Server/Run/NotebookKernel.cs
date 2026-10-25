@@ -24,6 +24,10 @@ public sealed class NotebookKernel : IDisposable
 
     /// <summary>Interpreter to run; falls back to PYMAGIC_PYTHON, then "python".</summary>
     public string? Python { get; set; }
+
+    /// <summary>Where the interpreter runs (this computer, WSL or Docker).</summary>
+    public ExecutionTarget Target { get; set; } = ExecutionTarget.Local;
+
     public bool Running => _process is { HasExited: false };
 
     public NotebookKernel(Action<JsonNode> emit) { _emit = emit; }
@@ -32,34 +36,32 @@ public sealed class NotebookKernel : IDisposable
     {
         string python = Python ?? Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python";
         string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
-        _listener = new TcpListener(IPAddress.Loopback, 0);
+        var (listen, connect) = Target.HelperAddress();
+        _listener = new TcpListener(listen, 0);
         _listener.Start();
         int port = ((IPEndPoint)_listener.LocalEndpoint).Port;
 
-        var psi = new ProcessStartInfo(python)
-        {
-            WorkingDirectory = root,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-        };
-        psi.ArgumentList.Add("-u");
-        psi.Environment["PYTHONIOENCODING"] = "utf-8";
-        psi.Environment["PYTHONUNBUFFERED"] = "1";
+        string helper = RunSession.ExtractHelper("pm_kernel.py");
+        var args = new List<string> { "-u", helper, "--port", port.ToString() };
+        if (connect != "127.0.0.1") { args.Add("--host"); args.Add(connect); }
+        args.Add("--token"); args.Add(token);
+        args.Add("--root"); args.Add(root);
+        var env = new Dictionary<string, string> { ["PYTHONIOENCODING"] = "utf-8", ["PYTHONUNBUFFERED"] = "1" };
         string? existing = Environment.GetEnvironmentVariable("PYTHONPATH");
-        psi.Environment["PYTHONPATH"] = string.IsNullOrEmpty(existing) ? root : root + Path.PathSeparator + existing;
-        psi.ArgumentList.Add(RunSession.ExtractHelper("pm_kernel.py"));
-        psi.ArgumentList.Add("--port"); psi.ArgumentList.Add(port.ToString());
-        psi.ArgumentList.Add("--token"); psi.ArgumentList.Add(token);
-        psi.ArgumentList.Add("--root"); psi.ArgumentList.Add(root);
+        env["PYTHONPATH"] = Target.IsLocal && !string.IsNullOrEmpty(existing) ? root + Path.PathSeparator + existing : root;
+
+        var psi = Target.Start(python, root, args, env, new[] { Path.GetDirectoryName(helper)! });
+        psi.RedirectStandardInput = true;
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        psi.StandardOutputEncoding = Encoding.UTF8;
+        psi.StandardErrorEncoding = Encoding.UTF8;
 
         try { _process = Process.Start(psi); }
-        catch (System.ComponentModel.Win32Exception e) { Fail($"cannot start '{python}': {e.Message}"); return; }
-        if (_process == null) { Fail($"cannot start '{python}'"); return; }
+        catch (System.ComponentModel.Win32Exception e) { Fail($"cannot start '{psi.FileName}': {e.Message}"); return; }
+        if (_process == null) { Fail($"cannot start '{psi.FileName}'"); return; }
         _process.StandardInput.Close();
 
         var pumps = new[] { Pump(_process.StandardOutput), Pump(_process.StandardError) };

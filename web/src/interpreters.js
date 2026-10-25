@@ -86,5 +86,80 @@ export function setupInterpreters() {
             venvButton.disabled = false;
         }
     };
+    // ---- an interpreter from a WSL distribution or a Docker image
+    $('b-remote').onclick = () => openRemoteDialog();
+    function openRemoteDialog() {
+        const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+        const shade = el('div', 'ask-shade');
+        const box = el('div', 'ask-box');
+        const kind = el('select');
+        for (const [value, label] of [['wsl', 'WSL distribution'], ['docker', 'Docker image']]) { const o = el('option', '', label); o.value = value; kind.append(o); }
+        const nameLabel = el('div', 'ask-hint');
+        const nameSelect = el('select');
+        const nameInput = el('input');
+        nameInput.spellcheck = false;
+        nameInput.autocomplete = 'off';
+        const python = el('input');
+        python.spellcheck = false;
+        python.autocomplete = 'off';
+        const hint = el('div', 'ask-hint');
+        const message = el('div', 'ask-hint');
+        message.style.color = '#e5534b';
+        const add = el('button', '', 'Add and use');
+        const cancel = el('button', '', 'Cancel');
+        const row = el('div', 'ask-buttons');
+        row.append(cancel, add);
+        box.append(el('div', 'ask-title', 'Add an interpreter'), el('div', 'ask-hint', 'Where does it run?'), kind, nameLabel, nameSelect, nameInput,
+            el('div', 'ask-hint', 'The interpreter in it'), python, hint, message, row);
+        shade.append(box);
+        document.body.append(shade);
+        const done = () => shade.remove();
+        let targets = { wsl: [], docker: { available: false }, dockerImages: [] };
+        function paint() {
+            const wsl = kind.value === 'wsl';
+            nameLabel.textContent = wsl ? 'Distribution' : 'Image (for example python:3.12-slim)';
+            nameSelect.style.display = wsl ? '' : 'none';
+            nameInput.style.display = wsl ? 'none' : '';
+            python.placeholder = wsl ? 'python3' : 'python';
+            hint.textContent = wsl
+                ? (targets.wsl.length ? 'The project folder is shared with the distribution; libraries are read from it. Debugging needs the Windows firewall to let it connect back.' : 'No WSL distribution was found on this computer.')
+                : (targets.docker.available ? 'Each run starts a container from the image with the project folder as /workspace. Libraries are copied out of the image once.' : 'The docker command did not answer: install Docker or start it.');
+            nameSelect.replaceChildren(...targets.wsl.map((n) => { const o = el('option', '', n); o.value = n; return o; }));
+            if (!nameInput.list && targets.dockerImages.length) {
+                const list = el('datalist');
+                list.id = 'docker-images';
+                list.append(...targets.dockerImages.map((i) => { const o = el('option'); o.value = i; return o; }));
+                box.append(list);
+                nameInput.setAttribute('list', 'docker-images');
+            }
+        }
+        kind.onchange = paint;
+        paint();
+        void (async () => {
+            try { targets = await (await fetch('/api/interpreter/targets')).json(); } catch { /* host not reachable */ }
+            paint();
+        })();
+        cancel.onclick = done;
+        shade.onmousedown = (e) => { if (e.target === shade) done(); };
+        shade.onkeydown = (e) => { if (e.key === 'Escape') done(); };
+        add.onclick = async () => {
+            message.textContent = '';
+            const name = kind.value === 'wsl' ? nameSelect.value : nameInput.value.trim();
+            if (!name) { message.textContent = kind.value === 'wsl' ? 'Choose a distribution.' : 'Type the name of an image.'; return; }
+            add.disabled = true;
+            say('Asking the interpreter…');
+            try {
+                const res = await fetch('/api/interpreter/remote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: kind.value, name, python: python.value.trim() }) });
+                const body = await res.json();
+                if (!res.ok) { message.textContent = body.error ?? 'It could not be added.'; say('', false); return; }
+                done();
+                say(`Using ${body.label}`);
+                window.dispatchEvent(new Event('pymagic:interpreter'));
+                await refresh(0);
+            }
+            finally { add.disabled = false; }
+        };
+        (nameSelect.style.display === 'none' ? nameInput : nameSelect).focus();
+    }
     void refresh();
 }

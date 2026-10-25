@@ -13,9 +13,9 @@ public static class ExternalFormatter
     public static readonly string[] Tools = { "black", "ruff" };
 
     /// <summary>Whether the tool is installed for this interpreter, and its version.</summary>
-    public static FormatterInfo Probe(string python, string tool)
+    public static FormatterInfo Probe(string python, string tool, ExecutionTarget? target = null)
     {
-        var result = Run(python, new[] { "-m", tool, "--version" }, "", TimeSpan.FromSeconds(15));
+        var result = Run(python, new[] { "-m", tool, "--version" }, "", TimeSpan.FromSeconds(15), target);
         if (result.ExitCode != 0 || result.Output.Trim().Length == 0)
             return new FormatterInfo(tool, tool, false, null);
         string first = result.Output.Split('\n')[0].Trim();
@@ -27,7 +27,7 @@ public static class ExternalFormatter
     /// <param name="filePath">Where the text lives, so that the tool finds the project's pyproject.toml.</param>
     /// <param name="lines">1-based first and last line to format (black only); null for the whole text.</param>
     /// <exception cref="ServiceException">The tool is not installed, rejects the text, or takes too long.</exception>
-    public static string Format(string python, string tool, string source, string filePath, (int First, int Last)? lines = null)
+    public static string Format(string python, string tool, string source, string filePath, (int First, int Last)? lines = null, ExecutionTarget? target = null)
     {
         var args = new List<string> { "-m", tool };
         if (tool == "black")
@@ -36,7 +36,7 @@ public static class ExternalFormatter
             if (lines != null)
             {
                 // --line-ranges arrived in 23.11
-                var info = Probe(python, "black");
+                var info = Probe(python, "black", target);
                 if (!info.Available) throw NotInstalled(python, tool);
                 var v = Regex.Match(info.Version ?? "", @"^(\d+)\.(\d+)");
                 if (!v.Success || int.Parse(v.Groups[1].Value) * 100 + int.Parse(v.Groups[2].Value) < 2311)
@@ -53,7 +53,7 @@ public static class ExternalFormatter
             args.Add("-");
         }
 
-        var r = Run(python, args, source, TimeSpan.FromSeconds(30));
+        var r = Run(python, args, source, TimeSpan.FromSeconds(30), target);
         if (r.ExitCode != 0)
         {
             string error = (r.Error.Trim().Length > 0 ? r.Error : r.Output).Trim();
@@ -72,19 +72,13 @@ public static class ExternalFormatter
 
     sealed record Result(int ExitCode, string Output, string Error);
 
-    static Result Run(string python, IEnumerable<string> args, string input, TimeSpan timeout)
+    static Result Run(string python, IEnumerable<string> args, string input, TimeSpan timeout, ExecutionTarget? target = null)
     {
-        var psi = new ProcessStartInfo(python)
-        {
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            UseShellExecute = false, CreateNoWindow = true,
-            StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false),
-            // not the project folder: `python -m` would put it first on sys.path and a file called black.py there would win
-            WorkingDirectory = Path.GetTempPath(),
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        psi.Environment["PYTHONIOENCODING"] = "utf-8";
-        psi.Environment["PYTHONUTF8"] = "1";
+        // not the project folder: `python -m` would put it first on sys.path and a file called black.py there would win
+        var psi = (target ?? ExecutionTarget.Local).Start(python, Path.GetTempPath(), args, new Dictionary<string, string> { ["PYTHONIOENCODING"] = "utf-8", ["PYTHONUTF8"] = "1" });
+        psi.RedirectStandardInput = true; psi.RedirectStandardOutput = true; psi.RedirectStandardError = true;
+        psi.UseShellExecute = false; psi.CreateNoWindow = true;
+        psi.StandardInputEncoding = new UTF8Encoding(false); psi.StandardOutputEncoding = new UTF8Encoding(false); psi.StandardErrorEncoding = new UTF8Encoding(false);
 
         try
         {

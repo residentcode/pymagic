@@ -25,6 +25,16 @@ public sealed record PythonInterpreter(
 {
     public string Version => $"{Major}.{Minor}.{Micro}";
 
+    /// <summary>Where it runs: this computer, a WSL distribution or a Docker image. For the others <see cref="Path"/> is the spec (see <see cref="ExecutionTarget"/>).</summary>
+    [JsonIgnore]
+    public ExecutionTarget Target { get; init; } = ExecutionTarget.Local;
+
+    /// <summary>The interpreter's own path as its target names it (what to run there); for a local one the same as <see cref="Path"/>.</summary>
+    public string? TargetPython { get; init; }
+
+    [JsonIgnore]
+    public string Python => TargetPython ?? Path;
+
     [JsonIgnore]
     public bool IsVenv => !string.Equals(System.IO.Path.GetFullPath(Prefix), System.IO.Path.GetFullPath(BasePrefix), StringComparison.OrdinalIgnoreCase);
 
@@ -35,6 +45,7 @@ public sealed record PythonInterpreter(
         {
             string where = Kind switch
             {
+                "wsl" or "docker" => Target.Name,
                 "venv" or "conda" => System.IO.Path.GetFileName(Prefix.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : Source,
                 "uv" => "uv",
                 "pyenv" => "pyenv",
