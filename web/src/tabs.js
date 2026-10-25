@@ -1,6 +1,9 @@
 // The tab bar above the editor: the files being worked on, a mark for unsaved ones, close buttons,
-// middle-click to close and Ctrl+Tab to switch (most recently used first).
+// middle-click to close, Ctrl+Tab to switch (most recently used first) and dragging to reorder.
+import { dropIndex, moveBy, moveTo, staysPut } from './taborder';
+
 const $ = (id) => document.getElementById(id);
+const TAB_TYPE = 'application/x-pymagic-tab';   // not text/plain, so a tab dropped on the editor inserts nothing
 
 function baseName(path) { return path.slice(path.lastIndexOf('/') + 1); }
 
@@ -43,6 +46,7 @@ export function setupTabs(deps) {
     let active = '';
     let cycling = -1;         // while Ctrl is held and Tab pressed: where in mru we are
     let menuEl = null;
+    let dragging = null;      // the tab being dragged along the bar
 
     function remember() {
         try { localStorage.setItem('pymagic.tabs', JSON.stringify({ tabs, active })); } catch { /* storage unavailable */ }
@@ -63,14 +67,77 @@ export function setupTabs(deps) {
             close.title = 'Close (Ctrl+W)';
             close.onclick = (e) => { e.stopPropagation(); void closeTab(rel); };
             tab.append(name, close);
-            tab.onclick = () => void deps.openFile(rel);
-            tab.onmousedown = (e) => { if (e.button === 1) e.preventDefault(); };
+            tab.onmousedown = (e) => {
+                if (e.button === 1) e.preventDefault();
+                // a tab opens when it is pressed, as in PyCharm, so a click that slips into a short drag still opens it;
+                // deferred so the browser's own focus handling of the press is done before the editor takes the focus
+                else if (e.button === 0 && !close.contains(e.target)) setTimeout(() => void deps.openFile(rel));
+            };
             tab.onmouseup = (e) => { if (e.button === 1) { e.preventDefault(); void closeTab(rel); } };
             tab.oncontextmenu = (e) => { e.preventDefault(); menu(e.clientX, e.clientY, rel); };
+            tab.draggable = true;
+            tab.ondragstart = (e) => {
+                dragging = rel;
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData(TAB_TYPE, rel);
+                // faded only after the browser has taken its picture of the tab for the drag image
+                requestAnimationFrame(() => { if (dragging === rel) tab.classList.add('dragging'); });
+            };
+            tab.ondragend = () => { dragging = null; tab.classList.remove('dragging'); markDrop(-1); };
             return tab;
         }));
         refresh();
     }
+
+    /** Puts the tabs in a new order; `reveal` is a tab to scroll into view instead of leaving the bar on the open one. */
+    function reorder(next, reveal = null) {
+        if (next === tabs) return;
+        tabs = next;
+        remember();
+        render();
+        if (reveal) Array.from(bar.children).find((el) => el.dataset.path === reveal)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+
+    // ------------------------------------------------------------ dragging a tab along the bar
+
+    function dropAt(x) {
+        return dropIndex(Array.from(bar.children, (el) => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; }), x);
+    }
+
+    /** The line where the dragged tab would land; -1 removes it. */
+    function markDrop(index) {
+        const kids = Array.from(bar.children);
+        const show = index >= 0 && dragging && !staysPut(tabs, dragging, index);
+        kids.forEach((el, i) => {
+            el.classList.toggle('drop-before', !!show && i === index);
+            el.classList.toggle('drop-after', !!show && index === kids.length && i === kids.length - 1);
+        });
+    }
+
+    // the type check keeps other drags (files from Explorer) out, even if a tab's dragend never arrived
+    const isTabDrag = (e) => dragging && e.dataTransfer.types.includes(TAB_TYPE);
+    bar.addEventListener('dragover', (e) => {
+        if (!isTabDrag(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        markDrop(dropAt(e.clientX));
+        // near either end the bar scrolls, so a tab can be taken to a place that is out of sight
+        const r = bar.getBoundingClientRect();
+        if (e.clientX < r.left + 32) bar.scrollLeft -= 16;
+        else if (e.clientX > r.right - 32) bar.scrollLeft += 16;
+    });
+    bar.addEventListener('dragleave', (e) => { if (!bar.contains(e.relatedTarget)) markDrop(-1); });
+    bar.addEventListener('drop', (e) => {
+        if (!isTabDrag(e)) return;
+        e.preventDefault();
+        const rel = dragging;
+        dragging = null;
+        markDrop(-1);
+        reorder(moveTo(tabs, rel, dropAt(e.clientX)), rel);
+    });
+    // a tab can only be dropped on the bar; elsewhere it is refused, above all on the editor, which would move its caret
+    for (const type of ['dragover', 'drop'])
+        window.addEventListener(type, (e) => { if (isTabDrag(e) && !bar.contains(e.target)) e.stopPropagation(); }, true);
 
     /** Only the marks: which tab is the open one and which have unsaved changes. */
     function refresh() {
@@ -85,11 +152,13 @@ export function setupTabs(deps) {
 
     /** Called when a file is shown in the editor. */
     function opened(rel) {
-        if (!tabs.includes(rel)) tabs.push(rel);
+        const known = tabs.includes(rel);
+        if (!known) tabs.push(rel);
         active = rel;
         if (cycling < 0) mru = [rel, ...mru.filter((r) => r !== rel)];
         remember();
-        render();
+        // a tab that is already there keeps its element, so a press that is turning into a drag is not cut off
+        if (known) refresh(); else render();
     }
 
     function drop(rel) {
@@ -188,6 +257,10 @@ export function setupTabs(deps) {
             void closeTab(active);
         } else if (e.altKey && !e.ctrlKey && e.key === 'PageDown') { e.preventDefault(); step(1); }
         else if (e.altKey && !e.ctrlKey && e.key === 'PageUp') { e.preventDefault(); step(-1); }
+        else if (e.ctrlKey && e.shiftKey && !e.altKey && (e.key === 'PageDown' || e.key === 'PageUp') && active) {
+            e.preventDefault();
+            reorder(moveBy(tabs, active, e.key === 'PageDown' ? 1 : -1));
+        }
     }, true);
     window.addEventListener('keyup', (e) => {
         if (e.key === 'Control' && cycling >= 0) {
