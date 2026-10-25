@@ -324,6 +324,65 @@ app.MapGet("/api/pypi", async (string name) =>
 });
 app.MapGet("/api/tests", () => TestDiscovery.Discover(root));
 
+// ---- the terminal: one command line at a time in the project folder -------------------------------------------------
+
+app.Map("/term", async (HttpContext ctx) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+    var outbox = new BlockingCollection<string>();
+    void Send(JsonObject o) { if (!outbox.IsAddingCompleted) try { outbox.Add(o.ToJsonString()); } catch (InvalidOperationException) { } }
+    using var term = new TerminalSession(root, () => interpreters.Current?.Path);
+    var sender = Task.Run(async () =>
+    {
+        foreach (var text in outbox.GetConsumingEnumerable())
+        {
+            if (ws.State != WebSocketState.Open) break;
+            try { await ws.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, CancellationToken.None); }
+            catch (WebSocketException) { break; }
+        }
+    });
+    Send(new JsonObject { ["type"] = "ready", ["cwd"] = term.Cwd, ["shell"] = OperatingSystem.IsWindows() ? "PowerShell" : "sh" });
+
+    var buffer = new byte[16 * 1024];
+    try
+    {
+        while (ws.State == WebSocketState.Open)
+        {
+            using var ms = new MemoryStream();
+            WebSocketReceiveResult r;
+            do
+            {
+                r = await ws.ReceiveAsync(buffer, CancellationToken.None);
+                if (r.MessageType == WebSocketMessageType.Close) goto done;
+                ms.Write(buffer, 0, r.Count);
+            } while (!r.EndOfMessage);
+            var msg = JsonNode.Parse(ms.ToArray());
+            switch (msg?["type"]?.GetValue<string>())
+            {
+                case "run":
+                    try
+                    {
+                        term.Run(msg["command"]?.GetValue<string>() ?? "",
+                            (stream, text) => Send(new JsonObject { ["type"] = stream, ["text"] = text }),
+                            (code, cwd) => Send(new JsonObject { ["type"] = "exit", ["code"] = code, ["cwd"] = cwd }));
+                    }
+                    catch (InvalidOperationException e) { Send(new JsonObject { ["type"] = "err", ["text"] = e.Message + "\n" }); }
+                    break;
+                case "stdin": term.WriteLine(msg["text"]?.GetValue<string>() ?? ""); break;
+                case "kill": term.Kill(); break;
+            }
+        }
+    }
+    catch (WebSocketException) { }
+    done:
+    term.Kill();
+    outbox.CompleteAdding();
+    await sender;
+    if (ws.State == WebSocketState.Open || ws.State == WebSocketState.CloseReceived)
+        try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); } catch (WebSocketException) { }
+});
+
 app.Map("/run", async (HttpContext ctx) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }

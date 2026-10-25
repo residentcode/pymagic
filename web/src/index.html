@@ -131,6 +131,12 @@
     .verb-get { color: #3fa9f5; } .verb-post { color: #4cbb6c; } .verb-put { color: #e0a030; } .verb-patch { color: #b58cf0; }
     .verb-delete { color: #e5534b; } .verb-ws { color: #38c0c0; }
     .route .rpath { font-family: var(--mono, monospace); }
+    #terminal-main { flex: 1; }
+    #term-output { flex: 1; margin: 0; padding: 4px 10px; overflow: auto; font: 12.5px/1.45 Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; word-break: break-all; }
+    #term-output .err { color: var(--red); } #term-output .info { color: var(--dim); } #term-output .cmd { color: #7aa7d9; }
+    #term-line { display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--line); padding: 3px 10px; font: 12.5px Consolas, "Cascadia Mono", monospace; }
+    #term-prompt { color: #7aa7d9; white-space: nowrap; } #term-prompt.busy { color: #e0a030; }
+    #term-input { flex: 1; border: 0; background: transparent; color: var(--fg); font: inherit; outline: none; }
     .listbar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
     .listbar input, .listbar select { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 1px 6px; }
     .listbar input { min-width: 220px; }
@@ -234,6 +240,7 @@
         <button id="t-git">Git</button>
         <button id="t-hier">Hierarchy</button>
         <button id="t-routes">Endpoints</button>
+        <button id="t-terminal" title="Terminal (Ctrl+`)">Terminal</button>
         <button id="t-problems">Problems</button>
         <button id="t-todo">TODO</button>
         <button id="t-insp">Inspections</button>
@@ -328,6 +335,17 @@
             <button id="insp-reset" title="Back to the defaults (deletes .pymagic/inspections.json)">Reset all</button>
           </div>
           <div class="body" id="insp-list"></div>
+        </div>
+      </div>
+      <div id="terminal-tab" class="tab">
+        <div class="col" id="terminal-main">
+          <div id="term-bar" class="listbar">
+            <span id="term-status"></span>
+            <button id="term-stop" title="Stop the running command (Ctrl+C)" disabled>Stop</button>
+            <button id="term-clear" title="Clear the output">Clear</button>
+          </div>
+          <pre id="term-output" class="body"></pre>
+          <div id="term-line"><span id="term-prompt"></span><input id="term-input" autocomplete="off" spellcheck="false" placeholder="Type a command, for example: python -m pytest"></div>
         </div>
       </div>
       <div id="problems-tab" class="tab">
