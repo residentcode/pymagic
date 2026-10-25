@@ -66,6 +66,7 @@ public sealed partial class LanguageService
         ("none-function-assignment", "Python", "Function returns nothing", "x = f() where f has no return value.", "weak"),
         ("except-clauses-order", "Python", "Exception clause already handled", "An except clause for a class an earlier clause already catches.", "warning"),
         ("exception-inherit", "Python", "Not an exception class", "raise or except of something that does not derive from BaseException.", "warning"),
+        ("dataclass-frozen", "Python classes", "Assignment to a frozen class", "x.attr = value on an instance of a frozen dataclass or attrs class.", "warning"),
         ("property-access", "Python classes", "Property cannot be set", "Assignment to a property that has no setter.", "warning"),
         ("naming-class", "PEP 8 naming", "Class names", "Classes are written CapWords.", "weak"),
         ("naming-function", "PEP 8 naming", "Function and method names", "Functions are written snake_case.", "weak"),

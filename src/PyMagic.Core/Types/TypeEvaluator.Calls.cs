@@ -328,6 +328,10 @@ public sealed partial class TypeEvaluator
             evaluated.Add((arg, param, at));
             Unify(param.Type, at, solved);
         }
+        // type[T] in a result or another parameter follows what T was solved to
+        foreach (var (name, value) in solved.ToList())
+            if (!name.StartsWith("type[", StringComparison.Ordinal) && !solved.ContainsKey($"type[{name}]"))
+                solved[$"type[{name}]"] = MapMembers(value, t => t is ClassType { IsInstance: true } c ? c.AsClassObject() : PyType.Unknown);
         foreach (var (arg, param, at0) in evaluated)
         {
             var at = at0;
@@ -459,6 +463,7 @@ public sealed partial class TypeEvaluator
         TypeVarType => true,
         ClassType c => c.Args.Any(ContainsTypeVar),
         UnionType u => u.MemberList.Any(ContainsTypeVar),
+        SignatureType sig => ContainsTypeVar(sig.Return) || (sig.Params?.Any(p => ContainsTypeVar(p.Type)) ?? false),
         _ => false,
     };
 
@@ -625,6 +630,12 @@ public sealed partial class TypeEvaluator
     {
         switch (param)
         {
+            case TypeVarType { Name: var wrapped } when wrapped.StartsWith("type[", StringComparison.Ordinal) && wrapped != "type[Self]":
+                // a parameter written type[T]: the class an argument is gives T its instance
+                foreach (var a in arg.Members)
+                    if (a is ClassType { IsInstance: false } cls) Unify(new TypeVarType(wrapped[5..^1]), cls with { IsInstance = true }, solved);
+                return;
+
             case TypeVarType tv:
                 if (tv.Name == "Self" || arg is NeverType) return;
                 solved[tv.Name] = solved.TryGetValue(tv.Name, out var prev) && !prev.Equals(arg) ? PyType.Union(prev, arg) : arg;
@@ -665,6 +676,7 @@ public sealed partial class TypeEvaluator
                     {
                         FunctionType f => ReturnTypeOf(f),
                         SignatureType s => s.Return,
+                        ClassType { IsInstance: false } made => made with { IsInstance = true },   // a class called makes an instance of it
                         _ => null,
                     };
                     if (ret != null) Unify(ps.Return, ret, solved);

@@ -139,6 +139,7 @@ public sealed partial class TypeEvaluator
     {
         ClassType { IsInstance: true } c => c.AsClassObject(),
         TypeVarType { Name: "Self" } => new TypeVarType("type[Self]"),
+        TypeVarType tv when !tv.Name.StartsWith("type[", StringComparison.Ordinal) => new TypeVarType($"type[{tv.Name}]"),   // type[T]: solved from the class an argument is
         UnknownType => Inst("type"),
         _ => PyType.Unknown,
     });

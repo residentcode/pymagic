@@ -18,9 +18,12 @@ public sealed partial class TypeEvaluator
                 {
                     if (target is SubscriptExpr sub && TypeOf(m, sub.Value) is ClassType { IsInstance: true, Info: { Name: "tuple", Module.Name: "builtins" } })
                         diags.Add(new Diagnostic(sub.Start, Math.Max(sub.End - sub.Start, 1), "'tuple' object does not support item assignment"));
-                    if (target is AttributeExpr pa) ReadOnlyProperty(m, pa, diags);
+                    if (target is AttributeExpr pa) { ReadOnlyProperty(m, pa, diags); FrozenAssignment(m, pa, diags); }
                 }
                 if (assign.Targets is [NameExpr] && assign.Value is CallExpr call) NoneFunction(m, call, diags);
+                break;
+            case AugAssignStmt { Target: AttributeExpr augTarget }:
+                FrozenAssignment(m, augTarget, diags);
                 break;
             case TryStmt t:
                 ExceptOrder(m, t, diags);
@@ -57,6 +60,23 @@ public sealed partial class TypeEvaluator
             if (AttributeType(recv, name).Missing.Count > 0) return;      // not a member at all: reported as a missing one
         }
         diags.Add(new Diagnostic(attr.End - name.Length, name.Length, $"Access to a protected member {name} of a {kind}"));
+    }
+
+    // ------------------------------------------------------------ frozen dataclasses and attrs classes
+
+    /// <summary>`p.x = 1` on an instance of a frozen dataclass or `@attrs.frozen` class raises at run time.</summary>
+    void FrozenAssignment(ModuleInfo m, AttributeExpr target, List<Diagnostic> diags)
+    {
+        if (TypeOf(m, target.Value) is not ClassType { IsInstance: true, Info.Module.IsStub: false } recv) return;
+        foreach (var entry in Mro(recv.Info))
+        {
+            if (entry is not ClassType e) return;
+            if (DataclassOf(e.Info) is { Frozen: true })
+            {
+                diags.Add(new Diagnostic(target.End - target.Attr.Length, target.Attr.Length, $"Cannot assign to attribute '{target.Attr}': '{recv.Info.Name}' is frozen"));
+                return;
+            }
+        }
     }
 
     // ------------------------------------------------------------ properties without a setter

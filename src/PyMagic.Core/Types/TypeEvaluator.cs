@@ -262,7 +262,7 @@ public sealed partial class TypeEvaluator
         {
             // flow-sensitive: only the assignments that reach this use, narrowed by the conditions on the way
             var flowType = FlowTypeOfName(m, n, r, sym);
-            if (flowType != null) return flowType;
+            if (flowType != null) return WholeOverloads(flowType, sym);
         }
         else
         {
@@ -278,10 +278,14 @@ public sealed partial class TypeEvaluator
         {
             var reach = m.Flow.ReachingDefinitions(n);
             if (reach != null)
-                return reach.Definitions.Count == 0 ? PyType.Unknown : PyType.Union(reach.Definitions.Select(d => TypeOfDeclaration(symModule, d)));
+                return reach.Definitions.Count == 0 ? PyType.Unknown : WholeOverloads(PyType.Union(reach.Definitions.Select(d => TypeOfDeclaration(symModule, d))), sym);
         }
         return TypeOfSymbol(sym);
     }
+
+    /// <summary>`ib = attrib` after four `@overload def attrib`: each def replaces the one before it in the flow, but the name stands for all of them.</summary>
+    PyType WholeOverloads(PyType t, Symbol sym) =>
+        t is FunctionType { Info.Flags: var flags } && (flags & FuncFlags.Overload) != 0 && TypeOfSymbol(sym) is OverloadedType all ? all : t;
 
     PyType BuiltinNameType(string name)
     {

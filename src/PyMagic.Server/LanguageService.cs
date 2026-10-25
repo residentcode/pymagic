@@ -218,6 +218,7 @@ public sealed partial class LanguageService
         : message.EndsWith("does not support item assignment") ? "tuple-item-assignment"
         : message.EndsWith("doesn't return anything") ? "none-function-assignment"
         : message.Contains("is already handled by an earlier clause") ? "except-clauses-order"
+        : message.StartsWith("Cannot assign to attribute") && message.EndsWith("is frozen") ? "dataclass-frozen"
         : message.StartsWith("Exceptions must derive") ? "exception-inherit"
         : message.StartsWith("Property '") && message.EndsWith("cannot be set") ? "property-access"
         : message.StartsWith("Expected type '") ? "argument-type"
