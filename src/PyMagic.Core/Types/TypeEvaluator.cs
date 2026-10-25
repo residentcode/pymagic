@@ -29,13 +29,26 @@ public sealed partial class TypeEvaluator
     T Memo<T>(Dictionary<object, T> cache, object key, T cycleValue, Func<T> compute)
     {
         if (cache.TryGetValue(key, out var hit)) return hit;
+        if (_provisional.Count > 0 && _provisional.TryGetValue((cache, key), out var soft)) return (T)soft!;
         if (!_active.Add(key)) { _open.Add(key); return cycleValue; }
         T result;
         try { result = compute(); }
         finally { _active.Remove(key); }
         _open.Remove(key);
         if (_open.Count == 0) cache[key] = result;
+        // a result that leaned on a cut cycle is not final, but within this one query it is as good as any other
+        // cut: keeping it stops mutually dependent attributes (self.line, self.column, ...) from being recomputed exponentially
+        else _provisional[(cache, key)] = result;
+        if (_active.Count == 0) { _provisional.Clear(); _open.Clear(); }
         return result;
+    }
+
+    readonly Dictionary<(object, object), object?> _provisional = new(new PairReferenceComparer());
+
+    sealed class PairReferenceComparer : IEqualityComparer<(object, object)>
+    {
+        public bool Equals((object, object) a, (object, object) b) => ReferenceEquals(a.Item1, b.Item1) && ReferenceEquals(a.Item2, b.Item2);
+        public int GetHashCode((object, object) p) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(p.Item1) * 31 + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(p.Item2);
     }
 
     PyType Memo(object key, Func<PyType> compute) => Memo(_cache, key, PyType.CycleUnknown, compute);

@@ -54,6 +54,14 @@ public sealed partial class TypeEvaluator
                     afterStar = true;
                     break;
                 case ParamKind.KwArgs:
+                    // **kwargs: Unpack[Options] stands for the keyword-only parameters the TypedDict lists
+                    if (p.Annotation is SubscriptExpr { Value: NameExpr { Name: "Unpack" } or AttributeExpr { Attr: "Unpack" } } unpack
+                        && AnnotationType(info.Module, unpack.Index) is ClassType { Info: var td } && TypedDictFieldsOf(td) is { } tdFields)
+                    {
+                        foreach (var (field, required) in tdFields)
+                            result.Add(new ParamInfo(field.Name, field.Type, ParamCategory.KeywordOnly, !required));
+                        break;
+                    }
                     result.Add(new ParamInfo(p.Name, Ty(), ParamCategory.VarKeyword, false));
                     break;
                 default:
