@@ -24,12 +24,51 @@ public sealed partial class LanguageService
             }
             Visit(DocumentSymbols(uri), m.Name);
         }
+        // the files nobody has open come from the index (built in the background, kept up to date by the file watcher)
+        if (_index != null)
+        {
+            var open = new HashSet<string>(_docs.Values.Where(d => d.Path != null).Select(d => System.IO.Path.GetFullPath(d.Path!)), StringComparer.OrdinalIgnoreCase);
+            foreach (var (score, sym) in _index.Query(query, open))
+            {
+                var at = new Position(sym.Line, sym.Character);
+                scored.Add((score, new SymbolInformation(sym.Name, sym.Kind, new Location(UriOfPath(sym.Path), new Range(at, new Position(sym.Line, sym.Character + sym.Name.Length))), sym.Container)));
+            }
+        }
         return scored.OrderBy(x => x.Score).ThenBy(x => x.Info.Name.Length).ThenBy(x => x.Info.Name, StringComparer.Ordinal)
             .Take(limit).Select(x => x.Info).ToList();
     }
 
+    SymbolIndex? _index;
+
+    /// <summary>The symbol index of the project, or null before <see cref="StartIndexing"/>.</summary>
+    public SymbolIndex? Index => _index;
+
+    /// <summary>Indexes the names of every file of the project in the background and keeps the index up to date (go to symbol finds files nobody has opened). The index is saved in <c>.pymagic/index.json</c>.</summary>
+    public Task? StartIndexing()
+    {
+        if (_index != null || SourceRoots.Count == 0) return null;
+        var roots = SourceRoots.Select(System.IO.Path.GetFullPath).ToArray();
+        string ModuleOf(string path)
+        {
+            string stem = System.IO.Path.GetFileNameWithoutExtension(path);
+            string full = System.IO.Path.GetFullPath(path);
+            foreach (var root in roots)
+            {
+                string r = root.TrimEnd('\\', '/') + System.IO.Path.DirectorySeparatorChar;
+                if (!full.StartsWith(r, StringComparison.OrdinalIgnoreCase)) continue;
+                var parts = full[r.Length..].Split('\\', '/');
+                parts[^1] = stem;
+                if (stem == "__init__") parts = parts[..^1];
+                if (parts.Length > 0 && parts.All(p => p.Length > 0)) return string.Join('.', parts);
+            }
+            return stem;
+        }
+        _index = new SymbolIndex(ProjectFiles, ModuleOf, System.IO.Path.Combine(roots[0], ".pymagic", "index.json"));
+        return _index.Start(roots);
+    }
+
     /// <summary>Lower is better; -1 when the letters of the query do not appear in order.</summary>
-    static int Score(string name, string query)
+    internal static int Score(string name, string query)
     {
         if (query.Length == 0) return 100;
         if (name.Equals(query, StringComparison.OrdinalIgnoreCase)) return 0;

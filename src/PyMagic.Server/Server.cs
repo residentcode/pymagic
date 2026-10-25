@@ -161,6 +161,9 @@ public sealed class Server
         var args = message["params"];
         if (method == null) return; // a response to something we asked; we never ask
 
+        // the whole project's problems take seconds: they are worked out beside the loop, on a copy of the documents, so typing and hovering go on
+        if (id != null && method == "pymagic/problems" && Deferred) { StartProblems(id, args); return; }
+
         try
         {
             if (id != null) Respond(id, Request(method, args));
@@ -170,6 +173,29 @@ public sealed class Server
         catch (ServiceException e) when (id != null) { Fail(id, -32803, e.Message); }
         catch (Exception e) when (id != null) { Fail(id, -32603, e.Message); }
         catch (Exception e) { Log($"error in {method}: {e}"); }
+    }
+
+    int _problemsTicket;
+    readonly SemaphoreSlim _problemsGate = new(1, 1);
+
+    /// <summary>Answers a request for the problems of the project later. A request that a newer one has replaced while it waited is answered with nothing (the page drops stale answers).</summary>
+    void StartProblems(JsonNode id, JsonNode? p)
+    {
+        int least = p?["leastSevere"]?.GetValue<int>() ?? 3;
+        var copy = _service.ForkForAnalysis();
+        int mine = Interlocked.Increment(ref _problemsTicket);
+        var idCopy = id.DeepClone();
+        Task.Run(() =>
+        {
+            _problemsGate.Wait();
+            try
+            {
+                if (mine != Volatile.Read(ref _problemsTicket)) Respond(idCopy, Array.Empty<ProblemEntry>());
+                else Respond(idCopy, copy.Problems(least));
+            }
+            catch (Exception e) { Fail(idCopy, -32603, e.Message); }
+            finally { _problemsGate.Release(); }
+        });
     }
 
     sealed class RpcException(int code, string message) : Exception(message) { public int Code { get; } = code; }
@@ -277,6 +303,7 @@ public sealed class Server
             if (opts["reportTypeMismatches"]?.GetValue<bool>() is { } r) _service.ReportTypeMismatches = r;
             if (opts["pythonPath"]?.GetValue<string>() is { Length: > 0 } python) ApplyInterpreter(python);
         }
+        _ = _service.StartIndexing();   // the names of every file of the project, in the background
 
         return new
         {

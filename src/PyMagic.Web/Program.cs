@@ -263,6 +263,7 @@ app.Map("/lsp", async (HttpContext ctx) =>
     var service = new LanguageService { TypeshedPath = typeshed };
     service.SourceRoots.Add(root);
     service.LibraryRoots.AddRange(libs);
+    _ = service.StartIndexing();
     var outbox = new BlockingCollection<string>();
     var server = new PyMagic.Server.Server(service, msg => outbox.Add(msg.ToJsonString()));
     var inbox = new BlockingCollection<JsonNode?>();

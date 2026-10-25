@@ -15,7 +15,10 @@ public sealed partial class LanguageService
     /// </summary>
     string[] ImportedNames(ModuleInfo m) => _imports.GetValue(m, ComputeImports);
 
-    static string[] ComputeImports(ModuleInfo m)
+    static string[] ComputeImports(ModuleInfo m) => ComputeImports(m.Ast, m.Package);
+
+    /// <summary>The names a module may depend on, from its syntax tree and the package its relative imports start from.</summary>
+    internal static string[] ComputeImports(Module ast, string package)
     {
         var set = new HashSet<string>(StringComparer.Ordinal);
         void AddPrefixes(string full)
@@ -25,7 +28,7 @@ public sealed partial class LanguageService
             for (int i = 1; i <= parts.Length; i++) set.Add(string.Join('.', parts.Take(i)));
         }
 
-        foreach (var n in AstChildren.Descendants(m.Ast))
+        foreach (var n in AstChildren.Descendants(ast))
         {
             switch (n)
             {
@@ -34,7 +37,7 @@ public sealed partial class LanguageService
                     break;
                 case ImportFromStmt f:
                 {
-                    string? abs = Workspace.AbsoluteName(m, f.Level, f.Module);
+                    string? abs = Workspace.AbsoluteName(package, f.Level, f.Module);
                     if (abs == null) break;
                     AddPrefixes(abs);
                     foreach (var a in f.Names) AddPrefixes(abs.Length == 0 ? a.Name : abs + "." + a.Name);
@@ -54,6 +57,7 @@ public sealed partial class LanguageService
     {
         var changed = uris.Where(u => _docs.ContainsKey(u)).ToList();
         if (changed.Count == 0 || _docs.Count < 2) return Array.Empty<string>();
+        if (_index is { Ready: true }) return DependentsFromIndex(changed);
 
         var snap = Full();
         var importers = new Dictionary<string, List<ModuleInfo>>(StringComparer.Ordinal);
@@ -81,5 +85,40 @@ public sealed partial class LanguageService
         foreach (var m in visited)
             if (snap.UriOf.TryGetValue(m, out var uri) && _docs.ContainsKey(uri) && !changed.Contains(uri)) result.Add(uri);
         return result;
+    }
+
+    /// <summary>
+    /// The same answer without reading the project: the importers of files nobody has open come from the symbol index (which keeps the names
+    /// every file imports, updated as files change), the open documents are asked directly.
+    /// </summary>
+    IReadOnlyList<string> DependentsFromIndex(List<string> changed)
+    {
+        var snap = Current();
+        var openByName = new Dictionary<string, ModuleInfo>(StringComparer.Ordinal);
+        var openPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var d in _docs.Values)
+        {
+            if (d.Path != null) openPaths.Add(System.IO.Path.GetFullPath(d.Path));
+            if (snap.ByUri.TryGetValue(d.Uri, out var om)) openByName[d.Uri] = om;
+        }
+
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        var queue = new Queue<string>();
+        foreach (var u in changed)
+            if (snap.ByUri.TryGetValue(u, out var m) && seenNames.Add(m.Name)) queue.Enqueue(m.Name);
+
+        var reached = new HashSet<string>(StringComparer.Ordinal);   // uris of open documents
+        while (queue.Count > 0)
+        {
+            string name = queue.Dequeue();
+            // open documents import it?
+            foreach (var (uri, m) in openByName)
+                if (ImportedNames(m).Contains(name) && reached.Add(uri) && seenNames.Add(m.Name)) queue.Enqueue(m.Name);
+            // files that are not open
+            foreach (var (path, moduleName) in _index!.ImportersOf(name))
+                if (!openPaths.Contains(path) && seenNames.Add(moduleName)) queue.Enqueue(moduleName);
+        }
+        foreach (var u in changed) reached.Remove(u);
+        return reached.ToList();
     }
 }

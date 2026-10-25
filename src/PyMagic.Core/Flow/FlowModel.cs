@@ -27,8 +27,11 @@ public sealed class FlowModel
     public ScopeFlow? For(Scope scope)
     {
         if (scope.Kind == ScopeKind.TypeParams) return null;
-        if (!_flows.TryGetValue(scope, out var f)) _flows[scope] = f = new ScopeFlow(_model, scope, _decls);
-        return f;
+        lock (_flows)   // analyses with their own evaluators share the module: the graph of a scope is built once
+        {
+            if (!_flows.TryGetValue(scope, out var f)) _flows[scope] = f = new ScopeFlow(_model, scope, _decls);
+            return f;
+        }
     }
 
     /// <summary>

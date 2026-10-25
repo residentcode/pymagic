@@ -28,7 +28,11 @@ public sealed partial class LanguageService
     readonly Dictionary<string, Doc> _docs = new();
     readonly Dictionary<ModuleInfo, LineMap> _lineMaps = new(ReferenceEqualityComparer.Instance);
     Snapshot? _snapshot, _full;
-    readonly AnalysisCache _cache = new();
+    readonly AnalysisCache _cache;
+
+    public LanguageService() : this(new AnalysisCache()) { }
+
+    LanguageService(AnalysisCache cache) { _cache = cache; }
 
     /// <summary>Parsed-module cache shared by all analysis snapshots of this session (exposed for tests and diagnostics).</summary>
     public AnalysisCache Cache => _cache;
@@ -167,8 +171,11 @@ public sealed partial class LanguageService
         ".git", "__pycache__", "node_modules", ".venv", "venv", "env", ".tox", ".mypy_cache", "bin", "obj", "site-packages",
     };
 
+    List<string>? _projectFilesOverride;
+
     IEnumerable<string> ProjectFiles()
     {
+        if (_projectFilesOverride != null) { foreach (var f in _projectFilesOverride) yield return f; yield break; }
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var root in SourceRoots)
         {
@@ -214,11 +221,13 @@ public sealed partial class LanguageService
         {
             var openPaths = new HashSet<string>(_docs.Values.Where(d => d.Path != null).Select(d => System.IO.Path.GetFullPath(d.Path!)),
                 StringComparer.OrdinalIgnoreCase);
-            foreach (var path in ProjectFiles())
+            var candidates = ProjectFiles().Where(path => !openPaths.Contains(System.IO.Path.GetFullPath(path))).ToList();
+            // the texts are read and parsed on every core at once; the workspace below then only registers what is ready
+            if (needle != null) candidates = candidates.AsParallel().AsOrdered().Where(path => FileMentions(path, needle)).ToList();
+            var named = candidates.Select(path => (Path: path, Name: ModuleNameOf(path))).ToList();
+            ws.Preload(named.Select(n => (n.Name.Name, n.Path, n.Name.IsPackage)).ToList());
+            foreach (var (path, (name, isPackage)) in named)
             {
-                if (openPaths.Contains(System.IO.Path.GetFullPath(path))) continue;
-                if (needle != null && !FileMentions(path, needle)) continue;
-                var (name, isPackage) = ModuleNameOf(path);
                 ModuleInfo m;
                 try { m = ws.AddDiskModule(name, path, isPackage); } catch (IOException) { continue; }
                 uriOf[m] = UriOfPath(path);
@@ -710,11 +719,11 @@ public sealed partial class LanguageService
         var m = ModuleFor(uri);
         if (m == null) return Array.Empty<DocumentSymbol>();
         var lines = Lines(m);
-        var ev = Current().Workspace.Evaluator;
-        return SymbolsOf(m.Ast.Body, m, lines, ev, inClass: false);
+        return SymbolsOf(m.Ast.Body, lines, inClass: false);
     }
 
-    List<DocumentSymbol> SymbolsOf(IEnumerable<Stmt> body, ModuleInfo m, LineMap lines, TypeEvaluator ev, bool inClass)
+    /// <summary>The outline of a module from its syntax alone (the symbol index builds it for files nobody has open).</summary>
+    internal static List<DocumentSymbol> SymbolsOf(IEnumerable<Stmt> body, LineMap lines, bool inClass)
     {
         var result = new List<DocumentSymbol>();
         foreach (var st in body)
@@ -725,35 +734,35 @@ public sealed partial class LanguageService
                     result.Add(new DocumentSymbol(f.Name,
                         inClass ? (f.Name == "__init__" ? SymbolKind.Constructor : SymbolKind.Method) : SymbolKind.Function,
                         lines.RangeOf(f.Start, f.End), lines.RangeOf(f.NameStart, f.NameStart + f.Name.Length),
-                        null, SymbolsOf(f.Body, m, lines, ev, false)));
+                        null, SymbolsOf(f.Body, lines, false)));
                     break;
                 case ClassDef c:
                     result.Add(new DocumentSymbol(c.Name, SymbolKind.Class,
                         lines.RangeOf(c.Start, c.End), lines.RangeOf(c.NameStart, c.NameStart + c.Name.Length),
-                        null, SymbolsOf(c.Body, m, lines, ev, true)));
+                        null, SymbolsOf(c.Body, lines, true)));
                     break;
                 case AssignStmt a:
                     foreach (var t in a.Targets.OfType<NameExpr>())
-                        result.Add(Variable(t, a, m, lines, inClass));
+                        result.Add(Variable(t, a, lines, inClass));
                     break;
                 case AnnAssignStmt aa when aa.Target is NameExpr tn:
-                    result.Add(Variable(tn, aa, m, lines, inClass));
+                    result.Add(Variable(tn, aa, lines, inClass));
                     break;
                 case IfStmt i:
-                    result.AddRange(SymbolsOf(i.Body, m, lines, ev, inClass));
-                    result.AddRange(SymbolsOf(i.Orelse, m, lines, ev, inClass));
+                    result.AddRange(SymbolsOf(i.Body, lines, inClass));
+                    result.AddRange(SymbolsOf(i.Orelse, lines, inClass));
                     break;
                 case TryStmt t:
-                    result.AddRange(SymbolsOf(t.Body, m, lines, ev, inClass));
-                    foreach (var h in t.Handlers) result.AddRange(SymbolsOf(h.Body, m, lines, ev, inClass));
-                    result.AddRange(SymbolsOf(t.Orelse, m, lines, ev, inClass));
+                    result.AddRange(SymbolsOf(t.Body, lines, inClass));
+                    foreach (var h in t.Handlers) result.AddRange(SymbolsOf(h.Body, lines, inClass));
+                    result.AddRange(SymbolsOf(t.Orelse, lines, inClass));
                     break;
             }
         }
         return result;
     }
 
-    static DocumentSymbol Variable(NameExpr name, Stmt stmt, ModuleInfo m, LineMap lines, bool inClass)
+    static DocumentSymbol Variable(NameExpr name, Stmt stmt, LineMap lines, bool inClass)
     {
         int kind = name.Name.All(ch => char.IsUpper(ch) || char.IsDigit(ch) || ch == '_') ? SymbolKind.Constant
             : inClass ? SymbolKind.Field : SymbolKind.Variable;

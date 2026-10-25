@@ -169,16 +169,26 @@ public static class AstChildren
         }
     }
 
-    /// <summary>Pre-order walk of a whole subtree.</summary>
-    public static IEnumerable<Node> Descendants(Node root)
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Module, Node[]> Flattened = new();
+
+    /// <summary>
+    /// Pre-order walk of a whole subtree. The walk of a whole module is made once and kept with the module (the tree never changes), because the
+    /// inspections, the fixes and the project-wide searches each walk the same module again and again.
+    /// </summary>
+    public static IEnumerable<Node> Descendants(Node root) =>
+        root is Module module ? Flattened.GetValue(module, m => Walk(m).ToArray()) : Walk(root);
+
+    static IEnumerable<Node> Walk(Node root)
     {
         var stack = new Stack<Node>();
+        var kids = new List<Node>();
         stack.Push(root);
         while (stack.Count > 0)
         {
             var n = stack.Pop();
             yield return n;
-            var kids = Of(n).ToList();
+            kids.Clear();
+            kids.AddRange(Of(n));
             for (int i = kids.Count - 1; i >= 0; i--) stack.Push(kids[i]);
         }
     }

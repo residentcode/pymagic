@@ -139,6 +139,42 @@ public class IncrementalTests
         finally { Directory.Delete(root, true); }
     }
 
+    [Fact]
+    public void DependentsFromTheIndexAreTheSameAsFromTheWholeProject()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "pm_dep2_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "pkg"));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "pkg", "__init__.py"), "");
+            File.WriteAllText(Path.Combine(root, "pkg", "mid.py"), "from . import leaf\nfrom .leaf import g\n");        // relative imports, not open
+            File.WriteAllText(Path.Combine(root, "pkg", "far.py"), "import pkg.mid\n");                                   // not open, imports the one above
+            File.WriteAllText(Path.Combine(root, "pkg", "alone.py"), "x = 1\n");
+            string Uri(string rel) => LanguageService.UriOfPath(Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar)));
+
+            LanguageService Make(bool indexed)
+            {
+                var svc = new LanguageService();
+                svc.SourceRoots.Add(root);
+                if (indexed) svc.StartIndexing()!.Wait();
+                svc.Open(Uri("pkg/leaf.py"), "def g(): ...\n", 1);
+                svc.Open(Uri("top.py"), "import pkg.far\n", 1);
+                svc.Open(Uri("pkg/other.py"), "from .alone import x\n", 1);
+                return svc;
+            }
+            var plain = Make(false);
+            var indexed = Make(true);
+            foreach (var changed in new[] { "pkg/leaf.py", "top.py", "pkg/other.py" })
+            {
+                var a = plain.DependentsOf(new[] { Uri(changed) }).OrderBy(x => x).ToList();
+                var b = indexed.DependentsOf(new[] { Uri(changed) }).OrderBy(x => x).ToList();
+                Assert.Equal(string.Join("|", a), string.Join("|", b));
+            }
+            Assert.Equal(Uri("top.py"), indexed.DependentsOf(new[] { Uri("pkg/leaf.py") }).Single());   // top -> far -> mid -> leaf, through three files nobody has open
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     // ------------------------------------------------------------ the server loop
 
     sealed class Wire

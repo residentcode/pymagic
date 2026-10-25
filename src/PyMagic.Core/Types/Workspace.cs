@@ -52,7 +52,7 @@ public sealed class ModuleInfo
     public SemanticModel Semantics { get; }
     public FlowModel Flow { get; }
 
-    Dictionary<Node, Node>? _parents;
+    volatile Dictionary<Node, Node>? _parents;
 
     internal ModuleInfo(string name, string? path, string source, bool isStub, bool isPackage, ResolutionKind kind, PythonEnvironment env)
     {
@@ -66,15 +66,27 @@ public sealed class ModuleInfo
     /// <summary>Package that relative imports are relative to.</summary>
     public string Package => IsPackage ? Name : (Name.Contains('.') ? Name[..Name.LastIndexOf('.')] : "");
 
+    readonly object _parentsGate = new();
+
+    /// <summary>The node that contains this one. The table is built on first use, once, even when several analyses (each with its own evaluator) ask at the same time.</summary>
     public Node? ParentOf(Node n)
     {
-        if (_parents == null)
+        var parents = _parents;
+        if (parents == null)
         {
-            _parents = new Dictionary<Node, Node>(ReferenceEqualityComparer.Instance);
-            foreach (var p in AstChildren.Descendants(Ast))
-                foreach (var c in AstChildren.Of(p)) _parents[c] = p;
+            lock (_parentsGate)
+            {
+                if (_parents == null)
+                {
+                    var built = new Dictionary<Node, Node>(ReferenceEqualityComparer.Instance);
+                    foreach (var p in AstChildren.Descendants(Ast))
+                        foreach (var c in AstChildren.Of(p)) built[c] = p;
+                    _parents = built;
+                }
+                parents = _parents;
+            }
         }
-        return _parents.GetValueOrDefault(n);
+        return parents.GetValueOrDefault(n);
     }
 
     public override string ToString() => Name;
@@ -139,6 +151,9 @@ public sealed class Workspace
         return m;
     }
 
+    /// <summary>Reads and parses these project files on every core at once; <see cref="AddDiskModule"/> then finds them in the cache.</summary>
+    public int Preload(IReadOnlyList<(string Name, string Path, bool IsPackage)> files) => _cache.Preload(files, Environment);
+
     /// <summary>Reads a file as a module with the given name (user code), replacing any module of that name.</summary>
     public ModuleInfo AddFile(string name, string path, bool isPackage = false)
     {
@@ -185,10 +200,13 @@ public sealed class Workspace
     public ModuleInfo? ModuleOf(Scope scope) => _byRootScope.GetValueOrDefault(scope.ModuleScope);
 
     /// <summary>Resolves a (possibly relative) import to an absolute module name.</summary>
-    public static string? AbsoluteName(ModuleInfo from, int level, string? module)
+    public static string? AbsoluteName(ModuleInfo from, int level, string? module) => AbsoluteName(from.Package, level, module);
+
+    /// <summary>The same for a module known only by the package its relative imports start from.</summary>
+    public static string? AbsoluteName(string package, int level, string? module)
     {
         if (level == 0) return module;
-        var parts = from.Package.Length == 0 ? new List<string>() : from.Package.Split('.').ToList();
+        var parts = package.Length == 0 ? new List<string>() : package.Split('.').ToList();
         int up = level - 1;
         if (up > parts.Count) return null;
         parts.RemoveRange(parts.Count - up, up);

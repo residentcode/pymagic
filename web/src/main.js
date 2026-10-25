@@ -535,14 +535,16 @@ async function forgetPath(rel) {
     tabs?.drop(rel);
     refreshDirty();
 }
-/** Opens the Python files that are new on disk, so the language server sees the whole project. */
+/**
+ * Forgets the editors of Python files that are gone from disk. The language server reads the rest of the project from disk itself (and keeps
+ * an index of it), so a file only gets an editor when somebody opens it: a project of thousands of files would not fit in the page otherwise.
+ */
 async function syncPyModels() {
     const files = await (await fetch('/api/files')).json();
     const wanted = new Set(files.map((f) => normalise(uriFor(f))));
     for (const [key] of Array.from(models))
         if (!wanted.has(key) && relPathOf.get(key)?.endsWith('.py'))
             await forgetPath(relPathOf.get(key));
-    await Promise.all(files.map((f) => ensureModel(f)));
 }
 function showNothing() {
     currentRel = '';
@@ -748,8 +750,7 @@ async function main() {
     });
     await explorer.refresh();
     tabs = setupTabs({ openFile, isDirty: isDirtyRel, save: saveFile, revert: reloadFromDisk, empty: showNothing });
-    // open everything so cross-file diagnostics and navigation see the whole project
-    await Promise.all(files.map((f) => ensureModel(f)));
+    // only the tabs that were open last time are loaded: the server finds the other files of the project on disk
     const restored = tabs.restore((rel) => explorer.has(rel));
     if (restored)
         await openFile(restored);
