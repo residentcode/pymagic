@@ -374,19 +374,24 @@ public sealed partial class TypeEvaluator
         return s;
     }
 
-    /// <summary>The metaclass in effect for a class: the nearest one declared along its MRO.</summary>
+    /// <summary>The metaclass in effect for a class: the nearest one declared along its MRO, else ABCMeta when a Protocol is in it.</summary>
     ClassType? MetaclassOf(ClassInfo c, out bool unknown)
     {
         unknown = false;
+        bool protocol = false;
         foreach (var e in Mro(c))
         {
             if (e is not ClassType ec) { unknown = true; continue; }
             var d = ClassDataOf(ec.Info);
-            if (d.Metaclass != null) return d.Metaclass;
+            if (d.Metaclass != null) return d.Metaclass; // an explicit one must derive from ABCMeta anyway when a Protocol is above it
             if (d.UnknownMetaclass) { unknown = true; return null; }
+            protocol |= d.IsProtocol;
         }
+        // typing._ProtocolMeta derives from ABCMeta; typeshed declares neither on Protocol (nor on Iterable, Mapping, ...)
+        if (protocol && _ws.GetModule("abc") is { } abc) return ModuleClass(_abcClasses, abc, "ABCMeta");
         return null;
     }
+    readonly Dictionary<string, ClassType?> _abcClasses = new();
 
     MemberHit? FindMember(ClassType cls, string name, bool instanceAccess, ClassInfo? startAfter, out bool unknownBase)
     {
