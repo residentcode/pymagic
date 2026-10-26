@@ -44,6 +44,7 @@ public sealed class ScopeFlow
 
     readonly Dictionary<NameExpr, List<Instruction>> _reads = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<NameExpr, List<Instruction>> _allReads = new(ReferenceEqualityComparer.Instance);
+    readonly Dictionary<CompExpr, List<Instruction>> _markers = new(ReferenceEqualityComparer.Instance);
     readonly HashSet<(Symbol, string)> _assertionKeys = new();
     readonly Dictionary<Symbol, int> _unboundId = new();
     readonly Dictionary<Symbol, Bits> _symbolMask = new();
@@ -71,6 +72,11 @@ public sealed class ScopeFlow
             {
                 if (!_allReads.TryGetValue(rn, out var all)) _allReads[rn] = all = new();
                 all.Add(ins);
+            }
+            if (ins.Kind == InstrKind.Join && ins.Element is CompExpr ce)
+            {
+                if (!_markers.TryGetValue(ce, out var ms)) _markers[ce] = ms = new();
+                ms.Add(ins);
             }
             if (ins.Kind == InstrKind.Assert && ins.Symbol != null) _assertionKeys.Add((ins.Symbol, ins.Path));
             if (ins.Kind is not (InstrKind.Read or InstrKind.Write or InstrKind.Delete) || !Owned(ins.Symbol) || ins.Path.Length > 0) continue;
@@ -138,6 +144,9 @@ public sealed class ScopeFlow
 
     /// <summary>Every Read instruction of this name expression (a finally block is built twice, so there can be two).</summary>
     public IReadOnlyList<Instruction>? ReadInstructions(NameExpr use) => _allReads.GetValueOrDefault(use);
+
+    /// <summary>The point where a comprehension written in this scope starts, after its first iterable (two in a finally block).</summary>
+    public IReadOnlyList<Instruction>? MarkerOf(CompExpr c) => _markers.GetValueOrDefault(c);
 
     /// <summary>Whether a condition somewhere in this scope narrows the given reference (symbol and member path).</summary>
     public bool HasAssertions(Symbol sym, string path) => _assertionKeys.Contains((sym, path));

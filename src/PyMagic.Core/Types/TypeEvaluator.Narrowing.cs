@@ -7,11 +7,14 @@ namespace PyMagic.Core.Types;
 public sealed partial class TypeEvaluator
 {
     readonly Dictionary<(ScopeFlow, Symbol, string, PyType), FlowWalker> _walkers = new();
+    readonly Dictionary<(ScopeFlow, Symbol, string, PyType), FlowWalker> _enclosedWalkers = new();
 
-    FlowWalker Walker(ModuleInfo m, ScopeFlow flow, Symbol sym, string path, PyType entry)
+    /// <summary>A walker; <paramref name="enclosed"/>: the entry is what an enclosing scope narrowed it to, kept even for a declared name.</summary>
+    FlowWalker Walker(ModuleInfo m, ScopeFlow flow, Symbol sym, string path, PyType entry, bool enclosed = false)
     {
         var key = (flow, sym, path, entry);
-        if (!_walkers.TryGetValue(key, out var w)) _walkers[key] = w = new FlowWalker(this, m, flow, sym, path, entry);
+        var walkers = enclosed ? _enclosedWalkers : _walkers;
+        if (!walkers.TryGetValue(key, out var w)) walkers[key] = w = new FlowWalker(this, m, flow, sym, path, entry, enclosed);
         return w;
     }
 
@@ -38,13 +41,13 @@ public sealed partial class TypeEvaluator
         public bool Exhausted => _steps > Budget;
         const int Budget = 30_000;
 
-        public FlowWalker(TypeEvaluator ev, ModuleInfo m, ScopeFlow flow, Symbol sym, string path, PyType entry)
+        public FlowWalker(TypeEvaluator ev, ModuleInfo m, ScopeFlow flow, Symbol sym, string path, PyType entry, bool enclosed)
         {
             _ev = ev; _m = m; _flow = flow; _sym = sym; _path = path;
             _symModule = ev._ws.ModuleOf(sym) ?? m;
             _declared = path.Length == 0 ? ev.DeclaredType(_symModule, sym) : null;
             // `x: int` with no assignment (and typing's `Any: _SpecialForm`) still has its declared type
-            _entry = _declared ?? entry;
+            _entry = enclosed ? entry : _declared ?? entry;
         }
 
         /// <summary>Instructions that can change what we know about the reference.</summary>
@@ -307,13 +310,15 @@ public sealed partial class TypeEvaluator
         var flow = m.Flow.For(r.UseScope);
         // a declared name that is assigned again (`url: URL | str` ... `url = URL(url)`) takes the assigned type from there on
         bool reassigned = sym.Declarations.Count > 1 && DeclaredType(_ws.ModuleOf(sym) ?? m, sym) != null;
-        if (flow == null || !(reassigned || flow.HasAssertions(sym, ""))) return null;
+        if (flow == null) return null;
+        var outer = EnclosingEntry(m, r.UseScope, sym, "", null, reassigned);
+        if (outer == null && !(reassigned || flow.HasAssertions(sym, ""))) return null;
         var reads = flow.ReadInstructions(n);
         if (reads == null || reads.Count == 0) return null;
 
         bool owned = ReferenceEquals(sym.Scope, r.UseScope);
-        var entry = owned ? PyType.Never : TypeOfSymbol(sym);
-        var w = Walker(m, flow, sym, "", entry);
+        var entry = owned ? PyType.Never : outer ?? TypeOfSymbol(sym);
+        var w = Walker(m, flow, sym, "", entry, !owned && outer != null);
         var t = PyType.Union(reads.Select(w.Before));
         if (w.Exhausted) return null;   // too tangled to follow: use the plain reaching-definitions answer
         return t is NeverType ? PyType.Unknown : t;
@@ -326,14 +331,40 @@ public sealed partial class TypeEvaluator
         var r = m.Semantics.ReferenceOf(root);
         if (r?.Symbol == null || r.UseScope == null) return baseline;
         var flow = m.Flow.For(r.UseScope);
-        if (flow == null || !flow.HasAssertions(r.Symbol, path)) return baseline;
+        if (flow == null) return baseline;
+        var outer = EnclosingEntry(m, r.UseScope, r.Symbol, path, baseline, false);
+        if (outer == null && !flow.HasAssertions(r.Symbol, path)) return baseline;
         var reads = flow.ReadInstructions(root);
         if (reads == null || reads.Count == 0) return baseline;
 
-        var w = Walker(m, flow, r.Symbol, path, baseline);
+        var w = Walker(m, flow, r.Symbol, path, outer ?? baseline);
         var t = PyType.Union(reads.Select(w.Before));
         if (w.Exhausted) return baseline;
         // nothing left (`isinstance(self.reason, bytes)` on a `str` attribute): unknown, as for names, not the declared type
         return t is NeverType ? PyType.Unknown : t;
+    }
+
+    /// <summary>
+    /// The type a comprehension body starts from for a reference of an enclosing scope that a condition there narrows
+    /// (`if not isinstance(p, Option): continue` before `(p.help for n in names)`), taken where the comprehension
+    /// starts; null when nothing outside narrows it. Generators count as running there too, as in PyCharm; lambdas
+    /// and nested functions do not: they run later.
+    /// </summary>
+    PyType? EnclosingEntry(ModuleInfo m, Scope scope, Symbol sym, string path, PyType? baseline, bool reassigned)
+    {
+        if (scope.Kind != ScopeKind.Comprehension || scope.Node is not CompExpr c || scope.Parent == null) return null;
+        if (path.Length == 0 && ReferenceEquals(sym.Scope, scope)) return null;
+        var flow = m.Flow.For(scope.Parent);
+        var markers = flow?.MarkerOf(c);
+        if (flow == null || markers == null || markers.Count == 0) return null;
+        var outer = EnclosingEntry(m, scope.Parent, sym, path, baseline, reassigned);   // a comprehension inside a comprehension
+        // the walk is paid for only where some condition (or a typed reassignment) can change the answer
+        if (!(flow.HasAssertions(sym, path) || reassigned && path.Length == 0)) return outer;
+
+        bool owned = path.Length == 0 && ReferenceEquals(sym.Scope, scope.Parent);
+        var entry = owned ? PyType.Never : outer ?? baseline ?? TypeOfSymbol(sym);
+        var w = Walker(m, flow, sym, path, entry, !owned && outer != null);
+        var t = PyType.Union(markers.Select(w.Before));
+        return w.Exhausted ? outer : t;
     }
 }
