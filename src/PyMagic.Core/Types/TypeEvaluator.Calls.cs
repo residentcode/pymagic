@@ -260,6 +260,10 @@ public sealed partial class TypeEvaluator
                 return Single(new CallTarget(callee, target, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
         }
 
+        if (callee is ClassType { IsInstance: false } tvc && tvc.Info.QualifiedName is "typing.TypeVar" or "typing_extensions.TypeVar"
+            && call.Args.FirstOrDefault() is { Name: null, Stars: 0, Value: ConstExpr tvName })
+            return Single(new CallTarget(callee, TypeVarFromCall(m, call, tvName), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
+
         if (TypedDictGet(m, call) is PyType tdGet)
             return Single(new CallTarget(callee, tdGet, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 
@@ -278,6 +282,17 @@ public sealed partial class TypeEvaluator
         if (field == null || field.Value.Field == null) return null;
         var fieldType = field.Value.Field.Type;
         return call.Args.Count == 2 ? PyType.Union(fieldType, TypeOf(m, call.Args[1].Value)) : PyType.Union(fieldType, NoneInstance);
+    }
+
+    /// <summary>TypeVar('T', str, bytes) or TypeVar('T', bound=X): the variable with its constraints or bound, read as types (where they stand: TypeVar runs).</summary>
+    TypeVarType TypeVarFromCall(ModuleInfo m, CallExpr call, ConstExpr name)
+    {
+        var constraints = call.Args.Skip(1).Where(a => a is { Name: null, Stars: 0 }).Select(a => Annotation(m, a.Value, null)).ToList();
+        var bound = call.Args.FirstOrDefault(a => a.Name == "bound") is { Value: not ConstExpr { Kind: ConstKind.None } } b ? Annotation(m, b.Value, null) : null;
+        // an unresolved bound or constraint says nothing about the arguments
+        if (bound is UnknownType) bound = null;
+        if (constraints.Any(c => c is UnknownType)) constraints.Clear();
+        return new TypeVarType(name.Text.Trim('"', '\''), bound, constraints.Count > 0 ? constraints : null);
     }
 
     static CallResolution Single(CallTarget t) => new(t.Returns, new[] { t });
@@ -655,6 +670,7 @@ public sealed partial class TypeEvaluator
 
             case TypeVarType tv:
                 if (tv.Name == "Self" || arg is NeverType) return;
+                arg = WithinTypeVar(tv, arg);
                 solved[tv.Name] = solved.TryGetValue(tv.Name, out var prev) && !prev.Equals(arg) ? PyType.Union(prev, arg) : arg;
                 return;
 
@@ -700,6 +716,28 @@ public sealed partial class TypeEvaluator
                 }
                 return;
         }
+    }
+
+    /// <summary>
+    /// What an argument solves a bounded or constrained variable to: a constrained one takes the constraint the argument
+    /// matches; an argument outside the bound or the constraints solves it to them, so the argument check reports it
+    /// (and an overload such as ast.parse's `(source: _T) -> _T`, _T bound to AST, does not match a str).
+    /// </summary>
+    PyType WithinTypeVar(TypeVarType tv, PyType arg)
+    {
+        if (tv.Constraints is { Count: > 0 } cs)
+        {
+            var matched = new List<PyType>();
+            foreach (var a in arg.Members)
+            {
+                if (a is UnknownType or TypeVarType) { matched.Add(a); continue; }
+                var c = cs.FirstOrDefault(x => IsAssignable(x, a));
+                if (c == null) return PyType.Union(cs);
+                matched.Add(c);
+            }
+            return matched.Count == 0 ? arg : PyType.Union(matched);
+        }
+        return tv.Bound != null && !IsAssignable(tv.Bound, arg) ? tv.Bound : arg;
     }
 
     /// <summary>
