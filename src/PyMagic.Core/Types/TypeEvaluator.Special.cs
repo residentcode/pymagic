@@ -308,12 +308,22 @@ public sealed partial class TypeEvaluator
     bool DefinesNamedTuple(ClassInfo c) =>
         _syntheticTupleFields.ContainsKey(c) || _syntheticUnknownTuples.Contains(c) || ClassDataOf(c).Bases.OfType<ClassType>().Any(b => b.Info.QualifiedName == "typing.NamedTuple");
 
-    /// <summary>The items an instance unpacks/iterates/indexes as: a tuple's recorded items, or a named tuple's fields.</summary>
+    /// <summary>The items an instance unpacks/iterates/indexes as: a tuple's recorded items, a named tuple's fields, or the items of a tuple[...] base.</summary>
     IReadOnlyList<PyType>? TupleItemsOf(ClassType c)
     {
         if (c.TupleItems != null) return c.TupleItems;
         if (!c.IsInstance) return null;
-        return NamedTupleFieldsOf(c.Info)?.Select(f => f.Type).ToList();
+        if (NamedTupleFieldsOf(c.Info) is { } fields) return fields.Select(f => f.Type).ToList();
+        // class CodecInfo(tuple[Any, Any, Any, Any]): the specialized base keeps the per-position items
+        if (BuiltinClass("tuple") is not { } tuple || ReferenceEquals(c.Info, tuple.Info)) return null;
+        if (SpecializeAs(c, tuple.Info)?.TupleItems is not { } items) return null;
+        // a subclass that indexes or iterates its own way is asked through its methods instead
+        foreach (var e in Mro(c.Info))
+        {
+            if (e is not ClassType ec || ReferenceEquals(ec.Info, tuple.Info)) break;
+            if (HasExplicitMember(ec.Info, "__getitem__") || HasExplicitMember(ec.Info, "__iter__")) return null;
+        }
+        return items;
     }
 
     /// <summary>namedtuple("P", "x y") / namedtuple("P", ["x", "y"], defaults=[0]) -> a class object.</summary>
