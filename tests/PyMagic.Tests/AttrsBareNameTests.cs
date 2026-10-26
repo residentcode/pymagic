@@ -69,9 +69,11 @@ public class AttrsBareNameTests
     }
 
     [Fact]
-    public void AFieldWithoutATypeIsUnknownNotTheCountingAttr()
+    public void AFieldWithoutATypeIsAnyNotTheCountingAttr()
     {
+        // as attrs' own stubs say: a bare attrib() is Any (RealAttrsTests checks the same with attrs installed)
         Assert.Equal(0, Found("from attr._make import attrib, attrs\n\n\n" + V + "def f(v: V):\n    return v.pattern.pattern\n").Count);
+        Assert.Equal("Any", Last("from attr._make import attrib, attrs\n\n\n" + V + "V(1, 2).pattern\n"));
     }
 
     [Fact]

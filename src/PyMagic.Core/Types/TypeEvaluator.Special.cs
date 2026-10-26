@@ -235,12 +235,12 @@ public sealed partial class TypeEvaluator
         });
     }
 
-    /// <summary>The type an attrs field `x = attr.ib(...)` holds: its type= (read where it stands: attrib runs), else what its default= or factory= gives.</summary>
+    /// <summary>The type an attrs field `x = attr.ib(...)` holds: its type= (read where it stands: attrib runs), else what its default= or factory= gives, else Any (attrs' own stubs: `attrib()` returns Any).</summary>
     PyType AttribFieldType(ModuleInfo m, CallExpr call) =>
         KeywordArg(call, "type") is { } typeArg ? Annotation(m, typeArg, null)
         : KeywordArg(call, "default") is { } dflt ? TypeOf(m, dflt).Members.Select(x => x is ClassType { LiteralValue: not null } lit ? lit.Widened() : x).Aggregate((PyType)PyType.Never, (acc, x) => PyType.Union(acc, x))
         : KeywordArg(call, "factory") is { } factory ? CallResultNoArgs(TypeOf(m, factory))
-        : PyType.Unknown;
+        : PyType.Any;
 
     public bool IsDataclass(ClassInfo c) => Mro(c).Any(e => e is ClassType ec && DataclassOf(ec.Info) != null);
 
@@ -334,12 +334,22 @@ public sealed partial class TypeEvaluator
     bool DefinesNamedTuple(ClassInfo c) =>
         _syntheticTupleFields.ContainsKey(c) || _syntheticUnknownTuples.Contains(c) || ClassDataOf(c).Bases.OfType<ClassType>().Any(b => b.Info.QualifiedName == "typing.NamedTuple");
 
-    /// <summary>The items an instance unpacks/iterates/indexes as: a tuple's recorded items, or a named tuple's fields.</summary>
+    /// <summary>The items an instance unpacks/iterates/indexes as: a tuple's recorded items, a named tuple's fields, or the items of a tuple[...] base.</summary>
     IReadOnlyList<PyType>? TupleItemsOf(ClassType c)
     {
         if (c.TupleItems != null) return c.TupleItems;
         if (!c.IsInstance) return null;
-        return NamedTupleFieldsOf(c.Info)?.Select(f => f.Type).ToList();
+        if (NamedTupleFieldsOf(c.Info) is { } fields) return fields.Select(f => f.Type).ToList();
+        // class CodecInfo(tuple[Any, Any, Any, Any]): the specialized base keeps the per-position items
+        if (BuiltinClass("tuple") is not { } tuple || ReferenceEquals(c.Info, tuple.Info)) return null;
+        if (SpecializeAs(c, tuple.Info)?.TupleItems is not { } items) return null;
+        // a subclass that indexes or iterates its own way is asked through its methods instead
+        foreach (var e in Mro(c.Info))
+        {
+            if (e is not ClassType ec || ReferenceEquals(ec.Info, tuple.Info)) break;
+            if (HasExplicitMember(ec.Info, "__getitem__") || HasExplicitMember(ec.Info, "__iter__")) return null;
+        }
+        return items;
     }
 
     /// <summary>namedtuple("P", "x y") / namedtuple("P", ["x", "y"], defaults=[0]) -> a class object.</summary>
@@ -384,7 +394,7 @@ public sealed partial class TypeEvaluator
             foreach (var it in items)
             {
                 if (it is TupleExpr { Items.Count: 2 } pair && StringValue(pair.Items[0]) is string fname)
-                    fields.Add(new FieldInfo(fname, AnnotationType(m, pair.Items[1]), false));
+                    fields.Add(new FieldInfo(fname, Annotation(m, pair.Items[1], null), false));
                 else { known = false; break; }
             }
         }

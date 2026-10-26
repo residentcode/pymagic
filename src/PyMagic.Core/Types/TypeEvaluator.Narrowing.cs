@@ -77,7 +77,9 @@ public sealed partial class TypeEvaluator
                         var assigned = _ev.AssignedType(_symModule, p.Declaration);
                         // a value nothing is known about (an unresolved call) says nothing against the declaration: no reports from it
                         if (assigned is UnknownType { Explicit: false, FromCycle: false }) return assigned;
-                        return assigned != null && !ContainsDynamic(assigned) && _ev.IsAssignable(_declared, assigned) ? assigned : _declared;
+                        // a container of unknown items (`args = [value, *args]`) is still that container, with the declared items
+                        if (assigned != null && ContainsDynamic(assigned)) assigned = _ev.WithDeclaredArgs(assigned, _declared);
+                        return assigned != null && _ev.IsAssignable(_declared, assigned) ? assigned : _declared;
                     }
                     return _entry; // the member (or its owner) was reassigned: back to the unnarrowed type
                 case InstrKind.Delete:
@@ -145,6 +147,23 @@ public sealed partial class TypeEvaluator
         if (d.Kind == DeclKind.Variable && d.Node is Expr target && m.ParentOf(target) is AnnAssignStmt an && ReferenceEquals(an.Target, target))
             return an.Value == null ? null : TypeOf(m, an.Value);
         return TypeOfDeclaration(m, d);
+    }
+
+    /// <summary>
+    /// An instance of a generic class whose arguments are partly unknown, with those arguments solved from a declaration
+    /// it is assigned to (list[Unknown] declared Sequence[str] is list[str]); null for any other dynamic type.
+    /// </summary>
+    PyType? WithDeclaredArgs(PyType assigned, PyType declared)
+    {
+        if (assigned is not ClassType { IsInstance: true, TupleItems: null, Args.Count: > 0 } c || IsClassOfAny(c)) return null;
+        var ps = ClassDataOf(c.Info).TypeParams;
+        if (ps.Count != c.Args.Count) return null;
+        var solved = new Dictionary<string, PyType>();
+        var generic = new ClassType(c.Info, ps.ToList<PyType>(), true);
+        foreach (var d in declared.Members)
+            if (d is ClassType { IsInstance: true } dc && SpecializeAs(generic, dc.Info) is { } view) Unify(view, dc, solved);
+        // an argument the declaration does not give (`x: object = []`) stays as it was
+        return c with { Args = c.Args.Select((a, i) => ContainsDynamic(a) && solved.TryGetValue(ps[i].Name, out var s) ? s : a).ToList() };
     }
 
     static bool ContainsDynamic(PyType t) => t switch

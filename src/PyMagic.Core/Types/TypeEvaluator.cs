@@ -98,7 +98,7 @@ public sealed partial class TypeEvaluator
     {
         if (_functions.TryGetValue(node, out var fi)) return fi;
         var scope = m.Semantics.ScopeOf(node)!;
-        fi = new FunctionInfo(node.Name, m, node, scope) { Flags = DecoratorFlags(node) };
+        fi = new FunctionInfo(node.Name, m, node, scope) { Flags = DecoratorFlags(m, node) };
         if (node.IsAsync) fi.Flags |= FuncFlags.Async;
         if (ContainsYield(node.Body)) fi.Flags |= FuncFlags.Generator;
         // owner: nearest enclosing class without crossing another function
@@ -121,8 +121,38 @@ public sealed partial class TypeEvaluator
     static readonly HashSet<string> FlagDecorators = new()
     {
         "staticmethod", "classmethod", "property", "cached_property", "setter", "getter", "deleter", "abstractmethod",
-        "overload", "final", "override", "abstractproperty", "abstractclassmethod", "abstractstaticmethod",
+        "overload", "final", "override", "abstractproperty", "abstractclassmethod", "abstractstaticmethod", "DynamicClassAttribute",
     };
+
+    /// <summary>
+    /// The name a decorator is spelled with, or the flag decorator an alias of it stands for (`from builtins import property as p`,
+    /// `p = property`, as typeshed's enum.pyi does). Purely syntactic: FunctionOf caches the flags outside the cycle handling.
+    /// </summary>
+    static string? DecoratorBaseName(ModuleInfo m, Expr d)
+    {
+        string? name = d switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => null };
+        if (name == null || FlagDecorators.Contains(name) || d is not NameExpr ne) return name;
+        return AliasedFlagName(m, ne, 3, new HashSet<Symbol>()) ?? name;
+    }
+
+    static string? AliasedFlagName(ModuleInfo m, NameExpr n, int depth, HashSet<Symbol> seen)
+    {
+        if (depth == 0 || m.Semantics.ReferenceOf(n)?.Symbol is not { } sym || !seen.Add(sym)) return null;
+        // every declaration counts: `_magic_enum_attr` is bound in both arms of a version check
+        foreach (var decl in sym.Declarations)
+        {
+            if (decl.Kind == DeclKind.Import && decl.Node is ImportAlias ia && m.ParentOf(ia) is ImportFromStmt)
+            {
+                if (FlagDecorators.Contains(ia.Name)) return ia.Name;
+            }
+            else if (decl.Kind == DeclKind.Variable && m.ParentOf(decl.Node) is AssignStmt { Targets.Count: 1 } a && ReferenceEquals(a.Targets[0], decl.Node))
+            {
+                if (a.Value is AttributeExpr av && FlagDecorators.Contains(av.Attr)) return av.Attr;
+                if (a.Value is NameExpr nv && (FlagDecorators.Contains(nv.Name) ? nv.Name : AliasedFlagName(m, nv, depth - 1, seen)) is { } r) return r;
+            }
+        }
+        return null;
+    }
 
     /// <summary>
     /// What a name bound by `@deco def f` is: f passed through each decorator, the nearest first. Only decorators that say
@@ -134,7 +164,7 @@ public sealed partial class TypeEvaluator
         for (int i = def.Decorators.Count - 1; i >= 0; i--)
         {
             var dec = def.Decorators[i];
-            string? name = dec switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, CallExpr { Func: NameExpr cn } => cn.Name, CallExpr { Func: AttributeExpr ca } => ca.Attr, _ => null };
+            string? name = dec switch { CallExpr { Func: NameExpr cn } => cn.Name, CallExpr { Func: AttributeExpr ca } => ca.Attr, _ => DecoratorBaseName(m, dec) };
             if (name != null && FlagDecorators.Contains(name)) continue;
             var decType = TypeOf(m, dec);
             if (decType.IsDynamic || !(decType.Members.All(x => x is FunctionType { Info: var fi } && DeclaredReturn(fi) != null
@@ -150,7 +180,7 @@ public sealed partial class TypeEvaluator
         return current;
     }
 
-    static FuncFlags DecoratorFlags(FunctionDef f)
+    static FuncFlags DecoratorFlags(ModuleInfo m, FunctionDef f)
     {
         var flags = FuncFlags.None;
         // implicit static/class methods
@@ -158,12 +188,11 @@ public sealed partial class TypeEvaluator
         if (f.Name is "__init_subclass__" or "__class_getitem__") flags |= FuncFlags.ClassMethod;
         foreach (var d in f.Decorators)
         {
-            string? name = d switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => null };
-            switch (name)
+            switch (DecoratorBaseName(m, d))
             {
                 case "staticmethod": flags |= FuncFlags.Static; break;
                 case "classmethod": flags |= FuncFlags.ClassMethod; break;
-                case "property": case "cached_property": flags |= FuncFlags.Property; break;
+                case "property": case "cached_property": case "DynamicClassAttribute": flags |= FuncFlags.Property; break;
                 case "setter": case "deleter": flags |= FuncFlags.PropertySetter; break;
                 case "getter": flags |= FuncFlags.Property; break;
                 case "abstractmethod": flags |= FuncFlags.Abstract; break;
@@ -444,16 +473,17 @@ public sealed partial class TypeEvaluator
             _ => null,
         };
 
-        // self / cls
-        if (fn?.Owner != null && owner is FunctionDef def && !fn.IsStatic && p.Annotation == null && p.Kind == ParamKind.Normal)
+        // self / cls (the cls of __new__ too: it is static only in that the class is passed explicitly)
+        bool isNew = fn?.Name == "__new__";
+        if (fn?.Owner != null && owner is FunctionDef def && (!fn.IsStatic || isNew) && p.Annotation == null && p.Kind == ParamKind.Normal)
         {
             var first = def.Params.FirstOrDefault(x => x.Kind is ParamKind.Normal or ParamKind.VarArgs or ParamKind.KwArgs);
             // by convention only these names mean "the receiver"; a def in a class body with another first parameter
             // is usually a helper called while the class is being built (fractions._operator_fallbacks)
-            if (ReferenceEquals(first, p) && p.Kind == ParamKind.Normal && (fn.IsClassMethod || IsReceiverName(p.Name)))
+            if (ReferenceEquals(first, p) && p.Kind == ParamKind.Normal && (fn.IsClassMethod || isNew || IsReceiverName(p.Name)))
             {
                 var self = new ClassType(fn.Owner, ClassTypeParamsAsArgs(fn.Owner), true);
-                return fn.IsClassMethod ? self.AsClassObject() : self;
+                return fn.IsClassMethod || isNew ? self.AsClassObject() : self;
             }
         }
 

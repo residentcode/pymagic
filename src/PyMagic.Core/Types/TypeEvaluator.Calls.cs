@@ -255,10 +255,14 @@ public sealed partial class TypeEvaluator
         if ((callee as FunctionType ?? (callee as OverloadedType)?.Overloads[0]) is { Info: { Name: "cast" } ci } && ci.Module.Name is "typing" or "typing_extensions"
             && call.Args is [{ Name: null, Stars: 0 } castType, { Stars: 0 }])
         {
-            var target = AnnotationType(m, castType.Value);
+            var target = Annotation(m, castType.Value, null);
             if (!target.IsDynamic)
                 return Single(new CallTarget(callee, target, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
         }
+
+        if (callee is ClassType { IsInstance: false } tvc && tvc.Info.QualifiedName is "typing.TypeVar" or "typing_extensions.TypeVar"
+            && call.Args.FirstOrDefault() is { Name: null, Stars: 0, Value: ConstExpr tvName })
+            return Single(new CallTarget(callee, TypeVarFromCall(m, call, tvName), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 
         if (TypedDictGet(m, call) is PyType tdGet)
             return Single(new CallTarget(callee, tdGet, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
@@ -267,17 +271,33 @@ public sealed partial class TypeEvaluator
         return new CallResolution(targets.Count == 0 ? PyType.Unknown : PyType.Union(targets.Select(t => t.Returns)), targets);
     }
 
-    /// <summary><c>movie.get("year")</c> on a TypedDict: the field's type (or None / the default's type).</summary>
+    /// <summary><c>movie.get("year")</c> on a TypedDict: the field's type (or None / the default's type);
+    /// <c>setdefault("year", 0)</c> is the field's type and <c>pop("year")</c> the field's (or it | the default's).</summary>
     PyType? TypedDictGet(ModuleInfo m, CallExpr call)
     {
-        if (call.Func is not AttributeExpr { Attr: "get" } ga || call.Args.Count is < 1 or > 2) return null;
+        // the stubs give these methods of typing._TypedDict object returns
+        if (call.Func is not AttributeExpr { Attr: "get" or "setdefault" or "pop" } ga || call.Args.Count is < 1 or > 2) return null;
+        if (ga.Attr == "setdefault" && call.Args.Count != 2) return null;
         if (call.Args[0] is not { Name: null, Stars: 0, Value: var keyExpr } || StringValue(keyExpr) is not string key) return null;
         if (TypeOf(m, ga.Value) is not ClassType { IsInstance: true } rc) return null;
         var fields = TypedDictFieldsOf(rc.Info);
         var field = fields?.FirstOrDefault(f => f.Field.Name == key);
         if (field == null || field.Value.Field == null) return null;
         var fieldType = field.Value.Field.Type;
-        return call.Args.Count == 2 ? PyType.Union(fieldType, TypeOf(m, call.Args[1].Value)) : PyType.Union(fieldType, NoneInstance);
+        if (ga.Attr == "setdefault") return fieldType;
+        if (call.Args.Count == 2) return PyType.Union(fieldType, TypeOf(m, call.Args[1].Value));
+        return ga.Attr == "pop" ? fieldType : PyType.Union(fieldType, NoneInstance);
+    }
+
+    /// <summary>TypeVar('T', str, bytes) or TypeVar('T', bound=X): the variable with its constraints or bound, read as types (where they stand: TypeVar runs).</summary>
+    TypeVarType TypeVarFromCall(ModuleInfo m, CallExpr call, ConstExpr name)
+    {
+        var constraints = call.Args.Skip(1).Where(a => a is { Name: null, Stars: 0 }).Select(a => Annotation(m, a.Value, null)).ToList();
+        var bound = call.Args.FirstOrDefault(a => a.Name == "bound") is { Value: not ConstExpr { Kind: ConstKind.None } } b ? Annotation(m, b.Value, null) : null;
+        // an unresolved bound or constraint says nothing about the arguments
+        if (bound is UnknownType) bound = null;
+        if (constraints.Any(c => c is UnknownType)) constraints.Clear();
+        return new TypeVarType(name.Text.Trim('"', '\''), bound, constraints.Count > 0 ? constraints : null);
     }
 
     static CallResolution Single(CallTarget t) => new(t.Returns, new[] { t });
@@ -310,8 +330,29 @@ public sealed partial class TypeEvaluator
         return result;
     }
 
-    CallTarget CallFunction(FunctionType f, IReadOnlyList<ArgInfo> args, Node? callNode) =>
-        CallParams(f, CallableParameters(f), () => ReturnTypeOf(f), args, callNode);
+    CallTarget CallFunction(FunctionType f, IReadOnlyList<ArgInfo> args, Node? callNode)
+    {
+        f = NewSelfFromCls(f, args);
+        return CallParams(f, CallableParameters(f), () => ReturnTypeOf(f), args, callNode);
+    }
+
+    /// <summary>
+    /// An explicit <c>X.__new__(cls, ...)</c>: Self is the class passed as cls, not X (<c>object.__new__(self.__class__)</c>
+    /// makes an instance of that class). Only a subclass of X is taken; anything else keeps X.
+    /// </summary>
+    FunctionType NewSelfFromCls(FunctionType f, IReadOnlyList<ArgInfo> args)
+    {
+        if (f.Info.Name != "__new__" || f.BoundFirst || args.Count == 0 || args[0] is not { Name: null, Stars: 0 } first) return f;
+        if (f.Subst == null || !f.Subst.TryGetValue("Self", out var self) || self is not ClassType { IsInstance: true } x) return f;
+        var classes = first.Type().Members.ToList();
+        if (classes.Count == 0 || !classes.All(t => t is ClassType { IsInstance: false } c && IsSubclass(c.Info, x.Info))) return f;
+        var subst = new Dictionary<string, PyType>(f.Subst)
+        {
+            ["Self"] = PyType.Union(classes.Select(t => ((ClassType)t).AsInstance())),
+            ["type[Self]"] = PyType.Union(classes),
+        };
+        return f with { Subst = subst };
+    }
 
     /// <summary>The literal type a written constant has: "a" is Literal['a'], -1 is Literal[-1], True is Literal[True].</summary>
     PyType? ConstantLiteral(Expr e) => e switch
@@ -655,6 +696,7 @@ public sealed partial class TypeEvaluator
 
             case TypeVarType tv:
                 if (tv.Name == "Self" || arg is NeverType) return;
+                arg = WithinTypeVar(tv, arg);
                 solved[tv.Name] = solved.TryGetValue(tv.Name, out var prev) && !prev.Equals(arg) ? PyType.Union(prev, arg) : arg;
                 return;
 
@@ -700,6 +742,28 @@ public sealed partial class TypeEvaluator
                 }
                 return;
         }
+    }
+
+    /// <summary>
+    /// What an argument solves a bounded or constrained variable to: a constrained one takes the constraint the argument
+    /// matches; an argument outside the bound or the constraints solves it to them, so the argument check reports it
+    /// (and an overload such as ast.parse's `(source: _T) -> _T`, _T bound to AST, does not match a str).
+    /// </summary>
+    PyType WithinTypeVar(TypeVarType tv, PyType arg)
+    {
+        if (tv.Constraints is { Count: > 0 } cs)
+        {
+            var matched = new List<PyType>();
+            foreach (var a in arg.Members)
+            {
+                if (a is UnknownType or TypeVarType) { matched.Add(a); continue; }
+                var c = cs.FirstOrDefault(x => IsAssignable(x, a));
+                if (c == null) return PyType.Union(cs);
+                matched.Add(c);
+            }
+            return matched.Count == 0 ? arg : PyType.Union(matched);
+        }
+        return tv.Bound != null && !IsAssignable(tv.Bound, arg) ? tv.Bound : arg;
     }
 
     /// <summary>

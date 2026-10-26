@@ -57,7 +57,9 @@ public sealed partial class TypeEvaluator
     void InspectAttribute(ModuleInfo m, AttributeExpr attr, List<Diagnostic> diags, bool includeNone)
     {
         var recv = TypeOf(m, attr.Value);
-        if (recv is UnknownType) return;
+        // a receiver that may be something unknown (`1 if c else x`, an unannotated parameter narrowed by isinstance)
+        // may have any attribute: as PyCharm, nothing is reported on it, not even for its known members
+        if (recv.Members.Any(x => x is UnknownType)) return;
         var res = AttributeType(recv, attr.Attr);
         var missing = res.Missing.Where(x => IsReportableMiss(x, attr.Attr, includeNone)).ToList();
         if (missing.Count == 0) return;
