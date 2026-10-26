@@ -140,9 +140,19 @@ public sealed partial class TypeEvaluator
         ClassType { IsInstance: true } c => c.AsClassObject(),
         TypeVarType { Name: "Self" } => new TypeVarType("type[Self]"),
         TypeVarType tv when !tv.Name.StartsWith("type[", StringComparison.Ordinal) => new TypeVarType($"type[{tv.Name}]"),   // type[T]: solved from the class an argument is
-        UnknownType => Inst("type"),
+        UnknownType u => ClassOfAny(u),
         _ => PyType.Unknown,
     });
+
+    /// <summary>
+    /// type[Any], or the class of something unknown (an unresolved import): an instance of `type` that keeps the Any, so the
+    /// members `type` has keep their types and any other attribute is the Any instead of missing, as in PyCharm.
+    /// </summary>
+    PyType ClassOfAny(UnknownType u) => BuiltinClass("type") is { } t ? new ClassType(t.Info, new PyType[] { u }, true) : u;
+
+    /// <summary>type[Any], or its own class (what `type(cls)` and `cls.__class__` give: the metaclass of an unknown class).</summary>
+    static bool IsClassOfAny(ClassType c) =>
+        c is { Args: [UnknownType] } && c.Info.Name == "type" && c.Info.Module.Name == "builtins";
 
     PyType TupleAnnotation(ModuleInfo m, IReadOnlyList<Expr> args, Scope? lookup)
     {

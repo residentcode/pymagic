@@ -150,6 +150,7 @@ public sealed partial class TypeEvaluator
     static bool ContainsDynamic(PyType t) => t switch
     {
         UnknownType => true,
+        ClassType c when IsClassOfAny(c) => false,   // type[Any] is a value worth keeping: a declared `x: object = cls` follows it
         ClassType c => c.Args.Any(ContainsDynamic) || (c.TupleItems?.Any(ContainsDynamic) ?? false),
         UnionType u => u.MemberList.Any(ContainsDynamic),
         _ => false,

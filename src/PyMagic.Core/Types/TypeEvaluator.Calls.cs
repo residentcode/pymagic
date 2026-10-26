@@ -761,6 +761,7 @@ public sealed partial class TypeEvaluator
     {
         if (dest is UnknownType || src is UnknownType || src is NeverType) return true;
         if (dest is TypeVarType || src is TypeVarType) return true;
+        if (src is ClassType anyClass && IsClassOfAny(anyClass)) return true;   // type[Any] may be whichever class is wanted
         if (src is UnionType su) return su.MemberList.All(m => IsAssignable(dest, m));
         if (dest is UnionType du) return du.MemberList.Any(m => IsAssignable(m, src));
 
