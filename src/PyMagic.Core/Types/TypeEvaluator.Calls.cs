@@ -310,8 +310,29 @@ public sealed partial class TypeEvaluator
         return result;
     }
 
-    CallTarget CallFunction(FunctionType f, IReadOnlyList<ArgInfo> args, Node? callNode) =>
-        CallParams(f, CallableParameters(f), () => ReturnTypeOf(f), args, callNode);
+    CallTarget CallFunction(FunctionType f, IReadOnlyList<ArgInfo> args, Node? callNode)
+    {
+        f = NewSelfFromCls(f, args);
+        return CallParams(f, CallableParameters(f), () => ReturnTypeOf(f), args, callNode);
+    }
+
+    /// <summary>
+    /// An explicit <c>X.__new__(cls, ...)</c>: Self is the class passed as cls, not X (<c>object.__new__(self.__class__)</c>
+    /// makes an instance of that class). Only a subclass of X is taken; anything else keeps X.
+    /// </summary>
+    FunctionType NewSelfFromCls(FunctionType f, IReadOnlyList<ArgInfo> args)
+    {
+        if (f.Info.Name != "__new__" || f.BoundFirst || args.Count == 0 || args[0] is not { Name: null, Stars: 0 } first) return f;
+        if (f.Subst == null || !f.Subst.TryGetValue("Self", out var self) || self is not ClassType { IsInstance: true } x) return f;
+        var classes = first.Type().Members.ToList();
+        if (classes.Count == 0 || !classes.All(t => t is ClassType { IsInstance: false } c && IsSubclass(c.Info, x.Info))) return f;
+        var subst = new Dictionary<string, PyType>(f.Subst)
+        {
+            ["Self"] = PyType.Union(classes.Select(t => ((ClassType)t).AsInstance())),
+            ["type[Self]"] = PyType.Union(classes),
+        };
+        return f with { Subst = subst };
+    }
 
     /// <summary>The literal type a written constant has: "a" is Literal['a'], -1 is Literal[-1], True is Literal[True].</summary>
     PyType? ConstantLiteral(Expr e) => e switch

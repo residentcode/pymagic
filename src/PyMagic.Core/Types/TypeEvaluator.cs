@@ -444,16 +444,17 @@ public sealed partial class TypeEvaluator
             _ => null,
         };
 
-        // self / cls
-        if (fn?.Owner != null && owner is FunctionDef def && !fn.IsStatic && p.Annotation == null && p.Kind == ParamKind.Normal)
+        // self / cls (the cls of __new__ too: it is static only in that the class is passed explicitly)
+        bool isNew = fn?.Name == "__new__";
+        if (fn?.Owner != null && owner is FunctionDef def && (!fn.IsStatic || isNew) && p.Annotation == null && p.Kind == ParamKind.Normal)
         {
             var first = def.Params.FirstOrDefault(x => x.Kind is ParamKind.Normal or ParamKind.VarArgs or ParamKind.KwArgs);
             // by convention only these names mean "the receiver"; a def in a class body with another first parameter
             // is usually a helper called while the class is being built (fractions._operator_fallbacks)
-            if (ReferenceEquals(first, p) && p.Kind == ParamKind.Normal && (fn.IsClassMethod || IsReceiverName(p.Name)))
+            if (ReferenceEquals(first, p) && p.Kind == ParamKind.Normal && (fn.IsClassMethod || isNew || IsReceiverName(p.Name)))
             {
                 var self = new ClassType(fn.Owner, ClassTypeParamsAsArgs(fn.Owner), true);
-                return fn.IsClassMethod ? self.AsClassObject() : self;
+                return fn.IsClassMethod || isNew ? self.AsClassObject() : self;
             }
         }
 
