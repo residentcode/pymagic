@@ -229,16 +229,15 @@ public sealed partial class TypeEvaluator
         string? name = call.Func is NameExpr n ? n.Name : null;
         int count = call.Args.Count;
 
-        if (name == "isinstance" && count == 2)
+        if (name is "isinstance" or "issubclass" && count == 2)
         {
-            var classes = IsinstanceClasses(m, call.Args[1].Value);
-            if (classes == null) return t;
-            return positive ? IsInstancePositive(t, classes) : IsInstanceNegative(t, classes);
-        }
-        if (name == "issubclass" && count == 2)
-        {
-            var classes = IsinstanceClasses(m, call.Args[1].Value);
-            return classes == null ? t : positive ? IsSubclassPositive(t, classes) : IsSubclassNegative(t, classes);
+            bool sub = name == "issubclass";
+            var (classes, unknown) = IsinstanceClasses(m, call.Args[1].Value);
+            if (!positive) return classes.Count == 0 ? t : sub ? IsSubclassNegative(t, classes) : IsInstanceNegative(t, classes);
+            var known = classes.Count == 0 ? null : sub ? IsSubclassPositive(t, classes) : IsInstancePositive(t, classes);
+            // a class nothing is known about: the value is one of those, so the members it had before must not stay
+            if (unknown) return known == null ? PyType.Unknown : PyType.Union(known, PyType.Unknown);
+            return known ?? t;
         }
         if (name == "callable" && count == 1) return positive ? KeepCallable(t) : DropCallable(t);
         if (name == "hasattr" && count == 2 && StringValue(call.Args[1].Value) is { } attr) return positive ? WithAttribute(t, attr) : t;
