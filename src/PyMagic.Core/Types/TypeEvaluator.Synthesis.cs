@@ -105,7 +105,7 @@ public sealed partial class TypeEvaluator
                     if (d.Keys[i] == null || StringValue(d.Keys[i]) is not { } key) { known = false; break; }
                     var head = AnnotationHead(d.Values[i]);
                     bool required = head == "Required" || (head != "NotRequired" && total);
-                    fields.Add((new FieldInfo(key, AnnotationType(m, d.Values[i]), !required), required));
+                    fields.Add((new FieldInfo(key, Annotation(m, d.Values[i], null), !required), required));
                 }
             }
             else known = false;
@@ -116,7 +116,7 @@ public sealed partial class TypeEvaluator
             {
                 var head = AnnotationHead(a.Value);
                 bool required = head == "Required" || (head != "NotRequired" && total);
-                fields.Add((new FieldInfo(a.Name!, AnnotationType(m, a.Value), !required), required));
+                fields.Add((new FieldInfo(a.Name!, Annotation(m, a.Value, null), !required), required));
             }
         }
 

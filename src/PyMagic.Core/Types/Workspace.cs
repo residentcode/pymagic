@@ -63,6 +63,12 @@ public sealed class ModuleInfo
         Flow = new FlowModel(Semantics);
     }
 
+    bool? _postponedAnnotations;
+
+    /// <summary>The module starts with `from __future__ import annotations`: its annotations are not evaluated where they stand.</summary>
+    public bool PostponedAnnotations => _postponedAnnotations ??=
+        Ast.Body.Any(s => s is ImportFromStmt { Level: 0, Module: "__future__" } f && f.Names.Any(a => a.Name == "annotations"));
+
     /// <summary>Package that relative imports are relative to.</summary>
     public string Package => IsPackage ? Name : (Name.Contains('.') ? Name[..Name.LastIndexOf('.')] : "");
 
