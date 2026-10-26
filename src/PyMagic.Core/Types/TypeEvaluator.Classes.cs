@@ -418,6 +418,11 @@ public sealed partial class TypeEvaluator
         if (classLevel != null && hit.ClassSymbol != null && IsStrongSymbol(hit.Owner.Info.Module, hit.ClassSymbol))
             return BindMember(classLevel, hit.Owner, receiver, receiverIsInstance);
 
+        // `self.x: T = ...` declares the attribute: other assignments are checked against T, not unioned into it
+        var annotated = hit.InstanceAttrs.Where(ia => ia.Module.ParentOf(ia.Target) is AnnAssignStmt an && ReferenceEquals(an.Target, ia.Target)).ToList();
+        if (annotated.Count > 0)
+            return PyType.Union(annotated.Select(ia => BindMember(TypeOfTarget(ia.Module, ia.Target), hit.Owner, receiver, receiverIsInstance, bindFunctions: false)).ToList());
+
         var parts = new List<PyType>();
         if (classLevel != null) parts.Add(BindMember(classLevel, hit.Owner, receiver, receiverIsInstance));
         foreach (var ia in hit.InstanceAttrs)
