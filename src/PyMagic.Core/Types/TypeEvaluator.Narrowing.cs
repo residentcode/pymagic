@@ -208,29 +208,33 @@ public sealed partial class TypeEvaluator
         return false;
     }
 
-    /// <summary>The classes named in the second argument of isinstance, or null if they cannot all be determined.</summary>
-    List<ClassType>? IsinstanceClasses(ModuleInfo m, Expr arg)
+    /// <summary>
+    /// The classes named in the second argument of isinstance, and whether some of it is not a class that is known
+    /// (an unresolved import, a class rebound by a call, a type[T]).
+    /// </summary>
+    (List<ClassType> Classes, bool Unknown) IsinstanceClasses(ModuleInfo m, Expr arg)
     {
         var result = new List<ClassType>();
-        bool Collect(PyType t)
+        bool unknown = false;
+        void Collect(PyType t)
         {
             switch (t)
             {
-                case ClassType { IsInstance: false } c: result.Add(c); return true;
-                case ClassType { IsInstance: true, TupleItems: not null } tup: return tup.TupleItems.All(Collect);
-                case UnionType u: return u.MemberList.All(Collect);
-                default: return false;
+                case ClassType { IsInstance: false } c: result.Add(c); break;
+                case ClassType { IsInstance: true, TupleItems: not null } tup: foreach (var item in tup.TupleItems) Collect(item); break;
+                case UnionType u: foreach (var member in u.MemberList) Collect(member); break;
+                default: unknown = true; break;
             }
         }
         if (arg is BinaryExpr { Op: "|" } b)
         {
-            var l = IsinstanceClasses(m, b.Left);
-            var r = IsinstanceClasses(m, b.Right);
-            if (l == null || r == null) return null;
+            var (l, lu) = IsinstanceClasses(m, b.Left);
+            var (r, ru) = IsinstanceClasses(m, b.Right);
             l.AddRange(r);
-            return l;
+            return (l, lu || ru);
         }
-        return Collect(TypeOf(m, arg)) && result.Count > 0 ? result : null;
+        Collect(TypeOf(m, arg));
+        return (result, unknown);
     }
 
     PyType IsInstancePositive(PyType t, List<ClassType> classes)
