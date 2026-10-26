@@ -267,17 +267,22 @@ public sealed partial class TypeEvaluator
         return new CallResolution(targets.Count == 0 ? PyType.Unknown : PyType.Union(targets.Select(t => t.Returns)), targets);
     }
 
-    /// <summary><c>movie.get("year")</c> on a TypedDict: the field's type (or None / the default's type).</summary>
+    /// <summary><c>movie.get("year")</c> on a TypedDict: the field's type (or None / the default's type);
+    /// <c>setdefault("year", 0)</c> is the field's type and <c>pop("year")</c> the field's (or it | the default's).</summary>
     PyType? TypedDictGet(ModuleInfo m, CallExpr call)
     {
-        if (call.Func is not AttributeExpr { Attr: "get" } ga || call.Args.Count is < 1 or > 2) return null;
+        // the stubs give these methods of typing._TypedDict object returns
+        if (call.Func is not AttributeExpr { Attr: "get" or "setdefault" or "pop" } ga || call.Args.Count is < 1 or > 2) return null;
+        if (ga.Attr == "setdefault" && call.Args.Count != 2) return null;
         if (call.Args[0] is not { Name: null, Stars: 0, Value: var keyExpr } || StringValue(keyExpr) is not string key) return null;
         if (TypeOf(m, ga.Value) is not ClassType { IsInstance: true } rc) return null;
         var fields = TypedDictFieldsOf(rc.Info);
         var field = fields?.FirstOrDefault(f => f.Field.Name == key);
         if (field == null || field.Value.Field == null) return null;
         var fieldType = field.Value.Field.Type;
-        return call.Args.Count == 2 ? PyType.Union(fieldType, TypeOf(m, call.Args[1].Value)) : PyType.Union(fieldType, NoneInstance);
+        if (ga.Attr == "setdefault") return fieldType;
+        if (call.Args.Count == 2) return PyType.Union(fieldType, TypeOf(m, call.Args[1].Value));
+        return ga.Attr == "pop" ? fieldType : PyType.Union(fieldType, NoneInstance);
     }
 
     static CallResolution Single(CallTarget t) => new(t.Returns, new[] { t });
