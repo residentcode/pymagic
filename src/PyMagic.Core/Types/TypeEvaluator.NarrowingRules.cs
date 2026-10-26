@@ -313,7 +313,8 @@ public sealed partial class TypeEvaluator
 
     /// <summary>After `hasattr(x, "n")`: members that have the attribute stay, the others become Unknown so that using it is not reported.</summary>
     PyType WithAttribute(PyType t, string attribute) =>
-        PyType.Union(t.Members.Select(x => x is ClassType { IsInstance: true } && AttributeType(x, attribute).Missing.Count > 0 ? PyType.Unknown : x));
+        PyType.Union(t.Members.Select(x => x is ClassType { IsInstance: true } or FunctionType or OverloadedType or SignatureType
+            && AttributeType(x, attribute).Missing.Count > 0 ? PyType.Unknown : x));
 
     // ------------------------------------------------------------ match statements
 

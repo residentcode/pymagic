@@ -59,6 +59,7 @@ public sealed partial class TypeEvaluator
                         foreach (var anc in Mro(fn.Info))
                             if (anc is ClassType fc)
                                 foreach (var name in fc.Info.Scope.Symbols.Keys) Add(name, fc.Info.Name, false);
+                    Add("__call__", "function", false);
                     break;
             }
         }

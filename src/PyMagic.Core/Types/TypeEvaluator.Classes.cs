@@ -507,6 +507,8 @@ public sealed partial class TypeEvaluator
 
                 case FunctionType or OverloadedType or SignatureType:
                 {
+                    // builtins.function lacks __call__ (types.FunctionType has it): calling it is calling the function itself
+                    if (name == "__call__") { types.Add(member); break; }
                     var fn = BuiltinClass("function");
                     if (fn != null) LookupOnClass(fn.AsInstance(), name, true, types, missing, decls, sites);
                     else types.Add(PyType.Unknown);
