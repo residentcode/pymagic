@@ -568,6 +568,13 @@ public sealed partial class TypeEvaluator
                 types.Add(CallResultNoArgs(bound));
                 return;
             }
+            // a __getattribute__ of its own (threading.local, SimpleNamespace, proxies) can answer any name; object's cannot
+            var gab = FindMember(c, "__getattribute__", true, null, out _);
+            if (gab != null && !(gab.Owner.Info.Name == "object" && gab.Owner.Info.Module.Name == "builtins"))
+            {
+                types.Add(CallResultNoArgs(BoundMember(gab, c, true)));
+                return;
+            }
         }
         else
         {
