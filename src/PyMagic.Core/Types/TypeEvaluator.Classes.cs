@@ -161,8 +161,10 @@ public sealed partial class TypeEvaluator
                 var seq = new List<ClassType>();
                 foreach (var e in Mro(bc.Info))
                 {
-                    if (e is ClassType ec) seq.Add((ClassType)Substitute(ec, map));
-                    else unknown = true;
+                    if (e is not ClassType ec) { unknown = true; continue; }
+                    var entry = (ClassType)Substitute(ec, map);
+                    // a tuple[int, str] base keeps its per-position items, which the base class's own MRO cannot know
+                    seq.Add(seq.Count == 0 && bc.TupleItems != null ? entry with { TupleItems = bc.TupleItems } : entry);
                 }
                 seqs.Add(seq);
                 direct.Add(bc);
