@@ -496,6 +496,10 @@ public sealed partial class TypeEvaluator
         switch (p)
         {
             case AssignStmt a when a.Targets.Any(t => ReferenceEquals(t, child)):
+                // `x = attrib()` in an attrs class declares a field: instances hold the field's value, not the _CountingAttr
+                if (ReferenceEquals(child, target) && a.Value is CallExpr { Func: NameExpr { Name: "ib" or "attrib" or "field" } or AttributeExpr { Attr: "ib" or "attrib" or "field" } } fc
+                    && m.ParentOf(a) is ClassDef owner && DataclassOf(ClassOf(m, owner)) is { Attrs: true })
+                    return AttribFieldType(m, fc);
                 return Destructure(m, TypeOf(m, a.Value), (Expr)child, target);
 
             case AugAssignStmt au when ReferenceEquals(au.Target, target):

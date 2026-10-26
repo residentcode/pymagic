@@ -13,7 +13,7 @@ public sealed record FieldInfo(string Name, PyType Type, bool HasDefault, bool I
 /// </summary>
 public sealed partial class TypeEvaluator
 {
-    sealed record DataclassOptions(bool Init, bool KwOnly, bool Frozen);
+    sealed record DataclassOptions(bool Init, bool KwOnly, bool Frozen, bool Attrs = false);
 
     readonly Dictionary<ClassInfo, DataclassOptions?> _dataclassOptions = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<ClassInfo, List<FieldInfo>> _ownFields = new(ReferenceEqualityComparer.Instance);
@@ -202,19 +202,45 @@ public sealed partial class TypeEvaluator
             var call = d as CallExpr;
             var head = call != null ? call.Func : d;
             string? name = head switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => null };
-            // attrs' classic decorators: @attr.s, @attr.attrs, @attr.attributes (fields written `x = attr.ib()`)
-            bool attrs = head is AttributeExpr { Value: NameExpr { Name: "attr" or "attrs" }, Attr: "s" or "attrs" or "attributes" };
+            // attrs' decorators: @attr.s, @attr.attrs, @attrs.define, ... or a bare @attrs / @define imported from attrs
+            bool attrs = head is AttributeExpr { Value: NameExpr { Name: "attr" or "attrs" }, Attr: "s" or "attrs" or "attributes" or "define" or "frozen" or "mutable" }
+                || head is NameExpr bare && IsAttrsDecoratorName(c.Module, bare);
             if (name != "dataclass" && !attrs) continue;
             o = new DataclassOptions(
                 Init: call == null || BoolConst(KeywordArg(call, "init")) != false,
                 KwOnly: call != null && BoolConst(KeywordArg(call, "kw_only")) == true,
-                Frozen: call != null && (BoolConst(KeywordArg(call, "frozen")) == true || attrs && BoolConst(KeywordArg(call, "frozen")) == true));
+                Frozen: attrs && name == "frozen" || call != null && BoolConst(KeywordArg(call, "frozen")) == true,
+                Attrs: attrs);
             break;
         }
         // a decorator or a base class marked with dataclass_transform (attrs, pydantic, your own)
         o ??= TransformedDataclassOf(c);
         return _dataclassOptions[c] = o;
     }
+
+    static readonly HashSet<string> AttrsModules = new(StringComparer.Ordinal) { "attr", "attrs", "attr._make", "attr._next_gen" };
+
+    /// <summary>`@attrs(...)` / `@define` whose name is imported from attrs, or defined in attrs' own modules (attr/_make.py).</summary>
+    bool IsAttrsDecoratorName(ModuleInfo m, NameExpr n)
+    {
+        // not a bare `s`: by name alone it says too little
+        if (n.Name is not ("attrs" or "attributes" or "define" or "frozen" or "mutable")) return false;
+        if (m.Semantics.Resolve(n) is not { } sym) return false;
+        return sym.Declarations.Any(d => d switch
+        {
+            { Kind: DeclKind.Import, Node: ImportAlias a } => m.ParentOf(a) is ImportFromStmt s
+                && Workspace.AbsoluteName(m, s.Level, s.Module) is { } abs && AttrsModules.Contains(abs),
+            { Kind: DeclKind.Function } => AttrsModules.Contains(m.Name),
+            _ => false,
+        });
+    }
+
+    /// <summary>The type an attrs field `x = attr.ib(...)` holds: its type= (read where it stands: attrib runs), else what its default= or factory= gives.</summary>
+    PyType AttribFieldType(ModuleInfo m, CallExpr call) =>
+        KeywordArg(call, "type") is { } typeArg ? Annotation(m, typeArg, null)
+        : KeywordArg(call, "default") is { } dflt ? TypeOf(m, dflt).Members.Select(x => x is ClassType { LiteralValue: not null } lit ? lit.Widened() : x).Aggregate((PyType)PyType.Never, (acc, x) => PyType.Union(acc, x))
+        : KeywordArg(call, "factory") is { } factory ? CallResultNoArgs(TypeOf(m, factory))
+        : PyType.Unknown;
 
     public bool IsDataclass(ClassInfo c) => Mro(c).Any(e => e is ClassType ec && DataclassOf(ec.Info) != null);
 
@@ -225,14 +251,14 @@ public sealed partial class TypeEvaluator
         bool kwOnly = classKwOnly;
         var found = new List<(int Start, FieldInfo Field)>();
         var annotatedNames = AnnotatedFields(c).Select(a => ((NameExpr)a.Target).Name).ToHashSet(StringComparer.Ordinal);
-        // fields written without an annotation: `x = attr.ib()`, `y = attr.ib(default=1, type=int)`
+        // fields written without an annotation: `x = attr.ib()`, `y = attr.ib(default=1, type=int)`, `z = attrs.field()` in an attrs class
+        bool attrsClass = DataclassOf(c) is { Attrs: true };
         foreach (var assign in c.Node.Body.OfType<AssignStmt>())
         {
             if (assign.Targets.Count != 1 || assign.Targets[0] is not NameExpr un || annotatedNames.Contains(un.Name) || !IsFieldSpecifier(assign.Value, out var uc)) continue;
-            if ((uc.Func switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => null }) is not ("ib" or "attrib")) continue;
-            PyType type = KeywordArg(uc, "type") is { } typeArg ? AnnotationType(c.Module, typeArg)
-                : KeywordArg(uc, "default") is { } dflt ? TypeOf(c.Module, dflt).Members.Select(x => x is ClassType { LiteralValue: not null } lit ? lit.Widened() : x).Aggregate((PyType)PyType.Never, (acc, x) => PyType.Union(acc, x))
-                : PyType.Unknown;
+            var spec = uc.Func switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => null };
+            if (spec is not ("ib" or "attrib") && !(attrsClass && spec == "field")) continue;
+            PyType type = AttribFieldType(c.Module, uc);
             bool uInit = BoolConst(KeywordArg(uc, "init")) != false;
             found.Add((assign.Start, new FieldInfo(un.Name, type, FieldHasDefault(uc), uInit, BoolConst(KeywordArg(uc, "kw_only")) == true || kwOnly)));
         }
