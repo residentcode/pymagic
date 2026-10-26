@@ -314,6 +314,7 @@ public sealed partial class TypeEvaluator
         var w = Walker(m, flow, r.Symbol, path, baseline);
         var t = PyType.Union(reads.Select(w.Before));
         if (w.Exhausted) return baseline;
-        return t is NeverType ? baseline : t;
+        // nothing left (`isinstance(self.reason, bytes)` on a `str` attribute): unknown, as for names, not the declared type
+        return t is NeverType ? PyType.Unknown : t;
     }
 }
