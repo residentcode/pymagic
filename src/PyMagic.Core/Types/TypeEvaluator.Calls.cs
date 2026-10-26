@@ -255,7 +255,7 @@ public sealed partial class TypeEvaluator
         if ((callee as FunctionType ?? (callee as OverloadedType)?.Overloads[0]) is { Info: { Name: "cast" } ci } && ci.Module.Name is "typing" or "typing_extensions"
             && call.Args is [{ Name: null, Stars: 0 } castType, { Stars: 0 }])
         {
-            var target = AnnotationType(m, castType.Value);
+            var target = Annotation(m, castType.Value, null);
             if (!target.IsDynamic)
                 return Single(new CallTarget(callee, target, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
         }

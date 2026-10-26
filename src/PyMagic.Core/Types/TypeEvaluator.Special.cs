@@ -230,7 +230,7 @@ public sealed partial class TypeEvaluator
         {
             if (assign.Targets.Count != 1 || assign.Targets[0] is not NameExpr un || annotatedNames.Contains(un.Name) || !IsFieldSpecifier(assign.Value, out var uc)) continue;
             if ((uc.Func switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => null }) is not ("ib" or "attrib")) continue;
-            PyType type = KeywordArg(uc, "type") is { } typeArg ? AnnotationType(c.Module, typeArg)
+            PyType type = KeywordArg(uc, "type") is { } typeArg ? Annotation(c.Module, typeArg, null)
                 : KeywordArg(uc, "default") is { } dflt ? TypeOf(c.Module, dflt).Members.Select(x => x is ClassType { LiteralValue: not null } lit ? lit.Widened() : x).Aggregate((PyType)PyType.Never, (acc, x) => PyType.Union(acc, x))
                 : PyType.Unknown;
             bool uInit = BoolConst(KeywordArg(uc, "init")) != false;
@@ -358,7 +358,7 @@ public sealed partial class TypeEvaluator
             foreach (var it in items)
             {
                 if (it is TupleExpr { Items.Count: 2 } pair && StringValue(pair.Items[0]) is string fname)
-                    fields.Add(new FieldInfo(fname, AnnotationType(m, pair.Items[1]), false));
+                    fields.Add(new FieldInfo(fname, Annotation(m, pair.Items[1], null), false));
                 else { known = false; break; }
             }
         }

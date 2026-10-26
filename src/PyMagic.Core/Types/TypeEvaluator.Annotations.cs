@@ -6,13 +6,17 @@ namespace PyMagic.Core.Types;
 public sealed partial class TypeEvaluator
 {
     /// <summary>Converts an annotation expression to the type it denotes (class objects become instances, etc.).</summary>
-    public PyType AnnotationType(ModuleInfo m, Expr ann) => Annotation(m, ann, null);
+    public PyType AnnotationType(ModuleInfo m, Expr ann) => Annotation(m, ann, null, deferred: true);
 
     /// <param name="lookup">
     /// Scope for resolving bare names. Used for string annotations, whose parsed fragment has no semantic references;
     /// null for ordinary expressions that the binder already resolved.
     /// </param>
-    PyType Annotation(ModuleInfo m, Expr e, Scope? lookup)
+    /// <param name="deferred">
+    /// A real annotation (of a parameter, return or variable), which postponed annotations and stubs never evaluate where it stands;
+    /// false for type expressions the runtime does evaluate (alias values, class bases, the functional TypedDict).
+    /// </param>
+    PyType Annotation(ModuleInfo m, Expr e, Scope? lookup, bool deferred = false)
     {
         switch (e)
         {
@@ -20,28 +24,31 @@ public sealed partial class TypeEvaluator
             case ConstExpr { Kind: ConstKind.Str, IsFString: false } s:
                 return ForwardReference(m, s);
             case NameExpr or AttributeExpr:
-                return ToAnnotation(ValueOf(m, e, lookup));
+                return ToAnnotation(ValueOf(m, e, lookup, deferred));
             case SubscriptExpr sub:
-                return AnnotationSubscript(m, sub, lookup);
+                return AnnotationSubscript(m, sub, lookup, deferred);
             case BinaryExpr { Op: "|" } b:
-                return PyType.Union(Annotation(m, b.Left, lookup), Annotation(m, b.Right, lookup));
+                return PyType.Union(Annotation(m, b.Left, lookup, deferred), Annotation(m, b.Right, lookup, deferred));
             default:
                 return PyType.Unknown;
         }
     }
 
     /// <summary>Evaluates a name/attribute chain used inside an annotation as a value.</summary>
-    PyType ValueOf(ModuleInfo m, Expr e, Scope? lookup)
+    PyType ValueOf(ModuleInfo m, Expr e, Scope? lookup, bool deferred = false)
     {
         switch (e)
         {
+            // under `from __future__ import annotations` (and in stubs) a name means its symbol, a class bound later included, as a quoted one does
+            case NameExpr n when lookup == null && deferred && (m.PostponedAnnotations || m.IsStub) && m.Semantics.ReferenceOf(n)?.Symbol is { } sym:
+                return TypeOfSymbol(sym);
             case NameExpr n when lookup == null: return TypeOf(m, n);
             case NameExpr n:
             {
                 var sym = lookup!.Lookup(n.Name);
                 return sym != null ? TypeOfSymbol(sym) : BuiltinNameType(n.Name);
             }
-            case AttributeExpr a: return AttributeType(ValueOf(m, a.Value, lookup), a.Attr).Type;
+            case AttributeExpr a: return AttributeType(ValueOf(m, a.Value, lookup, deferred), a.Attr).Type;
             default: return PyType.Unknown;
         }
     }
@@ -115,21 +122,21 @@ public sealed partial class TypeEvaluator
     /// <summary>The annotation form back to a value: instances of classes become the class object (for `Alias = list[int]`).</summary>
     PyType AnnotationToValue(PyType ann) => MapMembers(ann, t => t is ClassType { IsInstance: true } c ? c.AsClassObject() : t);
 
-    PyType AnnotationSubscript(ModuleInfo m, SubscriptExpr sub, Scope? lookup)
+    PyType AnnotationSubscript(ModuleInfo m, SubscriptExpr sub, Scope? lookup, bool deferred = false)
     {
-        var baseValue = ValueOf(m, sub.Value, lookup);
+        var baseValue = ValueOf(m, sub.Value, lookup, deferred);
         IReadOnlyList<Expr> args = sub.Index is TupleExpr { Parenthesized: false } t ? t.Items : new[] { sub.Index };
 
         return MapMembers(baseValue, b =>
         {
             switch (b)
             {
-                case SpecialFormType f: return SpecialFormSubscript(m, f.Name, args, lookup);
+                case SpecialFormType f: return SpecialFormSubscript(m, f.Name, args, lookup, deferred);
                 case ClassType { IsInstance: false } c:
-                    if (c.Info.Name == "tuple" && c.Info.Module.Name == "builtins") return TupleAnnotation(m, args, lookup);
+                    if (c.Info.Name == "tuple" && c.Info.Module.Name == "builtins") return TupleAnnotation(m, args, lookup, deferred);
                     if (c.Info.Name == "type" && c.Info.Module.Name == "builtins" && args.Count == 1)
-                        return TypeOfClassObject(Annotation(m, args[0], lookup));
-                    return new ClassType(c.Info, args.Select(a => Annotation(m, a, lookup)).ToList(), true);
+                        return TypeOfClassObject(Annotation(m, args[0], lookup, deferred));
+                    return new ClassType(c.Info, args.Select(a => Annotation(m, a, lookup, deferred)).ToList(), true);
                 default: return PyType.Unknown;
             }
         });
@@ -154,32 +161,32 @@ public sealed partial class TypeEvaluator
     static bool IsClassOfAny(ClassType c) =>
         c is { Args: [UnknownType] } && c.Info.Name == "type" && c.Info.Module.Name == "builtins";
 
-    PyType TupleAnnotation(ModuleInfo m, IReadOnlyList<Expr> args, Scope? lookup)
+    PyType TupleAnnotation(ModuleInfo m, IReadOnlyList<Expr> args, Scope? lookup, bool deferred = false)
     {
         var tuple = BuiltinClass("tuple");
         if (tuple == null) return PyType.Unknown;
         // tuple[T, ...] is homogeneous; tuple[()] is empty
         if (args.Count == 2 && args[1] is ConstExpr { Kind: ConstKind.Ellipsis })
-            return new ClassType(tuple.Info, new[] { Annotation(m, args[0], lookup) }, true);
+            return new ClassType(tuple.Info, new[] { Annotation(m, args[0], lookup, deferred) }, true);
         if (args.Count == 1 && args[0] is TupleExpr { Items.Count: 0 })
             return new ClassType(tuple.Info, new[] { PyType.Unknown }, true, Array.Empty<PyType>());
-        var items = args.Select(a => Annotation(m, a, lookup)).ToList();
+        var items = args.Select(a => Annotation(m, a, lookup, deferred)).ToList();
         return new ClassType(tuple.Info, new[] { PyType.Union(items) }, true, items);
     }
 
-    PyType SpecialFormSubscript(ModuleInfo m, string form, IReadOnlyList<Expr> args, Scope? lookup)
+    PyType SpecialFormSubscript(ModuleInfo m, string form, IReadOnlyList<Expr> args, Scope? lookup, bool deferred = false)
     {
-        PyType A(int i) => i < args.Count ? Annotation(m, args[i], lookup) : PyType.Unknown;
+        PyType A(int i) => i < args.Count ? Annotation(m, args[i], lookup, deferred) : PyType.Unknown;
         switch (form)
         {
             case "Optional": return PyType.Union(A(0), NoneInstance);
-            case "Union": return PyType.Union(args.Select(a => Annotation(m, a, lookup)));
+            case "Union": return PyType.Union(args.Select(a => Annotation(m, a, lookup, deferred)));
             case "ClassVar": case "Final": case "Annotated": case "Required": case "NotRequired":
             case "ReadOnly": case "Unpack":
                 return A(0);
             case "TypeGuard": case "TypeIs": return Inst("bool");
             case "Type": return TypeOfClassObject(A(0));
-            case "Tuple": return TupleAnnotation(m, args, lookup);
+            case "Tuple": return TupleAnnotation(m, args, lookup, deferred);
             case "List": return Inst("list", A(0));
             case "Set": return Inst("set", A(0));
             case "FrozenSet": return Inst("frozenset", A(0));
@@ -189,7 +196,7 @@ public sealed partial class TypeEvaluator
             case "Counter": return CollectionsInst("Counter", A(0));
             case "Deque": return CollectionsInst("deque", A(0));
             case "ChainMap": return CollectionsInst("ChainMap", A(0), A(1));
-            case "Literal": return PyType.Union(args.Select(a => LiteralType(m, a, lookup)));
+            case "Literal": return PyType.Union(args.Select(a => LiteralType(m, a, lookup, deferred)));
             case "Callable":
             {
                 if (args.Count < 2) return new SignatureType(null, PyType.Unknown);
@@ -197,7 +204,7 @@ public sealed partial class TypeEvaluator
                 if (args[0] is ListExpr l)
                 {
                     var ps = l.Items.Select((x, i) =>
-                        new ParamInfo($"_{i}", Annotation(m, x, lookup), ParamCategory.PositionalOnly, false)).ToList();
+                        new ParamInfo($"_{i}", Annotation(m, x, lookup, deferred), ParamCategory.PositionalOnly, false)).ToList();
                     return new SignatureType(ps, ret);
                 }
                 return new SignatureType(null, ret); // Callable[..., R] / ParamSpec
@@ -207,7 +214,7 @@ public sealed partial class TypeEvaluator
     }
 
     /// <summary>One argument of Literal[...]: a value of str, int, bytes or bool, None, an enum member, or another Literal.</summary>
-    PyType LiteralType(ModuleInfo m, Expr e, Scope? lookup)
+    PyType LiteralType(ModuleInfo m, Expr e, Scope? lookup, bool deferred = false)
     {
         PyType WithValue(string cls, object? value) =>
             Inst(cls) is ClassType c && value != null ? c with { LiteralValue = value } : Inst(cls);
@@ -224,7 +231,7 @@ public sealed partial class TypeEvaluator
                 // Literal[Color.RED]
                 return TypeOf(m, e) is ClassType { IsInstance: true, EnumMember: not null } member ? member : PyType.Unknown;
             case SubscriptExpr:
-                return Annotation(m, e, lookup);      // Literal[Literal["a"], "b"]
+                return Annotation(m, e, lookup, deferred);      // Literal[Literal["a"], "b"]
             default: return PyType.Unknown;
         }
     }
