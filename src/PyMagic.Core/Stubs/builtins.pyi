@@ -69,6 +69,10 @@ class module:
     __file__: str | None
     __dict__: dict[str, Any]
     __doc__: str | None
+    __package__: str | None
+    __path__: list[str]
+    __spec__: Any
+    __loader__: Any
 
 class staticmethod(Generic[_T]):
     def __init__(self, f: Callable[..., _T], /) -> None: ...

@@ -620,7 +620,9 @@ public sealed partial class TypeEvaluator
         var sub = _ws.GetModule(mt.Module.Name + "." + name);
         if (sub != null) { types.Add(new ModuleType(sub)); return; }
         if (scope.Symbols.ContainsKey("__getattr__") || scope.HasStarImport) { types.Add(PyType.Unknown); return; }
-        var modClass = BuiltinClass("module");
+        // what every module object has (__file__, __path__, __spec__, ...): typeshed keeps it in types.ModuleType, the bundled builtins stub in `module`
+        var typesModule = _ws.GetModule("types");
+        var modClass = BuiltinClass("module") ?? (typesModule == null ? null : ModuleClass(_typesClasses, typesModule, "ModuleType"));
         if (modClass != null)
         {
             var hit = FindMember(modClass.AsInstance(), name, true, null, out _);
