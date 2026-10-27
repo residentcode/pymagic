@@ -142,13 +142,17 @@ public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool 
 
 /// <param name="Bound">The bound= of TypeVar(...): an argument for the variable must be assignable to it.</param>
 /// <param name="Constraints">The constraints of TypeVar('T', str, bytes): the variable is solved to the one an argument matches.</param>
-public sealed record TypeVarType(string Name, PyType? Bound = null, IReadOnlyList<PyType>? Constraints = null) : PyType
+/// <param name="Variance">covariant= / contravariant= of TypeVar(...); Unknown for a PEP 695 parameter or infer_variance=True.</param>
+public sealed record TypeVarType(string Name, PyType? Bound = null, IReadOnlyList<PyType>? Constraints = null, Variance Variance = Variance.Unknown) : PyType
 {
     // a variable is its name: the T a TypeVar call made and the T written elsewhere are one variable
     public bool Equals(TypeVarType? o) => o != null && Name == o.Name;
     public override int GetHashCode() => Name.GetHashCode();
     public override string Display(int depth = 0) => Name;
 }
+
+/// <summary>How a class's type arguments compare when one instance goes where another is wanted. Unknown compares either way.</summary>
+public enum Variance { Unknown, Invariant, Covariant, Contravariant }
 
 /// <summary>A parameter specification variable (PEP 612, `P = ParamSpec("P")`, `def f[**P]`): stands for a whole parameter list.</summary>
 public sealed record ParamSpecType(string Name) : PyType

@@ -18,7 +18,7 @@ public sealed record CallTarget(PyType Callee, PyType Returns, IReadOnlyList<Arg
 public sealed record CallResolution(PyType Returns, IReadOnlyList<CallTarget> Targets);
 
 /// <summary>One argument of a call. Type is evaluated lazily, only when a parameter actually needs it.</summary>
-sealed record ArgInfo(Argument? Node, string? Name, int Stars, Func<PyType> Type, Func<PyType?>? Literal = null);
+sealed record ArgInfo(Argument? Node, string? Name, int Stars, Func<PyType> Type, Func<PyType?>? Literal = null, Func<bool>? Fresh = null);
 
 public sealed partial class TypeEvaluator
 {
@@ -231,7 +231,7 @@ public sealed partial class TypeEvaluator
     public CallResolution ResolveCall(ModuleInfo m, CallExpr call)
     {
         var callee = TypeOf(m, call.Func);
-        var args = call.Args.Select(a => new ArgInfo(a, a.Name, a.Stars, () => TypeOf(m, a.Value), () => ArgumentLiteral(m, a.Value))).ToList();
+        var args = call.Args.Select(a => new ArgInfo(a, a.Name, a.Stars, () => TypeOf(m, a.Value), () => ArgumentLiteral(m, a.Value), () => IsFreshValue(m, a.Value))).ToList();
 
         // super() needs the enclosing method, not just the callee's type
         // super is a function in the bundled stub and a class in typeshed
@@ -297,7 +297,12 @@ public sealed partial class TypeEvaluator
         // an unresolved bound or constraint says nothing about the arguments
         if (bound is UnknownType) bound = null;
         if (constraints.Any(c => c is UnknownType)) constraints.Clear();
-        return new TypeVarType(name.Text.Trim('"', '\''), bound, constraints.Count > 0 ? constraints : null);
+        var flags = call.Args.Where(a => a.Name is "covariant" or "contravariant" or "infer_variance" && a.Value is not ConstExpr { Kind: ConstKind.False }).ToList();
+        // infer_variance=True, or a flag that is not a plain True or False, leaves the variance unknown
+        var variance = flags.Count == 0 ? Variance.Invariant
+            : flags is [{ Name: not "infer_variance", Value: ConstExpr { Kind: ConstKind.True } } f] ? (f.Name == "covariant" ? Variance.Covariant : Variance.Contravariant)
+            : Variance.Unknown;
+        return new TypeVarType(name.Text.Trim('"', '\''), bound, constraints.Count > 0 ? constraints : null, variance);
     }
 
     static CallResolution Single(CallTarget t) => new(t.Returns, new[] { t });
@@ -362,6 +367,18 @@ public sealed partial class TypeEvaluator
         _ => null,
     };
 
+    /// <summary>
+    /// A value just built, whose type would be inferred from the one wanted (as a type checker does): a list, set or dict
+    /// display, a comprehension or generator, a call that solved type variables (`list(xs)`, `sorted(xs)`), or a choice of two such values.
+    /// </summary>
+    bool IsFreshValue(ModuleInfo m, Expr e) => e switch
+    {
+        ListExpr or SetExpr or DictExpr or CompExpr => true,
+        IfExpr i => IsFreshValue(m, i.Body) && IsFreshValue(m, i.Orelse),
+        CallExpr c => ResolveCall(m, c).Targets.Any(t => t.Solved is { Count: > 0 }),
+        _ => false,
+    };
+
     /// <summary>The literal an argument is: a written constant, or a name assigned once, from a constant (`mode = "r"` is always that literal).</summary>
     PyType? ArgumentLiteral(ModuleInfo m, Expr e)
     {
@@ -417,7 +434,7 @@ public sealed partial class TypeEvaluator
             var expected = Substitute(param.Type, solved);
             // a constant written in the call is the literal it spells where a Literal[...] is wanted
             if (expected.Members.Any(x => x is ClassType { IsInstance: true, LiteralValue: not null }) && arg.Literal?.Invoke() is { } literal) at = literal;
-            if (!IsAssignable(expected, at))
+            if (!IsAssignable(expected, at) && !(arg.Fresh?.Invoke() == true && IsAssignable(expected, at, fresh: true)))
                 problems.Add(new CallProblem(CallProblemKind.Type, (Node?)arg.Node ?? callNode,
                     $"Expected type '{expected}', got '{at}' instead"));
             else if (loose != null && IsLooseLiteral(expected, at))
@@ -1048,19 +1065,24 @@ public sealed partial class TypeEvaluator
         if (p != null && a != null) Unify(p, a, inner);
     }
 
-    /// <summary>Lenient assignability: only reports false when both sides are well known and clearly incompatible.</summary>
-    public bool IsAssignable(PyType dest, PyType src)
+    /// <summary>
+    /// Lenient assignability: only reports false when both sides are well known and clearly incompatible. A generic class's
+    /// arguments compare by the variance of its parameters; <paramref name="fresh"/> says the source is a value just built
+    /// (a list display, a generic call), which takes the type wanted, so an invariant argument only has to fit.
+    /// </summary>
+    public bool IsAssignable(PyType dest, PyType src, bool fresh = false)
     {
         if (dest is UnknownType || src is UnknownType || src is NeverType) return true;
         if (dest is TypeVarType or ParamSpecType or TypeVarTupleType || src is TypeVarType or ParamSpecType or TypeVarTupleType) return true;
         if (src is ClassType anyClass && IsClassOfAny(anyClass)) return true;   // type[Any] may be whichever class is wanted
-        if (src is UnionType su) return su.MemberList.All(m => IsAssignable(dest, m));
-        if (dest is UnionType du) return du.MemberList.Any(m => IsAssignable(m, src));
+        if (src is UnionType su) return MergeInstancesOfOneClass(su.MemberList).All(m => IsAssignable(dest, m, fresh));
+        if (dest is UnionType du) return du.MemberList.Any(m => IsAssignable(m, src, fresh));
 
         switch (dest)
         {
-            case SignatureType:
-                return src is FunctionType or OverloadedType or SignatureType or ClassType { IsInstance: false }
+            case SignatureType ds:
+                if (src is FunctionType or SignatureType) return CallbackFits(ds, src);
+                return src is OverloadedType or ClassType { IsInstance: false }
                     || (src is ClassType inst && FindMember(inst, "__call__", true, null, out _) != null);
 
             case ClassType { IsInstance: false } dc:
@@ -1095,8 +1117,27 @@ public sealed partial class TypeEvaluator
                 var spec = SpecializeAs(s, dc.Info);
                 if (spec != null)
                 {
+                    var ps = ClassDataOf(dc.Info).TypeParams;
+                    // with a *Ts the arguments do not line up with the parameters: compared either way, as for an unknown variance
+                    // so does a source with an unknown base, which may give the class other arguments
+                    bool aligned = ps.Count == dc.Args.Count && !ps.Any(p => p is TypeVarTupleType) && !HasUnknownAncestor(s.Info);
                     for (int i = 0; i < dc.Args.Count && i < spec.Args.Count; i++)
-                        if (!IsAssignable(dc.Args[i], spec.Args[i]) && !IsAssignable(spec.Args[i], dc.Args[i])) return false;
+                    {
+                        var variance = aligned && ps[i] is TypeVarType tv ? tv.Variance : Variance.Unknown;
+                        // a value just built takes the type wanted (`[1, 2]` is a list[float] there), so only its items have to fit
+                        if (fresh && variance == Variance.Invariant) variance = Variance.Covariant;
+                        // an inferred union is often wider than what flows there (str-or-bytes code, a None ruled out): either way, as before
+                        if (spec.Args[i] is UnionType) variance = Variance.Unknown;
+                        bool fits = variance switch
+                        {
+                            // both ways, so int-to-float promotion does not make a list[int] a list[float]
+                            Variance.Invariant => IsAssignable(dc.Args[i], spec.Args[i]) && IsAssignable(spec.Args[i], dc.Args[i]),
+                            Variance.Covariant => IsAssignable(dc.Args[i], spec.Args[i], fresh),
+                            Variance.Contravariant => IsAssignable(spec.Args[i], dc.Args[i]),
+                            _ => IsAssignable(dc.Args[i], spec.Args[i], fresh) || IsAssignable(spec.Args[i], dc.Args[i]),
+                        };
+                        if (!fits) return false;
+                    }
                     return true;
                 }
                 if (ClassDataOf(dc.Info).IsProtocol) return Satisfies(dc, s);
@@ -1105,6 +1146,43 @@ public sealed partial class TypeEvaluator
             }
             default: return true;
         }
+    }
+
+    /// <summary>
+    /// Instances of one generic class in a union as one instance of it, with the union of their arguments: a variable assigned
+    /// `[Table(...)]` here and a list[ConsoleRenderable] there is a list of either, not two lists to check one by one.
+    /// </summary>
+    static IEnumerable<PyType> MergeInstancesOfOneClass(IReadOnlyList<PyType> members)
+    {
+        static bool Generic(PyType t) => t is ClassType { IsInstance: true, Args.Count: > 0, TupleItems: null, LiteralValue: null };
+        foreach (var group in members.GroupBy(t => Generic(t) ? ((ClassType)t).Info : null))
+        {
+            var list = group.ToList();
+            if (group.Key == null || list.Count == 1 || list.Any(t => ((ClassType)t).Args.Count != ((ClassType)list[0]).Args.Count)) { foreach (var t in list) yield return t; continue; }
+            var first = (ClassType)list[0];
+            yield return first with { Args = first.Args.Select((_, i) => PyType.Union(list.Select(t => ((ClassType)t).Args[i]))).ToList() };
+        }
+    }
+
+    /// <summary>
+    /// A def or a signature where a Callable is wanted: its declared result goes where the wanted one does (covariant), and the
+    /// wanted parameters' types go into its parameters (contravariant), checked by calling it with them. Only the types are
+    /// compared, and nothing when either parameter list is unknown or not plain positional.
+    /// </summary>
+    bool CallbackFits(SignatureType want, PyType src)
+    {
+        // an inferred result is a guess, a lambda's included
+        var ret = src switch
+        {
+            FunctionType f when DeclaredReturn(f.Info) != null => ReturnTypeOf(f),
+            SignatureType s => s.Return,
+            _ => null,
+        };
+        if (ret != null && !IsAssignable(want.Return, ret)) return false;
+        if (want.Params == null || want.Spec != null || src is SignatureType { Params: null } or SignatureType { Spec: not null }) return true;
+        if (want.Params.Any(p => p.Category is not (ParamCategory.PositionalOnly or ParamCategory.Normal))) return true;
+        var args = want.Params.Select(p => new ArgInfo(null, null, 0, () => p.Type)).ToList();
+        return CallValue(src, args, null).All(t => t.Problems.All(p => p.Kind != CallProblemKind.Type));
     }
 
     bool IsProtocolSatisfiedByClassObject(ClassType proto) => ClassDataOf(proto.Info).IsProtocol;
