@@ -129,13 +129,13 @@ public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool 
         if (TupleItems != null)
         {
             sb.Append('[');
-            sb.Append(TupleItems.Count == 0 ? "()" : string.Join(", ", TupleItems.Select(a => a.Display(depth + 1))));
+            sb.Append(TupleItems.Count == 0 ? "()" : string.Join(", ", TupleItems.Select(a => a is TypeVarTupleType ? "*" + a.Display(depth + 1) : a.Display(depth + 1))));
             sb.Append(']');
         }
         else if (Info.Name == "tuple" && Info.Module.Name == "builtins" && Args.Count == 1)
             sb.Append('[').Append(Args[0].Display(depth + 1)).Append(", ...]");
         else if (Args.Count > 0)
-            sb.Append('[').Append(string.Join(", ", Args.Select(a => a.Display(depth + 1)))).Append(']');
+            sb.Append('[').Append(string.Join(", ", Args.Select(a => a is TypeVarTupleType ? "*" + a.Display(depth + 1) : a.Display(depth + 1)))).Append(']');
         return IsInstance ? sb.ToString() : $"type[{sb}]";
     }
 }
@@ -152,6 +152,16 @@ public sealed record TypeVarType(string Name, PyType? Bound = null, IReadOnlyLis
 
 /// <summary>A parameter specification variable (PEP 612, `P = ParamSpec("P")`, `def f[**P]`): stands for a whole parameter list.</summary>
 public sealed record ParamSpecType(string Name) : PyType
+{
+    public override string Display(int depth = 0) => Name;
+}
+
+/// <summary>
+/// A variadic type variable (PEP 646, `Ts = TypeVarTuple("Ts")`, `class C[*Ts]`): stands for any number of types. It is
+/// only written unpacked, so where it stands in tuple items, in a class's arguments or as a `*args` type it means `*Ts`;
+/// solved, it is a tuple of the types it stands for.
+/// </summary>
+public sealed record TypeVarTupleType(string Name) : PyType
 {
     public override string Display(int depth = 0) => Name;
 }
@@ -182,7 +192,7 @@ public sealed record SignatureType(IReadOnlyList<ParamInfo>? Params, PyType Retu
         && Equals(Spec, o.Spec);
     public override int GetHashCode() => Return.GetHashCode();
     public override string Display(int depth = 0) =>
-        $"({(Params == null ? "..." : string.Join(", ", Params.Select(p => p.Type.Display(depth + 1)).Concat(Spec == null ? Array.Empty<string>() : new[] { "**" + Spec.Name })))}) -> {Return.Display(depth + 1)}";
+        $"({(Params == null ? "..." : string.Join(", ", Params.Select(p => (p.Type is TypeVarTupleType ? "*" : "") + p.Type.Display(depth + 1)).Concat(Spec == null ? Array.Empty<string>() : new[] { "**" + Spec.Name })))}) -> {Return.Display(depth + 1)}";
 }
 
 /// <summary>Result of super() inside a method: attribute lookup starts after Current in the MRO of Receiver.</summary>

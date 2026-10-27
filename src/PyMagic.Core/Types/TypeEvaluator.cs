@@ -499,6 +499,8 @@ public sealed partial class TypeEvaluator
 
         return p.Kind switch
         {
+            // `*args: *Ts` is the tuple of the types Ts stands for
+            ParamKind.VarArgs when t is TypeVarTupleType && BuiltinClass("tuple") is { } tuple => TupleOf(tuple, new[] { t }),
             ParamKind.VarArgs => TupleHomogeneous(p.Annotation != null ? t : PyType.Unknown),
             ParamKind.KwArgs => Inst("dict", Inst("str"), p.Annotation != null ? t : PyType.Unknown),
             _ => t,

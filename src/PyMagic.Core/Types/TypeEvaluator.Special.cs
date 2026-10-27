@@ -337,7 +337,8 @@ public sealed partial class TypeEvaluator
     /// <summary>The items an instance unpacks/iterates/indexes as: a tuple's recorded items, a named tuple's fields, or the items of a tuple[...] base.</summary>
     IReadOnlyList<PyType>? TupleItemsOf(ClassType c)
     {
-        if (c.TupleItems != null) return c.TupleItems;
+        // with a `*Ts` among them the items' positions are not known
+        if (c.TupleItems != null) return c.TupleItems.Any(x => x is TypeVarTupleType) ? null : c.TupleItems;
         if (!c.IsInstance) return null;
         if (NamedTupleFieldsOf(c.Info) is { } fields) return fields.Select(f => f.Type).ToList();
         // class CodecInfo(tuple[Any, Any, Any, Any]): the specialized base keeps the per-position items

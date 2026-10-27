@@ -100,7 +100,7 @@ public sealed partial class TypeEvaluator
     {
         var ps = ParametersOf(f.Info).ToList();
         if (f.BoundFirst && ps.Count > 0 && ps[0].Category is ParamCategory.PositionalOnly or ParamCategory.Normal) ps.RemoveAt(0);
-        if (f.Subst != null && f.Subst.Count > 0) ps = ps.Select(p => p with { Type = Substitute(p.Type, f.Subst) }).ToList();
+        if (f.Subst != null && f.Subst.Count > 0) ps = SubstituteParams(ps, f.Subst);
         return ps;
     }
 
@@ -379,12 +379,24 @@ public sealed partial class TypeEvaluator
 
         var solved = new Dictionary<string, PyType>();
         var evaluated = new List<(ArgInfo Arg, ParamInfo Param, PyType Type)>();
+        // `*args: *Ts`: Ts is the types of the positional arguments it takes, in order (not known past a `*xs`)
+        var variadic = ps.FirstOrDefault(p => p is { Category: ParamCategory.VarPositional, Type: TypeVarTupleType });
+        var variadicArgs = map.Where(x => x.Param != null && ReferenceEquals(x.Param, variadic)).Select(x => x.Arg).ToList();
+        if (variadic != null)
+            SolveVariadic((TypeVarTupleType)variadic.Type, args.Any(a => a.Stars == 1) ? null : variadicArgs.Select(a => a.Type()).ToList(), solved);
         foreach (var (arg, param) in map)
         {
-            if (param == null || arg.Stars != 0) continue;
+            if (param == null || arg.Stars != 0 || ReferenceEquals(param, variadic)) continue;
             var at = arg.Type();
             evaluated.Add((arg, param, at));
             Unify(param.Type, at, solved);
+        }
+        // what a callable argument solved a Ts to counts when no *args or tuple did; those are checked against it below
+        var exact = new HashSet<string>(solved.Keys);
+        foreach (var key in solved.Keys.Where(k => k.StartsWith('*')).ToList())
+        {
+            solved.TryAdd(key[1..], solved[key]);
+            solved.Remove(key);
         }
         // type[T] in a result or another parameter follows what T was solved to
         foreach (var (name, value) in solved.ToList())
@@ -393,6 +405,11 @@ public sealed partial class TypeEvaluator
         foreach (var (arg, param, at0) in evaluated)
         {
             var at = at0;
+            if (CheckVariadicCallback(param.Type, at, arg, solved, exact, variadic, variadicArgs) is { } callbackProblems)
+            {
+                problems.AddRange(callbackProblems);
+                continue;
+            }
             var expected = Substitute(param.Type, solved);
             // a constant written in the call is the literal it spells where a Literal[...] is wanted
             if (expected.Members.Any(x => x is ClassType { IsInstance: true, LiteralValue: not null }) && arg.Literal?.Invoke() is { } literal) at = literal;
@@ -404,6 +421,36 @@ public sealed partial class TypeEvaluator
         var ret = EraseTypeVars(Substitute(returnType(), solved));
         var mappings = map.Where(x => x.Arg.Node != null).Select(x => new ArgumentMapping(x.Arg.Node!, x.Param)).ToList();
         return new CallTarget(callee, ret, mappings, problems, solved);
+    }
+
+    /// <summary>Records what a Ts is solved to (null: types of unknown length); two different solutions leave it unknown.</summary>
+    void SolveVariadic(TypeVarTupleType ts, IReadOnlyList<PyType>? types, Dictionary<string, PyType> solved, bool fromCallable = false)
+    {
+        // a callable's parameters solve it under a key of their own, taken only when nothing else solved it
+        string key = fromCallable ? "*" + ts.Name : ts.Name;
+        PyType value = types != null && BuiltinClass("tuple") is { } tuple ? TupleOf(tuple, types) : PyType.Unknown;
+        solved[key] = solved.TryGetValue(key, out var prev) && !prev.Equals(value) ? PyType.Unknown : value;
+    }
+
+    /// <summary>
+    /// A callback for a `Callable[[*Ts], R]` parameter whose Ts the `*args` or a tuple argument solved (`loop.call_soon(cb, 1)`):
+    /// it must take those arguments, so calling it with them is checked, with the problems shown where the arguments are.
+    /// Null when the parameter is not such a callable, or Ts is not known.
+    /// </summary>
+    List<CallProblem>? CheckVariadicCallback(PyType paramType, PyType callback, ArgInfo arg, Dictionary<string, PyType> solved,
+        HashSet<string> exact, ParamInfo? variadic, List<ArgInfo> variadicArgs)
+    {
+        if (paramType is not SignatureType { Params: { } sps } || sps.Count == 0 || sps[^1] is not { Category: ParamCategory.VarPositional, Type: TypeVarTupleType ts }) return null;
+        if (!exact.Contains(ts.Name) || !solved.TryGetValue(ts.Name, out var value) || value is not ClassType { TupleItems: { } types } || types.Any(t => t is TypeVarTupleType)) return null;
+        var callArgs = sps.Take(sps.Count - 1).Select(p => Substitute(p.Type, solved)).Select(t => new ArgInfo(null, null, 0, () => t)).ToList();
+        // the arguments the *args took stand for themselves; a tuple's items only by their types
+        if (variadic?.Type is TypeVarTupleType own && own.Name == ts.Name && variadicArgs.Count == types.Count) callArgs.AddRange(variadicArgs);
+        else callArgs.AddRange(types.Select(t => new ArgInfo(null, null, 0, () => t)));
+        var problems = new List<CallProblem>();
+        foreach (var c in callback.Members)
+            if (c is FunctionType or SignatureType { Params: not null })
+                foreach (var t in CallValue(c, callArgs, arg.Node)) problems.AddRange(t.Problems);
+        return problems;
     }
 
     CallTarget CallOverloaded(OverloadedType o, IReadOnlyList<ArgInfo> args, Node? callNode)
@@ -455,7 +502,9 @@ public sealed partial class TypeEvaluator
         }
         if (qn is "typing.ParamSpec" or "typing_extensions.ParamSpec")
             return new CallTarget(cls, new ParamSpecType(args.FirstOrDefault()?.Node?.Value is ConstExpr p ? p.Text.Trim('"', '\'') : "?"), none, noProblems);
-        if (qn is "typing.TypeVar" or "typing.TypeVarTuple" or "typing_extensions.TypeVar" or "typing_extensions.TypeVarTuple")
+        if (qn is "typing.TypeVarTuple" or "typing_extensions.TypeVarTuple")
+            return new CallTarget(cls, new TypeVarTupleType(args.FirstOrDefault()?.Node?.Value is ConstExpr ts ? ts.Text.Trim('"', '\'') : "?"), none, noProblems);
+        if (qn is "typing.TypeVar" or "typing_extensions.TypeVar")
         {
             var first = args.FirstOrDefault()?.Node?.Value as ConstExpr;
             string name = first != null ? first.Text.Trim('"', '\'') : "?";
@@ -501,8 +550,13 @@ public sealed partial class TypeEvaluator
         PyType[] resultArgs;
         if (cls.Args.Count > 0) resultArgs = cls.Args.ToArray();
         else
-            resultArgs = data.TypeParams.Select(tp =>
-                inner?.Solved != null && inner.Solved.TryGetValue(TypeParamName(tp), out var v) && !ContainsTypeVar(v) ? v : PyType.Unknown).ToArray();
+            resultArgs = data.TypeParams.SelectMany(tp =>
+            {
+                var v = inner?.Solved != null && inner.Solved.TryGetValue(TypeParamName(tp), out var found) && !ContainsTypeVar(found) ? found : PyType.Unknown;
+                // a Ts gives the class its types one by one: Array(1, "a") is Array[int, str]
+                if (tp is TypeVarTupleType) return v is ClassType { TupleItems: { } types } ? types : new[] { PyType.Unknown };
+                return new[] { v };
+            }).ToArray();
 
         PyType instance = new ClassType(cls.Info, resultArgs, true);
         // __new__ may return something else (e.g. a subclass or Self)
@@ -522,8 +576,8 @@ public sealed partial class TypeEvaluator
 
     static bool ContainsTypeVar(PyType t) => t switch
     {
-        TypeVarType or ParamSpecType => true,
-        ClassType c => c.Args.Any(ContainsTypeVar),
+        TypeVarType or ParamSpecType or TypeVarTupleType => true,
+        ClassType c => c.Args.Any(ContainsTypeVar) || (c.TupleItems?.Any(ContainsTypeVar) ?? false),
         UnionType u => u.MemberList.Any(ContainsTypeVar),
         SignatureType sig => sig.Spec != null || ContainsTypeVar(sig.Return) || (sig.Params?.Any(p => ContainsTypeVar(p.Type)) ?? false),
         _ => false,
@@ -720,7 +774,12 @@ public sealed partial class TypeEvaluator
                         if (ClassDataOf(pc.Info).IsProtocol && ac.IsInstance) UnifyProtocol(pc, ac, solved);
                         continue;
                     }
-                    if (pc.TupleItems != null && spec.TupleItems != null && pc.TupleItems.Count == spec.TupleItems.Count)
+                    // tuple[int, *Ts] matched with a tuple's items, Array[*Ts] with a class's arguments
+                    if (pc.TupleItems != null && pc.TupleItems.Any(x => x is TypeVarTupleType))
+                        UnifyVariadic(pc.TupleItems, spec.TupleItems, solved);
+                    else if (pc.TupleItems == null && pc.Args.Any(x => x is TypeVarTupleType))
+                        UnifyVariadic(pc.Args, spec.Args.Count == 0 ? null : spec.Args, solved, unknownInTheMiddle: true);
+                    else if (pc.TupleItems != null && spec.TupleItems != null && pc.TupleItems.Count == spec.TupleItems.Count)
                         for (int i = 0; i < pc.TupleItems.Count; i++) Unify(pc.TupleItems[i], spec.TupleItems[i], solved);
                     else
                         for (int i = 0; i < pc.Args.Count && i < spec.Args.Count; i++) Unify(pc.Args[i], spec.Args[i], solved);
@@ -750,8 +809,47 @@ public sealed partial class TypeEvaluator
                     if (ret != null) Unify(ps.Return, ret, solved);
                 }
                 if (ps.Spec != null && arg.Members.Count == 1 && ParametersOfValue(arg) is { Params: not null } given) SolveParamSpec(ps, given, solved);
+                if (ps.Params is [.., { Category: ParamCategory.VarPositional, Type: TypeVarTupleType ts }]) SolveVariadicFromCallable(ps, ts, arg, solved);
                 return;
         }
+    }
+
+    /// <summary>
+    /// `[A, *Ts, B]` matched with the given items (a tuple's, a class's arguments): the ends first, Ts the items between them.
+    /// Ts stays unknown when the length is not known (null items, a `*Us` outside the middle, too few items, or with
+    /// <paramref name="unknownInTheMiddle"/> the one Unknown a class keeps where an unsolved Ts stands).
+    /// </summary>
+    void UnifyVariadic(IReadOnlyList<PyType> pattern, IReadOnlyList<PyType>? given, Dictionary<string, PyType> solved, bool unknownInTheMiddle = false)
+    {
+        int v = pattern.ToList().FindIndex(x => x is TypeVarTupleType);
+        var ts = (TypeVarTupleType)pattern[v];
+        int after = pattern.Count - v - 1;
+        if (given == null || given.Count < v + after) { SolveVariadic(ts, null, solved); return; }
+        for (int i = 0; i < v; i++) Unify(pattern[i], given[i], solved);
+        for (int j = 0; j < after; j++) Unify(pattern[v + 1 + j], given[given.Count - after + j], solved);
+        var middle = given.Skip(v).Take(given.Count - v - after).ToList();
+        bool known = !given.Take(v).Concat(given.Skip(given.Count - after)).Any(x => x is TypeVarTupleType)
+            && !(unknownInTheMiddle && middle is [UnknownType]);
+        SolveVariadic(ts, known ? middle : null, solved);
+    }
+
+    /// <summary>
+    /// `Callable[[A, *Ts], R]` matched with what is passed: A takes its first positional parameter and Ts the rest. Left
+    /// unknown for a `*args` or a parameter with a default (how many it is given is not fixed) or a value of unknown shape.
+    /// </summary>
+    void SolveVariadicFromCallable(SignatureType param, TypeVarTupleType ts, PyType arg, Dictionary<string, PyType> solved)
+    {
+        var lead = param.Params!.Take(param.Params!.Count - 1).ToList();
+        var given = arg.Members.Count == 1 ? ParametersOfValue(arg)?.Params : null;
+        var positional = given?.TakeWhile(p => p.Category is ParamCategory.PositionalOnly or ParamCategory.Normal).ToList();
+        if (given == null || positional!.Count < lead.Count || given.Skip(positional.Count).Any(p => p.Category == ParamCategory.VarPositional)
+            || positional.Skip(lead.Count).Any(p => p.HasDefault))
+        {
+            SolveVariadic(ts, null, solved, fromCallable: true);
+            return;
+        }
+        for (int i = 0; i < lead.Count; i++) Unify(lead[i].Type, positional[i].Type, solved);
+        SolveVariadic(ts, positional.Skip(lead.Count).Select(p => p.Type).ToList(), solved, fromCallable: true);
     }
 
     /// <summary>
@@ -887,7 +985,7 @@ public sealed partial class TypeEvaluator
     public bool IsAssignable(PyType dest, PyType src)
     {
         if (dest is UnknownType || src is UnknownType || src is NeverType) return true;
-        if (dest is TypeVarType or ParamSpecType || src is TypeVarType or ParamSpecType) return true;
+        if (dest is TypeVarType or ParamSpecType or TypeVarTupleType || src is TypeVarType or ParamSpecType or TypeVarTupleType) return true;
         if (src is ClassType anyClass && IsClassOfAny(anyClass)) return true;   // type[Any] may be whichever class is wanted
         if (src is UnionType su) return su.MemberList.All(m => IsAssignable(dest, m));
         if (dest is UnionType du) return du.MemberList.Any(m => IsAssignable(m, src));

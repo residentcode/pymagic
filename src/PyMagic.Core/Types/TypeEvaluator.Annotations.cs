@@ -29,6 +29,9 @@ public sealed partial class TypeEvaluator
                 return AnnotationSubscript(m, sub, lookup, deferred);
             case BinaryExpr { Op: "|" } b:
                 return PyType.Union(Annotation(m, b.Left, lookup, deferred), Annotation(m, b.Right, lookup, deferred));
+            case StarExpr star:
+                // `*Ts` (tuple items, Callable parameters, `*args: *Ts`) is what Unpack[Ts] spells
+                return Annotation(m, star.Value, lookup, deferred) is TypeVarTupleType ts ? ts : PyType.Unknown;
             default:
                 return PyType.Unknown;
         }
@@ -81,7 +84,7 @@ public sealed partial class TypeEvaluator
             switch (t)
             {
                 case ClassType { IsInstance: false } c: return c.AsInstance();
-                case TypeVarType or ParamSpecType: return t;
+                case TypeVarType or ParamSpecType or TypeVarTupleType: return t;
                 case SpecialFormType f:
                     return f.Name switch
                     {
@@ -170,9 +173,12 @@ public sealed partial class TypeEvaluator
             return new ClassType(tuple.Info, new[] { Annotation(m, args[0], lookup, deferred) }, true);
         if (args.Count == 1 && args[0] is TupleExpr { Items.Count: 0 })
             return new ClassType(tuple.Info, new[] { PyType.Unknown }, true, Array.Empty<PyType>());
-        var items = args.Select(a => Annotation(m, a, lookup, deferred)).ToList();
-        return new ClassType(tuple.Info, new[] { PyType.Union(items) }, true, items);
+        return TupleOf(tuple, args.Select(a => Annotation(m, a, lookup, deferred)).ToList());
     }
+
+    /// <summary>A tuple of these items; with a `*Ts` among them its length is not known, so its element type is not either.</summary>
+    static ClassType TupleOf(ClassType tuple, IReadOnlyList<PyType> items) =>
+        new(tuple.Info, new[] { items.Any(x => x is TypeVarTupleType) ? PyType.Unknown : PyType.Union(items) }, true, items);
 
     PyType SpecialFormSubscript(ModuleInfo m, string form, IReadOnlyList<Expr> args, Scope? lookup, bool deferred = false)
     {
@@ -203,9 +209,13 @@ public sealed partial class TypeEvaluator
                 PyType ret = A(1);
                 if (args[0] is ListExpr l)
                 {
-                    var ps = l.Items.Select((x, i) =>
-                        new ParamInfo($"_{i}", Annotation(m, x, lookup, deferred), ParamCategory.PositionalOnly, false)).ToList();
-                    return new SignatureType(ps, ret);
+                    // Callable[[int, *Ts], R]: the *Ts is a `*args: *Ts` parameter after the leading ones
+                    var ps = l.Items.Select((x, i) => Annotation(m, x, lookup, deferred) is var t && t is TypeVarTupleType
+                        ? new ParamInfo($"_{i}", t, ParamCategory.VarPositional, false)
+                        : new ParamInfo($"_{i}", t, ParamCategory.PositionalOnly, false)).ToList();
+                    // parameters after the *Ts (Callable[[*Ts, int], R]) are left for later: it takes any arguments
+                    int star = ps.FindIndex(p => p.Category == ParamCategory.VarPositional);
+                    return star >= 0 && star < ps.Count - 1 ? new SignatureType(null, ret) : new SignatureType(ps, ret);
                 }
                 // Callable[P, R] and Callable[Concatenate[X, P], R]: the leading parameters, then what P stands for
                 switch (Annotation(m, args[0], lookup, deferred))

@@ -15,7 +15,7 @@ public sealed partial class TypeEvaluator
 {
     sealed class ClassData
     {
-        /// <summary>TypeVarType or ParamSpecType, in the order the class's type arguments are written.</summary>
+        /// <summary>TypeVarType, ParamSpecType or TypeVarTupleType, in the order the class's type arguments are written.</summary>
         public List<PyType> TypeParams { get; } = new();
         public List<PyType> Bases { get; } = new();   // ClassType (class object form) or Unknown
         public bool IsProtocol { get; set; }
@@ -44,11 +44,16 @@ public sealed partial class TypeEvaluator
     public IReadOnlyList<PyType> TypeParametersOf(ClassInfo c) => ClassDataOf(c).TypeParams;
     public bool IsProtocol(ClassInfo c) => ClassDataOf(c).IsProtocol;
 
-    /// <summary>The variable a PEP 695 type parameter declares: `**P` a ParamSpec, the others a TypeVar.</summary>
-    static PyType TypeParamType(TypeParam tp) => tp.Kind == TypeParamKind.ParamSpec ? new ParamSpecType(tp.Name) : new TypeVarType(tp.Name);
+    /// <summary>The variable a PEP 695 type parameter declares: `**P` a ParamSpec, `*Ts` a TypeVarTuple, the others a TypeVar.</summary>
+    static PyType TypeParamType(TypeParam tp) => tp.Kind switch
+    {
+        TypeParamKind.ParamSpec => new ParamSpecType(tp.Name),
+        TypeParamKind.TypeVarTuple => new TypeVarTupleType(tp.Name),
+        _ => new TypeVarType(tp.Name),
+    };
 
-    /// <summary>The name a type parameter of a class (a TypeVar or a ParamSpec) is substituted by.</summary>
-    static string TypeParamName(PyType tp) => tp switch { TypeVarType tv => tv.Name, ParamSpecType p => p.Name, _ => "" };
+    /// <summary>The name a type parameter of a class (a TypeVar, a ParamSpec or a TypeVarTuple) is substituted by.</summary>
+    static string TypeParamName(PyType tp) => tp switch { TypeVarType tv => tv.Name, ParamSpecType p => p.Name, TypeVarTupleType ts => ts.Name, _ => "" };
 
     ClassData ClassDataOf(ClassInfo c)
     {
@@ -84,7 +89,7 @@ public sealed partial class TypeEvaluator
                         if (!explicitParams)
                         {
                             foreach (var a in targs)
-                                if (Annotation(m, a, null) is var tv and (TypeVarType or ParamSpecType) && !d.TypeParams.Contains(tv)) d.TypeParams.Add(tv);
+                                if (Annotation(m, a, null) is var tv and (TypeVarType or ParamSpecType or TypeVarTupleType) && !d.TypeParams.Contains(tv)) d.TypeParams.Add(tv);
                             explicitParams = true;
                         }
                         continue;
@@ -135,8 +140,10 @@ public sealed partial class TypeEvaluator
         {
             case TypeVarType tv when tv.Name != "Self": if (!into.Contains(tv)) into.Add(tv); break;
             case ParamSpecType p: if (!into.Contains(p)) into.Add(p); break;
+            case TypeVarTupleType ts: if (!into.Contains(ts)) into.Add(ts); break;
             case ClassType c:
                 foreach (var a in c.Args) CollectTypeVars(a, into);
+                if (c.TupleItems != null) foreach (var a in c.TupleItems) CollectTypeVars(a, into);
                 break;
             case UnionType u: foreach (var x in u.MemberList) CollectTypeVars(x, into); break;
             case SignatureType s:
@@ -212,7 +219,20 @@ public sealed partial class TypeEvaluator
     {
         var map = new Dictionary<string, PyType>();
         var ps = ClassDataOf(info).TypeParams;
-        for (int i = 0; i < ps.Count; i++) map[TypeParamName(ps[i])] = i < args.Count ? args[i] : PyType.Unknown;
+        int v = ps.FindIndex(p => p is TypeVarTupleType);
+        if (v < 0 || args.Count == 0)
+        {
+            for (int i = 0; i < ps.Count; i++) map[TypeParamName(ps[i])] = i < args.Count ? args[i] : PyType.Unknown;
+            return map;
+        }
+        // Array[int, str, bytes] for (T, *Ts, U): T and U take the ends, Ts the arguments between them
+        int after = ps.Count - v - 1, middle = args.Count - v - after;
+        for (int i = 0; i < v; i++) map[TypeParamName(ps[i])] = i < args.Count ? args[i] : PyType.Unknown;
+        for (int j = 0; j < after; j++) map[TypeParamName(ps[v + 1 + j])] = middle >= 0 ? args[v + middle + j] : PyType.Unknown;
+        // an Unknown where Ts stands (an unsolved Ts, `Array[Any]`) is a Ts of unknown length
+        var tuple = BuiltinClass("tuple");
+        bool unknown = middle < 0 || (middle == 1 && args[v] is UnknownType) || tuple == null;
+        map[TypeParamName(ps[v])] = unknown ? PyType.Unknown : TupleOf(tuple!, args.Skip(v).Take(middle).ToList());
         return map;
     }
 
@@ -240,17 +260,22 @@ public sealed partial class TypeEvaluator
         {
             case TypeVarType tv: return map.TryGetValue(tv.Name, out var r) ? r : t;
             case ParamSpecType p: return map.TryGetValue(p.Name, out var given) ? given : t;
+            case TypeVarTupleType ts: return map.TryGetValue(ts.Name, out var types) ? types : t;
             case ClassType c:
             {
                 if (c.Args.Count == 0 && c.TupleItems == null) return c;
-                var args = c.Args.Select(a => Substitute(a, map)).ToList();
-                var items = c.TupleItems?.Select(a => Substitute(a, map)).ToList();
-                return new ClassType(c.Info, args, c.IsInstance, items);
+                PyType Solved(TypeVarTupleType ts) => map.TryGetValue(ts.Name, out var types) ? types : ts;
+                var args = SpliceVariadic(c.Args, a => Substitute(a, map), Solved, classArgs: true)!;
+                if (c.TupleItems == null) return new ClassType(c.Info, args, c.IsInstance);
+                var items = SpliceVariadic(c.TupleItems, a => Substitute(a, map), Solved);
+                // tuple[int, *Ts] with Ts of unknown length is a tuple of unknown length
+                if (items == null) return new ClassType(c.Info, new[] { PyType.Unknown }, c.IsInstance);
+                return c.TupleItems.Any(x => x is TypeVarTupleType) ? TupleOf(c, items) with { IsInstance = c.IsInstance } : new ClassType(c.Info, args, c.IsInstance, items);
             }
             case UnionType u: return PyType.Union(u.MemberList.Select(x => Substitute(x, map)));
             case SignatureType s:
             {
-                var ps = s.Params?.Select(p => p with { Type = Substitute(p.Type, map) }).ToList();
+                var ps = s.Params == null ? null : SubstituteParams(s.Params, map);
                 var ret = Substitute(s.Return, map);
                 if (s.Spec == null || !map.TryGetValue(s.Spec.Name, out var spec)) return s with { Params = ps, Return = ret };
                 // P solved: its parameters follow the leading ones (Concatenate), and the def they came from stays known
@@ -265,6 +290,46 @@ public sealed partial class TypeEvaluator
                 return f with { Subst = MergeSubst(f.Subst, map) };
             default: return t;
         }
+    }
+
+    /// <summary>
+    /// Items with a `*Ts` among them (tuple items, a class's arguments), each Ts replaced by the types <paramref name="solved"/>
+    /// gives it (a tuple of them, or another Ts). A Ts that stands for types of unknown length makes it null, or with
+    /// <paramref name="classArgs"/> is one Unknown where it stands (how a class keeps an unsolved Ts).
+    /// </summary>
+    static List<PyType>? SpliceVariadic(IReadOnlyList<PyType> items, Func<PyType, PyType> each, Func<TypeVarTupleType, PyType> solved, bool classArgs = false)
+    {
+        var result = new List<PyType>();
+        foreach (var x in items)
+        {
+            if (x is not TypeVarTupleType ts) { result.Add(each(x)); continue; }
+            switch (solved(ts))
+            {
+                case TypeVarTupleType other: result.Add(other); break;
+                case ClassType { TupleItems: { } types }: result.AddRange(types); break;
+                default: if (!classArgs) return null; result.Add(PyType.Unknown); break;
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Parameters with the variables substituted; a `*args: *Ts` with Ts solved becomes one positional-only parameter per type.</summary>
+    List<ParamInfo> SubstituteParams(IEnumerable<ParamInfo> ps, IReadOnlyDictionary<string, PyType> map)
+    {
+        var result = new List<ParamInfo>();
+        foreach (var p in ps)
+        {
+            if (p is not { Category: ParamCategory.VarPositional, Type: TypeVarTupleType ts } || !map.TryGetValue(ts.Name, out var given))
+            {
+                result.Add(p with { Type = Substitute(p.Type, map) });
+                continue;
+            }
+            // solved to something of unknown length: any positional arguments
+            if (given is not ClassType { TupleItems: { } types }) { result.Add(p with { Type = given is TypeVarTupleType ? given : PyType.Unknown }); continue; }
+            foreach (var t in types)
+                result.Add(t is TypeVarTupleType more ? p with { Type = more } : new ParamInfo($"_{result.Count}", t, ParamCategory.PositionalOnly, false));
+        }
+        return result;
     }
 
     static IReadOnlyDictionary<string, PyType> MergeSubst(IReadOnlyDictionary<string, PyType>? a, IReadOnlyDictionary<string, PyType> b)
@@ -286,12 +351,22 @@ public sealed partial class TypeEvaluator
     {
         TypeVarType tv => keep != null && keep.Contains(tv.Name) ? tv : PyType.Unknown,
         ParamSpecType p => keep != null && keep.Contains(p.Name) ? p : PyType.Unknown,
-        ClassType c when c.Args.Count > 0 || c.TupleItems != null =>
-            new ClassType(c.Info, c.Args.Select(a => EraseTypeVars(a, keep)).ToList(), c.IsInstance, c.TupleItems?.Select(a => EraseTypeVars(a, keep)).ToList()),
+        TypeVarTupleType ts => keep != null && keep.Contains(ts.Name) ? ts : PyType.Unknown,
+        ClassType c when c.Args.Count > 0 || c.TupleItems != null => EraseClassArgs(c, keep),
         UnionType u => PyType.Union(u.MemberList.Select(x => EraseTypeVars(x, keep))),
         SignatureType s => EraseSignature(s, keep),
         _ => t,
     };
+
+    PyType EraseClassArgs(ClassType c, IReadOnlySet<string>? keep)
+    {
+        PyType Kept(TypeVarTupleType ts) => keep != null && keep.Contains(ts.Name) ? ts : PyType.Unknown;
+        var args = SpliceVariadic(c.Args, a => EraseTypeVars(a, keep), Kept, classArgs: true)!;
+        if (c.TupleItems == null) return new ClassType(c.Info, args, c.IsInstance);
+        // a tuple[int, *Ts] whose Ts nothing solved has a length that is not known
+        var items = SpliceVariadic(c.TupleItems, a => EraseTypeVars(a, keep), Kept);
+        return items == null ? new ClassType(c.Info, new[] { PyType.Unknown }, c.IsInstance) : new ClassType(c.Info, args, c.IsInstance, items);
+    }
 
     PyType EraseSignature(SignatureType s, IReadOnlySet<string>? keep)
     {

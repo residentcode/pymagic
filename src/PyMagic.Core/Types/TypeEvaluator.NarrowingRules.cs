@@ -62,7 +62,8 @@ public sealed partial class TypeEvaluator
         {
             if (x is ClassType { IsInstance: true, Info.Name: "tuple" } tup && tup.Info.Module.Name == "builtins")
             {
-                if (tup.TupleItems != null) { if ((tup.TupleItems.Count == n) == equal) result.Add(x); continue; }
+                // tuple[int, *Ts] has no fixed length
+                if (tup.TupleItems != null && !tup.TupleItems.Any(i => i is TypeVarTupleType)) { if ((tup.TupleItems.Count == n) == equal) result.Add(x); continue; }
                 if (equal && tup.Args.Count == 1 && n is >= 0 and <= 8) { result.Add(TupleOf(Enumerable.Repeat(tup.Args[0], (int)n).ToList())); continue; }
             }
             result.Add(x);
