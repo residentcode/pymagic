@@ -15,7 +15,8 @@ public sealed partial class TypeEvaluator
 {
     sealed class ClassData
     {
-        public List<TypeVarType> TypeParams { get; } = new();
+        /// <summary>TypeVarType or ParamSpecType, in the order the class's type arguments are written.</summary>
+        public List<PyType> TypeParams { get; } = new();
         public List<PyType> Bases { get; } = new();   // ClassType (class object form) or Unknown
         public bool IsProtocol { get; set; }
         public bool HasUnknownBase { get; set; }
@@ -40,8 +41,14 @@ public sealed partial class TypeEvaluator
 
     // ------------------------------------------------------------ class structure
 
-    public IReadOnlyList<TypeVarType> TypeParametersOf(ClassInfo c) => ClassDataOf(c).TypeParams;
+    public IReadOnlyList<PyType> TypeParametersOf(ClassInfo c) => ClassDataOf(c).TypeParams;
     public bool IsProtocol(ClassInfo c) => ClassDataOf(c).IsProtocol;
+
+    /// <summary>The variable a PEP 695 type parameter declares: `**P` a ParamSpec, the others a TypeVar.</summary>
+    static PyType TypeParamType(TypeParam tp) => tp.Kind == TypeParamKind.ParamSpec ? new ParamSpecType(tp.Name) : new TypeVarType(tp.Name);
+
+    /// <summary>The name a type parameter of a class (a TypeVar or a ParamSpec) is substituted by.</summary>
+    static string TypeParamName(PyType tp) => tp switch { TypeVarType tv => tv.Name, ParamSpecType p => p.Name, _ => "" };
 
     ClassData ClassDataOf(ClassInfo c)
     {
@@ -53,7 +60,7 @@ public sealed partial class TypeEvaluator
             var m = c.Module;
             bool explicitParams = false;
 
-            foreach (var tp in c.Node.TypeParams) { d.TypeParams.Add(new TypeVarType(tp.Name)); explicitParams = true; }
+            foreach (var tp in c.Node.TypeParams) { d.TypeParams.Add(TypeParamType(tp)); explicitParams = true; }
 
             foreach (var arg in c.Node.Bases)
             {
@@ -77,7 +84,7 @@ public sealed partial class TypeEvaluator
                         if (!explicitParams)
                         {
                             foreach (var a in targs)
-                                if (Annotation(m, a, null) is TypeVarType tv && !d.TypeParams.Contains(tv)) d.TypeParams.Add(tv);
+                                if (Annotation(m, a, null) is var tv and (TypeVarType or ParamSpecType) && !d.TypeParams.Contains(tv)) d.TypeParams.Add(tv);
                             explicitParams = true;
                         }
                         continue;
@@ -122,23 +129,25 @@ public sealed partial class TypeEvaluator
         else { d.Bases.Add(PyType.Unknown); d.HasUnknownBase = true; }
     }
 
-    static void CollectTypeVars(PyType t, List<TypeVarType> into)
+    static void CollectTypeVars(PyType t, List<PyType> into)
     {
         switch (t)
         {
             case TypeVarType tv when tv.Name != "Self": if (!into.Contains(tv)) into.Add(tv); break;
+            case ParamSpecType p: if (!into.Contains(p)) into.Add(p); break;
             case ClassType c:
                 foreach (var a in c.Args) CollectTypeVars(a, into);
                 break;
             case UnionType u: foreach (var x in u.MemberList) CollectTypeVars(x, into); break;
             case SignatureType s:
                 if (s.Params != null) foreach (var p in s.Params) CollectTypeVars(p.Type, into);
+                if (s.Spec != null) CollectTypeVars(s.Spec, into);
                 CollectTypeVars(s.Return, into);
                 break;
         }
     }
 
-    IReadOnlyList<PyType> ClassTypeParamsAsArgs(ClassInfo c) => ClassDataOf(c).TypeParams.Cast<PyType>().ToList();
+    IReadOnlyList<PyType> ClassTypeParamsAsArgs(ClassInfo c) => ClassDataOf(c).TypeParams.ToList();
 
     /// <summary>Linearised ancestors, most specific first. Entries are class objects; an Unknown entry marks unresolvable ancestors.</summary>
     public IReadOnlyList<PyType> MroOf(ClassInfo c) => Mro(c);
@@ -203,7 +212,7 @@ public sealed partial class TypeEvaluator
     {
         var map = new Dictionary<string, PyType>();
         var ps = ClassDataOf(info).TypeParams;
-        for (int i = 0; i < ps.Count; i++) map[ps[i].Name] = i < args.Count ? args[i] : PyType.Unknown;
+        for (int i = 0; i < ps.Count; i++) map[TypeParamName(ps[i])] = i < args.Count ? args[i] : PyType.Unknown;
         return map;
     }
 
@@ -230,6 +239,7 @@ public sealed partial class TypeEvaluator
         switch (t)
         {
             case TypeVarType tv: return map.TryGetValue(tv.Name, out var r) ? r : t;
+            case ParamSpecType p: return map.TryGetValue(p.Name, out var given) ? given : t;
             case ClassType c:
             {
                 if (c.Args.Count == 0 && c.TupleItems == null) return c;
@@ -239,7 +249,18 @@ public sealed partial class TypeEvaluator
             }
             case UnionType u: return PyType.Union(u.MemberList.Select(x => Substitute(x, map)));
             case SignatureType s:
-                return new SignatureType(s.Params?.Select(p => p with { Type = Substitute(p.Type, map) }).ToList(), Substitute(s.Return, map));
+            {
+                var ps = s.Params?.Select(p => p with { Type = Substitute(p.Type, map) }).ToList();
+                var ret = Substitute(s.Return, map);
+                if (s.Spec == null || !map.TryGetValue(s.Spec.Name, out var spec)) return s with { Params = ps, Return = ret };
+                // P solved: its parameters follow the leading ones (Concatenate), and the def they came from stays known
+                return spec switch
+                {
+                    SignatureType { Params: { } solved } list => new SignatureType((ps ?? new List<ParamInfo>()).Concat(solved).ToList(), ret, list.Spec, list.Origin),
+                    ParamSpecType other => s with { Params = ps, Return = ret, Spec = other },
+                    _ => new SignatureType(null, ret),    // solved to anything: takes any arguments
+                };
+            }
             case FunctionType f:
                 return f with { Subst = MergeSubst(f.Subst, map) };
             default: return t;
@@ -264,6 +285,7 @@ public sealed partial class TypeEvaluator
     PyType EraseTypeVars(PyType t, IReadOnlySet<string>? keep) => t switch
     {
         TypeVarType tv => keep != null && keep.Contains(tv.Name) ? tv : PyType.Unknown,
+        ParamSpecType p => keep != null && keep.Contains(p.Name) ? p : PyType.Unknown,
         ClassType c when c.Args.Count > 0 || c.TupleItems != null =>
             new ClassType(c.Info, c.Args.Select(a => EraseTypeVars(a, keep)).ToList(), c.IsInstance, c.TupleItems?.Select(a => EraseTypeVars(a, keep)).ToList()),
         UnionType u => PyType.Union(u.MemberList.Select(x => EraseTypeVars(x, keep))),
@@ -273,11 +295,14 @@ public sealed partial class TypeEvaluator
 
     PyType EraseSignature(SignatureType s, IReadOnlySet<string>? keep)
     {
-        var own = new List<TypeVarType>();
+        var own = new List<PyType>();
         if (s.Params != null) foreach (var p in s.Params) CollectTypeVars(p.Type, own);
         var all = new HashSet<string>(keep ?? (IReadOnlySet<string>)new HashSet<string>());
-        foreach (var tv in own) all.Add(tv.Name);
-        return new SignatureType(s.Params?.Select(p => p with { Type = EraseTypeVars(p.Type, all) }).ToList(), EraseTypeVars(s.Return, all));
+        foreach (var tv in own) all.Add(TypeParamName(tv));
+        var ret = EraseTypeVars(s.Return, all);
+        // a ParamSpec nothing solved: the callable takes any arguments, as Callable[..., R] does
+        if (s.Spec != null && !all.Contains(s.Spec.Name)) return new SignatureType(null, ret);
+        return s with { Params = s.Params?.Select(p => p with { Type = EraseTypeVars(p.Type, all) }).ToList(), Return = ret };
     }
 
     // ------------------------------------------------------------ members
@@ -465,9 +490,26 @@ public sealed partial class TypeEvaluator
                 case FunctionType f: return BindFunction(f, subst, receiverIsInstance);
                 case OverloadedType o:
                     return new OverloadedType(o.Overloads.Select(f => (FunctionType)BindFunction(f, subst, receiverIsInstance, allowProperty: false)).ToList());
+                case SignatureType { Origin.BoundFirst: false } s: return BindSignature(s, subst, receiverIsInstance);
                 default: return Substitute(t, subst);
             }
         });
+    }
+
+    /// <summary>
+    /// A decorated method whose parameters a ParamSpec carried over (`@contextmanager def m(self, n)`): the decorator's
+    /// result is bound like the def would be, so through an instance its first parameter is the receiver.
+    /// </summary>
+    PyType BindSignature(SignatureType s, IReadOnlyDictionary<string, PyType> subst, bool receiverIsInstance)
+    {
+        var origin = s.Origin!;
+        var sig = (SignatureType)Substitute(s, subst);
+        if (origin.Info.IsStatic) return sig;
+        if (origin.Info.IsProperty && (origin.Info.Flags & FuncFlags.PropertySetter) == 0) return receiverIsInstance ? sig.Return : sig;
+        if (!receiverIsInstance && !origin.Info.IsClassMethod) return sig;
+        var ps = sig.Params?.ToList();
+        if (ps is [{ Category: ParamCategory.PositionalOnly or ParamCategory.Normal }, ..]) ps.RemoveAt(0);
+        return sig with { Params = ps, Origin = origin with { BoundFirst = true } };
     }
 
     PyType BindFunction(FunctionType f, IReadOnlyDictionary<string, PyType> subst, bool receiverIsInstance, bool allowProperty = true)

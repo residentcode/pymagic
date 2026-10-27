@@ -163,7 +163,7 @@ public sealed partial class TypeEvaluator
         foreach (var d in declared.Members)
             if (d is ClassType { IsInstance: true } dc && SpecializeAs(generic, dc.Info) is { } view) Unify(view, dc, solved);
         // an argument the declaration does not give (`x: object = []`) stays as it was
-        return c with { Args = c.Args.Select((a, i) => ContainsDynamic(a) && solved.TryGetValue(ps[i].Name, out var s) ? s : a).ToList() };
+        return c with { Args = c.Args.Select((a, i) => ContainsDynamic(a) && solved.TryGetValue(TypeParamName(ps[i]), out var s) ? s : a).ToList() };
     }
 
     static bool ContainsDynamic(PyType t) => t switch

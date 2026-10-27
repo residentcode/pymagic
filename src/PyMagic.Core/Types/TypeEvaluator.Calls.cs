@@ -419,7 +419,8 @@ public sealed partial class TypeEvaluator
     CallTarget CallSignature(SignatureType s, IReadOnlyList<ArgInfo> args, Node? callNode)
     {
         if (s.Params == null) return new CallTarget(s, s.Return, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>());
-        return CallParams(s, s.Params, () => s.Return, args, callNode);
+        // a ParamSpec not solved here (`f: Callable[P, R]` in the body of a decorator) takes any arguments after the leading ones
+        return CallParams(s, s.Spec == null ? s.Params : s.Params.Concat(AnyArguments).ToList(), () => s.Return, args, callNode);
     }
 
     CallTarget CallInstance(ClassType inst, IReadOnlyList<ArgInfo> args, Node? callNode)
@@ -452,7 +453,9 @@ public sealed partial class TypeEvaluator
                 _ => PyType.Unknown,
             }), none, noProblems);
         }
-        if (qn is "typing.TypeVar" or "typing.ParamSpec" or "typing.TypeVarTuple" or "typing_extensions.TypeVar" or "typing_extensions.ParamSpec" or "typing_extensions.TypeVarTuple")
+        if (qn is "typing.ParamSpec" or "typing_extensions.ParamSpec")
+            return new CallTarget(cls, new ParamSpecType(args.FirstOrDefault()?.Node?.Value is ConstExpr p ? p.Text.Trim('"', '\'') : "?"), none, noProblems);
+        if (qn is "typing.TypeVar" or "typing.TypeVarTuple" or "typing_extensions.TypeVar" or "typing_extensions.TypeVarTuple")
         {
             var first = args.FirstOrDefault()?.Node?.Value as ConstExpr;
             string name = first != null ? first.Text.Trim('"', '\'') : "?";
@@ -486,6 +489,7 @@ public sealed partial class TypeEvaluator
             {
                 FunctionType f => f with { BoundFirst = true },
                 OverloadedType o => new OverloadedType(o.Overloads.Select(f => f with { BoundFirst = true }).ToList()),
+                SignatureType { Origin: not null, Params: [{ Category: ParamCategory.PositionalOnly or ParamCategory.Normal }, ..] } s => s with { Params = s.Params.Skip(1).ToList() },
                 _ => t,
             });
             inner = Pick(CallValue(withoutCls, args, callNode));
@@ -498,7 +502,7 @@ public sealed partial class TypeEvaluator
         if (cls.Args.Count > 0) resultArgs = cls.Args.ToArray();
         else
             resultArgs = data.TypeParams.Select(tp =>
-                inner?.Solved != null && inner.Solved.TryGetValue(tp.Name, out var v) && !ContainsTypeVar(v) ? v : PyType.Unknown).ToArray();
+                inner?.Solved != null && inner.Solved.TryGetValue(TypeParamName(tp), out var v) && !ContainsTypeVar(v) ? v : PyType.Unknown).ToArray();
 
         PyType instance = new ClassType(cls.Info, resultArgs, true);
         // __new__ may return something else (e.g. a subclass or Self)
@@ -518,10 +522,10 @@ public sealed partial class TypeEvaluator
 
     static bool ContainsTypeVar(PyType t) => t switch
     {
-        TypeVarType => true,
+        TypeVarType or ParamSpecType => true,
         ClassType c => c.Args.Any(ContainsTypeVar),
         UnionType u => u.MemberList.Any(ContainsTypeVar),
-        SignatureType sig => ContainsTypeVar(sig.Return) || (sig.Params?.Any(p => ContainsTypeVar(p.Type)) ?? false),
+        SignatureType sig => sig.Spec != null || ContainsTypeVar(sig.Return) || (sig.Params?.Any(p => ContainsTypeVar(p.Type)) ?? false),
         _ => false,
     };
 
@@ -700,6 +704,11 @@ public sealed partial class TypeEvaluator
                 solved[tv.Name] = solved.TryGetValue(tv.Name, out var prev) && !prev.Equals(arg) ? PyType.Union(prev, arg) : arg;
                 return;
 
+            case ParamSpecType p:
+                // the ParamSpec argument of a class (`_Wrapper[P, R]`): the parameter list given for it
+                if (arg is SignatureType { Params: not null } list) solved[p.Name] = list;
+                return;
+
             case ClassType pc when pc.Args.Count > 0 || pc.TupleItems != null:
                 foreach (var a in arg.Members)
                 {
@@ -740,6 +749,7 @@ public sealed partial class TypeEvaluator
                     };
                     if (ret != null) Unify(ps.Return, ret, solved);
                 }
+                if (ps.Spec != null && arg.Members.Count == 1 && ParametersOfValue(arg) is { Params: not null } given) SolveParamSpec(ps, given, solved);
                 return;
         }
     }
@@ -767,6 +777,59 @@ public sealed partial class TypeEvaluator
     }
 
     /// <summary>
+    /// `Callable[Concatenate[X, P], R]` matched with what is passed: X takes its first positional parameter (a *args
+    /// takes them all), and P the parameters after it, with their names, kinds and defaults. Left unsolved when they do
+    /// not fit (X and nothing positional), and made "any arguments" when two arguments solve one P differently.
+    /// </summary>
+    void SolveParamSpec(SignatureType param, SignatureType given, Dictionary<string, PyType> solved)
+    {
+        var rest = given.Params!.ToList();
+        foreach (var lead in param.Params!)
+        {
+            if (rest.Count == 0 || rest[0].Category is ParamCategory.KeywordOnly or ParamCategory.VarKeyword) return;
+            Unify(lead.Type, rest[0].Type, solved);
+            if (rest[0].Category != ParamCategory.VarPositional) rest.RemoveAt(0);
+        }
+        var value = given with { Params = rest, Return = PyType.Unknown };
+        string name = param.Spec!.Name;
+        solved[name] = solved.TryGetValue(name, out var prev) && !prev.Equals(value) ? new SignatureType(null, PyType.Unknown) : value;
+    }
+
+    /// <summary>
+    /// The parameters calling a value takes, to solve a ParamSpec from: a def's (without a bound receiver, the def kept as
+    /// the origin), a Callable's, a class's constructor's, an instance's `__call__`'s. Null when not known, as for an
+    /// overloaded function, whose parameters depend on the overload a call picks.
+    /// </summary>
+    SignatureType? ParametersOfValue(PyType value)
+    {
+        switch (value)
+        {
+            case FunctionType f: return new SignatureType(CallableParameters(f), PyType.Unknown, null, f);
+            case SignatureType { Params: not null } s: return s;
+            case ClassType { IsInstance: false } cls:
+                return ConstructorParameters(cls) is { } ctor ? new SignatureType(ctor, PyType.Unknown) : null;
+            case ClassType inst when FindMember(inst, "__call__", true, null, out _) is { } call:
+                return BoundMember(call, inst, true) is FunctionType bound ? ParametersOfValue(bound) : null;
+            default: return null;
+        }
+    }
+
+    /// <summary>What calling a class takes, chosen as <see cref="CallClass"/> does: the synthesized __init__, else the class's own __init__, else its __new__.</summary>
+    IReadOnlyList<ParamInfo>? ConstructorParameters(ClassType cls)
+    {
+        if (IsEnumClass(cls.Info) || cls.Info.QualifiedName is "builtins.type" || cls.Info.Module.Name is "typing" or "typing_extensions") return null;
+        var receiver = new ClassType(cls.Info, cls.Args.Count > 0 ? cls.Args : ClassTypeParamsAsArgs(cls.Info), true);
+        if (SynthesizedInit(receiver) is { } synthesized) return synthesized.Params;
+        var init = FindMember(receiver, "__init__", true, null, out bool unkInit);
+        if (init != null && init.Owner.Info.QualifiedName != "builtins.object")
+            return BoundMember(init, receiver, true) is FunctionType i ? CallableParameters(i) : null;
+        var @new = FindMember(receiver, "__new__", true, null, out bool unkNew);
+        if (@new != null && @new.Owner.Info.QualifiedName != "builtins.object")
+            return BoundMember(@new, receiver, true) is FunctionType n ? CallableParameters(n with { BoundFirst = true }) : null;
+        return unkInit || unkNew || HasUnknownAncestor(cls.Info) ? null : Array.Empty<ParamInfo>();
+    }
+
+    /// <summary>
     /// Solves the type arguments of a protocol parameter (SupportsNext[_T]) from an argument that merely has the right
     /// members: each protocol member is matched with the argument's and their result types are unified.
     /// </summary>
@@ -782,9 +845,9 @@ public sealed partial class TypeEvaluator
         finally { _protocolUnifying.Remove((proto.Info, arg.Info)); }
     }
 
-    void UnifyProtocolCore(ClassType proto, ClassType arg, IReadOnlyList<TypeVarType> protoParams, Dictionary<string, PyType> solved)
+    void UnifyProtocolCore(ClassType proto, ClassType arg, IReadOnlyList<PyType> protoParams, Dictionary<string, PyType> solved)
     {
-        var self = new ClassType(proto.Info, protoParams.Cast<PyType>().ToList(), true);
+        var self = new ClassType(proto.Info, protoParams.ToList(), true);
         var inner = new Dictionary<string, PyType>();
 
         foreach (var e in Mro(proto.Info))
@@ -802,7 +865,7 @@ public sealed partial class TypeEvaluator
             }
         }
         for (int i = 0; i < proto.Args.Count && i < protoParams.Count; i++)
-            if (inner.TryGetValue(protoParams[i].Name, out var found)) Unify(proto.Args[i], found, solved);
+            if (inner.TryGetValue(TypeParamName(protoParams[i]), out var found)) Unify(proto.Args[i], found, solved);
     }
 
     /// <summary>Unifies what two members produce: for methods their return types, for plain attributes their types.</summary>
@@ -824,7 +887,7 @@ public sealed partial class TypeEvaluator
     public bool IsAssignable(PyType dest, PyType src)
     {
         if (dest is UnknownType || src is UnknownType || src is NeverType) return true;
-        if (dest is TypeVarType || src is TypeVarType) return true;
+        if (dest is TypeVarType or ParamSpecType || src is TypeVarType or ParamSpecType) return true;
         if (src is ClassType anyClass && IsClassOfAny(anyClass)) return true;   // type[Any] may be whichever class is wanted
         if (src is UnionType su) return su.MemberList.All(m => IsAssignable(dest, m));
         if (dest is UnionType du) return du.MemberList.Any(m => IsAssignable(m, src));
