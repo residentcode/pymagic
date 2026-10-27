@@ -330,10 +330,10 @@ public sealed partial class TypeEvaluator
         return result;
     }
 
-    CallTarget CallFunction(FunctionType f, IReadOnlyList<ArgInfo> args, Node? callNode)
+    CallTarget CallFunction(FunctionType f, IReadOnlyList<ArgInfo> args, Node? callNode, List<CallProblem>? loose = null)
     {
         f = NewSelfFromCls(f, args);
-        return CallParams(f, CallableParameters(f), () => ReturnTypeOf(f), args, callNode);
+        return CallParams(f, CallableParameters(f), () => ReturnTypeOf(f), args, callNode, loose);
     }
 
     /// <summary>
@@ -372,8 +372,12 @@ public sealed partial class TypeEvaluator
         return null;
     }
 
-    /// <summary>Maps arguments to parameters, solves type variables from them and computes the call's result.</summary>
-    CallTarget CallParams(PyType callee, IReadOnlyList<ParamInfo> ps, Func<PyType> returnType, IReadOnlyList<ArgInfo> args, Node? callNode)
+    /// <summary>
+    /// Maps arguments to parameters, solves type variables from them and computes the call's result.
+    /// With <paramref name="loose"/>, a plain str or bool taken where only a Literal of it is wanted is noted there (see <see cref="IsLooseLiteral"/>).
+    /// </summary>
+    CallTarget CallParams(PyType callee, IReadOnlyList<ParamInfo> ps, Func<PyType> returnType, IReadOnlyList<ArgInfo> args, Node? callNode,
+        List<CallProblem>? loose = null)
     {
         var (map, problems) = MapArguments(ps, args, callNode);
 
@@ -416,11 +420,26 @@ public sealed partial class TypeEvaluator
             if (!IsAssignable(expected, at))
                 problems.Add(new CallProblem(CallProblemKind.Type, (Node?)arg.Node ?? callNode,
                     $"Expected type '{expected}', got '{at}' instead"));
+            else if (loose != null && IsLooseLiteral(expected, at))
+                loose.Add(new CallProblem(CallProblemKind.Type, (Node?)arg.Node ?? callNode, $"Expected type '{expected}', got '{at}' instead"));
         }
 
         var ret = EraseTypeVars(Substitute(returnType(), solved));
         var mappings = map.Where(x => x.Arg.Node != null).Select(x => new ArgumentMapping(x.Arg.Node!, x.Param)).ToList();
         return new CallTarget(callee, ret, mappings, problems, solved);
+    }
+
+    /// <summary>
+    /// A str, int or bool that is no literal, taken where the parameter wants literals of its class (Literal['r', 'w'], Literal[True])
+    /// and nothing else that would take it: lenient for a plain call, not enough to pick an overload.
+    /// </summary>
+    bool IsLooseLiteral(PyType expected, PyType arg)
+    {
+        var literals = expected.Members.OfType<ClassType>().Where(c => c is { IsInstance: true, LiteralValue: not null }).ToList();
+        if (literals.Count == 0) return false;
+        var rest = expected.Members.Where(x => x is not ClassType { LiteralValue: not null }).ToList();
+        return arg.Members.Any(a => a is ClassType { IsInstance: true, LiteralValue: null, EnumMember: null } c
+            && literals.Any(l => ReferenceEquals(l.Info, c.Info)) && !rest.Any(r => IsAssignable(r, c)));
     }
 
     /// <summary>Records what a Ts is solved to (null: types of unknown length); two different solutions leave it unknown.</summary>
@@ -455,12 +474,60 @@ public sealed partial class TypeEvaluator
 
     CallTarget CallOverloaded(OverloadedType o, IReadOnlyList<ArgInfo> args, Node? callNode)
     {
-        var targets = o.Overloads.Select(f => CallFunction(f, args, callNode)).ToList();
-        var pick = targets.FirstOrDefault(t => t.Problems.Count == 0)
-                   ?? targets.FirstOrDefault(t => t.Problems.All(p => p.Kind != CallProblemKind.Arity));
+        var targets = PickOverload(o, args, callNode, out var pick);
+        // a union argument no overload takes as a whole: each member goes to the overload that takes it (os.path.basename(str | PathLike[str]))
+        pick ??= SplitUnionArgument(o, args, callNode)
+                 ?? targets.FirstOrDefault(t => t.Problems.Count == 0)
+                 ?? targets.FirstOrDefault(t => t.Problems.All(p => p.Kind != CallProblemKind.Arity));
         if (pick != null) return pick;
         return new CallTarget(o, PyType.Unknown, Array.Empty<ArgumentMapping>(),
             new[] { new CallProblem(CallProblemKind.Arity, callNode, $"No overload of '{o.Overloads[0].Info.Name}' matches these arguments") });
+    }
+
+    /// <summary>
+    /// Calls every overload; <paramref name="pick"/> is the first that takes the arguments as they are. A plain str or bool
+    /// where an overload wants a Literal does not count there, so a later overload taking it is picked (open(p, mode) with mode: str).
+    /// </summary>
+    List<CallTarget> PickOverload(OverloadedType o, IReadOnlyList<ArgInfo> args, Node? callNode, out CallTarget? pick)
+    {
+        var targets = new List<CallTarget>();
+        pick = null;
+        foreach (var f in o.Overloads)
+        {
+            var loose = new List<CallProblem>();
+            var t = CallFunction(f, args, callNode, loose);
+            targets.Add(t);
+            if (t.Problems.Count == 0 && loose.Count == 0) { pick = t; break; }
+        }
+        return targets;
+    }
+
+    /// <summary>
+    /// The first union argument whose members each go to some overload: the call returns what those overloads return, joined.
+    /// Null when there is no such argument (one member no overload takes, or no union at all).
+    /// </summary>
+    CallTarget? SplitUnionArgument(OverloadedType o, IReadOnlyList<ArgInfo> args, Node? callNode)
+    {
+        for (int i = 0; i < args.Count; i++)
+        {
+            if (args[i].Stars != 0 || args[i].Type() is not UnionType u) continue;
+            var picks = new List<CallTarget>();
+            foreach (var member in u.MemberList)
+            {
+                var split = args.ToList();
+                split[i] = args[i] with { Type = () => member, Literal = null };
+                var targets = PickOverload(o, split, callNode, out var pick);
+                pick ??= targets.FirstOrDefault(t => t.Problems.Count == 0);
+                if (pick == null) break;
+                picks.Add(pick);
+            }
+            if (picks.Count < u.MemberList.Count) continue;
+            // a type variable counts when every member solved it, as the union of what they solved it to
+            var solved = picks[0].Solved?.Keys.Where(k => picks.All(p => p.Solved?.ContainsKey(k) == true))
+                .ToDictionary(k => k, k => PyType.Union(picks.Select(p => p.Solved![k])));
+            return new CallTarget(picks[0].Callee, PyType.Union(picks.Select(p => p.Returns)), picks[0].Mappings, Array.Empty<CallProblem>(), solved);
+        }
+        return null;
     }
 
     CallTarget CallSignature(SignatureType s, IReadOnlyList<ArgInfo> args, Node? callNode)
