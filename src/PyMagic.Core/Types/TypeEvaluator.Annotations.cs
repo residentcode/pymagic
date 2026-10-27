@@ -81,7 +81,7 @@ public sealed partial class TypeEvaluator
             switch (t)
             {
                 case ClassType { IsInstance: false } c: return c.AsInstance();
-                case TypeVarType: return t;
+                case TypeVarType or ParamSpecType: return t;
                 case SpecialFormType f:
                     return f.Name switch
                     {
@@ -207,7 +207,21 @@ public sealed partial class TypeEvaluator
                         new ParamInfo($"_{i}", Annotation(m, x, lookup, deferred), ParamCategory.PositionalOnly, false)).ToList();
                     return new SignatureType(ps, ret);
                 }
-                return new SignatureType(null, ret); // Callable[..., R] / ParamSpec
+                // Callable[P, R] and Callable[Concatenate[X, P], R]: the leading parameters, then what P stands for
+                switch (Annotation(m, args[0], lookup, deferred))
+                {
+                    case ParamSpecType p: return new SignatureType(Array.Empty<ParamInfo>(), ret, p);
+                    case SignatureType { Params: { } leading, Spec: { } tail }: return new SignatureType(leading, ret, tail);
+                }
+                return new SignatureType(null, ret); // Callable[..., R]
+            }
+            case "Concatenate":
+            {
+                // the parameter list it stands for, kept as a signature: X, Y positional-only, then P (`...` takes anything)
+                if (args.Count < 2 || Annotation(m, args[^1], lookup, deferred) is not ParamSpecType spec) return new SignatureType(null, PyType.Unknown);
+                var leading = args.Take(args.Count - 1).Select((x, i) =>
+                    new ParamInfo($"_{i}", Annotation(m, x, lookup, deferred), ParamCategory.PositionalOnly, false)).ToList();
+                return new SignatureType(leading, PyType.Unknown, spec);
             }
             default: return PyType.Unknown;
         }

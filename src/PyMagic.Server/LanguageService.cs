@@ -417,6 +417,8 @@ public sealed partial class LanguageService
         switch (type)
         {
             case FunctionType f: return FormatFunction(ev, name, f);
+            // a decorated def whose parameters a ParamSpec kept (`@contextmanager def cm(x: int)`): those parameters, by name
+            case SignatureType { Origin: not null, Params: { } ps } s: return FormatDef(ev, "def ", name, ps, s.Return);
             case OverloadedType o:
                 return FormatFunction(ev, name, o.Overloads[0]) + (o.Overloads.Count > 1 ? $"  # +{o.Overloads.Count - 1} overloads" : "");
             case ClassType { IsInstance: false } c: return FormatClassHeader(ev, c);
@@ -439,8 +441,13 @@ public sealed partial class LanguageService
         var ps = ev.ParametersOf(f.Info).ToList();
         if (f.BoundFirst && !f.Info.IsStatic && ps.Count > 0 && ps[0].Category is ParamCategory.PositionalOnly or ParamCategory.Normal)
             ps.RemoveAt(0);
+        return FormatDef(ev, (f.Info.Flags & FuncFlags.Async) != 0 ? "async def " : "def ", name, ps, ev.ReturnTypeOf(f));
+    }
+
+    static string FormatDef(TypeEvaluator ev, string keyword, string name, IReadOnlyList<ParamInfo> ps, PyType ret)
+    {
         var sb = new StringBuilder();
-        sb.Append((f.Info.Flags & FuncFlags.Async) != 0 ? "async def " : "def ").Append(name).Append('(');
+        sb.Append(keyword).Append(name).Append('(');
         bool sawKwOnly = false, sawPosOnly = false;
         var parts = new List<string>();
         for (int i = 0; i < ps.Count; i++)
@@ -457,7 +464,6 @@ public sealed partial class LanguageService
         }
         if (sawPosOnly) parts.Add("/");
         sb.Append(string.Join(", ", parts)).Append(')');
-        var ret = ev.ReturnTypeOf(f);
         if (ret is not UnknownType { Explicit: false }) sb.Append(" -> ").Append(FormatType(ev, ret));
         return sb.ToString();
     }
@@ -501,7 +507,7 @@ public sealed partial class LanguageService
             case FunctionType f:
                 return FormatFunction(ev, f.Info.Name, f);
             case SignatureType s:
-                return $"({(s.Params == null ? "..." : string.Join(", ", s.Params.Select(p => FormatType(ev, p.Type, depth + 1))))}) -> {FormatType(ev, s.Return, depth + 1)}";
+                return $"({(s.Params == null ? "..." : string.Join(", ", s.Params.Select(p => FormatType(ev, p.Type, depth + 1)).Concat(s.Spec == null ? [] : ["**" + s.Spec.Name])))}) -> {FormatType(ev, s.Return, depth + 1)}";
             case ModuleType mt: return $"Module(\"{mt.Module.Name}\")";
             case UnknownType { Explicit: true }: return "Any";
             case UnknownType: return "Unknown";

@@ -445,7 +445,7 @@ public sealed partial class TypeEvaluator
             case DeclKind.Parameter: return ParameterType(m, (Parameter)d.Node);
             case DeclKind.Variable: return d.Node is Expr target ? InferTargetType(m, target) : PyType.Unknown;
             case DeclKind.Import: return ImportType(m, (ImportAlias)d.Node);
-            case DeclKind.TypeParam: return new TypeVarType(((TypeParam)d.Node).Name);
+            case DeclKind.TypeParam: return TypeParamType((TypeParam)d.Node);
             case DeclKind.ExceptionVar:
             {
                 var h = (ExceptHandler)d.Node;

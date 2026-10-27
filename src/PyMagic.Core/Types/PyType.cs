@@ -150,6 +150,12 @@ public sealed record TypeVarType(string Name, PyType? Bound = null, IReadOnlyLis
     public override string Display(int depth = 0) => Name;
 }
 
+/// <summary>A parameter specification variable (PEP 612, `P = ParamSpec("P")`, `def f[**P]`): stands for a whole parameter list.</summary>
+public sealed record ParamSpecType(string Name) : PyType
+{
+    public override string Display(int depth = 0) => Name;
+}
+
 public sealed record ModuleType(ModuleInfo Module) : PyType
 {
     public bool Equals(ModuleType? o) => o != null && ReferenceEquals(Module, o.Module);
@@ -167,13 +173,16 @@ public sealed record FunctionType(FunctionInfo Info, bool BoundFirst, IReadOnlyD
 }
 
 /// <summary>A callable described only by a signature, from Callable[[A], R] annotations.</summary>
-public sealed record SignatureType(IReadOnlyList<ParamInfo>? Params, PyType Return) : PyType
+/// <param name="Spec">The ParamSpec of `Callable[P, R]` / `Callable[Concatenate[A, P], R]`: it stands for the parameters after Params.</param>
+/// <param name="Origin">The def a ParamSpec took these parameters from (`@deco def f`): bound like it when found on a class, and not part of equality.</param>
+public sealed record SignatureType(IReadOnlyList<ParamInfo>? Params, PyType Return, ParamSpecType? Spec = null, FunctionType? Origin = null) : PyType
 {
     public bool Equals(SignatureType? o) =>
-        o != null && Return.Equals(o.Return) && (Params == null ? o.Params == null : o.Params != null && Params.SequenceEqual(o.Params));
+        o != null && Return.Equals(o.Return) && (Params == null ? o.Params == null : o.Params != null && Params.SequenceEqual(o.Params))
+        && Equals(Spec, o.Spec);
     public override int GetHashCode() => Return.GetHashCode();
     public override string Display(int depth = 0) =>
-        $"({(Params == null ? "..." : string.Join(", ", Params.Select(p => p.Type.Display(depth + 1))))}) -> {Return.Display(depth + 1)}";
+        $"({(Params == null ? "..." : string.Join(", ", Params.Select(p => p.Type.Display(depth + 1)).Concat(Spec == null ? Array.Empty<string>() : new[] { "**" + Spec.Name })))}) -> {Return.Display(depth + 1)}";
 }
 
 /// <summary>Result of super() inside a method: attribute lookup starts after Current in the MRO of Receiver.</summary>
