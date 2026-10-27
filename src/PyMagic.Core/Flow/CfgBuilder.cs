@@ -582,6 +582,7 @@ internal sealed class CfgBuilder
 
             case CompExpr c:
                 if (c.Generators.Count > 0) VisitExpr(c.Generators[0].Iter);
+                Emit(InstrKind.Join, c);   // where the comprehension starts: its body sees what is known here
                 return;
 
             case NamedExpr w:
