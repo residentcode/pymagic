@@ -27,6 +27,7 @@ import { setupStructure } from './structure';
 import { setupBookmarks } from './bookmarks';
 import { setupRecent } from './recent';
 import { setupRunConfigurations } from './runconfig';
+import { setupHistory } from './history';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
 import { loadSettings, editorOptions, applySettings, themeNow, settings } from './settings';
@@ -700,6 +701,7 @@ async function main() {
     const structure = setupStructure({ editor, lsp, uriOf: (model) => serverUri.get(model), visible: () => chrome.shown() && chrome.view() === 'structure' });
     window.addEventListener('pymagic:sidebar', (e) => { if (e.detail === 'structure') structure.show(); });
     const bookmarks = setupBookmarks({ monaco, editor, openFile, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+    setupHistory({ monaco, editor, currentFile: () => currentRel });
     recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
     setupMainMenu({
         editor, save, saveAll: common.saveAll, reload: reloadFromDisk, openFile, tabs: () => tabs, currentFile: () => currentRel, search, refactor,

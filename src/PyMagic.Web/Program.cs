@@ -115,6 +115,7 @@ app.MapGet("/api/info", () => new
 
 // the settings of the person (theme, editor font, ...): the same in every project, kept in their own folder
 var userSettings = new UserSettings();
+var history = new LocalHistory(root);
 app.MapGet("/api/settings", () => Results.Text(userSettings.Read(), "application/json"));
 app.MapPut("/api/settings", async (HttpRequest req) =>
 {
@@ -190,11 +191,36 @@ app.MapPut("/api/file", async (string path, HttpRequest req) =>
         string full = ResolveInRoot(path);
         if (IsInsideGit(full)) return Results.BadRequest("the .git folder is not edited here");
         using var reader = new StreamReader(req.Body, Encoding.UTF8);
+        string text = await reader.ReadToEndAsync();
+        string rel = Path.GetRelativePath(root, full).Replace('\\', '/');
+        // what the file held before this save is kept first (once), then what it holds after
+        if (File.Exists(full) && new FileInfo(full).Length <= LocalHistory.MaxFileBytes) { try { history.Baseline(rel, File.ReadAllText(full)); } catch (IOException) { } }
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-        await File.WriteAllTextAsync(full, await reader.ReadToEndAsync(), new UTF8Encoding(false));
+        await File.WriteAllTextAsync(full, text, new UTF8Encoding(false));
+        history.Record(rel, text);
         return Results.NoContent();
     }
     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.BadRequest(e.Message); }
+});
+
+// the local history of a file: its versions at each save, and the text of one
+app.MapGet("/api/history", (string path) =>
+{
+    try
+    {
+        string rel = Path.GetRelativePath(root, ResolveInRoot(path)).Replace('\\', '/');
+        return Results.Json(history.List(rel).Select(e => new { id = e.Id, time = e.Time.ToString("o"), bytes = e.Bytes }).ToList());
+    }
+    catch (UnauthorizedAccessException) { return Results.NotFound(); }
+});
+app.MapGet("/api/history/text", (string path, string id) =>
+{
+    try
+    {
+        string rel = Path.GetRelativePath(root, ResolveInRoot(path)).Replace('\\', '/');
+        return history.Read(rel, id) is { } text ? Results.Text(text, "text/plain; charset=utf-8") : Results.NotFound();
+    }
+    catch (UnauthorizedAccessException) { return Results.NotFound(); }
 });
 
 bool IsInsideGit(string full) =>

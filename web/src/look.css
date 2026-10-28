@@ -417,3 +417,16 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 .runcfg textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; }
 #project.clickable { cursor: pointer; padding: 3px 6px; margin: 0 -6px; border-radius: 6px; }
 #project.clickable:hover { background: var(--hover2); }
+
+/* ------------------------------------------------------------------ local history */
+#history-list { padding: 4px 0; font: inherit; }
+.hist-row { display: flex; align-items: baseline; gap: 14px; padding: 5px 14px; cursor: pointer; }
+.hist-row:hover { background: var(--hover); }
+.hist-when { min-width: 150px; font-family: var(--mono); font-size: 12.5px; }
+.hist-ago { min-width: 120px; color: var(--dim); }
+.hist-size { color: var(--faint); font-size: 12px; }
+.hist-tag { margin-left: auto; padding: 1px 8px; border-radius: 999px; background: var(--sel-soft); color: var(--accent-text); font-size: 11px; }
+.hist-diff { display: flex; flex-direction: column; width: min(1200px, 96vw); height: min(760px, 92vh); background: var(--raised); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+.hist-diff-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.hist-diff-title { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-diff-body { flex: 1; min-height: 0; }

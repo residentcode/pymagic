@@ -73,6 +73,7 @@
     <symbol id="i-sort" viewBox="0 0 24 24"><path d="M4.500 7h8M4.500 12h5.500M4.500 17h3M17 6v12M13.500 15l3.500 3.500 3.500-3.500"/></symbol>
     <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.500"/><circle cx="12" cy="12" r="2.200"/><path d="M12 2.500v3M12 18.500v3M2.500 12h3M18.500 12h3"/></symbol>
     <symbol id="i-structure" viewBox="0 0 24 24"><path d="M4.500 6h7M9 12h7M9 18h7M6.500 6v12M6.500 12H9M6.500 18H9"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.500"/><path d="M12 7.500V12l3 2"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.800 5.200L19 10l-5.200 1.800L12 17l-1.800-5.200L5 10l5.200-1.800z" fill="currentColor"/></symbol>
   </svg>
   <div id="app">
@@ -173,6 +174,7 @@
         <span class="gsep"></span>
         <button id="t-search" title="Search"><svg class="i"><use href="#i-search"/></svg><span class="lbl">Search</span></button>
         <button id="t-git" title="Git"><svg class="i"><use href="#i-branch"/></svg><span class="lbl">Git</span></button>
+        <button id="t-history" title="Local history"><svg class="i"><use href="#i-clock"/></svg><span class="lbl">History</span></button>
         <button id="t-packages" title="Packages"><svg class="i"><use href="#i-cube"/></svg><span class="lbl">Packages</span></button>
         <button id="t-routes" title="Endpoints"><svg class="i"><use href="#i-route"/></svg><span class="lbl">Endpoints</span></button>
         <button id="t-django" title="Django"><svg class="i"><use href="#i-layers"/></svg><span class="lbl">Django</span></button>
@@ -379,6 +381,16 @@
             <span id="hier-modes"></span>
           </div>
           <div class="body" id="hier-tree"></div>
+        </div>
+      </div>
+      <div id="history-tab" class="tab">
+        <div class="col" id="history-main">
+          <div class="listbar">
+            <span id="history-title">Local history</span>
+            <span class="spacer" style="flex:1"></span>
+            <button id="hist-refresh" title="Read the versions again"><svg class="i"><use href="#i-refresh"/></svg></button>
+          </div>
+          <div class="body" id="history-list"></div>
         </div>
       </div>
       <div id="packages-tab" class="tab">
