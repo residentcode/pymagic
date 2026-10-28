@@ -258,6 +258,17 @@ const CODE_LANGUAGES = ['python', 'django-html'];
 function registerProviders() {
     monaco.languages.registerDocumentFormattingEditProvider('python', {
         async provideDocumentFormattingEdits(model) {
+            if (notebook?.isCell(model)) {
+                // a cell is formatted as the piece of code it is, not through the notebook's file
+                try {
+                    const text = await notebook.formatted(model);
+                    return text === model.getValue() ? [] : [{ range: model.getFullModelRange(), text }];
+                }
+                catch (e) {
+                    toast(e.message ?? 'The cell cannot be formatted.', true);
+                    return [];
+                }
+            }
             const uri = serverUri.get(model);
             if (!uri)
                 return [];
@@ -712,7 +723,7 @@ async function main() {
         suggest: { showWords: false, insertMode: 'replace' },
     });
     applySettings(monaco, THEMES, editor);
-    notebook = setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, lsp, rootUri: () => rootUri, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+    notebook = setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, lsp, formatEngine: () => formatOptions().pymagicEngine, rootUri: () => rootUri, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     window.pymagic = { editor, monaco, openFile, notebook };
     const common = {
         editor,

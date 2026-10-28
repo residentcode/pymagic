@@ -106,7 +106,7 @@ export function renderOutput(o) {
 const NOISE = new Set(['pep8-blank-lines', 'pep8-imports']);
 const NOISE_MESSAGE = /^PEP 8: (W29\d|W391|E30\d)/;   // no newline at the end, blank lines between cells
 
-export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUri }) {
+export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUri, formatEngine = () => 'builtin' }) {
     const root = el('div', 'nb-root');
     root.id = 'notebook';
     area.append(root);
@@ -209,6 +209,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
             el('span', 'sep'),
             btn('＋ Code', 'Add a code cell below (Alt+Enter)', () => addCell(state, 'code')),
             btn('＋ Text', 'Add a markdown cell below', () => addCell(state, 'markdown')),
+            btn('Format', 'Lay out the code of every code cell (the formatter of the toolbar); one cell: Shift+Alt+F', () => void formatAll(state)),
             btn('Clear outputs', 'Remove the outputs of every cell', () => { clearOutputs(state.nb); state.views.forEach(paintOutputs); pushSoon(state); }),
             btn('Save', 'Save the notebook (Ctrl+S)', () => { flush(state); void save(); }),
             state.statusEl,
@@ -555,7 +556,42 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         return i;
     }
 
+    /** The text of a code cell laid out by the formatter; the text itself when it has `!` or `%` lines, which are not Python, with a reason thrown. */
+    async function formattedText(state, text) {
+        if (/^\s*[!%]/m.test(text)) throw new Error('A cell with !commands or %magics cannot be formatted.');
+        if (text.trim() === '') return text;
+        const r = await lsp.request('pymagic/formatText', { textDocument: { uri: state.vuri }, text, options: { pymagicEngine: formatEngine() } });
+        return r.text;
+    }
+
+    /** Formats every code cell that can be; the ones that cannot (syntax errors, magics) are counted, not touched. */
+    async function formatAll(state) {
+        let changed = 0, skipped = 0;
+        for (const view of state.views) {
+            if (view.cell.cell_type !== 'code') continue;
+            const text = view.editor ? view.editor.getValue() : sourceOf(view.cell);
+            try {
+                const out = await formattedText(state, text);
+                if (out === text) continue;
+                if (!view.editor) createEditor(state, view);
+                const ed = view.editor;
+                ed.pushUndoStop();
+                ed.executeEdits('format', [{ range: ed.getModel().getFullModelRange(), text: out }]);
+                ed.pushUndoStop();
+                changed++;
+            } catch { skipped++; }
+        }
+        toast(changed || skipped ? `Formatted ${changed} cell${changed === 1 ? '' : 's'}${skipped ? `, ${skipped} left as they are` : ''}` : 'Every cell is already formatted');
+    }
+
     return {
+        /** Whether a Monaco model is the editor of a notebook cell. */
+        isCell(model) { return cellModels.has(model); },
+        /** The text of a cell's editor laid out by the formatter (throws when it cannot be). */
+        formatted(model) {
+            const entry = cellModels.get(model);
+            return entry ? formattedText(entry.state, model.getValue()) : Promise.resolve(model.getValue());
+        },
         /** Shows the notebook of a file (an open editor model) in place of the code editor. */
         show(rel, model) {
             for (const s of states.values()) s.dom.style.display = 'none';

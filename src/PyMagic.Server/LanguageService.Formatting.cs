@@ -91,6 +91,20 @@ public sealed partial class LanguageService
         return DiffEdit(m, formatted);
     }
 
+    /// <summary>
+    /// Formats a piece of text that is not a document of its own (a cell of a notebook), with the settings of the project <paramref name="uri"/> belongs to.
+    /// A cell has no newline at its end by convention, so none is left there when the text had none. Imports are not sorted: they are another cell's business.
+    /// </summary>
+    /// <exception cref="ServiceException">The text has syntax errors, opts out with `fmt: off`, or the tool is missing or fails.</exception>
+    public string FormatText(string text, string uri, string engine = "builtin")
+    {
+        if (PyMagic.Core.Syntax.Parser.Parse(text).Diagnostics.Count > 0) throw new ServiceException("Fix the syntax errors first: code that does not parse cannot be formatted.");
+        string formatted = engine is "builtin" or ""
+            ? PythonFormatter.Format(text, FormatConfigOf(uri)) ?? throw new ServiceException("This code cannot be formatted (it has `fmt: off`, or the result could have changed it).")
+            : RunExternal(engine, text, uri);
+        return text.EndsWith('\n') ? formatted : formatted.TrimEnd('\n');
+    }
+
     /// <summary>Formats the lines the range touches. black formats them itself (23.11 or newer); everything else uses the built-in formatter.</summary>
     /// <exception cref="ServiceException">The selection cannot be formatted on its own.</exception>
     public IReadOnlyList<TextEdit> FormatRange(string uri, Range range, string engine = "builtin")
