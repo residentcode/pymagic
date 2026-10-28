@@ -6,10 +6,24 @@
     <Nullable>enable</Nullable>
     <AssemblyName>pymagic-web</AssemblyName>
     <TieredPGO>false</TieredPGO>
+    <WebDir>$(MSBuildThisFileDirectory)..\..\web\</WebDir>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\PyMagic.Server\PyMagic.Server.csproj" />
   </ItemGroup>
+
+  <!--
+    The page the host serves (web/dist) is made by Node, not by C#, and is not in git. Building the engine builds the page too, so that Visual Studio,
+    `dotnet build` and `dotnet run` never serve a page older than the sources. Without Node.js the build only warns. Skip it with -p:SkipPageBuild=true.
+  -->
+  <Target Name="BuildPage" BeforeTargets="BeforeBuild" Condition="'$(SkipPageBuild)' != 'true' And Exists('$(WebDir)package.json')">
+    <Exec Command="node --version" IgnoreExitCode="true" StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ExitCode" PropertyName="NodeExitCode" />
+    </Exec>
+    <Warning Condition="'$(NodeExitCode)' != '0'" Text="Node.js was not found, so the page (web/dist) was not built and the app may show an old one. Install Node.js, or run 'node build.mjs' in the web folder." />
+    <Exec Condition="'$(NodeExitCode)' == '0' And !Exists('$(WebDir)node_modules\monaco-editor')" Command="npm install" WorkingDirectory="$(WebDir)" ContinueOnError="true" />
+    <Exec Condition="'$(NodeExitCode)' == '0'" Command="node build.mjs" WorkingDirectory="$(WebDir)" ContinueOnError="true" StandardOutputImportance="low" />
+  </Target>
 
 </Project>

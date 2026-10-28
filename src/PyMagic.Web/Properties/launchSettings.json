@@ -2,11 +2,12 @@
   "profiles": {
     "PyMagic.Web": {
       "commandName": "Project",
+      "commandLineArgs": "--root ..\\..\\examples\\demo",
       "launchBrowser": true,
+      "launchUrl": "http://127.0.0.1:5180/",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
-      },
-      "applicationUrl": "https://localhost:57066;http://localhost:57067"
+      }
     }
   }
 }
