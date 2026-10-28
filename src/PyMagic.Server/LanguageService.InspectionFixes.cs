@@ -16,6 +16,7 @@ public sealed partial class LanguageService
             if (!Suppressed(m.Source, f)) yield return AsDiag(f);
         foreach (var d in ClassDiagnostics(m, ev)) yield return d;
         foreach (var d in MoreTypedDiagnostics(m, ev)) yield return d;
+        foreach (var d in StructureDiagnostics(m, ev)) yield return d;
         foreach (var d in FixtureDiagnostics(m, ev)) yield return d;
         foreach (var d in DjangoDiagnostics(m, ev)) yield return d;
         foreach (var d in WebRouteDiagnostics(m, ev)) yield return d;
