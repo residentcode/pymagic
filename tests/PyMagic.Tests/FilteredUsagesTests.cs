@@ -72,4 +72,34 @@ public class FilteredUsagesTests
         svc.Change(uri, edited, 2);
         Assert.Equal(5, svc.References(uri, At(edited, "rarely_used_name"), true).Count);
     }
+
+    [Fact]
+    public void AFileThatOnlyTalksAboutTheNameInProseIsNotParsed()
+    {
+        var files = new Dictionary<string, string> { ["a.py"] = A, ["b.py"] = B };
+        for (int i = 0; i < 20; i++)
+            files[$"doc{i}.py"] = "\"\"\"Module.\n\nExample: rarely_used_name(3)\n\"\"\"\n\n\ndef f" + i + "():\n    \"\"\"Calls rarely_used_name.\"\"\"\n    return " + i + "  # not rarely_used_name\n";
+        var (svc, dir) = Project(files);
+        string uri = LanguageService.UriOfPath(Path.Combine(dir, "a.py"));
+        svc.Open(uri, A, 1);
+        var refs = svc.References(uri, At(A, "rarely_used_name"), true);
+        Assert.Equal(4, refs.Count);
+        Assert.True(svc.Cache.Misses < 10, $"{svc.Cache.Misses} files were parsed; twenty of them only mention the name in docstrings and comments");
+    }
+
+    [Fact]
+    public void ProseIsToldFromCodeBeforeAFileIsRead()
+    {
+        const string name = "rarely_used_name";
+        Assert.True(!LanguageService.MentionsOutsideProse("\"\"\"Docs: rarely_used_name\"\"\"\n", name));
+        Assert.True(!LanguageService.MentionsOutsideProse("x = 1  # rarely_used_name\n", name));
+        Assert.True(!LanguageService.MentionsOutsideProse("def f():\n    \"\"\"rarely_used_name\"\"\"\n    return 1\n", name));
+        Assert.True(LanguageService.MentionsOutsideProse("x = rarely_used_name(1)\n", name));
+        Assert.True(LanguageService.MentionsOutsideProse("import rarely_used_name\n", name));
+        Assert.True(LanguageService.MentionsOutsideProse("order_by(\"rarely_used_name\")\n", name));   // a string that is an argument
+        Assert.True(LanguageService.MentionsOutsideProse("x: \"rarely_used_name\" = None\n", name));   // an annotation
+        Assert.True(LanguageService.MentionsOutsideProse("print(f\"{rarely_used_name}\")\n", name));   // a field of an f-string
+        Assert.True(LanguageService.MentionsOutsideProse("__all__ = [\"rarely_used_name\"]\n", name));
+        Assert.True(LanguageService.MentionsOutsideProse("\"a\" \"rarely_used_name\"\n", name));       // joined literals are not a docstring
+    }
 }

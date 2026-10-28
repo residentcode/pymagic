@@ -3,8 +3,9 @@ namespace PyMagic.Core.Syntax;
 /// <summary>Base of all syntax nodes. Start/End are offsets into the source text.</summary>
 public abstract record Node
 {
-    public int Start { get; init; }
-    public int End { get; init; }
+    /// <summary>Set once by the parser right where it creates the node (it used to copy every node with <c>with</c> to do that).</summary>
+    public int Start { get; internal set; }
+    public int End { get; internal set; }
 }
 
 public readonly record struct Diagnostic(int Start, int Length, string Message);
@@ -133,7 +134,13 @@ public sealed record TypeAliasStmt(string Name, IReadOnlyList<TypeParam> TypePar
     public int NameStart { get; init; }
 }
 
-public sealed record Module(IReadOnlyList<Stmt> Body) : Node;
+public sealed record Module(IReadOnlyList<Stmt> Body) : Node
+{
+    /// <summary>The module contains a <c>:=</c>; without one the binder does not look for walrus targets.</summary>
+    public bool HasWalrus { get; init; } = true;
+    /// <summary>The module contains a <c>global</c> or <c>nonlocal</c> statement; without one the binder does not look for them.</summary>
+    public bool HasScopeDeclarations { get; init; } = true;
+}
 
 /// <summary>Result of parsing a file: always a tree, plus any syntax errors found.</summary>
 public sealed record ParseResult(Module Module, IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<Token> Tokens);

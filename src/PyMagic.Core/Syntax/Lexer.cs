@@ -17,6 +17,8 @@ public sealed class Lexer
         "return", "try", "while", "with", "yield",
     };
 
+    static readonly HashSet<string>.AlternateLookup<ReadOnlySpan<char>> KeywordLookup = Keywords.GetAlternateLookup<ReadOnlySpan<char>>();
+
     // Longest first so greedy matching works.
     static readonly string[] Operators =
     {
@@ -27,8 +29,12 @@ public sealed class Lexer
         ",", ":", ".", ";", "=", "!",
     };
 
+    /// <summary>The operators that start with each ASCII character, longest first (the list above filtered by first character).</summary>
+    static readonly string[][] OperatorsByFirstChar = Enumerable.Range(0, 128)
+        .Select(ch => Operators.Where(o => o[0] == ch).ToArray()).ToArray();
+
     readonly string _s;
-    readonly List<Token> _tokens = new();
+    readonly List<Token> _tokens;
     readonly Stack<int> _indents = new();
     int _pos;
     int _brackets;
@@ -37,6 +43,7 @@ public sealed class Lexer
     Lexer(string source)
     {
         _s = source;
+        _tokens = new List<Token>(source.Length / 4 + 8);   // about one token for four characters of Python
         _indents.Push(0);
     }
 
@@ -188,12 +195,11 @@ public sealed class Lexer
                 LexString(s, _pos);
                 return;
             }
-            string word = _s.Substring(s, _pos - s);
-            Add(Keywords.Contains(word) ? TokenKind.Keyword : TokenKind.Name, s, _pos);
+            Add(KeywordLookup.Contains(_s.AsSpan(s, _pos - s)) ? TokenKind.Keyword : TokenKind.Name, s, _pos);
             return;
         }
 
-        foreach (var op in Operators)
+        foreach (var op in c < OperatorsByFirstChar.Length ? OperatorsByFirstChar[c] : Array.Empty<string>())
         {
             if (string.CompareOrdinal(_s, _pos, op, 0, op.Length) == 0)
             {

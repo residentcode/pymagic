@@ -14,13 +14,16 @@ public sealed class Parser
     readonly List<Diagnostic> _diags = new();
     int _i;
     int _prevEnd;
+    bool _sawWalrus, _sawScopeDeclaration;
 
     Parser(string src, List<Token> toks) { _src = src; _toks = toks; }
 
     public static ParseResult Parse(string source)
     {
         var all = Lexer.Tokenize(source);
-        var toks = all.Where(t => t.Kind != TokenKind.Comment).ToList();
+        var toks = new List<Token>(all.Count);
+        foreach (var t in all)
+            if (t.Kind != TokenKind.Comment) toks.Add(t);
         var p = new Parser(source, toks);
         var module = p.ParseModule();
         return new ParseResult(module, p._diags, all);
@@ -30,7 +33,10 @@ public sealed class Parser
 
     Token Cur => _toks[_i];
     Token PeekAt(int n) => _toks[Math.Min(_i + n, _toks.Count - 1)];
-    string Txt(Token t) => _src.Substring(t.Start, t.Length);
+    /// <summary>The text of a token. Names, keywords and operators are shared strings (the same word is one string in every module), so reading a file does not allocate one per use.</summary>
+    string Txt(Token t) => t.Kind is TokenKind.Name or TokenKind.Keyword or TokenKind.Operator
+        ? WordCache.Get(_src.AsSpan(t.Start, t.Length))
+        : _src.Substring(t.Start, t.Length);
     bool AtEnd => Cur.Kind == TokenKind.EndOfFile;
 
     Token Advance()
@@ -61,7 +67,13 @@ public sealed class Parser
 
     SyntaxError Err(string msg) => new(Cur.Start, msg);
 
-    T At<T>(T node, int start) where T : Node => node with { Start = start, End = Math.Max(_prevEnd, start) };
+    /// <summary>Gives a node it has just created its place in the source (every caller passes a new node, so it is changed in place).</summary>
+    T At<T>(T node, int start) where T : Node
+    {
+        node.Start = start;
+        node.End = Math.Max(_prevEnd, start);
+        return node;
+    }
 
     void Report(SyntaxError e)
     {
@@ -79,7 +91,7 @@ public sealed class Parser
             if (Cur.Kind == TokenKind.Newline) { Advance(); continue; }
             ParseStatementInto(body);
         }
-        return new Module(body) { Start = 0, End = _src.Length };
+        return new Module(body) { Start = 0, End = _src.Length, HasWalrus = _sawWalrus, HasScopeDeclarations = _sawScopeDeclaration };
     }
 
     /// <summary>Parses one statement line (possibly several simple statements) with error recovery.</summary>
@@ -234,8 +246,8 @@ public sealed class Parser
                     }
                     return At(new RaiseStmt(exc, cause), s);
                 }
-                case "global": { Advance(); return At(new GlobalStmt(ParseNameList()), s); }
-                case "nonlocal": { Advance(); return At(new NonlocalStmt(ParseNameList()), s); }
+                case "global": { Advance(); _sawScopeDeclaration = true; return At(new GlobalStmt(ParseNameList()), s); }
+                case "nonlocal": { Advance(); _sawScopeDeclaration = true; return At(new NonlocalStmt(ParseNameList()), s); }
                 case "del":
                 {
                     Advance();
@@ -880,6 +892,7 @@ public sealed class Parser
         {
             Advance();
             var v = ParseTest();
+            _sawWalrus = true;
             return At(new NamedExpr(e, v), s);
         }
         return e;
@@ -963,25 +976,34 @@ public sealed class Parser
         return ops == null ? left : At(new CompareExpr(left, ops, comps!), s);
     }
 
-    Expr ParseBinaryLevel(Func<Expr> next, params string[] ops)
+    static readonly string[][] BinaryOperators = { new[] { "|" }, new[] { "^" }, new[] { "&" }, new[] { "<<", ">>" }, new[] { "+", "-" }, new[] { "*", "/", "//", "%", "@" } };
+
+    /// <summary>The operator of this level at the current token, spelled with the shared literal, or null.</summary>
+    string? BinaryOperatorAt(string[] ops)
+    {
+        if (Cur.Kind != TokenKind.Operator) return null;
+        foreach (var op in ops)
+            if (Cur.Length == op.Length && string.CompareOrdinal(_src, Cur.Start, op, 0, op.Length) == 0) return op;
+        return null;
+    }
+
+    /// <summary>Left-associative binary operators: level 0 is `|`, then `^`, `&amp;`, shifts, `+ -`, and level 5 `* / // % @`, whose operands are factors.</summary>
+    Expr ParseBinaryLevel(int level)
     {
         int s = Cur.Start;
-        var l = next();
-        while (Cur.Kind == TokenKind.Operator && Array.IndexOf(ops, Txt(Cur)) >= 0)
+        var l = level == 5 ? ParseFactor() : ParseBinaryLevel(level + 1);
+        var ops = BinaryOperators[level];
+        while (BinaryOperatorAt(ops) is { } op)
         {
-            string op = Txt(Advance());
-            var r = next();
+            Advance();
+            var r = level == 5 ? ParseFactor() : ParseBinaryLevel(level + 1);
             l = At(new BinaryExpr(l, op, r), s);
         }
         return l;
     }
 
-    Expr ParseBitOr() => ParseBinaryLevel(ParseBitXor, "|");
-    Expr ParseBitXor() => ParseBinaryLevel(ParseBitAnd, "^");
-    Expr ParseBitAnd() => ParseBinaryLevel(ParseShift, "&");
-    Expr ParseShift() => ParseBinaryLevel(ParseArith, "<<", ">>");
-    Expr ParseArith() => ParseBinaryLevel(ParseTerm, "+", "-");
-    Expr ParseTerm() => ParseBinaryLevel(ParseFactor, "*", "/", "//", "%", "@");
+    Expr ParseBitOr() => ParseBinaryLevel(0);
+    Expr ParseArith() => ParseBinaryLevel(4);
 
     Expr ParseFactor()
     {
@@ -1103,7 +1125,7 @@ public sealed class Parser
         {
             case TokenKind.Name:
                 Advance();
-                return At(new NameExpr(_src.Substring(t.Start, t.Length)), s);
+                return At(new NameExpr(Txt(t)), s);
 
             case TokenKind.Number:
                 Advance();
@@ -1258,24 +1280,28 @@ public sealed class Parser
         return end;
     }
 
+    /// <summary>Moves a tree parsed from a piece of the source to where that piece sits in the whole.</summary>
+    static void Shift(Node n, int by)
+    {
+        n.Start += by;
+        n.End += by;
+        foreach (var c in AstChildren.Of(n)) Shift(c, by);
+    }
+
     void ParseFieldExpression(int start, int end, List<Expr> parts)
     {
         if (end <= start || _src.AsSpan(start, end - start).Trim().Length == 0) return;
         try
         {
-            // the field is wrapped in parentheses (so it may span lines) and parsed in a copy of the source where it sits at its real offsets
-            var tokens = Lexer.Tokenize("(" + _src.Substring(start, end - start) + ")");
-            int shift = start - 1;
-            var shifted = tokens.Where(k => k.Kind != TokenKind.Comment).Select(k => k with { Start = k.Start + shift }).ToList();
-            string aligned = string.Create(end + 1, (_src, start, end), static (span, f) =>
-            {
-                span.Fill(' ');
-                f._src.AsSpan(f.start, f.end - f.start).CopyTo(span[f.start..]);
-                span[f.start - 1] = '(';
-                span[f.end] = ')';
-            });
-            var sub = new Parser(aligned, shifted);
-            parts.Add(sub.ParseParen());
+            // the field is wrapped in parentheses (so it may span lines) and parsed on its own; the nodes are then moved to where the field really is
+            string text = "(" + _src.Substring(start, end - start) + ")";
+            var all = Lexer.Tokenize(text);
+            var tokens = new List<Token>(all.Count);
+            foreach (var k in all)
+                if (k.Kind != TokenKind.Comment) tokens.Add(k);
+            var expr = new Parser(text, tokens).ParseParen();
+            Shift(expr, start - 1);
+            parts.Add(expr);
         }
         catch (SyntaxError) { /* an unparsable field stays opaque, as before */ }
     }
@@ -1425,7 +1451,7 @@ public sealed class Parser
     {
         int s = Cur.Start;
         var e = ParseOr();
-        if (e is NameExpr && IsOp(":=")) { Advance(); var v = ParseOr(); return At(new NamedExpr(e, v), s); }
+        if (e is NameExpr && IsOp(":=")) { Advance(); var v = ParseOr(); _sawWalrus = true; return At(new NamedExpr(e, v), s); }
         return e;
     }
 }

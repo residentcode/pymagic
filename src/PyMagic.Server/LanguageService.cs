@@ -159,11 +159,53 @@ public sealed partial class LanguageService
         return e > s ? text[s..e] : null;
     }
 
+    /// <summary>The file can hold a usage of the name: the name is written in it somewhere other than a comment or a docstring.</summary>
     static bool FileMentions(string path, string needle)
     {
-        try { return File.ReadAllText(path).Contains(needle, StringComparison.Ordinal); }
+        try
+        {
+            string text = File.ReadAllText(path);
+            return text.Contains(needle, StringComparison.Ordinal) && MentionsOutsideProse(text, needle);
+        }
         catch (IOException) { return true; }
         catch (UnauthorizedAccessException) { return true; }
+    }
+
+    /// <summary>
+    /// False when every place the text holds the name is a comment or a string that stands alone as a statement (a docstring, as in the
+    /// `model = X.from_pretrained(...)` examples most model files of a big library carry): such a file has no usage, and is not worth parsing.
+    /// Any other string (an argument, an annotation, an f-string) counts, since names are looked for there too.
+    /// </summary>
+    public static bool MentionsOutsideProse(string text, string needle)
+    {
+        var tokens = Lexer.Tokenize(text);
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            var t = tokens[i];
+            if (t.Length == 0 || t.Kind == TokenKind.Comment || text.AsSpan(t.Start, t.Length).IndexOf(needle, StringComparison.Ordinal) < 0) continue;
+            if (t.Kind == TokenKind.String && !IsFormatted(text, t) && StandsAlone(tokens, i)) continue;
+            return true;
+        }
+        return false;
+    }
+
+    static bool IsFormatted(string text, Token t)
+    {
+        for (int i = t.Start; i < t.End && text[i] is not ('"' or '\''); i++)
+            if (text[i] is 'f' or 'F' or 't' or 'T') return true;
+        return false;
+    }
+
+    /// <summary>The string is a whole statement: the line before it ended (or the block began), and the line ends after it.</summary>
+    static bool StandsAlone(List<Token> tokens, int at)
+    {
+        int before = at - 1;
+        while (before >= 0 && tokens[before].Kind == TokenKind.Comment) before--;
+        bool startsLine = before < 0 || tokens[before].Kind is TokenKind.Newline or TokenKind.Indent or TokenKind.Dedent;
+        int after = at + 1;
+        while (after < tokens.Count && tokens[after].Kind == TokenKind.Comment) after++;
+        bool endsLine = after >= tokens.Count || tokens[after].Kind is TokenKind.Newline or TokenKind.EndOfFile or TokenKind.Dedent;
+        return startsLine && endsLine;
     }
 
     static readonly HashSet<string> SkippedDirectories = new(StringComparer.OrdinalIgnoreCase)

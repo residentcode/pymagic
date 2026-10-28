@@ -291,7 +291,6 @@ public sealed partial class LanguageService
 
     List<Site> Usages(Snapshot snap, Target target, bool forRename)
     {
-        var ev = snap.Workspace.Evaluator;
         var sites = new List<Site>();
         var seen = new HashSet<(ModuleInfo, int)>();
         void Add(ModuleInfo m, (int Start, int End) span, bool decl)
@@ -302,38 +301,12 @@ public sealed partial class LanguageService
         bool memberLike = target.Nodes.OfType<AttributeExpr>().Any()
             || target.Symbols.Any(s => s.Scope.Kind is ScopeKind.Class or ScopeKind.Module);
 
-        foreach (var m in snap.Project)
-        {
-            // plain names (and their imports) resolved through the scope tables
-            foreach (var scope in AllScopes(m.Semantics.ModuleScope))
-                foreach (var sym in scope.Symbols.Values)
-                {
-                    if (sym.Redirect != null || sym.Name != target.Name && !IsImportAliasFor(sym, target)) continue;
-                    if (!ReachesTarget(snap, m, sym, target)) continue;
-
-                    bool isTarget = target.Symbols.Contains(sym);
-                    bool renamedByAs = !isTarget && forRename && sym.Declarations.Count == 1
-                        && sym.Declarations[0].Node is ImportAlias { AsName: not null };
-
-                    foreach (var d in sym.Declarations)
-                    {
-                        if (isTarget) Add(m, DeclSpan(m, d), true);
-                        else if (d.Node is ImportAlias ia) Add(m, (ia.Start, ia.Start + ia.Name.Length), false);
-                    }
-                    if (renamedByAs) continue;   // uses of `as other` keep their own name
-                    foreach (var r in sym.References) Add(m, (r.Node.Start, r.Node.End), false);
-                }
-
-            // attribute accesses: module.name, Class.member, obj.member
-            if (!memberLike) continue;
-            foreach (var n in AstChildren.Descendants(m.Ast))
-            {
-                if (n is not AttributeExpr a || a.Attr != target.Name) continue;
-                var res = ev.AttributeType(ev.TypeOf(m, a.Value), a.Attr);
-                if (res.Declarations.Any(d => target.Nodes.Contains(d.Node)) || res.InstanceSites.Any(target.Nodes.Contains))
-                    Add(m, AttrSpanOf(a), false);
-            }
-        }
+        // A big project is searched by several workers at once (each with an evaluator of its own, the parsed modules shared); a small one by this thread.
+        int workers = memberLike && snap.Project.Count >= ParallelUsagesFrom ? Math.Clamp(System.Environment.ProcessorCount / 4, 2, 4) : 1;
+        if (workers > 1 && UsagesInParallel(snap, target, forRename, memberLike, workers, Add)) { /* done */ }
+        else
+            foreach (var m in snap.Project)
+                UsagesIn(snap, target, m, forRename, memberLike, (span, decl) => Add(m, span, decl));
 
         // declaration sites reached through attribute lookup (class members, `self.x = ...`)
         foreach (var n in target.Nodes)
@@ -349,6 +322,82 @@ public sealed partial class LanguageService
             }
         }
         return sites;
+    }
+
+    /// <summary>From this many modules on, the modules are searched for member usages by several workers (a smaller project is searched by one thread).</summary>
+    public int ParallelUsagesFrom { get; set; } = 150;
+
+    /// <summary>The usages of the target in one module.</summary>
+    void UsagesIn(Snapshot snap, Target target, ModuleInfo m, bool forRename, bool memberLike, Action<(int Start, int End), bool> add)
+    {
+        var ev = snap.Workspace.Evaluator;
+        // plain names (and their imports) resolved through the scope tables
+        foreach (var scope in AllScopes(m.Semantics.ModuleScope))
+            foreach (var sym in scope.Symbols.Values)
+            {
+                if (sym.Redirect != null || sym.Name != target.Name && !IsImportAliasFor(sym, target)) continue;
+                if (!ReachesTarget(snap, m, sym, target)) continue;
+
+                bool isTarget = target.Symbols.Contains(sym);
+                bool renamedByAs = !isTarget && forRename && sym.Declarations.Count == 1
+                    && sym.Declarations[0].Node is ImportAlias { AsName: not null };
+
+                foreach (var d in sym.Declarations)
+                {
+                    if (isTarget) add(DeclSpan(m, d), true);
+                    else if (d.Node is ImportAlias ia) add((ia.Start, ia.Start + ia.Name.Length), false);
+                }
+                if (renamedByAs) continue;   // uses of `as other` keep their own name
+                foreach (var r in sym.References) add((r.Node.Start, r.Node.End), false);
+            }
+
+        // attribute accesses: module.name, Class.member, obj.member
+        if (!memberLike) return;
+        foreach (var n in AstChildren.Descendants(m.Ast))
+        {
+            if (n is not AttributeExpr a || a.Attr != target.Name) continue;
+            var res = ev.AttributeType(ev.TypeOf(m, a.Value), a.Attr);
+            if (res.Declarations.Any(d => target.Nodes.Contains(d.Node)) || res.InstanceSites.Any(target.Nodes.Contains))
+                add(AttrSpanOf(a), false);
+        }
+    }
+
+    /// <summary>
+    /// Searches the modules on several workers: this thread takes the first share, the others each work in a copy of this service (an evaluator of its own,
+    /// the same parsed modules, so the declarations the target holds are the very same objects). False when a worker failed; the caller then does it all itself.
+    /// </summary>
+    bool UsagesInParallel(Snapshot snap, Target target, bool forRename, bool memberLike, int workers, Action<ModuleInfo, (int Start, int End), bool> add)
+    {
+        var modules = snap.Project;
+        var uriOf = modules.ToDictionary(m => m, m => UriOfModule(m) ?? "", ReferenceEqualityComparer.Instance as IEqualityComparer<ModuleInfo>);
+        var byUri = new Dictionary<string, ModuleInfo>(StringComparer.Ordinal);
+        foreach (var (m, uri) in uriOf) if (uri.Length > 0) byUri[uri] = m;
+        var files = modules.Select(m => m.Path).Where(p => p != null).Select(p => p!).ToList();
+        int per = (modules.Count + workers - 1) / workers;
+        var shares = Enumerable.Range(0, workers).Select(i => modules.Skip(i * per).Take(per).ToList()).Where(l => l.Count > 0).ToList();
+
+        var tasks = shares.Skip(1).Select(share => Task.Run(() =>
+        {
+            var worker = Fork(files);
+            var wsnap = worker.Full();
+            var mine = new HashSet<string>(share.Select(m => uriOf[m]), StringComparer.Ordinal);
+            var found = new List<(string Uri, (int Start, int End) Span, bool Decl)>();
+            foreach (var wm in wsnap.Project)
+            {
+                if (worker.UriOfModule(wm) is not { } uri || !mine.Contains(uri)) continue;
+                worker.UsagesIn(wsnap, target, wm, forRename, memberLike, (span, decl) => found.Add((uri, span, decl)));
+            }
+            return found;
+        })).ToArray();
+
+        foreach (var m in shares[0])
+            UsagesIn(snap, target, m, forRename, memberLike, (span, decl) => add(m, span, decl));
+        try { Task.WaitAll(tasks); }
+        catch (AggregateException) { return false; }
+        foreach (var t in tasks)
+            foreach (var (uri, span, decl) in t.Result)
+                if (byUri.TryGetValue(uri, out var m)) add(m, span, decl);
+        return true;
     }
 
     /// <summary>An import binding under a different name (`as other`) can still lead to the target.</summary>

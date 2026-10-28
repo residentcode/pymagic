@@ -34,7 +34,8 @@ internal sealed class Binder
 
     void Setup(Scope scope, IReadOnlyList<Stmt> body)
     {
-        foreach (var s in body) CollectGlobalDecls(scope, s);
+        if (_module.HasScopeDeclarations)
+            foreach (var s in body) CollectGlobalDecls(scope, s);
         foreach (var s in body) DeclareStmt(scope, s);
     }
 
@@ -192,8 +193,33 @@ internal sealed class Binder
     /// <summary>Finds ":=" bindings inside an expression; they bind in the nearest non-comprehension scope.</summary>
     void ScanWalrus(Scope sc, Node n)
     {
-        if (n is LambdaExpr) return; // has its own scope, handled when the lambda is visited
-        if (n is NamedExpr w && w.Target is NameExpr ne) Bind(sc, ne.Name, DeclKind.Variable, ne);
+        if (!_module.HasWalrus) return; // no walrus anywhere in the module
+        // the common nodes are walked directly (AstChildren.Of allocates an iterator for every node), in the order Of gives
+        switch (n)
+        {
+            case LambdaExpr or NameExpr: return;   // a lambda has its own scope, handled when it is visited
+            case ConstExpr { Parts.Count: 0 }: return;
+            case NamedExpr w:
+                if (w.Target is NameExpr ne) Bind(sc, ne.Name, DeclKind.Variable, ne);
+                ScanWalrus(sc, w.Target);
+                ScanWalrus(sc, w.Value);
+                return;
+            case AttributeExpr x: ScanWalrus(sc, x.Value); return;
+            case CallExpr x:
+                ScanWalrus(sc, x.Func);
+                foreach (var a in x.Args) ScanWalrus(sc, a.Value);
+                return;
+            case BinaryExpr x: ScanWalrus(sc, x.Left); ScanWalrus(sc, x.Right); return;
+            case UnaryExpr x: ScanWalrus(sc, x.Operand); return;
+            case SubscriptExpr x: ScanWalrus(sc, x.Value); ScanWalrus(sc, x.Index); return;
+            case CompareExpr x:
+                ScanWalrus(sc, x.Left);
+                foreach (var c in x.Comparators) ScanWalrus(sc, c);
+                return;
+            case TupleExpr x: foreach (var i in x.Items) ScanWalrus(sc, i); return;
+            case ListExpr x: foreach (var i in x.Items) ScanWalrus(sc, i); return;
+            case IfExpr x: ScanWalrus(sc, x.Body); ScanWalrus(sc, x.Test); ScanWalrus(sc, x.Orelse); return;
+        }
         foreach (var c in AstChildren.Of(n)) ScanWalrus(sc, c);
     }
 
@@ -414,6 +440,34 @@ internal sealed class Binder
                 VisitExpr(w.Value);
                 VisitTarget(w.Target, Access.Write);
                 return;
+        }
+        // the common nodes are walked directly (AstChildren.Of allocates an iterator for every node it is asked about); the order is the one Of gives
+        switch (e)
+        {
+            case AttributeExpr x: VisitExpr(x.Value); return;
+            case CallExpr x:
+                VisitExpr(x.Func);
+                foreach (var a in x.Args) VisitExpr(a.Value);
+                return;
+            case BinaryExpr x: VisitExpr(x.Left); VisitExpr(x.Right); return;
+            case UnaryExpr x: VisitExpr(x.Operand); return;
+            case SubscriptExpr x: VisitExpr(x.Value); VisitExpr(x.Index); return;
+            case CompareExpr x:
+                VisitExpr(x.Left);
+                foreach (var c in x.Comparators) VisitExpr(c);
+                return;
+            case TupleExpr x: foreach (var i in x.Items) VisitExpr(i); return;
+            case ListExpr x: foreach (var i in x.Items) VisitExpr(i); return;
+            case SetExpr x: foreach (var i in x.Items) VisitExpr(i); return;
+            case DictExpr x:
+                for (int i = 0; i < x.Values.Count; i++)
+                {
+                    VisitExpr(x.Keys[i]);
+                    VisitExpr(x.Values[i]);
+                }
+                return;
+            case IfExpr x: VisitExpr(x.Body); VisitExpr(x.Test); VisitExpr(x.Orelse); return;
+            case ConstExpr { Parts.Count: 0 }: return;
         }
         foreach (var c in AstChildren.Of(e))
         {
