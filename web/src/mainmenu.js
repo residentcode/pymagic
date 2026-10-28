@@ -6,6 +6,7 @@ import { openSettings } from './settings-ui';
 
 const $ = (id) => document.getElementById(id);
 const press = (id) => () => $(id).click();
+let findActionOpen = () => {};
 
 export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, currentFile, search, refactor, breakpoints, recent, chrome, bookmarks, runConfigs }) {
     // the desktop app lets the page open another folder (preload.js); in a browser the engine is started with its folder and these stay dim
@@ -118,6 +119,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, c
                 { label: 'Forward', key: 'Ctrl+Alt+Right', run: press('b-forward'), disabled: $('b-forward').disabled },
                 '-',
                 { label: 'Search everywhere…', key: 'Ctrl+P', run: () => void search.anythingPicker() },
+                { label: 'Find action…', key: 'Ctrl+Shift+A', run: () => setTimeout(() => findActionOpen()) },
                 { label: 'Go to symbol…', key: 'Ctrl+Alt+O', run: () => void search.symbolPicker() },
                 { label: 'Go to line…', key: 'Ctrl+G', run: act('editor.action.gotoLine') },
                 '-',
@@ -238,6 +240,83 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, c
             { label: 'Git panel', run: dock('git') },
         ]);
     };
+    // Find action: every command of the menu in one list to type into
+    function leaves(list, path = []) {
+        const out = [];
+        for (const item of list) {
+            if (item === '-') continue;
+            if (item.submenu) out.push(...leaves(item.submenu, [...path, item.label]));
+            else if (!item.disabled && item.run) out.push({ label: item.label, path: path.join(' > '), key: item.key, run: item.run, checked: item.checked });
+        }
+        return out;
+    }
+    function findAction() {
+        const all = leaves(items());
+        const overlay = document.createElement('div');
+        overlay.id = 'sigdialog';
+        const box = document.createElement('div');
+        box.className = 'box';
+        const title = document.createElement('h2');
+        title.textContent = 'Find action';
+        const input = document.createElement('input');
+        input.placeholder = 'a command: format, rename, run, theme, bookmark...';
+        input.spellcheck = false;
+        const list = document.createElement('div');
+        list.className = 'picklist';
+        box.append(title, input, list);
+        overlay.append(box);
+        let shown = [];
+        let index = 0;
+        const finish = (entry) => { overlay.remove(); if (entry) entry.run(); else editor.focus(); };
+        const score = (a, q) => {
+            const text = `${a.label} ${a.path}`.toLowerCase();
+            const label = a.label.toLowerCase();
+            if (!q) return 10;
+            if (label === q) return 0;
+            if (label.startsWith(q)) return 1;
+            if (label.includes(q)) return 2;
+            const words = q.split(/\s+/).filter(Boolean);
+            return words.every((w) => text.includes(w)) ? 3 : -1;
+        };
+        function draw() {
+            list.replaceChildren();
+            if (shown.length === 0) { const none = document.createElement('div'); none.className = 'dim'; none.textContent = 'No command matches.'; list.append(none); }
+            shown.forEach((a, i) => {
+                const row = document.createElement('div');
+                row.className = i === index ? 'pick sel' : 'pick';
+                const name = document.createElement('span');
+                name.textContent = a.label;
+                const detail = document.createElement('span');
+                detail.className = 'pick-detail';
+                detail.textContent = a.key ? `${a.path}   ${a.key}` : a.path;
+                row.append(name, detail);
+                row.onclick = () => finish(a);
+                list.append(row);
+            });
+            list.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
+        }
+        function refresh() {
+            const q = input.value.trim().toLowerCase();
+            shown = all.map((a) => ({ a, s: score(a, q) })).filter((x) => x.s >= 0).sort((x, y) => x.s - y.s || x.a.label.length - y.a.label.length).slice(0, 60).map((x) => x.a);
+            index = 0;
+            draw();
+        }
+        input.oninput = refresh;
+        overlay.onkeydown = (e) => {
+            if (e.key === 'Escape') { e.preventDefault(); finish(); }
+            else if (e.key === 'ArrowDown') { e.preventDefault(); index = Math.min(index + 1, shown.length - 1); draw(); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); index = Math.max(index - 1, 0); draw(); }
+            else if (e.key === 'Enter') { e.preventDefault(); if (shown[index]) finish(shown[index]); }
+        };
+        overlay.onmousedown = (e) => { if (e.target === overlay) finish(); };
+        document.body.append(overlay);
+        input.focus();
+        refresh();
+    }
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') { e.preventDefault(); findAction(); }
+    });
+    findActionOpen = findAction;
     $('brand').querySelector('.mark').onclick = () => openMenu($('brand'), items());
     $('brand').querySelector('.mark').title = 'Main menu';
 }
