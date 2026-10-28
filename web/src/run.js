@@ -153,7 +153,8 @@ export function setupRun(deps) {
         $('b-run').disabled = active;
         $('b-profile').disabled = active;
         $('b-debug').disabled = active && !paused;
-        $('b-debug').textContent = paused ? '▶ Resume' : '🐞 Debug';
+        $('b-debug').querySelector('.lbl').textContent = paused ? 'Resume' : 'Debug';
+        $('b-debug').querySelector('use').setAttribute('href', paused ? '#i-run' : '#i-debug');
         $('b-stop').disabled = !active;
         for (const id of ['b-over', 'b-into', 'b-out'])
             $(id).disabled = !paused;

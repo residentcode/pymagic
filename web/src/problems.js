@@ -38,7 +38,10 @@ export function setupProblems(deps) {
         summary.textContent = problems.length === 0
             ? 'No problems found.'
             : `${counts[0]} errors, ${counts[1]} warnings, ${counts[2]} weak warnings${counts[3] ? `, ${counts[3]} hints` : ''} in ${byFile.size} files`;
-        tab.textContent = problems.length === 0 ? 'Problems' : `Problems (${problems.filter((p) => p.severity <= 2).length})`;
+        const serious = problems.filter((p) => p.severity <= 2).length;
+        tab.querySelector('.lbl').textContent = 'Problems';
+        tab.dataset.count = serious > 0 ? String(serious) : '';
+        document.getElementById('r-problems')?.querySelector('.badge')?.replaceChildren(serious > 0 ? String(serious) : '');
         const rows = [];
         for (const [file, items] of [...byFile.entries()].sort((a, b) => Math.min(...a[1].map((p) => p.severity)) - Math.min(...b[1].map((p) => p.severity)) || a[0].localeCompare(b[0]))) {
             const head = document.createElement('div');
@@ -97,7 +100,7 @@ export function setupTodo(deps) {
         const needle = filter.value.trim().toLowerCase();
         const shown = todos.filter((t) => !needle || `${t.tag} ${t.text} ${deps.relOfUri(t.uri) ?? t.uri}`.toLowerCase().includes(needle));
         summary.textContent = todos.length === 0 ? 'No TODO, FIXME, XXX, HACK or BUG comments.' : `${shown.length} of ${todos.length} comments`;
-        tab.textContent = todos.length === 0 ? 'TODO' : `TODO (${todos.length})`;
+        tab.dataset.count = todos.length > 0 ? String(todos.length) : '';
         list.replaceChildren(...shown.map((t) => {
             const row = document.createElement('div');
             row.className = 'prob';

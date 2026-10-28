@@ -3,17 +3,30 @@ import { toast } from './toast';
 
 const $ = (id) => document.getElementById(id);
 
+// file kind -> the symbol of the icon sprite in index.html (and the class that colours it)
 const ICONS = {
-    py: '🐍', pyi: '🐍', html: '🌐', htm: '🌐', jinja: '🌐', j2: '🌐', css: '🎨', js: '📜', json: '{}', md: '📝', rst: '📝', txt: '📄',
-    toml: '⚙', ini: '⚙', cfg: '⚙', yaml: '⚙', yml: '⚙', env: '⚙', http: '🌍', sql: '🗄', sh: '▤', ps1: '▤', bat: '▤', cmd: '▤',
-    png: '🖼', jpg: '🖼', jpeg: '🖼', gif: '🖼', svg: '🖼', ico: '🖼', zip: '📦', whl: '📦', gz: '📦', pdf: '📕', exe: '▣', dll: '▣', pyd: '▣', so: '▣',
+    py: ['py', ''], pyi: ['py', ''], html: ['web', 'web'], htm: ['web', 'web'], jinja: ['web', 'web'], j2: ['web', 'web'], css: ['web', 'web'], js: ['code', 'web'],
+    json: ['data', 'data'], md: ['doc', 'doc'], rst: ['doc', 'doc'], txt: ['doc', 'doc'], pdf: ['doc', 'doc'],
+    toml: ['cog', 'cog'], ini: ['cog', 'cog'], cfg: ['cog', 'cog'], yaml: ['cog', 'cog'], yml: ['cog', 'cog'], env: ['cog', 'cog'], http: ['web', 'web'], sql: ['data', 'data'],
+    sh: ['shell', 'cog'], ps1: ['shell', 'cog'], bat: ['shell', 'cog'], cmd: ['shell', 'cog'],
+    png: ['file', 'doc'], jpg: ['file', 'doc'], jpeg: ['file', 'doc'], gif: ['file', 'doc'], svg: ['file', 'doc'], ico: ['file', 'doc'],
+    zip: ['cube', 'data'], whl: ['cube', 'data'], gz: ['cube', 'data'], exe: ['cube', 'cog'], dll: ['cube', 'cog'], pyd: ['cube', 'cog'], so: ['cube', 'cog'],
 };
+
+function sprite(name, cls = '') {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', `i ${cls}`.trim());
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', `#i-${name}`);
+    svg.append(use);
+    return svg;
+}
 const BINARY = /\.(png|jpe?g|gif|ico|bmp|webp|zip|whl|gz|tar|7z|rar|pdf|exe|dll|pyd|so|dylib|pyc|pyo|class|jar|woff2?|ttf|otf|eot|mp[34]|wav|avi|mov|sqlite3?|db|bin|dat|pkl|npy|npz|h5|pt|pth|onnx)$/i;
 
 function iconOf(name) {
     const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-    if (name === 'requirements.txt' || name === 'Dockerfile' || name === '.gitignore') return '⚙';
-    return ICONS[ext] ?? '📄';
+    if (name === 'requirements.txt' || name === 'Dockerfile' || name === '.gitignore') return ['cog', 'cog'];
+    return ICONS[ext] ?? ['file', 'doc'];
 }
 
 function baseName(path) { return path.slice(path.lastIndexOf('/') + 1); }
@@ -117,10 +130,11 @@ export function setupExplorer(deps) {
         li.title = path;
         const twisty = document.createElement('span');
         twisty.className = 'twisty';
-        twisty.textContent = isDir ? (isOpen ? '▾' : '▸') : '';
+        if (isDir) twisty.append(sprite(isOpen ? 'chev-down' : 'chev-right'));
         const icon = document.createElement('span');
         icon.className = 'ficon';
-        icon.textContent = isDir ? (isOpen ? '📂' : '📁') : iconOf(name);
+        if (isDir) icon.append(sprite(isOpen ? 'folder-open' : 'folder', 'folder'));
+        else icon.append(sprite(...iconOf(name)));
         const label = document.createElement('span');
         label.className = 'fname';
         label.textContent = name;

@@ -20,6 +20,8 @@ import { setupTabs } from './tabs';
 import { setupInspections } from './inspections';
 import { setupGit } from './git';
 import { toast } from './toast';
+import { setupChrome } from './rail';
+import { THEME, EDITOR_FONT, defineTheme } from './theme';
 self.MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
 const toPos = (p) => ({ line: p.lineNumber - 1, character: p.column - 1 });
 const toRange = (r) => ({
@@ -617,12 +619,20 @@ async function reloadAllFromDisk() {
     }
 }
 async function main() {
+    setupChrome();
     const info = await (await fetch('/api/info')).json();
     rootUri = info.rootUri;
+    defineTheme(monaco);
     editor = monaco.editor.create($('editor'), {
-        theme: 'vs-dark',
+        theme: THEME,
         automaticLayout: true,
+        fontFamily: EDITOR_FONT,
+        fontLigatures: false,
         fontSize: 14,
+        lineHeight: 22,
+        padding: { top: 10, bottom: 10 },
+        cursorSmoothCaretAnimation: 'on',
+        roundedSelection: true,
         minimap: { enabled: false },
         quickSuggestions: { other: true, comments: false, strings: false },
         scrollBeyondLastLine: false,

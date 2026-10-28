@@ -5,6 +5,8 @@ import { cpSync, mkdirSync } from 'node:fs';
 const watch = process.argv.includes('--watch');
 mkdirSync('dist', { recursive: true });
 cpSync('src/index.html', 'dist/index.html');
+cpSync('src/panels.css', 'dist/panels.css');
+cpSync('src/look.css', 'dist/look.css');
 
 const options = {
   entryPoints: {

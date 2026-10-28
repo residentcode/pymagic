@@ -1,0 +1,272 @@
+/* The look of PyMagic: colours, type, spacing and the frame around the editor (rail, command bar, explorer, editor tabs, tool dock, status bar).
+   The panels inside the dock are styled in panels.css with the same tokens. docs/design/PyMagic-look.md says why it looks like this. */
+
+:root {
+  color-scheme: dark;
+
+  /* surfaces, from the deepest (where code and output are read) to the highest (menus and dialogs) */
+  --bg: #0f111a;
+  --panel: #151824;
+  --raised: #1c2032;
+  --line: #252a3d;
+  --line-strong: #353b55;
+
+  /* text */
+  --fg: #e8eaf4;
+  --dim: #9298b2;
+  --faint: #5f6580;
+
+  /* the brand: the violet and blue of the app icon, and its golden spark */
+  --accent: #8a6bff;
+  --accent-2: #4c8dff;
+  --accent-text: #bfb1ff;
+  --on-accent: #fff;
+  --on-accent-dim: #e1dbff;
+  --spark: #ffd866;
+  --brand: linear-gradient(135deg, #7b5cff, #2f80ed);
+
+  /* meanings */
+  --good: #4ddbb4;
+  --warn: #ffc861;
+  --bad: #ff6f86;
+  --bad-text: #ffb3c0;
+  --bad-strong: #c8445e;
+  --info: #6db4ff;
+  --violet: #c2a6ff;
+  --teal: #4ddbd2;
+  --sym: #8fd0ff;
+
+  /* states over any surface */
+  --hover: rgba(255, 255, 255, .055);
+  --hover2: rgba(255, 255, 255, .09);
+  --hover3: rgba(255, 255, 255, .14);
+  --sel: rgba(138, 107, 255, .26);
+  --sel-soft: rgba(138, 107, 255, .15);
+  --shadow: 0 14px 40px rgba(2, 3, 9, .62);
+  --shadow-sm: 0 6px 18px rgba(2, 3, 9, .5);
+
+  /* shape and type */
+  --radius: 6px;
+  --radius-lg: 10px;
+  --ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Code", "Cascadia Mono", Consolas, monospace;
+
+  /* the names the panel styles used before the tokens had these */
+  --green: var(--good);
+  --red: var(--bad);
+  --amber: var(--warn);
+}
+
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--faint); background-clip: padding-box; border: 2px solid transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+::selection { background: var(--sel); }
+
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 var(--ui); -webkit-font-smoothing: antialiased; }
+
+/* ------------------------------------------------------------------ icons: one sprite (index.html), drawn with the line of the text colour */
+.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
+.i.fill { fill: currentColor; stroke: none; }
+.i.lg { width: 20px; height: 20px; }
+
+/* ------------------------------------------------------------------ controls: the same for every panel and dialog */
+button, select, input, textarea { font: inherit; color: var(--fg); }
+button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 3px 10px; line-height: 1.4; cursor: pointer; white-space: nowrap;
+  transition: background-color .12s, border-color .12s, color .12s;
+}
+button:hover:not(:disabled) { background: var(--hover3); border-color: var(--line-strong); }
+button:active:not(:disabled) { background: var(--hover2); }
+button:disabled { opacity: .38; cursor: default; }
+button.primary, .primary { background: var(--brand); border-color: transparent; color: var(--on-accent); }
+button.primary:hover:not(:disabled) { filter: brightness(1.12); background: var(--brand); }
+select, input:not([type=checkbox]):not([type=radio]), textarea {
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 3px 8px; outline: none; min-width: 0;
+}
+select { padding-right: 4px; }
+select:hover, input:not([type=checkbox]):hover, textarea:hover { border-color: var(--line-strong); }
+select:focus, input:not([type=checkbox]):focus, textarea:focus, button:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--sel-soft); outline: none; }
+::placeholder { color: var(--faint); }
+input[type=checkbox], input[type=radio] { accent-color: var(--accent); margin: 0 4px 0 0; vertical-align: -2px; }
+label { cursor: default; }
+kbd { font: 11px var(--mono); background: var(--raised); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; }
+
+/* ------------------------------------------------------------------ the frame: a command bar on top, a rail and an explorer on the left, the editor and its dock in the middle, the status bar below */
+#app {
+  display: grid; height: 100%;
+  grid-template-columns: 48px 256px minmax(0, 1fr);
+  grid-template-rows: 48px minmax(0, 1fr) auto 26px;
+  grid-template-areas: "bar bar bar" "rail side editor" "rail side dock" "status status status";
+}
+#app.no-side { grid-template-columns: 48px 0 minmax(0, 1fr); }
+#app.no-side #sidebar { display: none; }
+#toolbar { grid-area: bar; }
+#rail { grid-area: rail; }
+#sidebar { grid-area: side; }
+#editor-area { grid-area: editor; }
+#panel { grid-area: dock; }
+#status { grid-area: status; }
+
+/* ------------------------------------------------------------------ command bar */
+#toolbar {
+  display: flex; align-items: center; gap: 6px; padding: 0 12px 0 0; min-width: 0; overflow: hidden;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+#brand { display: flex; align-items: center; gap: 10px; flex: none; min-width: 0; margin-right: 6px; }
+#brand .mark { width: 48px; height: 48px; padding: 10px; flex: none; }
+#project { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; letter-spacing: .01em; }
+#branch-chip { display: none; align-items: center; gap: 5px; max-width: 150px; padding: 2px 8px 2px 6px; border-radius: 999px; background: var(--hover); color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+#branch-chip.on { display: inline-flex; }
+#branch-chip:hover { background: var(--hover2); color: var(--fg); }
+#toolbar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 6px; flex: none; }
+#toolbar .spacer { flex: 1; min-width: 8px; }
+#toolbar button { background: transparent; border-color: transparent; padding: 0 10px; height: 30px; color: var(--fg); }
+#toolbar button:hover:not(:disabled) { background: var(--hover2); border-color: transparent; }
+#toolbar button .i { color: var(--dim); }
+#toolbar button:hover:not(:disabled) .i { color: var(--fg); }
+#toolbar button.run { background: var(--brand); color: var(--on-accent); font-weight: 600; padding: 0 14px 0 11px; box-shadow: 0 1px 10px rgba(123, 92, 255, .35); }
+#toolbar button.run:hover:not(:disabled) { background: var(--brand); filter: brightness(1.12); }
+#toolbar button.run .i { color: var(--on-accent); }
+#toolbar button.dbg .i { color: var(--warn); }
+#toolbar button.stop:not(:disabled) .i { color: var(--bad); }
+#toolbar button.iconbtn { padding: 0; width: 30px; }
+#toolbar #b-over:disabled, #toolbar #b-into:disabled, #toolbar #b-out:disabled { display: none; }
+#toolbar #b-over:not(:disabled), #toolbar #b-into:not(:disabled), #toolbar #b-out:not(:disabled) { background: var(--hover); }
+#fmt-engine { height: 26px; padding: 0 2px 0 6px; background: var(--raised); color: var(--dim); font-size: 12px; }
+.fmtsave { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; white-space: nowrap; cursor: pointer; user-select: none; }
+#interp-note { color: var(--dim); font-size: 12px; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#interp-note.bad { color: var(--bad); }
+#interp { height: 28px; max-width: 280px; padding: 0 4px 0 8px; background: var(--raised); border-radius: 999px; }
+
+/* ------------------------------------------------------------------ rail: the tools one click away */
+#rail { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; background: var(--panel); border-right: 1px solid var(--line); }
+#rail button { position: relative; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 9px; background: transparent; color: var(--dim); }
+#rail button:hover:not(:disabled) { background: var(--hover2); color: var(--fg); border: 0; }
+#rail button.active { color: var(--accent-text); background: var(--sel-soft); }
+#rail button.active::before { content: ""; position: absolute; left: -6px; top: 9px; bottom: 9px; width: 3px; border-radius: 0 3px 3px 0; background: var(--brand); }
+#rail .grow { flex: 1; }
+#rail .badge { position: absolute; top: 2px; right: 1px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: var(--bad-strong); color: #fff; font: 600 10px/15px var(--ui); text-align: center; }
+#rail .badge:empty { display: none; }
+
+/* ------------------------------------------------------------------ explorer */
+#sidebar { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 40px minmax(0, 1fr); grid-template-areas: "title tools" "files files"; background: var(--panel); border-right: 1px solid var(--line); overflow: hidden; }
+#sidebar h1 { grid-area: title; display: flex; align-items: center; margin: 0; padding: 0 0 0 14px; font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+#explorer-tools { grid-area: tools; display: flex; align-items: center; gap: 2px; padding: 0 8px 0 0; }
+#explorer-tools button { width: 26px; height: 26px; padding: 0; border: 0; background: transparent; color: var(--dim); border-radius: var(--radius); }
+#explorer-tools button:hover { background: var(--hover2); color: var(--fg); }
+#files { grid-area: files; list-style: none; margin: 0; padding: 0 6px 12px; outline: none; overflow: auto; min-height: 60px; }
+#files li { display: flex; align-items: center; gap: 2px; height: 26px; padding: 0 8px; border-radius: var(--radius); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none; color: var(--fg); }
+#files li:hover { background: var(--hover); }
+#files li.sel:not(.active) { background: var(--hover2); }
+#files li.active { background: var(--sel); color: var(--fg); box-shadow: inset 2px 0 0 var(--accent); }
+#files li .twisty { display: inline-flex; align-items: center; justify-content: center; width: 14px; flex: none; color: var(--faint); font-size: 10px; }
+#files li .ficon { display: inline-flex; align-items: center; justify-content: center; width: 20px; flex: none; margin-right: 4px; }
+#files li .ficon .i { width: 16px; height: 16px; }
+#files li .ficon .i.folder { color: var(--info); }
+#files li .ficon .i.doc { color: var(--dim); }
+#files li .ficon .i.cog { color: var(--faint); }
+#files li .ficon .i.web { color: var(--teal); }
+#files li .ficon .i.data { color: var(--warn); }
+#files li.dirty::after { content: ""; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--warn); flex: none; }
+#files li.git-M { color: var(--info); } #files li.git-A { color: var(--good); } #files li.git-D { color: var(--bad); } #files li.git-U { color: var(--warn); }
+
+/* ------------------------------------------------------------------ editor and its tabs */
+#editor-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+#editor { flex: 1; min-width: 0; min-height: 0; }
+#tabs-bar { display: flex; align-items: flex-end; gap: 2px; padding: 6px 8px 0; overflow-x: auto; flex: none; background: var(--panel); border-bottom: 1px solid var(--line); scrollbar-width: none; }
+#tabs-bar::-webkit-scrollbar { display: none; }
+#tabs-bar:empty { display: none; }
+.etab { position: relative; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px 0 14px; border-radius: 8px 8px 0 0; cursor: pointer; white-space: nowrap; color: var(--dim); user-select: none; }
+.etab:hover { background: var(--hover); color: var(--fg); }
+.etab.active { background: var(--bg); color: var(--fg); box-shadow: 0 -2px 0 0 var(--accent) inset; }
+.etab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: var(--bg); }
+.etab.dragging { opacity: .45; }
+.etab.drop-before::before, .etab.drop-after::after { content: ""; position: absolute; top: 4px; bottom: 4px; width: 2px; background: var(--accent); pointer-events: none; border-radius: 2px; height: auto; }
+.etab.drop-before::before { left: -2px; }
+.etab.drop-after::after { right: -2px; left: auto; }
+.etab-close { width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 5px; font-size: 10px; opacity: 0; }
+.etab:hover .etab-close, .etab.active .etab-close { opacity: .75; }
+.etab-close:hover { background: var(--hover3); opacity: 1; }
+.etab.dirty .etab-close { opacity: 1; font-size: 0; }
+.etab.dirty .etab-close::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--warn); }
+.etab.dirty .etab-close:hover::before { content: "✕"; width: auto; height: auto; margin: 0; border-radius: 0; background: none; font-size: 10px; color: var(--fg); }
+
+/* ------------------------------------------------------------------ dock: the tool windows below the editor */
+#panel { display: none; height: clamp(230px, 36vh, 460px); min-height: 0; flex-direction: column; background: var(--bg); border-top: 1px solid var(--line); }
+#panel.open { display: flex; }
+#tabs { display: flex; align-items: center; gap: 2px; flex: none; height: 40px; padding: 0 8px; overflow-x: auto; scrollbar-width: none; background: var(--panel); border-bottom: 1px solid var(--line); }
+#tabs::-webkit-scrollbar { display: none; }
+#tabs button { position: relative; height: 28px; padding: 0 9px; border: 0; background: transparent; color: var(--dim); border-radius: var(--radius); gap: 7px; }
+#tabs button:hover:not(:disabled) { background: var(--hover2); color: var(--fg); border: 0; }
+#tabs button.active { background: var(--sel-soft); color: var(--accent-text); }
+#tabs button:not(.active) .lbl { display: none; }
+#tabs button[data-count]:not([data-count=""]):not([data-count="0"])::after { content: attr(data-count); position: absolute; top: 0; right: -2px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: var(--bad-strong); color: #fff; font: 600 10px/15px var(--ui); }
+#tabs button.active[data-count]::after { position: static; margin-left: 2px; }
+#tabs .gsep { width: 1px; height: 18px; margin: 0 6px; background: var(--line); flex: none; }
+#tabs .spacer { flex: 1; }
+#tabs .close { padding: 0; width: 28px; color: var(--dim); }
+.tab { display: none; flex: 1; min-height: 0; }
+.tab.active { display: flex; }
+@media (min-width: 1720px) { #tabs button:not(.active) .lbl { display: inline; } }
+
+/* ------------------------------------------------------------------ status bar */
+#status { display: flex; align-items: center; gap: 14px; padding: 0 14px; background: var(--panel); border-top: 1px solid var(--line); color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; }
+#status .spacer { flex: 1; }
+#conn { display: inline-flex; align-items: center; gap: 7px; }
+#conn::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+#conn.ok { color: var(--good); } #conn.bad { color: var(--bad); }
+#status #cursor { color: var(--fg); }
+
+/* ------------------------------------------------------------------ menus, dialogs and notices */
+.ask-shade { position: fixed; inset: 0; background: rgba(4, 5, 12, .62); backdrop-filter: blur(2px); display: flex; align-items: flex-start; justify-content: center; padding-top: 16vh; z-index: 50; }
+.ask-box { background: var(--raised); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); padding: 18px 20px; width: 400px; box-shadow: var(--shadow); }
+.ask-title { font-weight: 600; font-size: 14px; margin-bottom: 10px; }
+.ask-hint { color: var(--dim); font-size: 12px; margin: 8px 0 4px; }
+.ask-box select, .ask-box input { width: 100%; }
+.ask-buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.ask-buttons button.danger { background: var(--bad-strong); border-color: var(--bad-strong); color: #fff; }
+.ctx-menu, .inh-menu, .git-popup { background: var(--raised); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: var(--shadow-sm); padding: 4px; }
+.ctx-menu { position: fixed; z-index: 60; min-width: 190px; }
+.ctx-item { padding: 5px 12px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+.ctx-item:hover { background: var(--sel); color: var(--fg); }
+.ctx-sep { height: 1px; background: var(--line); margin: 4px 2px; }
+#toast, #namebox, #sigdialog .box, #git-diff, #git-lines { border-radius: var(--radius-lg); box-shadow: var(--shadow); background-color: var(--raised); border: 1px solid var(--line-strong); }
+#sigdialog .box { border-color: var(--line-strong); }
+#sigdialog button.primary { border-color: transparent; }
+
+/* ------------------------------------------------------------------ the panels of the dock: bars of controls, lists and headings */
+#panel button, #panel select { height: 26px; padding-top: 0; padding-bottom: 0; }
+#panel select { background: var(--raised); }
+#panel .col h2 { padding: 0 12px; height: 28px; display: flex; align-items: center; font-size: 11px; letter-spacing: .09em; color: var(--dim); background: var(--panel); border-bottom: 1px solid var(--line); }
+#panel input:not([type=checkbox]) { height: 26px; }
+#tests-bar, #fs-bar, #pk-bar, #git-bar, #git-sync, #insp-bar, #django-bar, #routes-bar, .listbar, #hier-bar, #prof-bar { gap: 6px; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
+#panel .body, #output { scrollbar-gutter: stable; }
+#output { padding: 10px 14px; font-family: var(--mono); font-size: 12.5px; }
+#stdin { padding: 7px 14px; background: var(--panel); font-family: var(--mono); }
+.pkrow.head, .prof-head { background: var(--panel); }
+
+@media (max-width: 1500px) {
+  #toolbar .lbl-opt { display: none; }
+  #toolbar button.optional { padding: 0; width: 30px; }
+}
+@media (max-width: 900px) { #app { grid-template-columns: 48px 0 minmax(0, 1fr); } #sidebar { display: none; } #project, #branch-chip { display: none; } }
+#t-todo[data-count]::after { background: var(--line-strong) !important; }
+
+/* a tool window that is one column fills the dock */
+.tab > .col:only-child { flex: 1 1 auto; }
+/* the count on the open tab sits after its name instead of on the corner of the icon */
+#tabs button.active[data-count]:not([data-count=""]):not([data-count="0"])::after { position: static; margin-left: 4px; }
+/* boxes to tick, in the same shape as the toggle in the command bar's neighbours */
+input[type=checkbox] { appearance: none; -webkit-appearance: none; width: 15px; height: 15px; border: 1.5px solid var(--line-strong); border-radius: 4px; background: var(--bg); position: relative; cursor: pointer; flex: none; }
+input[type=checkbox]:hover { border-color: var(--faint); }
+input[type=checkbox]:checked { background: var(--accent); border-color: var(--accent); }
+input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5px; top: .5px; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.fmtsave input[type=checkbox] { width: 26px; height: 15px; border: 0; border-radius: 999px; background: var(--line-strong); }
+.fmtsave input[type=checkbox]:checked { background: var(--accent); }
+.fmtsave input[type=checkbox]::after { content: ""; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border: 0; border-radius: 50%; background: var(--fg); transform: none; transition: transform .15s; }
+.fmtsave input[type=checkbox]:checked::after { transform: translateX(11px); border: 0; }
+#panel label { white-space: nowrap; }
