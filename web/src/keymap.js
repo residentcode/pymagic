@@ -5,7 +5,7 @@ export const KEYMAP = [
     ['Edit', [['Save', 'Ctrl+S'], ['Undo', 'Ctrl+Z'], ['Redo', 'Ctrl+Y'], ['Format the file or the selection', 'Shift+Alt+F'], ['Format (second key)', 'Ctrl+Alt+L'],
         ['Remove unused imports and sort', 'Shift+Alt+O'], ['Quick fixes and refactorings', 'Ctrl+.'], ['Comment the line', 'Ctrl+/'], ['Find in the file', 'Ctrl+F'], ['Replace in the file', 'Ctrl+H']]],
     ['Navigate', [['Search everywhere (files and symbols)', 'Ctrl+P'], ['Go to symbol', 'Ctrl+Alt+O'], ['Go to line', 'Ctrl+G'], ['Go to definition', 'F12'],
-        ['Find usages', 'Shift+F12'], ['Back', 'Ctrl+Alt+Left'], ['Forward', 'Ctrl+Alt+Right'], ['Find in files', 'Ctrl+Shift+F'], ['Type hierarchy', 'Ctrl+H (in the editor)']]],
+        ['Find usages', 'Shift+F12'], ['Back', 'Ctrl+Alt+Left'], ['Forward', 'Ctrl+Alt+Right'], ['Find in files', 'Ctrl+Shift+F'], ['Type hierarchy', 'Ctrl+H (in the editor)'], ['Toggle a bookmark', 'Ctrl+F2'], ['Next bookmark', 'Alt+F2'], ['Previous bookmark', 'Shift+Alt+F2']]],
     ['Refactor', [['Rename', 'F2'], ['Extract variable', 'Ctrl+Alt+V'], ['Extract constant', 'Ctrl+Alt+C'], ['Extract method', 'Ctrl+Alt+M'], ['Inline variable', 'Ctrl+Alt+N'],
         ['Inline method', 'Ctrl+Alt+P'], ['Change signature', 'Ctrl+F6'], ['Move to another file', 'F6']]],
     ['Tools', [['Terminal', 'Ctrl+`'], ['Git: commit message', 'Alt+9'], ['Settings', 'Ctrl+,']]],

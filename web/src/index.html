@@ -69,11 +69,17 @@
     <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.200"/><path d="M12 3.500v2.600M12 17.900v2.600M3.500 12h2.600M17.900 12h2.600M6 6l1.900 1.900M16.100 16.100 18 18M18 6l-1.900 1.900M7.900 16.100 6 18"/><circle cx="12" cy="12" r="6.800"/></symbol>
     <symbol id="i-tick" viewBox="0 0 24 24"><path d="M5.500 12.500l4.200 4.200L18.500 7.500"/></symbol>
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4.500 7h15M4.500 12h15M4.500 17h15"/></symbol>
+    <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M7 4.500h10v15l-5-4-5 4z"/></symbol>
+    <symbol id="i-sort" viewBox="0 0 24 24"><path d="M4.500 7h8M4.500 12h5.500M4.500 17h3M17 6v12M13.500 15l3.500 3.500 3.500-3.500"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.500"/><circle cx="12" cy="12" r="2.200"/><path d="M12 2.500v3M12 18.500v3M2.500 12h3M18.500 12h3"/></symbol>
+    <symbol id="i-structure" viewBox="0 0 24 24"><path d="M4.500 6h7M9 12h7M9 18h7M6.500 6v12M6.500 12H9M6.500 18H9"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.800 5.200L19 10l-5.200 1.800L12 17l-1.800-5.200L5 10l5.200-1.800z" fill="currentColor"/></symbol>
   </svg>
   <div id="app">
     <nav id="rail" aria-label="Tools">
       <button id="r-explorer" title="Files (Ctrl+B)" class="active"><svg class="i lg"><use href="#i-folders"/></svg></button>
+      <button id="r-structure" title="Structure of the file"><svg class="i lg"><use href="#i-structure"/></svg></button>
+      <button id="r-bookmarks" title="Bookmarks (Ctrl+F2 marks the line)"><svg class="i lg"><use href="#i-bookmark"/></svg></button>
       <button id="r-search" title="Find in files (Ctrl+Shift+F)"><svg class="i lg"><use href="#i-search"/></svg></button>
       <button id="r-git" title="Git"><svg class="i lg"><use href="#i-branch"/></svg></button>
       <button id="r-tests" title="Tests"><svg class="i lg"><use href="#i-tests"/></svg></button>
@@ -82,14 +88,24 @@
       <button id="r-packages" title="Packages"><svg class="i lg"><use href="#i-cube"/></svg></button>
       <span class="grow"></span>
     </nav>
-    <aside id="sidebar"><h1>Files</h1>
-      <div id="explorer-tools">
+    <aside id="sidebar" data-view="files"><h1 id="side-title">Files</h1>
+      <div id="explorer-tools" class="side-tools">
         <button id="ex-new-file" title="New file"><svg class="i"><use href="#i-new-file"/></svg></button>
         <button id="ex-new-folder" title="New folder"><svg class="i"><use href="#i-new-folder"/></svg></button>
         <button id="ex-refresh" title="Read the folder again"><svg class="i"><use href="#i-refresh"/></svg></button>
         <button id="ex-collapse" title="Close all folders"><svg class="i"><use href="#i-collapse"/></svg></button>
       </div>
-      <ul id="files"></ul></aside>
+      <div id="structure-tools" class="side-tools">
+        <button id="st-follow" title="Follow the cursor"><svg class="i"><use href="#i-target"/></svg></button>
+        <button id="st-sort" title="Sort by name"><svg class="i"><use href="#i-sort"/></svg></button>
+        <button id="st-collapse" title="Fold everything"><svg class="i"><use href="#i-collapse"/></svg></button>
+      </div>
+      <div id="bookmark-tools" class="side-tools">
+        <button id="bm-clear" title="Remove all the bookmarks"><svg class="i"><use href="#i-close"/></svg></button>
+      </div>
+      <ul id="files" class="side-view"></ul>
+      <div id="structure" class="side-view"></div>
+      <div id="bookmarks" class="side-view"></div></aside>
     <div id="toolbar">
       <div id="brand">
         <svg class="mark" viewBox="0 0 256 256" aria-hidden="true"><rect x="40" y="40" width="176" height="176" rx="44" fill="url(#g-brand)"/><path fill="#fff" fill-rule="evenodd" d="M88 76 H134 A38 38 0 0 1 134 152 H112 V180 H88 Z M112 98 H132 A15 15 0 0 1 132 128 H112 Z"/><path fill="#ffd866" d="M184 62 L190 82 L210 88 L190 94 L184 114 L178 94 L158 88 L178 82 Z"/></svg>

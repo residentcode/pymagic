@@ -7,7 +7,7 @@ import { openSettings } from './settings-ui';
 const $ = (id) => document.getElementById(id);
 const press = (id) => () => $(id).click();
 
-export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, currentFile, search, refactor, breakpoints, recent }) {
+export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, currentFile, search, refactor, breakpoints, recent, chrome, bookmarks }) {
     const act = (id) => () => { editor.focus(); editor.trigger('menu', id, null); };
     const dock = (id) => () => $(`t-${id}`).click();
 
@@ -91,7 +91,9 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, c
                 ] },
             ] },
             { label: 'View', submenu: [
-                { label: 'Files', checked: sidebarShown, run: press('r-explorer') },
+                { label: 'Files', checked: sidebarShown && chrome.view() === 'files', run: press('r-explorer') },
+                { label: 'Structure of the file', checked: sidebarShown && chrome.view() === 'structure', run: press('r-structure') },
+                { label: 'Bookmarks', checked: sidebarShown && chrome.view() === 'bookmarks', run: press('r-bookmarks') },
                 { label: 'Tool windows', submenu: windows },
                 { label: 'Hide the tool window', run: press('t-close') },
                 '-',
@@ -112,6 +114,10 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, c
                 { label: 'Search everywhere…', key: 'Ctrl+P', run: () => void search.anythingPicker() },
                 { label: 'Go to symbol…', key: 'Ctrl+Alt+O', run: () => void search.symbolPicker() },
                 { label: 'Go to line…', key: 'Ctrl+G', run: act('editor.action.gotoLine') },
+                '-',
+                { label: 'Toggle a bookmark', key: 'Ctrl+F2', run: () => { editor.focus(); bookmarks.toggle(); } },
+                { label: 'Next bookmark', key: 'Alt+F2', run: () => { editor.focus(); bookmarks.next(); }, disabled: bookmarks.count() === 0 },
+                { label: 'Previous bookmark', key: 'Shift+Alt+F2', run: () => { editor.focus(); bookmarks.previous(); }, disabled: bookmarks.count() === 0 },
                 '-',
                 { label: 'Go to definition', key: 'F12', run: act('editor.action.revealDefinition') },
                 { label: 'Go to implementations', run: act('editor.action.goToImplementation') },

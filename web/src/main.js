@@ -23,6 +23,8 @@ import { toast } from './toast';
 import { setupChrome } from './rail';
 import { setupToolbar } from './toolbar';
 import { setupMainMenu } from './mainmenu';
+import { setupStructure } from './structure';
+import { setupBookmarks } from './bookmarks';
 import { setupRecent } from './recent';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
@@ -628,7 +630,7 @@ async function reloadAllFromDisk() {
     }
 }
 async function main() {
-    setupChrome();
+    const chrome = setupChrome();
     const info = await (await fetch('/api/info')).json();
     rootUri = info.rootUri;
     defineTheme(monaco);
@@ -692,10 +694,13 @@ async function main() {
     });
     setupToolbar({ monaco, editor, save, openFile, currentFile: () => currentRel, refactor, search });
     setupAutoSave({ editor, saveAll: common.saveAll });
+    const structure = setupStructure({ editor, lsp, uriOf: (model) => serverUri.get(model), visible: () => chrome.shown() && chrome.view() === 'structure' });
+    window.addEventListener('pymagic:sidebar', (e) => { if (e.detail === 'structure') structure.show(); });
+    const bookmarks = setupBookmarks({ monaco, editor, openFile, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
     setupMainMenu({
         editor, save, saveAll: common.saveAll, reload: reloadFromDisk, openFile, tabs: () => tabs, currentFile: () => currentRel, search, refactor,
-        breakpoints: runHooks.breakpoints, recent: (current) => recents.list(current),
+        breakpoints: runHooks.breakpoints, recent: (current) => recents.list(current), chrome, bookmarks,
     });
     const git = setupGit({
         editor,

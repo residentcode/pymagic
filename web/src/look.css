@@ -370,3 +370,32 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 /* the mark opens the main menu */
 #brand .mark { cursor: pointer; border-radius: 12px; transition: background-color .12s; }
 #brand .mark:hover { background: var(--hover2); }
+
+/* ------------------------------------------------------------------ the sidebar's three views */
+#sidebar .side-tools { grid-area: tools; display: none; align-items: center; gap: 2px; padding: 0 8px 0 0; }
+#sidebar[data-view="files"] #explorer-tools, #sidebar[data-view="structure"] #structure-tools, #sidebar[data-view="bookmarks"] #bookmark-tools { display: flex; }
+#sidebar .side-tools button { width: 26px; height: 26px; padding: 0; border: 0; background: transparent; color: var(--dim); border-radius: var(--radius); }
+#sidebar .side-tools button:hover { background: var(--hover2); color: var(--fg); }
+#sidebar .side-tools button.on { color: var(--accent-text); background: var(--sel-soft); }
+#sidebar .side-view { grid-area: files; display: none; overflow: auto; min-height: 60px; }
+#sidebar[data-view="files"] #files, #sidebar[data-view="structure"] #structure, #sidebar[data-view="bookmarks"] #bookmarks { display: block; }
+#structure, #bookmarks { padding: 0 6px 12px; }
+.side-empty { padding: 14px 10px; color: var(--dim); line-height: 1.5; }
+.tree { list-style: none; margin: 0; padding: 0; }
+.tree li { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: var(--radius); cursor: pointer; white-space: nowrap; overflow: hidden; user-select: none; }
+.tree li:hover { background: var(--hover); }
+.tree li.here { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
+.tree .twisty { display: inline-flex; width: 14px; flex: none; justify-content: center; color: var(--faint); }
+.tree .fname { overflow: hidden; text-overflow: ellipsis; }
+.sym { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: none; border-radius: 5px; font: 600 11px/1 var(--mono); }
+.sym-class { background: rgba(255, 185, 138, .16); color: #ffb98a; }
+.sym-fn { background: rgba(138, 107, 255, .2); color: var(--accent-text); }
+.sym-var { background: rgba(143, 208, 255, .16); color: var(--sym); }
+.sym-const { background: rgba(255, 207, 122, .16); color: var(--warn); }
+.sym-mod { background: var(--hover2); color: var(--dim); }
+:root[data-theme="light"] .sym-class { color: #c2570c; background: rgba(194, 87, 12, .12); }
+.sym-detail { color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; margin-left: 4px; }
+.tree .drop { margin-left: auto; opacity: 0; font-size: 10px; padding: 2px 5px; border-radius: 4px; color: var(--dim); }
+.tree li:hover .drop { opacity: .8; }
+.tree .drop:hover { background: var(--hover3); opacity: 1; }
+.bookmark-glyph { background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 2h8v12l-4-3.200L4 14z' fill='%238a6bff'/%3E%3C/svg%3E") center / 12px no-repeat; }

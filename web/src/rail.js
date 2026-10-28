@@ -4,6 +4,9 @@ const $ = (id) => document.getElementById(id);
 
 const SIDEBAR_KEY = 'pymagic.sidebar';
 
+/** The rail buttons that show something in the sidebar, and what. */
+const VIEWS = { 'r-explorer': ['files', 'Files'], 'r-structure': ['structure', 'Structure'], 'r-bookmarks': ['bookmarks', 'Bookmarks'] };
+
 /** Which dock tab (or command bar button) each rail button stands for. */
 const TOOLS = {
     'r-search': 't-search',
@@ -14,20 +17,33 @@ const TOOLS = {
     'r-packages': 't-packages',
 };
 
-function sidebarWasShown() {
-    try { return localStorage.getItem(SIDEBAR_KEY) !== 'hidden'; } catch { return true; }
+function remembered() {
+    try {
+        const v = localStorage.getItem(SIDEBAR_KEY) ?? 'files';
+        return v === 'hidden' ? { shown: false, view: 'files' } : { shown: true, view: Object.values(VIEWS).some(([k]) => k === v) ? v : 'files' };
+    } catch { return { shown: true, view: 'files' }; }
 }
 
 export function setupChrome() {
     const app = $('app');
 
-    const showSidebar = (shown) => {
-        app.classList.toggle('no-side', !shown);
-        $('r-explorer').classList.toggle('active', shown);
-        try { localStorage.setItem(SIDEBAR_KEY, shown ? 'shown' : 'hidden'); } catch { /* the choice is only not remembered */ }
+    let view = 'files';
+    const shown = () => !app.classList.contains('no-side');
+    /** Shows the sidebar with this view, or hides it. */
+    const showSidebar = (isShown, name = view) => {
+        view = name;
+        app.classList.toggle('no-side', !isShown);
+        $('sidebar').dataset.view = view;
+        for (const [id, [v, title]] of Object.entries(VIEWS)) {
+            $(id).classList.toggle('active', isShown && v === view);
+            if (v === view) $('side-title').textContent = title;
+        }
+        try { localStorage.setItem(SIDEBAR_KEY, isShown ? view : 'hidden'); } catch { /* the choice is only not remembered */ }
+        if (isShown) window.dispatchEvent(new CustomEvent('pymagic:sidebar', { detail: view }));
     };
-    showSidebar(sidebarWasShown());
-    $('r-explorer').onclick = () => showSidebar(app.classList.contains('no-side'));
+    const first = remembered();
+    showSidebar(first.shown, first.view);
+    for (const [id, [v]] of Object.entries(VIEWS)) $(id).onclick = () => showSidebar(!(shown() && view === v), v);
 
     for (const [from, to] of Object.entries(TOOLS)) $(from).onclick = () => $(to).click();
 
@@ -61,4 +77,5 @@ export function setupChrome() {
         sync();
     }
     chip.onclick = () => $('t-git').click();
+    return { showView: (name) => showSidebar(true, name), view: () => view, shown };
 }
