@@ -297,7 +297,7 @@ public sealed class Server
         if (folders.Count == 0 && p?["rootUri"]?.GetValue<string>() is { } root) folders.Add(root);
         foreach (var u in folders)
             if (u.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
-                _service.SourceRoots.Add(new Uri(u).LocalPath);
+                _service.AddSourceRoot(new Uri(u).LocalPath);
 
         if (p?["initializationOptions"] is JsonObject opts)
         {

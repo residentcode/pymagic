@@ -299,7 +299,7 @@ app.Map("/lsp", async (HttpContext ctx) =>
     using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
 
     var service = new LanguageService { TypeshedPath = typeshed };
-    service.SourceRoots.Add(root);
+    service.AddSourceRoot(root);
     service.LibraryRoots.AddRange(libs);
     _ = service.StartIndexing();
     var outbox = new BlockingCollection<string>();

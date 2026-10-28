@@ -38,6 +38,27 @@ public sealed partial class LanguageService
     public AnalysisCache Cache => _cache;
 
     public List<string> SourceRoots { get; } = new();
+
+    readonly object _rootsGate = new();
+
+    /// <summary>
+    /// Adds a project folder unless it is one already (the same folder in any spelling: a trailing slash, another case), and says whether it was added.
+    /// The host adds the folder it was started on and the client's `initialize` names it again; adding it twice both doubled it and changed the list
+    /// while the background indexer was reading it.
+    /// </summary>
+    public bool AddSourceRoot(string path)
+    {
+        static string Plain(string p) => System.IO.Path.GetFullPath(p).TrimEnd('\\', '/');
+        string full = Plain(path);
+        lock (_rootsGate)
+        {
+            if (SourceRoots.Any(r => Plain(r).Equals(full, StringComparison.OrdinalIgnoreCase))) return false;
+            SourceRoots.Add(path);
+            return true;
+        }
+    }
+
+    string[] SourceRootsNow() { lock (_rootsGate) return SourceRoots.ToArray(); }
     public List<string> LibraryRoots { get; } = new();
     public string? TypeshedPath { get; set; } = Workspace.DefaultTypeshedPath;
     public PythonEnvironment Environment { get; set; } = PythonEnvironment.Default;
@@ -219,7 +240,7 @@ public sealed partial class LanguageService
     {
         if (_projectFilesOverride != null) { foreach (var f in _projectFilesOverride) yield return f; yield break; }
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var root in SourceRoots)
+        foreach (var root in SourceRootsNow())
         {
             if (!Directory.Exists(root)) continue;
             var stack = new Stack<string>();
