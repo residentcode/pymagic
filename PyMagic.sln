@@ -3,6 +3,8 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyMagic.Web", "src\PyMagic.Web\PyMagic.Web.csproj", "{CFE7DD3A-4CE7-407E-90AB-23FFA9C98B34}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyMagic.Core", "src\PyMagic.Core\PyMagic.Core.csproj", "{B944DFF7-7CC1-4B22-9A0A-29788CFA09DB}"
@@ -12,8 +14,6 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyMagic.Tests", "tests\PyMagic.Tests\PyMagic.Tests.csproj", "{4B90744B-C02C-40F3-B096-E50950B814EA}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyMagic.Server", "src\PyMagic.Server\PyMagic.Server.csproj", "{3607AB76-3D69-4182-868E-2788B64C6D1E}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyMagic.Web", "src\PyMagic.Web\PyMagic.Web.csproj", "{CFE7DD3A-4CE7-407E-90AB-23FFA9C98B34}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
