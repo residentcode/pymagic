@@ -14,6 +14,7 @@ import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
 import { setupProfiler } from './profiler';
 import { setupNotebook } from './notebook';
+import { buildInfo, buildLabel } from './build-info.js';
 import { setupGitSync } from './git-sync';
 import { setupExplorer } from './explorer';
 import { setupTabs } from './tabs';
@@ -723,6 +724,7 @@ async function main() {
         suggest: { showWords: false, insertMode: 'replace' },
     });
     applySettings(monaco, THEMES, editor);
+    $('build').textContent = buildLabel();
     notebook = setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, lsp, formatEngine: () => formatOptions().pymagicEngine, rootUri: () => rootUri, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     window.pymagic = { editor, monaco, openFile, notebook };
     const common = {

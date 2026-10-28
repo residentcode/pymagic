@@ -111,6 +111,8 @@ app.MapGet("/api/info", () => new
     root,
     rootUri = LanguageService.UriOfPath(root + Path.DirectorySeparatorChar),
     typeshed,
+    // when the engine's own file was written: a build that did not happen shows here as an old date
+    engineBuiltAt = File.GetLastWriteTimeUtc(typeof(LanguageService).Assembly.Location).ToString("o"),
 });
 
 // the settings of the person (theme, editor font, ...): the same in every project, kept in their own folder

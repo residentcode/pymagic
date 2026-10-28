@@ -2,6 +2,7 @@
 // What a page edits is either a setting of the person (settings.js; changes show at once) or a control PyMagic already has (the formatter's engine,
 // the interpreter, the Git switches), which the page mirrors and presses.
 import { change, resetAll, settings } from './settings';
+import { buildLabel, shortTime } from './build-info.js';
 import { KEYMAP } from './keymap';
 
 const $ = (id) => document.getElementById(id);
@@ -186,7 +187,7 @@ const SPECIAL = {
         info.className = 'keymap about-table';
         page.append(info);
         fetch('/api/info').then((r) => r.json()).then((i) => {
-            const items = [['Project', i.root], ['Engine', 'C# on .NET, language server and run host in one process'], ['Editor', 'Monaco'], ['Typeshed', i.typeshed ?? 'bundled stubs'], ['Settings file', '%LOCALAPPDATA%\\PyMagic\\settings.json']];
+            const items = [['Project', i.root], ['Page', buildLabel()], ['Engine', 'C# on .NET, built ' + (i.engineBuiltAt ? shortTime(i.engineBuiltAt) : 'at an unknown time')], ['Editor', 'Monaco'], ['Typeshed', i.typeshed ?? 'bundled stubs'], ['Settings file', '%LOCALAPPDATA%\\PyMagic\\settings.json']];
             for (const [a, b] of items) {
                 const x = document.createElement('span');
                 x.textContent = a;
