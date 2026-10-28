@@ -252,4 +252,108 @@ public sealed partial class LanguageService
                 yield return new Finding(overloads[^1].NameStart, overloads[^1].Name.Length, $"The @overload '{first.Name}' has no implementation after it", "overload-structure", FindingLevel.Warning);
         }
     }
+
+    // ------------------------------------------------------------ fixes
+
+    void StructureFix(string code, ModuleInfo m, int start, Action<string, bool, Edit[]> add)
+    {
+        switch (code)
+        {
+            case "dataclass-fields" or "namedtuple-fields":
+                if (AstChildren.Descendants(m.Ast).OfType<AnnAssignStmt>().FirstOrDefault(a => a.Target.Start == start) is { } field)
+                    MoveFieldFix(m, field, add);
+                else
+                    MutableDefaultFieldFix(m, start, add);
+                break;
+            case "typeddict-keys":
+            {
+                var call = AstChildren.Descendants(m.Ast).OfType<CallExpr>().FirstOrDefault(c => c.Args.Any(a => a.Start == start && a.Name != null));
+                if (call == null) break;
+                int i = call.Args.ToList().FindIndex(a => a.Start == start);
+                var arg = call.Args[i];
+                Edit edit = call.Args.Count == 1 ? new Edit(arg.Start, arg.End, "")
+                    : i + 1 < call.Args.Count ? new Edit(arg.Start, call.Args[i + 1].Start, "")
+                    : new Edit(call.Args[i - 1].End, arg.End, "");
+                add($"Remove the key '{arg.Name}'", true, new[] { edit });
+                break;
+            }
+            case "overload-structure":
+            {
+                var f = AstChildren.Descendants(m.Ast).OfType<FunctionDef>().FirstOrDefault(d => d.NameStart == start);
+                var dec = f?.Decorators.FirstOrDefault(d => d is NameExpr { Name: "overload" } or AttributeExpr { Attr: "overload" });
+                if (f == null || dec == null || SiblingOverloads(m, f) != 1) break;   // only a lone overload has this fix
+                string text = m.Source;
+                int ls = LineStart(text, dec.Start), le = LineEndInclusive(text, dec.End);
+                int at = text.LastIndexOf('@', dec.Start, dec.Start - ls + 1);   // the decorator node starts after the @
+                bool whole = at >= ls && text[ls..at].All(c => c is ' ' or '\t') && text[dec.End..le].All(c => c is ' ' or '\t' or '\r' or '\n');
+                if (whole) add("Remove the @overload decorator", true, new[] { new Edit(ls, le, "") });
+                break;
+            }
+        }
+    }
+
+    /// <summary>How many @overload definitions of this name stand in the body of the function (itself included).</summary>
+    static int SiblingOverloads(ModuleInfo m, FunctionDef f)
+    {
+        var parent = m.ParentOf(f);
+        var body = parent == null ? null : BodyContaining(parent, f);
+        return body == null ? 0 : body.OfType<FunctionDef>().Count(x => x.Name == f.Name && IsOverloadDef(x));
+    }
+
+    /// <summary>A field without a default moves above the first field that has one (its trailing comment goes along).</summary>
+    void MoveFieldFix(ModuleInfo m, AnnAssignStmt field, Action<string, bool, Edit[]> add)
+    {
+        if (m.ParentOf(field) is not ClassDef cd || field.Target is not NameExpr name) return;
+        var firstDefault = cd.Body.TakeWhile(s => !ReferenceEquals(s, field)).OfType<AnnAssignStmt>().FirstOrDefault(a => a.Value != null && a.Target is NameExpr);
+        if (firstDefault == null) return;   // the default comes from a base class
+        string text = m.Source;
+        int ls = LineStart(text, field.Start), le = LineEndInclusive(text, field.End);
+        if (!text[ls..field.Start].All(c => c is ' ' or '\t')) return;
+        string tail = text[field.End..le].Trim();
+        if (tail.Length > 0 && !tail.StartsWith('#')) return;
+        string line = text[ls..le];
+        if (!line.EndsWith('\n')) line += "\n";
+        int to = LineStart(text, firstDefault.Start);
+        add($"Move '{name.Name}' above '{((NameExpr)firstDefault.Target).Name}'", true, new[] { new Edit(to, to, line), new Edit(ls, le, "") });
+    }
+
+    /// <summary>`items: list = []` becomes `items: list = field(default_factory=list)` and `field(default=[])` becomes `field(default_factory=list)`.</summary>
+    void MutableDefaultFieldFix(ModuleInfo m, int start, Action<string, bool, Edit[]> add)
+    {
+        var value = AstChildren.Descendants(m.Ast).OfType<Expr>().FirstOrDefault(e => e.Start == start && IsMutableDisplay(e));
+        if (value == null) return;
+        string text = m.Source, original = text[value.Start..value.End];
+        string factory = value switch
+        {
+            ListExpr { Items.Count: 0 } or CallExpr { Func: NameExpr { Name: "list" } } => "list",
+            DictExpr { Values.Count: 0 } or CallExpr { Func: NameExpr { Name: "dict" } } => "dict",
+            CallExpr { Func: NameExpr { Name: "set" } } => "set",
+            _ => "lambda: " + original,
+        };
+        var edits = new List<Edit>();
+        var wrapper = AstChildren.Descendants(m.Ast).OfType<CallExpr>().FirstOrDefault(c => DecoratorName(c) == "field" && c.Args.Any(a => ReferenceEquals(a.Value, value)));
+        if (wrapper != null)
+        {
+            var arg = wrapper.Args.First(a => ReferenceEquals(a.Value, value));
+            if (arg.Name != "default") return;
+            edits.Add(new Edit(arg.Start, arg.End, "default_factory=" + factory));
+        }
+        else edits.Add(new Edit(value.Start, value.End, $"{FieldReference(m, edits)}(default_factory={factory})"));
+        add("Use default_factory", true, edits.ToArray());
+    }
+
+    /// <summary>How `field` is written in this module; adds the import that makes it available when there is none.</summary>
+    static string FieldReference(ModuleInfo m, List<Edit> edits)
+    {
+        var imports = m.Ast.Body.OfType<ImportFromStmt>().Where(s => s.Level == 0 && s.Module == "dataclasses").ToList();
+        if (imports.Any(s => s.IsStar || s.Names.Any(a => a.Name == "field" && a.AsName == null))) return "field";
+        if (imports.FirstOrDefault(s => s.Names.Count > 0) is { } from)
+        {
+            edits.Add(new Edit(from.Names[^1].End, from.Names[^1].End, ", field"));
+            return "field";
+        }
+        if (m.Ast.Body.OfType<ImportStmt>().Any(s => s.Names.Any(a => a.Name == "dataclasses" && a.AsName == null))) return "dataclasses.field";
+        // the dataclass decorator is written as `dataclasses.dataclass` or imported from dataclasses, so one of the cases above applies
+        return "dataclasses.field";
+    }
 }

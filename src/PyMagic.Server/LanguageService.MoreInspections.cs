@@ -167,6 +167,9 @@ public sealed partial class LanguageService
             case "docstring-parameter" or "docstring-missing-parameter":
                 DocstringFix(code, m, start, end, add);
                 return true;
+            case "dataclass-fields" or "namedtuple-fields" or "typeddict-keys" or "overload-structure":
+                StructureFix(code, m, start, add);
+                return true;
         }
         return false;
     }

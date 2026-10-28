@@ -16,6 +16,87 @@ public class StructureInspectionTests
 
     static string Src(params string[] lines) => string.Join("\n", lines) + "\n";
 
+    static string Fix(string title, string src)
+    {
+        var svc = new LanguageService();
+        svc.Open(Main, src, 1);
+        var all = svc.CodeActions(Main, new LineMap(src).RangeOf(0, src.Length)).ToList();
+        var a = all.FirstOrDefault(x => x.Title.StartsWith(title));
+        if (a == null) throw new AssertionException($"no action '{title}'; offered: {string.Join(" | ", all.Select(x => x.Title))}");
+        var lines = new LineMap(src);
+        string text = src;
+        foreach (var e in a.Edit!.Changes[Main].OrderByDescending(e => lines.OffsetOf(e.Range.Start)).ThenByDescending(e => lines.OffsetOf(e.Range.End)))
+            text = text[..lines.OffsetOf(e.Range.Start)] + e.NewText + text[lines.OffsetOf(e.Range.End)..];
+        return text;
+    }
+
+    static bool Offered(string title, string src)
+    {
+        var svc = new LanguageService();
+        svc.Open(Main, src, 1);
+        return svc.CodeActions(Main, new LineMap(src).RangeOf(0, src.Length)).Any(x => x.Title.StartsWith(title));
+    }
+
+    // ------------------------------------------------------------ quick fixes
+
+    [Fact]
+    public void AMutableDataclassDefaultBecomesADefaultFactory()
+    {
+        string head = "from dataclasses import dataclass\n\n";
+        Assert.Equal(head.Replace("dataclass\n", "dataclass, field\n") + Src("@dataclass", "class A:", "    items: list = field(default_factory=list)"),
+            Fix("Use default_factory", head + Src("@dataclass", "class A:", "    items: list = []")));
+        Assert.Equal(head.Replace("dataclass\n", "dataclass, field\n") + Src("@dataclass", "class A:", "    d: dict = field(default_factory=dict)"),
+            Fix("Use default_factory", head + Src("@dataclass", "class A:", "    d: dict = {}")));
+        // a list with items is built by a lambda
+        Assert.Equal(head.Replace("dataclass\n", "dataclass, field\n") + Src("@dataclass", "class A:", "    items: list = field(default_factory=lambda: [1, 2])"),
+            Fix("Use default_factory", head + Src("@dataclass", "class A:", "    items: list = [1, 2]")));
+        // field(default=...) keeps its call
+        string withField = "from dataclasses import dataclass, field\n\n";
+        Assert.Equal(withField + Src("@dataclass", "class A:", "    items: list = field(default_factory=list, repr=False)"),
+            Fix("Use default_factory", withField + Src("@dataclass", "class A:", "    items: list = field(default=[], repr=False)")));
+    }
+
+    [Fact]
+    public void TheFieldImportIsAddedWhereItIsMissing()
+    {
+        // the module is imported: dataclasses.field
+        Assert.Equal(Src("import dataclasses", "", "@dataclasses.dataclass", "class A:", "    items: list = dataclasses.field(default_factory=list)"),
+            Fix("Use default_factory", Src("import dataclasses", "", "@dataclasses.dataclass", "class A:", "    items: list = []")));
+        // another name from the module is imported: field is added to that import
+        string src = Src("\"\"\"Doc.\"\"\"", "from dataclasses import (dataclass)", "", "@dataclass", "class A:", "    items: list = []");
+        Assert.Contains("(dataclass, field)", Fix("Use default_factory", src));
+    }
+
+    [Fact]
+    public void AFieldWithoutADefaultMovesAboveTheFirstOneWithADefault()
+    {
+        string src = Src("from dataclasses import dataclass", "", "@dataclass", "class P:", "    x: int = 0", "    z: int = 1", "    y: int  # needed");
+        string fixedUp = Src("from dataclasses import dataclass", "", "@dataclass", "class P:", "    y: int  # needed", "    x: int = 0", "    z: int = 1");
+        Assert.Equal(fixedUp, Fix("Move 'y' above 'x'", src));
+        Assert.Equal(0, Found(fixedUp, "dataclass-fields").Count);
+        string tuple = Src("from typing import NamedTuple", "", "class P(NamedTuple):", "    x: int = 0", "    y: int");
+        Assert.Equal(Src("from typing import NamedTuple", "", "class P(NamedTuple):", "    y: int", "    x: int = 0"), Fix("Move 'y' above 'x'", tuple));
+        // the default comes from a base class: nothing to move above
+        Assert.True(!Offered("Move", Src("from dataclasses import dataclass", "", "@dataclass", "class Base:", "    a: int = 1", "", "@dataclass", "class Child(Base):", "    b: int")));
+    }
+
+    [Fact]
+    public void AKeyTheTypedDictDoesNotHaveIsRemoved()
+    {
+        string head = Src("from typing import TypedDict", "", "class Movie(TypedDict):", "    name: str", "");
+        Assert.Equal(head + Src("m = Movie(name='x')"), Fix("Remove the key 'rating'", head + Src("m = Movie(name='x', rating=3)")));
+        Assert.Equal(head + Src("m = Movie(name='x')"), Fix("Remove the key 'rating'", head + Src("m = Movie(rating=3, name='x')")));
+    }
+
+    [Fact]
+    public void ALoneOverloadLosesItsDecorator()
+    {
+        string src = Src("from typing import overload", "", "@overload", "def f(x: int) -> int: ...", "def f(x):", "    return x");
+        Assert.Equal(Src("from typing import overload", "", "def f(x: int) -> int: ...", "def f(x):", "    return x"), Fix("Remove the @overload", src));
+        // two overloads and no implementation: the decorator is not what is wrong
+        Assert.True(!Offered("Remove the @overload", Src("from typing import overload", "", "@overload", "def f(x: int) -> int: ...", "@overload", "def f(x: str) -> str: ...")));
+    }
+
     // ------------------------------------------------------------ dataclass
 
     [Fact]
