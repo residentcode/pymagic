@@ -1,5 +1,5 @@
 // PyMagic for Windows: starts the C# host in the background and shows the editor in its own window.
-const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell, ipcMain } = require('electron');
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -7,6 +7,7 @@ const path = require('node:path');
 const http = require('node:http');
 const os = require('node:os');
 const { hostEnvironment } = require('./host-env');
+const { remember, existing } = require('./recent-projects');
 
 const repo = path.resolve(__dirname, '..');
 const packaged = app.isPackaged;
@@ -121,6 +122,7 @@ async function openProject(folder) {
   project = folder;
   const s = readSettings();
   s.last = folder;
+  s.recent = remember(s.recent, folder);
   writeSettings(s);
   win.setTitle(`PyMagic - ${folder}`);
   await startHost(hostDll, folder);
@@ -149,12 +151,17 @@ function menu() {
 }
 
 function splash(text) {
-  const html = `<body style="margin:0;background:#1e1e1e;color:#ccc;font:15px Segoe UI;display:flex;align-items:center;justify-content:center;height:100vh"><div id=t>${text}</div></body>`;
+  const html = `<body style="margin:0;background:#0f111a;color:#bcc1d6;font:15px Segoe UI;display:flex;align-items:center;justify-content:center;height:100vh"><div id=t>${text}</div></body>`;
   return win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 }
 
 app.whenReady().then(async () => {
-  win = new BrowserWindow({ width: 1400, height: 900, backgroundColor: '#1e1e1e', title: 'PyMagic', icon, autoHideMenuBar: false, webPreferences: { contextIsolation: true } });
+  // the page has its own menu (the mark at the left of its command bar); this one stays for its keys and shows with Alt
+  win = new BrowserWindow({ width: 1400, height: 900, backgroundColor: '#0f111a', title: 'PyMagic', icon, autoHideMenuBar: true, webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.js') } });
+  ipcMain.handle('pymagic:open-folder', () => chooseFolder());
+  ipcMain.handle('pymagic:open-project', async (_e, folder) => { if (typeof folder === 'string' && fs.existsSync(folder) && fs.statSync(folder).isDirectory()) await openProject(path.resolve(folder)); });
+  ipcMain.handle('pymagic:open-demo', () => openProject(demo));
+  ipcMain.handle('pymagic:recent', () => existing(readSettings().recent, fs.existsSync, project));
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
   menu();
   const report = t => win.webContents.executeJavaScript(`document.getElementById('t') && (document.getElementById('t').textContent = ${JSON.stringify(t)})`).catch(() => {});

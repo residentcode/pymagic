@@ -415,3 +415,5 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 .runcfg .set-control { justify-content: stretch; }
 .runcfg .set-control input, .runcfg .set-control select, .runcfg .set-control textarea { width: 100%; }
 .runcfg textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; }
+#project.clickable { cursor: pointer; padding: 3px 6px; margin: 0 -6px; border-radius: 6px; }
+#project.clickable:hover { background: var(--hover2); }

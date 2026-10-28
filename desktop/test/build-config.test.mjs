@@ -61,7 +61,7 @@ test('package.mjs builds the installer from the packaged folder, and the tools a
 });
 
 test('the app folder takes the shell and its icon, and leaves out the build tools, tests and icon source', () => {
-  for (const p of ['/main.js', '/host-env.js', '/package.json', '/icon', '/icon/pymagic.ico']) assert.ok(kept(p), `${p} is left out`);
+  for (const p of ['/main.js', '/host-env.js', '/preload.js', '/recent-projects.js', '/package.json', '/icon', '/icon/pymagic.ico']) assert.ok(kept(p), `${p} is left out`);
   for (const p of ['/out', '/out/PyMagic-win32-x64/PyMagic.exe', '/stage/host', '/test/build-config.test.mjs',
     '/package.mjs', '/build-config.mjs', '/icon/pymagic.svg', '/icon/pymagic.ico.sha256', '/icon/make-icon.js']) assert.ok(!kept(p), `${p} is packaged`);
   assert.deepEqual(opts.extraResource.map(p => p.split(/[\\/]/).pop()), ['www', 'host', 'demo']);

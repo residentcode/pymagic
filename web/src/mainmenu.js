@@ -8,6 +8,10 @@ const $ = (id) => document.getElementById(id);
 const press = (id) => () => $(id).click();
 
 export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, currentFile, search, refactor, breakpoints, recent, chrome, bookmarks, runConfigs }) {
+    // the desktop app lets the page open another folder (preload.js); in a browser the engine is started with its folder and these stay dim
+    const desktop = window.pymagicDesktop;
+    let recentProjects = [];
+    desktop?.recentProjects().then((list) => { recentProjects = list; }).catch(() => { /* none shown */ });
     const act = (id) => () => { editor.focus(); editor.trigger('menu', id, null); };
     const dock = (id) => () => $(`t-${id}`).click();
 
@@ -37,7 +41,9 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, c
             { label: 'File', submenu: [
                 { label: 'New file…', run: press('ex-new-file') },
                 { label: 'New folder…', run: press('ex-new-folder') },
-                { label: 'Open folder…', key: 'Ctrl+Shift+O', run: () => (window.pymagicDesktop?.openFolder ? window.pymagicDesktop.openFolder() : window.alert('Open folder is in the PyMagic desktop app. In a browser, start PyMagic with the folder: PyMagic.cmd C:\\my\\project')), disabled: !window.pymagicDesktop },
+                { label: 'Open folder…', key: 'Ctrl+Shift+O', run: () => void desktop.openFolder(), disabled: !desktop },
+                { label: 'Recent projects', disabled: !desktop, submenu: recentProjects.length ? recentProjects.map((p) => ({ label: p, run: () => void desktop.openProject(p) })) : [{ label: 'No recent projects', disabled: true }] },
+                { label: 'Open the demo project', run: () => void desktop.openDemo(), disabled: !desktop },
                 { label: 'Recent files', submenu: files.length ? files.map((rel) => ({ label: rel, run: () => void openFile(rel) })) : [{ label: 'No recent files', disabled: true }] },
                 '-',
                 { label: 'Save', key: 'Ctrl+S', run: () => void save() },
@@ -204,6 +210,16 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, c
         ];
     }
 
+    if (desktop) {
+        $('project').classList.add('clickable');
+        $('project').onclick = () => openMenu($('project'), [
+            { label: 'Open folder…', key: 'Ctrl+Shift+O', run: () => void desktop.openFolder() },
+            '-',
+            ...(recentProjects.length ? recentProjects.map((p) => ({ label: p, run: () => void desktop.openProject(p) })) : [{ label: 'No other recent projects', disabled: true }]),
+            '-',
+            { label: 'Open the demo project', run: () => void desktop.openDemo() },
+        ]);
+    }
     $('brand').querySelector('.mark').onclick = () => openMenu($('brand'), items());
     $('brand').querySelector('.mark').title = 'Main menu';
 }
