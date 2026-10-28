@@ -1,5 +1,6 @@
 // Run and debug: toolbar, output panel, breakpoints in the gutter, stepping, frames, variables and evaluate.
 import * as monaco from 'monaco-editor';
+import { startOf } from './runconfig-model.js';
 import { RunClient } from './runclient';
 import { showTab } from './panel';
 import { editBreakpoint, isPlain } from './bpdialog';
@@ -430,6 +431,12 @@ export function setupRun(deps) {
     async function start(debug, profile = false) {
         if (run)
             return;
+        const chosen = deps.runConfig?.();
+        if (chosen) {
+            const s = startOf(chosen);
+            await launch(s.file, debug, profile, s.args, { env: s.env, cwd: s.cwd });
+            return;
+        }
         const model = editor.getModel();
         const rel = model && deps.relOf(model);
         if (!rel)
@@ -437,7 +444,7 @@ export function setupRun(deps) {
         await launch(rel, debug, profile, []);
     }
     // runs a file of the project with arguments (the Django tab runs manage.py this way); false when a run is going
-    async function launch(rel, debug, profile, args) {
+    async function launch(rel, debug, profile, args, extra = {}) {
         if (run)
             return false;
         await deps.saveAll();
@@ -453,7 +460,7 @@ export function setupRun(deps) {
         profiling = profile;
         paused = false;
         showTab('output');
-        run = new RunClient({ type: 'start', file: rel, debug, profile, args, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught' });
+        run = new RunClient({ type: 'start', file: rel, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught' });
         run.onMessage = handle;
         run.onClose = () => { if (run) {
             append('\nConnection to the host lost.\n', 'err');

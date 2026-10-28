@@ -34,6 +34,12 @@ public sealed class RunSession : IDisposable
 
     /// <summary>Where the interpreter runs (this computer, WSL or Docker).</summary>
     public ExecutionTarget Target { get; set; } = ExecutionTarget.Local;
+
+    /// <summary>Environment variables of the run configuration, added to the program's environment.</summary>
+    public IReadOnlyDictionary<string, string>? ExtraEnvironment { get; set; }
+
+    /// <summary>The folder the program starts in when it is not the project's own (a run configuration's choice; a run on this computer only: another system has its own folders).</summary>
+    public string? WorkingDirectory { get; set; }
     public bool IsDebug { get; private set; }
 
     public RunSession(Action<JsonNode> emit) { _emit = emit; }
@@ -156,6 +162,7 @@ public sealed class RunSession : IDisposable
         args2.AddRange(args);
 
         var env = new Dictionary<string, string> { ["PYTHONIOENCODING"] = "utf-8", ["PYTHONUNBUFFERED"] = "1" };
+        foreach (var (key, value) in ExtraEnvironment ?? new Dictionary<string, string>()) env[key] = value;
         string? existing = Environment.GetEnvironmentVariable("PYTHONPATH");
         env["PYTHONPATH"] = Target.IsLocal && !string.IsNullOrEmpty(existing) ? root + Path.PathSeparator + existing : root;
 
@@ -165,6 +172,7 @@ public sealed class RunSession : IDisposable
 
         var psi = Target.Start(python, root, args2, env, helperDirs.Distinct().ToList());
         _runId = psi.Environment.TryGetValue("PYMAGIC_RUN_ID", out var runId) ? runId : null;
+        if (Target.IsLocal && WorkingDirectory != null) psi.WorkingDirectory = WorkingDirectory;
         psi.RedirectStandardInput = true;
         psi.RedirectStandardOutput = true;
         psi.RedirectStandardError = true;

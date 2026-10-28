@@ -681,6 +681,9 @@ app.Map("/run", async (HttpContext ctx) =>
                 string file0 = msg["file"]!.GetValue<string>();
                 ResolveInRoot(file0);   // refuses paths outside the workspace
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
+                // what a run configuration adds: variables, and a folder inside the project to start in
+                session.ExtraEnvironment = RunConfigurations.CleanEnvironment(msg["env"] as JsonObject);
+                session.WorkingDirectory = msg["cwd"]?.GetValue<string>() is { Length: > 0 } cwd && Directory.Exists(ResolveInRoot(cwd)) ? ResolveInRoot(cwd) : null;
                 if (msg["profile"]?.GetValue<bool>() == true) session.StartProfile(root, file0, args);
                 else session.StartWithBreakpoints(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
                 if (msg["exceptionBreak"]?.GetValue<string>() == "raised")

@@ -87,6 +87,35 @@ public class RunTests
     }
 
     [Fact]
+    public void ARunConfigurationAddsVariablesAndChoosesTheFolder()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        Directory.CreateDirectory(Path.Combine(h.Root, "data"));
+        h.Script("show.py", string.Join('\n', "import os", "print('MODE=' + os.environ.get('PM_MODE', '-'))", "print('CWD=' + os.path.basename(os.getcwd()))", "print('HOME_OF=' + os.environ.get('PYTHONPATH', '').split(os.pathsep)[0].split(os.sep)[-1])", ""));
+        h.Session.ExtraEnvironment = new Dictionary<string, string> { ["PM_MODE"] = "fast" };
+        h.Session.WorkingDirectory = Path.Combine(h.Root, "data");
+        h.Session.Start(h.Root, "show.py", false, Array.Empty<string>());
+        h.Type("exited");
+        string output = h.AllOutput();
+        Assert.Contains("MODE=fast", output);
+        Assert.Contains("CWD=data", output);
+        Assert.Contains("HOME_OF=" + Path.GetFileName(h.Root), output);   // the project is still on PYTHONPATH
+    }
+
+    [Fact]
+    public void OnlyHarmlessVariablesAreTakenFromAConfiguration()
+    {
+        var env = (JsonObject)JsonNode.Parse("""{ "OK_NAME": "1", "PATH": "x", "pythonpath": "y", "bad name": "z", "1ABC": "z", "NUM": 5, "LONG": "%LONG%" }""".Replace("%LONG%", new string('a', RunConfigurations.MaxValueLength + 1)))!;
+        var clean = RunConfigurations.CleanEnvironment(env);
+        Assert.Equal("OK_NAME", string.Join(",", clean.Keys));
+        Assert.Equal(0, RunConfigurations.CleanEnvironment(null).Count);
+        var many = new JsonObject();
+        for (int i = 0; i < 80; i++) many["V" + i] = "x";
+        Assert.Equal(RunConfigurations.MaxVariables, RunConfigurations.CleanEnvironment(many).Count);
+    }
+
+    [Fact]
     public void RunPassesArgumentsAndStdinAndSetsPythonPath()
     {
         if (!HavePython) return;

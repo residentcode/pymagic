@@ -11,7 +11,7 @@ const $ = (id) => document.getElementById(id);
 /** A jump of at least this many lines inside a file is a new place to come back to. */
 const FAR = 15;
 
-export function setupToolbar({ monaco, editor, save, openFile, currentFile, refactor, search }) {
+export function setupToolbar({ monaco, editor, save, openFile, currentFile, refactor, search, runConfigs }) {
     const M = monaco.KeyMod, K = monaco.KeyCode;
 
     // ---------------------------------------------------------------- back and forward
@@ -50,9 +50,15 @@ export function setupToolbar({ monaco, editor, save, openFile, currentFile, refa
     editor.addCommand(M.CtrlCmd | M.Alt | K.LeftArrow, () => step(back, forward));
     editor.addCommand(M.CtrlCmd | M.Alt | K.RightArrow, () => step(forward, back));
 
-    // ---------------------------------------------------------------- what Run works on: the file in the editor
-    const target = () => { $('run-target').lastElementChild.textContent = (currentFile() ?? '').split('/').pop() || 'no file'; };
+    // ---------------------------------------------------------------- what Run starts: the chosen run configuration, or the file in the editor
+    const target = () => {
+        const name = runConfigs.selectedName();
+        $('run-config').children[1].textContent = name ?? ((currentFile() ?? '').split('/').pop() || 'no file');
+        $('run-config').title = name ? `Run configuration "${name}": Run, Debug and Profile start it` : 'Run and Debug start the file in the editor; choose a run configuration to start a file with parameters';
+    };
     editor.onDidChangeModel(target);
+    runConfigs.onChange(target);
+    $('run-config').onclick = () => runConfigs.menu($('run-config'));
     target();
 
     // ---------------------------------------------------------------- the file and its edits

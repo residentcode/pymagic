@@ -26,6 +26,7 @@ import { setupMainMenu } from './mainmenu';
 import { setupStructure } from './structure';
 import { setupBookmarks } from './bookmarks';
 import { setupRecent } from './recent';
+import { setupRunConfigurations } from './runconfig';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
 import { loadSettings, editorOptions, applySettings, themeNow, settings } from './settings';
@@ -510,6 +511,7 @@ function updateProblems() {
 let explorer = null;
 let tabs = null;
 let recents = null;
+let runConfigs = null;
 let knownFiles = new Set();   // the files of the project, as the engine listed them last
 let notebook = null;
 const isDirtyRel = (rel) => { const m = models.get(normalise(uriFor(rel))); return !!m && m.getValue() !== savedText.get(rel); };
@@ -673,7 +675,8 @@ async function main() {
             window.dispatchEvent(new Event('pymagic:saved'));
         },
     };
-    runHooks = setupRun({ ...common, root: info.root });
+    runConfigs = setupRunConfigurations({ currentFile: () => currentRel });
+    runHooks = setupRun({ ...common, root: info.root, runConfig: () => runConfigs.current() });
     setupTests(common);
     setupInterpreters();
     setupPackages();
@@ -692,7 +695,7 @@ async function main() {
             return out;
         },
     });
-    setupToolbar({ monaco, editor, save, openFile, currentFile: () => currentRel, refactor, search });
+    setupToolbar({ monaco, editor, save, openFile, currentFile: () => currentRel, refactor, search, runConfigs });
     setupAutoSave({ editor, saveAll: common.saveAll });
     const structure = setupStructure({ editor, lsp, uriOf: (model) => serverUri.get(model), visible: () => chrome.shown() && chrome.view() === 'structure' });
     window.addEventListener('pymagic:sidebar', (e) => { if (e.detail === 'structure') structure.show(); });
@@ -700,7 +703,7 @@ async function main() {
     recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
     setupMainMenu({
         editor, save, saveAll: common.saveAll, reload: reloadFromDisk, openFile, tabs: () => tabs, currentFile: () => currentRel, search, refactor,
-        breakpoints: runHooks.breakpoints, recent: (current) => recents.list(current), chrome, bookmarks,
+        breakpoints: runHooks.breakpoints, recent: (current) => recents.list(current), chrome, bookmarks, runConfigs,
     });
     const git = setupGit({
         editor,

@@ -7,7 +7,7 @@ import { openSettings } from './settings-ui';
 const $ = (id) => document.getElementById(id);
 const press = (id) => () => $(id).click();
 
-export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, currentFile, search, refactor, breakpoints, recent, chrome, bookmarks }) {
+export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, currentFile, search, refactor, breakpoints, recent, chrome, bookmarks, runConfigs }) {
     const act = (id) => () => { editor.focus(); editor.trigger('menu', id, null); };
     const dock = (id) => () => $(`t-${id}`).click();
 
@@ -147,6 +147,13 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, c
                 { label: 'TODO comments', run: dock('todo') },
             ] },
             { label: 'Run', submenu: [
+                { label: 'Run configuration', submenu: [
+                    { label: 'Current file', checked: runConfigs.selectedName() === null, run: () => runConfigs.choose(null) },
+                    ...runConfigs.names().map((n) => ({ label: n, checked: runConfigs.selectedName() === n, run: () => runConfigs.choose(n) })),
+                    '-',
+                    { label: 'Edit configurations…', run: () => void runConfigs.edit() },
+                ] },
+                '-',
                 { label: 'Run', key: 'Ctrl+F5', run: press('b-run'), disabled: $('b-run').disabled },
                 { label: 'Debug', key: 'F5', run: press('b-debug'), disabled: $('b-debug').disabled },
                 { label: 'Run with coverage', run: press('b-cov') },

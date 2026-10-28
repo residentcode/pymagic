@@ -280,10 +280,8 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 #toolbar .grp { display: inline-flex; align-items: center; gap: 2px; }
 @media (max-width: 1380px) { #toolbar .grp-vcs, #toolbar .grp-file { display: none; } }
 @media (max-width: 1120px) { #toolbar .grp-nav, #b-refactor, #b-anything, #b-cov { display: none; } }
-#run-target { display: inline-flex; align-items: center; gap: 6px; max-width: 170px; height: 28px; padding: 0 10px 0 8px; margin-right: 2px; border-radius: 999px; background: var(--hover); color: var(--dim); font-size: 12px; white-space: nowrap; }
-#run-target span { overflow: hidden; text-overflow: ellipsis; }
 #interp { flex: 0 1 auto; min-width: 150px; }
-@media (max-width: 1500px) { #run-target { display: none; } }
+
 #fmt-engine { flex: none; width: 92px; }
 #interp { flex: 0 1 230px; }
 
@@ -399,3 +397,21 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 .tree li:hover .drop { opacity: .8; }
 .tree .drop:hover { background: var(--hover3); opacity: 1; }
 .bookmark-glyph { background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 2h8v12l-4-3.200L4 14z' fill='%238a6bff'/%3E%3C/svg%3E") center / 12px no-repeat; }
+
+/* the chip that says what Run starts, and the run configurations dialog */
+#run-config { display: inline-flex; align-items: center; gap: 6px; max-width: 190px; height: 28px; padding: 0 8px 0 9px; margin-right: 2px; border: 0; border-radius: 999px; background: var(--hover); color: var(--dim); font-size: 12px; }
+#run-config:hover:not(:disabled) { background: var(--hover2); color: var(--fg); }
+#run-config span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 1380px) { #run-config { display: none; } }
+.runcfg { grid-template-columns: 250px minmax(0, 1fr); }
+.runcfg .settings-nav { gap: 6px; }
+.runcfg-list { display: flex; flex-direction: column; gap: 2px; flex: 1; min-height: 0; overflow: auto; }
+.runcfg-list button { justify-content: flex-start; height: 30px; padding: 0 10px; border: 0; background: transparent; color: var(--dim); border-radius: 8px; overflow: hidden; text-overflow: ellipsis; }
+.runcfg-list button:hover { background: var(--hover2); color: var(--fg); }
+.runcfg-list button.active { background: var(--sel-soft); color: var(--accent-text); }
+.runcfg-tools { display: flex; gap: 6px; }
+.runcfg .settings-foot { justify-content: flex-end; }
+.runcfg .set-row { grid-template-columns: 150px minmax(0, 1fr); }
+.runcfg .set-control { justify-content: stretch; }
+.runcfg .set-control input, .runcfg .set-control select, .runcfg .set-control textarea { width: 100%; }
+.runcfg textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; }
