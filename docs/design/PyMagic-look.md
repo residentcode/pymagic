@@ -7,6 +7,8 @@ PyMagic has a look and a layout of its own. It is not a copy of PyCharm, and it 
 | ![before](before-problems.png) | ![after](after-problems.png) |
 | ![before](before-git.png) | ![after](after-git.png) |
 
+The main menu (the mark opens it), the Structure view of the sidebar, the settings dialog in the light theme, and the light theme: ![main menu](after-main-menu.png) ![settings](after-settings-light.png) ![light](after-light.png)
+
 The command bar's menus and picker: ![refactor](after-refactor-menu.png) ![search](after-search-everywhere.png)
 
 At 1100 x 700 the dock keeps only the icons of the tools that are shut, and the command bar drops its labels: ![narrow](after-narrow.png)
@@ -73,6 +75,17 @@ The editor is Monaco (only its theme and font changed, in `web/src/theme.js`), e
 - `web/src/panels.css`: what is inside the dock's tool windows (they use the tokens).
 - `web/src/theme.js`: the editor's colours and font.
 - `web/src/rail.js`: the rail, the explorer's visibility, the project and branch in the command bar.
+
+## Everything the bar and the menus reach
+
+Besides the command bar (back and forward, save, undo and redo, Run, Debug, Coverage, Profile, Format, Imports, Refactor, Git update, commit and push, Tests, find, Search everywhere, interpreter), the window has:
+
+- **A main menu** (the mark): File, Edit, View, Navigate, Code, Run, Tools, Git and Help, with every command and its key (`web/src/mainmenu.js`). The branch next to the project name opens the branches and the usual Git commands; in the desktop app the project name opens Open folder and the recent projects.
+- **A gear menu and the Settings dialog** (Ctrl+,): Appearance (theme: dark, light, follow the system), Editor (font, size, line height, ligatures, wrapping, line numbers, minimap, sticky scroll, bracket colours, whitespace, ruler, smooth scrolling, cursor), Files (save automatically), Formatter, Python, Inspections, Git, Keymap and About. The person's settings are one file kept by the engine (`%LOCALAPPDATA%\PyMagic\settings.json`).
+- **The light theme**: the same tokens on white (`:root[data-theme="light"]` in `look.css`) and a Monaco theme of its own. A new rule that uses tokens needs nothing for it; a colour written out in a rule would break it, so there are none.
+- **Run configurations** (the chip before Run): parameters, environment variables and a working folder, kept in the project.
+- **Sidebar views** (the rail): Files, Structure of the open file, Bookmarks (Ctrl+F2).
+- **Menus** are `web/src/menu.js` (submenus, check marks, keys, dim items); a new command goes in the main menu with its key, and a new setting in `settings.js` with its page in `settings-ui.js`.
 
 ## Checking a change
 

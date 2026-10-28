@@ -220,6 +220,24 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, c
             { label: 'Open the demo project', run: () => void desktop.openDemo() },
         ]);
     }
+    // the branch next to the project: the branches to switch to, and the Git commands people reach for first
+    $('branch-chip').onclick = () => {
+        const select = $('git-branches');
+        const options = [...select.options].filter((o) => !o.value.startsWith('remote:'));
+        const branches = options.length
+            ? options.map((o) => ({ label: o.textContent, checked: o.selected, run: () => { select.value = o.value; select.dispatchEvent(new Event('change', { bubbles: true })); } }))
+            : [{ label: 'No branches', disabled: true }];
+        openMenu($('branch-chip'), [
+            ...branches, '-',
+            { label: 'New branch…', run: () => { $('t-git').click(); $('git-new').click(); } },
+            { label: 'Branches and tags…', run: () => { $('t-git').click(); $('git-manage').click(); } },
+            '-',
+            { label: 'Update (pull)', run: press('b-update') },
+            { label: 'Commit…', run: press('b-commit') },
+            { label: 'Push…', run: press('b-push') },
+            { label: 'Git panel', run: dock('git') },
+        ]);
+    };
     $('brand').querySelector('.mark').onclick = () => openMenu($('brand'), items());
     $('brand').querySelector('.mark').title = 'Main menu';
 }

@@ -58,9 +58,17 @@ export function renderMarkdown(into, text) {
 
 // ------------------------------------------------------------ outputs
 
-const HTML_STYLE = '<style>body{margin:0;font:13px/1.4 system-ui,sans-serif;color:#d4d4d4;background:transparent}'
-    + 'table{border-collapse:collapse}td,th{border:1px solid #555;padding:2px 8px;text-align:right}th{background:#333}tr:nth-child(even){background:#2a2a2a}'
-    + 'img,svg{max-width:100%}</style>';
+/** The style of an HTML output (it is shown in a frame of its own): the colours of the page around it, light or dark. */
+function htmlStyle() {
+    const css = getComputedStyle(document.documentElement);
+    const fg = css.getPropertyValue('--fg').trim() || '#d4d4d4';
+    const line = css.getPropertyValue('--line-strong').trim() || '#555';
+    const head = css.getPropertyValue('--hover3').trim() || '#333';
+    const stripe = css.getPropertyValue('--hover').trim() || '#2a2a2a';
+    return `<style>body{margin:0;font:13px/1.4 system-ui,sans-serif;color:${fg};background:transparent}`
+        + `table{border-collapse:collapse}td,th{border:1px solid ${line};padding:2px 8px;text-align:right}th{background:${head}}tr:nth-child(even){background:${stripe}}`
+        + 'img,svg{max-width:100%}</style>';
+}
 
 function textOutput(text, cls) {
     let t = collapseCarriageReturns(text);
@@ -82,7 +90,7 @@ export function renderOutput(o) {
             // scripts are off in a sandboxed frame; allow-same-origin only lets the page measure it
             const frame = el('iframe', 'nb-out nb-html');
             frame.setAttribute('sandbox', 'allow-same-origin');
-            frame.srcdoc = HTML_STYLE + d.html;
+            frame.srcdoc = htmlStyle() + d.html;
             frame.onload = () => { try { frame.style.height = `${Math.min(frame.contentDocument.documentElement.scrollHeight + 4, 600)}px`; } catch { /* not measurable */ } };
             return frame;
         }
