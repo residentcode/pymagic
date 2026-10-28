@@ -1,6 +1,7 @@
 // Git beyond the working tree: fetch, pull and push, the merge or rebase that stopped on conflicts (resolve each file, continue or
 // abort), stashes, remotes, and branch and tag management. The Git tab (git.js) owns the status; this module reads it when it refreshes.
 import { toast } from './toast';
+import { openMerge } from './merge';
 
 const $ = (id) => document.getElementById(id);
 
@@ -102,6 +103,7 @@ export function setupGitSync({ git, deps }) {
             const oursTitle = operation === 'rebase' ? 'The version of the branch you are rebasing onto' : 'Your version (the branch you are on)';
             const theirsTitle = operation === 'rebase' ? 'The version of your commit being replayed' : 'The version that comes in';
             row.append(
+                button('Resolve…', 'Settle each conflict of the file in the merge editor', () => merge(path)),
                 button('Ours', oursTitle, () => resolve(path, 'ours')),
                 button('Theirs', theirsTitle, () => resolve(path, 'theirs')),
                 button('Compare', 'Ours against theirs side by side', () => compare(path)),
@@ -110,6 +112,22 @@ export function setupGitSync({ git, deps }) {
             );
             box.append(row);
         }
+    }
+
+    async function merge(path) {
+        try {
+            await deps.saveAll();
+            await openMerge({
+                monaco: deps.monaco,
+                path,
+                finish: async (resolved) => {
+                    if (resolved) await act({ op: 'markResolved', path });
+                    await deps.reloadAll();
+                    toast(resolved ? `${path}: resolved` : `${path}: saved, still has conflicts`);
+                    await git.refresh();
+                },
+            });
+        } catch (e) { toast(String(e.message ?? e), true); }
     }
 
     async function resolve(path, side) {

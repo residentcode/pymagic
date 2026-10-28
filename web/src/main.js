@@ -717,7 +717,7 @@ async function main() {
         reload: reloadFromDisk,
         reloadAll: reloadAllFromDisk,
     });
-    setupGitSync({ git, deps: { saveAll: common.saveAll, reloadAll: reloadAllFromDisk, openFile } });
+    setupGitSync({ git, deps: { saveAll: common.saveAll, reloadAll: reloadAllFromDisk, openFile, monaco } });
     setupHierarchy({
         editor, lsp, openFile, modelForUri,
         uriOf: (model) => serverUri.get(model),
