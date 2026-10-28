@@ -124,4 +124,69 @@ public class SignatureHelpTests
         Assert.True(At("nothing_known(|") == null);
         Assert.True(At(Src("if (|")) == null);
     }
+
+    [Fact]
+    public void TheFirstParagraphOfTheDocstringComesWithIt()
+    {
+        string src = Src("def area(w, h):", "    \"\"\"The area of a box.", "", "    More about it.", "    \"\"\"", "    return w * h", "", "area(|");
+        Assert.Equal("The area of a box.", At(src)!.Signatures[0].Documentation);
+        Assert.True(At(Src("def b(x):", "    return x", "b(|"))!.Signatures[0].Documentation == null);
+    }
+
+    // ------------------------------------------------------------ keyword names in completion
+
+    static List<string> Names(string marked)
+    {
+        int at = marked.IndexOf('|');
+        string src = marked.Remove(at, 1);
+        var svc = new LanguageService();
+        svc.Open(Main, src, 1);
+        return svc.Completion(Main, new LineMap(src).PositionOf(at)).Select(i => i.Label).ToList();
+    }
+
+    [Fact]
+    public void KeywordNamesAreOfferedWhereAnArgumentBegins()
+    {
+        string def = Src("def f(width, height=1, *, color=None):", "    pass", "");
+        var names = Names(def + "f(|");
+        Assert.True(names.Contains("width="));
+        Assert.True(names.Contains("height="));
+        Assert.True(names.Contains("color="));
+        Assert.True(Names(def + "f(1, |").Contains("height="));
+        var narrowed = Names(def + "f(h|");
+        Assert.True(narrowed.Contains("height="));
+        Assert.True(!narrowed.Contains("width="));
+    }
+
+    [Fact]
+    public void KeywordNamesLeaveOutWhatIsFilledOrGiven()
+    {
+        string def = Src("def f(width, height=1, *, color=None):", "    pass", "");
+        var after = Names(def + "f(5, |");
+        Assert.True(!after.Contains("width="));          // the first argument fills it
+        Assert.True(after.Contains("height="));
+        var given = Names(def + "f(color=1, |");
+        Assert.True(!given.Contains("color="));
+        Assert.True(given.Contains("width="));
+        Assert.True(!Names(Src("def g(a, /, b):", "    pass", "g(|")).Contains("a="));   // positional only
+    }
+
+    [Fact]
+    public void KeywordNamesAreNotOfferedInTheMiddleOfAnExpressionOrAfterADot()
+    {
+        string def = Src("def f(width, height=1):", "    pass", "x = 3", "");
+        Assert.True(!Names(def + "f(x + w|").Contains("width="));
+        Assert.True(!Names(def + "f(x.w|").Contains("width="));
+        Assert.True(!Names(def + "y = [w|").Any(n => n.EndsWith('=')));
+        Assert.True(!Names(def + "f(width=w|").Contains("width="));
+    }
+
+    [Fact]
+    public void KeywordNamesOfAMethodAndOfAClass()
+    {
+        string src = Src("class P:", "    def __init__(self, x, y=0):", "        pass", "", "    def move(self, dx, dy):", "        pass", "");
+        Assert.True(Names(src + "P(1, |").Contains("y="));
+        Assert.True(!Names(src + "P(|").Contains("self="));
+        Assert.True(Names(src + "P(1).move(1, |").Contains("dy="));
+    }
 }

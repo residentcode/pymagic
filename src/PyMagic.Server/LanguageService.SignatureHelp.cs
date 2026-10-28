@@ -57,17 +57,18 @@ public sealed partial class LanguageService
         return new OpenCall(call2.At, call2.Commas, keyword);
     }
 
-    /// <summary>Parameter info for the call the cursor is in, or null when there is none or nothing is known about the callee.</summary>
-    public SignatureHelp? SignatureHelp(string uri, Position pos)
-    {
-        if (!_docs.TryGetValue(uri, out var doc)) return null;
-        string text = doc.Text;
-        int offset = new LineMap(text).OffsetOf(pos);
-        if (SiteAt(text, offset) == CursorSite.Nothing) return null;
-        if (OpenCallAt(text, offset) is not { } open) return null;
+    sealed record CallContext(TypeEvaluator Ev, ModuleInfo Module, CallExpr Call, IReadOnlyList<CallSignature> Sigs, string Name, OpenCall Open);
 
-        // what is written so far rarely parses: analyse a copy where the unfinished argument is a name and the brackets are closed
-        var (ws, m) = PatchedModule(doc, offset, offset);
+    /// <summary>
+    /// The call that is open where text[start..end) is being typed, with what its callee takes; null when the cursor is in no call or nothing is known
+    /// about the callee. What is written so far rarely parses, so a copy is analysed where that text is a name and the brackets are closed.
+    /// </summary>
+    CallContext? CallAt(Doc doc, int start, int end)
+    {
+        string text = doc.Text;
+        if (SiteAt(text, end) == CursorSite.Nothing) return null;
+        if (OpenCallAt(text, start) is not { } open) return null;
+        var (ws, m) = PatchedModule(doc, start, end);
         CallExpr? call = null;
         foreach (var n in AstChildren.Descendants(m.Ast))
         {
@@ -77,15 +78,50 @@ public sealed partial class LanguageService
             if (p == open.Paren && (call == null || c.Start >= call.Start)) call = c;
         }
         if (call == null) return null;
-
         var ev = ws.Evaluator;
         var sigs = ev.CallSignatures(ev.TypeOf(m, call.Func));
         if (sigs.Count == 0) return null;
         string name = call.Func switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => SourceText(m, call.Func) };
+        return new CallContext(ev, m, call, sigs, name, open);
+    }
 
-        var infos = sigs.Select(s => DescribeCall(ev, name, s)).ToList();
-        int chosen = Enumerable.Range(0, sigs.Count).FirstOrDefault(i => Accepts(sigs[i].Params, open), 0);
-        return new SignatureHelp(infos.Select(i => i.Info).ToList(), chosen, infos[chosen].Index(open));
+    /// <summary>Parameter info for the call the cursor is in, or null when there is none or nothing is known about the callee.</summary>
+    public SignatureHelp? SignatureHelp(string uri, Position pos)
+    {
+        if (!_docs.TryGetValue(uri, out var doc)) return null;
+        int offset = new LineMap(doc.Text).OffsetOf(pos);
+        if (CallAt(doc, offset, offset) is not { } cx) return null;
+        var infos = cx.Sigs.Select(s => DescribeCall(cx.Ev, cx.Name, s)).ToList();
+        int chosen = Enumerable.Range(0, cx.Sigs.Count).FirstOrDefault(i => Accepts(cx.Sigs[i].Params, cx.Open), 0);
+        return new SignatureHelp(infos.Select(i => i.Info).ToList(), chosen, infos[chosen].Index(cx.Open));
+    }
+
+    /// <summary>
+    /// `name=` for each parameter the call can still be given by keyword, where an argument begins (after the bracket or a comma): not those that are
+    /// filled by the arguments written before, not those already given, not positional-only ones.
+    /// </summary>
+    IReadOnlyList<CompletionItem> KeywordArgumentItems(Doc doc, int start, int end, string prefix)
+    {
+        string text = doc.Text;
+        int i = start - 1;
+        while (i >= 0 && char.IsWhiteSpace(text[i])) i--;
+        if (i < 0 || text[i] is not ('(' or ',') || CallAt(doc, start, end) is not { } cx) return Array.Empty<CompletionItem>();
+        var given = cx.Call.Args.Where(a => a.Name != null).Select(a => a.Name!).ToHashSet();
+        int positional = cx.Call.Args.Count(a => a.Name == null && a.Stars == 0 && a.Value is not NameExpr { Name: CursorMark });
+        var found = new Dictionary<string, PyType>();
+        foreach (var sig in cx.Sigs)
+        {
+            var byPosition = sig.Params.Where(p => p.Category is ParamCategory.PositionalOnly or ParamCategory.Normal).ToList();
+            if (positional > byPosition.Count && !sig.Params.Any(p => p.Category == ParamCategory.VarPositional)) continue;   // this overload takes fewer arguments than are written
+            foreach (var p in sig.Params)
+            {
+                if (p.Category is not (ParamCategory.Normal or ParamCategory.KeywordOnly) || given.Contains(p.Name) || !p.Name.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                if (p.Category == ParamCategory.Normal && byPosition.IndexOf(p) < positional) continue;
+                found.TryAdd(p.Name, p.Type);
+            }
+        }
+        return found.Select(kv => new CompletionItem(kv.Key + "=", CompletionKind.Variable,
+            kv.Value is UnknownType { Explicit: false } ? null : FormatType(cx.Ev, kv.Value), SortText: "00" + kv.Key.ToLowerInvariant(), InsertText: kv.Key + "=", FilterText: kv.Key)).ToList();
     }
 
     /// <summary>Whether a signature could take the argument the cursor is on (a keyword it has or a position it reaches), to pick among overloads.</summary>
@@ -133,6 +169,7 @@ public sealed partial class LanguageService
         }
         sb.Append(')');
         if (s.Returns is { } r && r is not UnknownType { Explicit: false }) sb.Append(" -> ").Append(FormatType(ev, r));
-        return new Described(new SignatureInformation(sb.ToString(), labels.Select(l => new ParameterInformation(l)).ToList()), s.Params);
+        string? doc = s.Function?.Node is FunctionDef def ? FirstParagraphOfDocstring(def) : null;
+        return new Described(new SignatureInformation(sb.ToString(), labels.Select(l => new ParameterInformation(l)).ToList(), doc), s.Params);
     }
 }

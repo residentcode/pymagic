@@ -16,7 +16,7 @@ public sealed record Hover(MarkupContent Contents, Range Range);
 
 /// <param name="Label">The start and end of the parameter inside the signature's label.</param>
 public sealed record ParameterInformation(int[] Label);
-public sealed record SignatureInformation(string Label, List<ParameterInformation> Parameters);
+public sealed record SignatureInformation(string Label, List<ParameterInformation> Parameters, string? Documentation = null);
 public sealed record SignatureHelp(List<SignatureInformation> Signatures, int ActiveSignature, int ActiveParameter);
 
 public static class CompletionKind

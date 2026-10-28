@@ -498,7 +498,7 @@ function registerProviders() {
                 return null;
             return {
                 value: {
-                    signatures: h.signatures.map((s) => ({ label: s.label, parameters: s.parameters.map((p) => ({ label: p.label })) })),
+                    signatures: h.signatures.map((s) => ({ label: s.label, documentation: s.documentation ?? undefined, parameters: s.parameters.map((p) => ({ label: p.label })) })),
                     activeSignature: h.activeSignature,
                     activeParameter: h.activeParameter,
                 },

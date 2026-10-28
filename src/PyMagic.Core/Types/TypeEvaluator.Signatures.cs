@@ -1,7 +1,8 @@
 namespace PyMagic.Core.Types;
 
 /// <summary>One way of calling something: the parameters it takes and what it returns (null for a class, whose call makes an instance).</summary>
-public sealed record CallSignature(IReadOnlyList<ParamInfo> Params, PyType? Returns);
+/// <param name="Function">The def the parameters were read from, when there is one (to show its docstring).</param>
+public sealed record CallSignature(IReadOnlyList<ParamInfo> Params, PyType? Returns, FunctionInfo? Function = null);
 
 public sealed partial class TypeEvaluator
 {
@@ -21,10 +22,10 @@ public sealed partial class TypeEvaluator
                     foreach (var f in o.Overloads) Add(f);
                     break;
                 case FunctionType f:
-                    found.Add(new CallSignature(CallableParameters(f), ReturnTypeOf(f)));
+                    found.Add(new CallSignature(CallableParameters(f), ReturnTypeOf(f), f.Info));
                     break;
                 case SignatureType { Params: { } ps } s:
-                    found.Add(new CallSignature(ps, s.Origin == null ? s.Return : null));
+                    found.Add(new CallSignature(ps, s.Origin == null ? s.Return : null, s.Origin?.Info));
                     break;
                 default:
                     if (ParametersOfValue(t) is { Params: { } ps2 }) found.Add(new CallSignature(ps2, null));

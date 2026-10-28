@@ -41,7 +41,10 @@ public sealed partial class LanguageService
             return Array.Empty<CompletionItem>();
         if (afterDot && start >= 2 && char.IsDigit(text[start - 2]) && IsNumberBefore(text, start - 1)) return Array.Empty<CompletionItem>();   // 3.|
 
-        return afterDot ? MemberCompletion(doc, start, offset, prefix) : NameCompletion(doc, start, offset, prefix, lineBefore);
+        if (afterDot) return MemberCompletion(doc, start, offset, prefix);
+        var names = NameCompletion(doc, start, offset, prefix, lineBefore);
+        var keywords = KeywordArgumentItems(doc, start, offset, prefix);
+        return keywords.Count == 0 ? names : keywords.Concat(names).ToList();
     }
 
     // ------------------------------------------------------------ where the cursor is
