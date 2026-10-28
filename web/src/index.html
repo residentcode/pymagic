@@ -66,6 +66,9 @@
     <symbol id="i-refactor" viewBox="0 0 24 24"><path d="M5 8h12l-3.500-3.500M19 16H7l3.500 3.500"/></symbol>
     <symbol id="i-find" viewBox="0 0 24 24"><path d="M4 6.500h8M4 10.500h5M4 14.500h4"/><circle cx="15" cy="14" r="4"/><path d="M18 17l3 3"/></symbol>
     <symbol id="i-commit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.500"/><path d="M8.500 12.200l2.500 2.500 4.500-5"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.200"/><path d="M12 3.500v2.600M12 17.900v2.600M3.500 12h2.600M17.900 12h2.600M6 6l1.900 1.900M16.100 16.100 18 18M18 6l-1.900 1.900M7.900 16.100 6 18"/><circle cx="12" cy="12" r="6.800"/></symbol>
+    <symbol id="i-tick" viewBox="0 0 24 24"><path d="M5.500 12.500l4.200 4.200L18.500 7.500"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4.500 7h15M4.500 12h15M4.500 17h15"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.800 5.200L19 10l-5.200 1.800L12 17l-1.800-5.200L5 10l5.200-1.800z" fill="currentColor"/></symbol>
   </svg>
   <div id="app">
@@ -135,6 +138,7 @@
       <select id="interp" title="Python interpreter"></select>
       <button id="b-venv" class="iconbtn" title="Create a .venv in the project with the selected interpreter"><svg class="i"><use href="#i-venv"/></svg></button>
       <button id="b-remote" class="iconbtn" title="Use a Python interpreter from a WSL distribution, a Docker image or an SSH host"><svg class="i"><use href="#i-remote"/></svg></button>
+      <button id="b-gear" class="iconbtn" title="Settings and appearance (Ctrl+,)"><svg class="i"><use href="#i-gear"/></svg></button>
     </div>
     <div id="editor-area"><div id="tabs-bar"></div><div id="editor"></div></div>
     <section id="panel">

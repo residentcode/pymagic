@@ -2,48 +2,14 @@
 // redo, coverage, the refactoring menu, search everywhere, find in files, and the Git actions one click from the editor. Each one presses what
 // the tool already does (a key, a button of the dock, a function of its script); only the history of places is new.
 import { showTab } from './panel';
+import { openMenu } from './menu';
+import { change, settings } from './settings';
+import { openSettings, setupSettingsKey } from './settings-ui';
 
 const $ = (id) => document.getElementById(id);
 
 /** A jump of at least this many lines inside a file is a new place to come back to. */
 const FAR = 15;
-
-/** A small menu under a button, in the style of the context menu. */
-function menu(anchor, items) {
-    document.getElementById('bar-menu')?.remove();
-    const box = document.createElement('div');
-    box.className = 'ctx-menu';
-    box.id = 'bar-menu';
-    const close = () => { box.remove(); document.removeEventListener('mousedown', outside, true); document.removeEventListener('keydown', onKey, true); };
-    const outside = (e) => { if (!box.contains(e.target)) close(); };
-    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
-    for (const item of items) {
-        if (item === '-') {
-            const sep = document.createElement('div');
-            sep.className = 'ctx-sep';
-            box.appendChild(sep);
-            continue;
-        }
-        const row = document.createElement('div');
-        row.className = 'ctx-item';
-        const label = document.createElement('span');
-        label.textContent = item.label;
-        row.appendChild(label);
-        if (item.key) {
-            const key = document.createElement('span');
-            key.className = 'ctx-key';
-            key.textContent = item.key;
-            row.appendChild(key);
-        }
-        row.onclick = () => { close(); item.run(); };
-        box.appendChild(row);
-    }
-    document.body.appendChild(box);
-    const r = anchor.getBoundingClientRect();
-    box.style.top = `${r.bottom + 4}px`;
-    box.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - box.offsetWidth - 8))}px`;
-    setTimeout(() => { document.addEventListener('mousedown', outside, true); document.addEventListener('keydown', onKey, true); });
-}
 
 export function setupToolbar({ monaco, editor, save, openFile, currentFile, refactor, search }) {
     const M = monaco.KeyMod, K = monaco.KeyCode;
@@ -99,7 +65,7 @@ export function setupToolbar({ monaco, editor, save, openFile, currentFile, refa
 
     // ---------------------------------------------------------------- refactorings
     const act = (kind) => () => { editor.focus(); void refactor.trigger(kind); };
-    $('b-refactor').onclick = () => menu($('b-refactor'), [
+    $('b-refactor').onclick = () => openMenu($('b-refactor'), [
         { label: 'Rename…', key: 'F2', run: () => { editor.focus(); editor.trigger('toolbar', 'editor.action.rename', null); } },
         '-',
         { label: 'Extract variable', key: 'Ctrl+Alt+V', run: act('extractVariable') },
@@ -126,14 +92,45 @@ export function setupToolbar({ monaco, editor, save, openFile, currentFile, refa
     // ---------------------------------------------------------------- Git, one click from the editor (the work itself is the Git panel's)
     $('b-update').onclick = () => {
         $('t-git').click();
-        if (window.confirm('Fetch and join the upstream into this branch now?\n\nThe Git panel shows how it went (its "merge / rebase" setting decides how).'))
+        if (!settings().confirmGit || window.confirm('Fetch and join the upstream into this branch now?\n\nThe Git panel shows how it went (its "merge / rebase" setting decides how).'))
             $('git-pull').click();
     };
     $('b-commit').onclick = () => { $('t-git').click(); showTab('git'); $('git-message').focus(); };
     $('b-push').onclick = () => {
         $('t-git').click();
-        if (window.confirm('Send this branch to its upstream now?'))
+        if (!settings().confirmGit || window.confirm('Send this branch to its upstream now?'))
             $('git-push').click();
+    };
+
+    // ---------------------------------------------------------------- the gear: settings and the choices people change most often
+    setupSettingsKey();
+    const flip = (key, on, off) => () => change({ [key]: settings()[key] === on ? off : on });
+    $('b-gear').onclick = () => {
+        const s = settings();
+        const theme = (value, label) => ({ label, checked: s.theme === value, run: () => change({ theme: value }) });
+        openMenu($('b-gear'), [
+            { label: 'Settings…', key: 'Ctrl+,', run: () => openSettings() },
+            '-',
+            { label: 'Theme', submenu: [theme('dark', 'Dark'), theme('light', 'Light'), theme('system', 'Follow the system')] },
+            { label: 'Editor', submenu: [
+                { label: 'Wrap long lines', checked: s.wordWrap === 'on', run: flip('wordWrap', 'on', 'off') },
+                { label: 'Minimap', checked: s.minimap, run: flip('minimap', true, false) },
+                { label: 'Keep the enclosing definition in view', checked: s.stickyScroll, run: flip('stickyScroll', true, false) },
+                { label: 'Colour matching brackets', checked: s.bracketColors, run: flip('bracketColors', true, false) },
+                '-',
+                { label: 'Larger text', run: () => change({ fontSize: settings().fontSize + 1 }) },
+                { label: 'Smaller text', run: () => change({ fontSize: settings().fontSize - 1 }) },
+                { label: 'Normal text size', run: () => change({ fontSize: 14 }) },
+            ] },
+            '-',
+            { label: 'Formatter…', run: () => openSettings('formatter') },
+            { label: 'Python interpreter…', run: () => openSettings('python') },
+            { label: 'Inspections…', run: () => $('t-insp').click() },
+            { label: 'Git…', run: () => openSettings('git') },
+            '-',
+            { label: 'Keyboard shortcuts', run: () => openSettings('keymap') },
+            { label: 'About PyMagic', run: () => openSettings('about') },
+        ]);
     };
     paint();
 }

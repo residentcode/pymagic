@@ -113,6 +113,16 @@ app.MapGet("/api/info", () => new
     typeshed,
 });
 
+// the settings of the person (theme, editor font, ...): the same in every project, kept in their own folder
+var userSettings = new UserSettings();
+app.MapGet("/api/settings", () => Results.Text(userSettings.Read(), "application/json"));
+app.MapPut("/api/settings", async (HttpRequest req) =>
+{
+    using var reader = new StreamReader(req.Body, Encoding.UTF8);
+    try { userSettings.Write(await reader.ReadToEndAsync()); return Results.NoContent(); }
+    catch (ServiceException e) { return Results.BadRequest(e.Message); }
+});
+
 app.MapGet("/api/files", () =>
 {
     var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", "node_modules", ".venv", "venv", "bin", "obj" };

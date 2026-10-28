@@ -22,7 +22,9 @@ import { setupGit } from './git';
 import { toast } from './toast';
 import { setupChrome } from './rail';
 import { setupToolbar } from './toolbar';
-import { THEME, EDITOR_FONT, defineTheme } from './theme';
+import { setupAutoSave } from './autosave';
+import { THEMES, defineTheme, defineLightTheme } from './theme';
+import { loadSettings, editorOptions, applySettings, themeNow, settings } from './settings';
 self.MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
 const toPos = (p) => ({ line: p.lineNumber - 1, character: p.column - 1 });
 const toRange = (r) => ({
@@ -624,17 +626,15 @@ async function main() {
     const info = await (await fetch('/api/info')).json();
     rootUri = info.rootUri;
     defineTheme(monaco);
+    defineLightTheme(monaco);
+    await loadSettings();
     editor = monaco.editor.create($('editor'), {
-        theme: THEME,
+        theme: THEMES[themeNow()],
         automaticLayout: true,
-        fontFamily: EDITOR_FONT,
-        fontLigatures: false,
-        fontSize: 14,
-        lineHeight: 22,
+        ...editorOptions(settings()),
         padding: { top: 10, bottom: 10 },
         cursorSmoothCaretAnimation: 'on',
         roundedSelection: true,
-        minimap: { enabled: false },
         quickSuggestions: { other: true, comments: false, strings: false },
         scrollBeyondLastLine: false,
         glyphMargin: true,
@@ -643,6 +643,7 @@ async function main() {
         snippetSuggestions: 'inline',
         suggest: { showWords: false, insertMode: 'replace' },
     });
+    applySettings(monaco, THEMES, editor);
     notebook = setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, lsp, rootUri: () => rootUri, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     window.pymagic = { editor, monaco, openFile, notebook };
     const common = {
@@ -684,6 +685,7 @@ async function main() {
         },
     });
     setupToolbar({ monaco, editor, save, openFile, currentFile: () => currentRel, refactor, search });
+    setupAutoSave({ editor, saveAll: common.saveAll });
     const git = setupGit({
         editor,
         relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')),

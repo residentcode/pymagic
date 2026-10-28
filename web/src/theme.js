@@ -1,7 +1,7 @@
 // The editor's colours and type: PyMagic's own theme for Monaco (colours of look.css, the violet of the icon, a golden spark for what is searched for).
 export const THEME = 'pymagic';
-
-export const EDITOR_FONT = '"Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace';
+export const THEME_LIGHT = 'pymagic-light';
+export const THEMES = { dark: THEME, light: THEME_LIGHT };
 
 export function defineTheme(monaco) {
     monaco.editor.defineTheme(THEME, {
@@ -80,6 +80,75 @@ export function defineTheme(monaco) {
             'scrollbarSlider.activeBackground': '#5f6580aa',
             'diffEditor.insertedTextBackground': '#4ddbb422',
             'diffEditor.removedTextBackground': '#ff6f8622',
+        },
+    });
+}
+
+/** The light theme: the same violet and spark on white surfaces. */
+export function defineLightTheme(monaco) {
+    monaco.editor.defineTheme(THEME_LIGHT, {
+        base: 'vs',
+        inherit: true,
+        rules: [
+            { token: '', foreground: '1d2033' },
+            { token: 'keyword', foreground: '6a4df0' },
+            { token: 'keyword.flow', foreground: '6a4df0' },
+            { token: 'string', foreground: '0f8a63' },
+            { token: 'string.escape', foreground: 'b26a00' },
+            { token: 'number', foreground: 'b26a00' },
+            { token: 'number.float', foreground: 'b26a00' },
+            { token: 'number.hex', foreground: 'b26a00' },
+            { token: 'comment', foreground: '8a92ad', fontStyle: 'italic' },
+            { token: 'comment.doc', foreground: '77809d', fontStyle: 'italic' },
+            { token: 'type', foreground: '1a64a8' },
+            { token: 'type.identifier', foreground: 'c2570c' },
+            { token: 'predefined', foreground: '1a64a8' },
+            { token: 'annotation', foreground: 'c2306b' },
+            { token: 'identifier', foreground: '1d2033' },
+            { token: 'operator', foreground: '5d647d' },
+            { token: 'delimiter', foreground: '5d647d' },
+            { token: 'delimiter.bracket', foreground: '3b4160' },
+            { token: 'tag', foreground: 'c2306b' },
+        ],
+        colors: {
+            'editor.background': '#ffffff',
+            'editor.foreground': '#1d2033',
+            'editorLineNumber.foreground': '#a9b0c8',
+            'editorLineNumber.activeForeground': '#4a5170',
+            'editor.lineHighlightBackground': '#f3f4fb',
+            'editor.lineHighlightBorder': '#00000000',
+            'editor.selectionBackground': '#6a4df030',
+            'editor.inactiveSelectionBackground': '#6a4df01c',
+            'editor.selectionHighlightBackground': '#6a4df01c',
+            'editor.wordHighlightBackground': '#6a4df01c',
+            'editor.findMatchBackground': '#ffd86690',
+            'editor.findMatchHighlightBackground': '#ffd86655',
+            'editorCursor.foreground': '#6a4df0',
+            'editorIndentGuide.background1': '#e6e9f4',
+            'editorIndentGuide.activeBackground1': '#c9cee0',
+            'editorBracketMatch.background': '#6a4df01f',
+            'editorBracketMatch.border': '#6a4df070',
+            'editorGutter.background': '#ffffff',
+            'editorWhitespace.foreground': '#dde1ef',
+            'editorWidget.background': '#ffffff',
+            'editorWidget.border': '#c9cee0',
+            'editorSuggestWidget.background': '#ffffff',
+            'editorSuggestWidget.border': '#c9cee0',
+            'editorSuggestWidget.selectedBackground': '#6a4df022',
+            'editorSuggestWidget.highlightForeground': '#5236d6',
+            'editorHoverWidget.background': '#ffffff',
+            'editorHoverWidget.border': '#c9cee0',
+            'peekView.border': '#6a4df0',
+            'peekViewEditor.background': '#f7f8fd',
+            'peekViewResult.background': '#f4f5fa',
+            'peekViewTitle.background': '#f4f5fa',
+            'list.hoverBackground': '#14183214',
+            'list.activeSelectionBackground': '#6a4df022',
+            'input.background': '#ffffff',
+            'input.border': '#e1e4ef',
+            'focusBorder': '#6a4df0',
+            'scrollbarSlider.background': '#c9cee088',
+            'scrollbarSlider.hoverBackground': '#aab1cc99',
         },
     });
 }
