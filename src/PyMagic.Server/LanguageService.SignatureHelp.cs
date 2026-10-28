@@ -91,7 +91,9 @@ public sealed partial class LanguageService
         if (!_docs.TryGetValue(uri, out var doc)) return null;
         int offset = new LineMap(doc.Text).OffsetOf(pos);
         if (CallAt(doc, offset, offset) is not { } cx) return null;
-        var infos = cx.Sigs.Select(s => DescribeCall(cx.Ev, cx.Name, s)).ToList();
+        // calling a class: its docstring, and what it says about the parameters, count as much as __init__'s
+        var owner = cx.Ev.TypeOf(cx.Module, cx.Call.Func) is ClassType { IsInstance: false } cls ? cls.Info.Node : null;
+        var infos = cx.Sigs.Select(s => DescribeCall(cx.Ev, cx.Name, s, owner)).ToList();
         int chosen = Enumerable.Range(0, cx.Sigs.Count).FirstOrDefault(i => Accepts(cx.Sigs[i].Params, cx.Open), 0);
         return new SignatureHelp(infos.Select(i => i.Info).ToList(), chosen, infos[chosen].Index(cx.Open));
     }
@@ -154,10 +156,16 @@ public sealed partial class LanguageService
         }
     }
 
-    static Described DescribeCall(TypeEvaluator ev, string name, CallSignature s)
+    static Described DescribeCall(TypeEvaluator ev, string name, CallSignature s, ClassDef? owner)
     {
+        // a class has no def of its own to point at: its own __init__ is the one whose docstring counts
+        var def = s.Function?.Node as FunctionDef ?? owner?.Body.OfType<FunctionDef>().FirstOrDefault(f => f.Name == "__init__");
+        string? functionDoc = def != null ? Docstrings.Of(def.Body) : null;
+        string? classDoc = owner != null ? Docstrings.Of(owner.Body) : null;
+        var parameterDocs = Docstrings.Parameters(functionDoc);
+        var classParameterDocs = Docstrings.Parameters(classDoc);
         var sb = new StringBuilder(name).Append('(');
-        var labels = new List<int[]>();
+        var labels = new List<ParameterInformation>();
         bool first = true;
         foreach (var (text, param) in ParamParts(ev, s.Params))
         {
@@ -165,11 +173,11 @@ public sealed partial class LanguageService
             first = false;
             int from = sb.Length;
             sb.Append(text);
-            if (param != null) labels.Add(new[] { from, sb.Length });
+            if (param != null) labels.Add(new ParameterInformation(new[] { from, sb.Length }, parameterDocs.GetValueOrDefault(param.Name) ?? classParameterDocs.GetValueOrDefault(param.Name)));
         }
         sb.Append(')');
         if (s.Returns is { } r && r is not UnknownType { Explicit: false }) sb.Append(" -> ").Append(FormatType(ev, r));
-        string? doc = s.Function?.Node is FunctionDef def ? FirstParagraphOfDocstring(def) : null;
-        return new Described(new SignatureInformation(sb.ToString(), labels.Select(l => new ParameterInformation(l)).ToList(), doc), s.Params);
+        string? doc = owner != null ? Docstrings.Summary(classDoc) ?? Docstrings.Summary(functionDoc) : Docstrings.Summary(functionDoc);
+        return new Described(new SignatureInformation(sb.ToString(), labels, doc), s.Params);
     }
 }
