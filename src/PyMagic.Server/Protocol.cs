@@ -14,6 +14,11 @@ public sealed record LspDiagnostic(Range Range, int Severity, string Message, st
 public sealed record MarkupContent(string Kind, string Value);
 public sealed record Hover(MarkupContent Contents, Range Range);
 
+/// <param name="Label">The start and end of the parameter inside the signature's label.</param>
+public sealed record ParameterInformation(int[] Label);
+public sealed record SignatureInformation(string Label, List<ParameterInformation> Parameters);
+public sealed record SignatureHelp(List<SignatureInformation> Signatures, int ActiveSignature, int ActiveParameter);
+
 public static class CompletionKind
 {
     public const int Method = 2, Function = 3, Field = 5, Variable = 6, Class = 7, Module = 9, Property = 10,

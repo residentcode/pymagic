@@ -214,6 +214,8 @@ public sealed class Server
                 return _service.Hover(UriOf(p), PositionOf(p));
             case "textDocument/definition":
                 return _service.Definition(UriOf(p), PositionOf(p));
+            case "textDocument/signatureHelp":
+                return _service.SignatureHelp(UriOf(p), PositionOf(p));
             case "textDocument/completion":
                 return new { isIncomplete = false, items = _service.Completion(UriOf(p), PositionOf(p)) };
             case "textDocument/implementation":
@@ -313,6 +315,7 @@ public sealed class Server
                 hoverProvider = true,
                 definitionProvider = true,
                 completionProvider = new { triggerCharacters = new[] { "." } },
+                signatureHelpProvider = new { triggerCharacters = new[] { "(", "," } },
                 documentSymbolProvider = true,
                 workspaceSymbolProvider = true,
                 implementationProvider = true,

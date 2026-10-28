@@ -490,24 +490,30 @@ public sealed partial class LanguageService
     {
         var sb = new StringBuilder();
         sb.Append(keyword).Append(name).Append('(');
+        sb.Append(string.Join(", ", ParamParts(ev, ps).Select(x => x.Text))).Append(')');
+        if (ret is not UnknownType { Explicit: false }) sb.Append(" -> ").Append(FormatType(ev, ret));
+        return sb.ToString();
+    }
+
+    /// <summary>The pieces of a parameter list as written: each parameter (`*args: int`, `x = ...`) and the bare `*` and `/` between them (those have no parameter).</summary>
+    static List<(string Text, ParamInfo? Param)> ParamParts(TypeEvaluator ev, IReadOnlyList<ParamInfo> ps)
+    {
         bool sawKwOnly = false, sawPosOnly = false;
-        var parts = new List<string>();
+        var parts = new List<(string, ParamInfo?)>();
         for (int i = 0; i < ps.Count; i++)
         {
             var p = ps[i];
             if (p.Category == ParamCategory.KeywordOnly && !sawKwOnly && !ps.Any(x => x.Category == ParamCategory.VarPositional))
-            { parts.Add("*"); sawKwOnly = true; }
+            { parts.Add(("*", null)); sawKwOnly = true; }
             if (p.Category == ParamCategory.PositionalOnly) sawPosOnly = true;
-            else if (sawPosOnly) { parts.Add("/"); sawPosOnly = false; }
+            else if (sawPosOnly) { parts.Add(("/", null)); sawPosOnly = false; }
 
             string prefix = p.Category switch { ParamCategory.VarPositional => "*", ParamCategory.VarKeyword => "**", _ => "" };
             string ann = p.Type is UnknownType { Explicit: false } ? "" : ": " + FormatType(ev, p.Type);
-            parts.Add(prefix + p.Name + ann + (p.HasDefault ? " = ..." : ""));
+            parts.Add((prefix + p.Name + ann + (p.HasDefault ? " = ..." : ""), p));
         }
-        if (sawPosOnly) parts.Add("/");
-        sb.Append(string.Join(", ", parts)).Append(')');
-        if (ret is not UnknownType { Explicit: false }) sb.Append(" -> ").Append(FormatType(ev, ret));
-        return sb.ToString();
+        if (sawPosOnly) parts.Add(("/", null));
+        return parts;
     }
 
     /// <summary>Type-checker style display (`int | None`, `type[C]`, `list[str]`, `(int) -> str`).</summary>

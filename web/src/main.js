@@ -362,14 +362,20 @@ function registerProviders() {
     monaco.languages.registerCompletionItemProvider('django-html', completionProvider(['.', '|', '"', "'", ' ', '%']));
     monaco.languages.registerReferenceProvider(CODE_LANGUAGES, {
         async provideReferences(model, position, context) {
-            const uri = serverUri.get(model);
+            const cell = notebook?.targetOf(model, position);
+            const uri = cell ? cell.uri : serverUri.get(model);
             if (!uri)
                 return [];
             const locs = (await lsp.request('textDocument/references', {
-                textDocument: { uri }, position: toPos(position), context: { includeDeclaration: context.includeDeclaration },
+                textDocument: { uri }, position: cell ? cell.position : toPos(position), context: { includeDeclaration: context.includeDeclaration },
             })) ?? [];
             const result = [];
             for (const l of locs) {
+                const inCell = notebook?.locate(l.uri, l.range); // a use in a cell of the notebook
+                if (inCell) {
+                    result.push({ uri: inCell.model.uri, range: toRange(inCell.range) });
+                    continue;
+                }
                 const target = await modelForUri(l.uri);
                 if (target)
                     result.push({ uri: target.uri, range: toRange(l.range) });
@@ -379,32 +385,39 @@ function registerProviders() {
     });
     monaco.languages.registerRenameProvider(CODE_LANGUAGES, {
         async resolveRenameLocation(model, position) {
-            const uri = serverUri.get(model);
+            const cell = notebook?.targetOf(model, position);
+            const uri = cell ? cell.uri : serverUri.get(model);
             if (!uri)
                 return { range: new monaco.Range(1, 1, 1, 1), text: '', rejectReason: 'not a workspace file' };
             try {
-                const r = await lsp.request('textDocument/prepareRename', { textDocument: { uri }, position: toPos(position) });
+                const r = await lsp.request('textDocument/prepareRename', { textDocument: { uri }, position: cell ? cell.position : toPos(position) });
                 if (!r)
                     return { range: new monaco.Range(1, 1, 1, 1), text: '', rejectReason: 'Nothing to rename here.' };
-                return { range: toRange(r.range), text: r.placeholder };
+                return { range: toRange(cell ? cell.fromServer(r.range) : r.range), text: r.placeholder };
             }
             catch (e) {
                 return { range: new monaco.Range(1, 1, 1, 1), text: '', rejectReason: e.message };
             }
         },
         async provideRenameEdits(model, position, newName) {
-            const uri = serverUri.get(model);
+            const cell = notebook?.targetOf(model, position);
+            const uri = cell ? cell.uri : serverUri.get(model);
             if (!uri)
                 return { edits: [] };
             try {
-                const edit = await lsp.request('textDocument/rename', { textDocument: { uri }, position: toPos(position), newName });
+                const edit = await lsp.request('textDocument/rename', { textDocument: { uri }, position: cell ? cell.position : toPos(position), newName });
                 const edits = [];
                 for (const [target, list] of Object.entries(edit.changes)) {
-                    const m = await modelForUri(target);
-                    if (!m)
-                        continue;
-                    for (const e of list)
-                        edits.push({ resource: m.uri, versionId: undefined, textEdit: { range: toRange(e.range), text: e.newText } });
+                    for (const e of list) {
+                        const inCell = notebook?.locate(target, e.range); // the name in a cell of the notebook
+                        if (inCell) {
+                            edits.push({ resource: inCell.model.uri, versionId: undefined, textEdit: { range: toRange(inCell.range), text: e.newText } });
+                            continue;
+                        }
+                        const m = await modelForUri(target);
+                        if (m)
+                            edits.push({ resource: m.uri, versionId: undefined, textEdit: { range: toRange(e.range), text: e.newText } });
+                    }
                 }
                 return { edits };
             }
@@ -415,15 +428,18 @@ function registerProviders() {
     });
     monaco.languages.registerCodeActionProvider('python', {
         async provideCodeActions(model, range) {
-            const uri = serverUri.get(model);
-            if (!uri)
+            const from = notebook?.targetOf(model, { lineNumber: range.startLineNumber, column: range.startColumn });
+            const to = from && notebook.targetOf(model, { lineNumber: range.endLineNumber, column: range.endColumn });
+            const uri = from ? from.uri : serverUri.get(model);
+            if (!uri || from && !to)
                 return { actions: [], dispose() { } };
             // the server recomputes diagnostics from its own copy, so send it the text the cursor is in
-            lsp.notify('textDocument/didChange', {
-                textDocument: { uri, version: model.getVersionId() },
-                contentChanges: [{ text: model.getValue() }],
-            });
-            const lspRange = {
+            if (!from)
+                lsp.notify('textDocument/didChange', {
+                    textDocument: { uri, version: model.getVersionId() },
+                    contentChanges: [{ text: model.getValue() }],
+                });
+            const lspRange = from ? { start: from.position, end: to.position } : {
                 start: { line: range.startLineNumber - 1, character: range.startColumn - 1 },
                 end: { line: range.endLineNumber - 1, character: range.endColumn - 1 },
             };
@@ -433,13 +449,27 @@ function registerProviders() {
             const actions = [];
             for (const a of found) {
                 const edits = [];
+                let elsewhere = false;
                 for (const [target, list] of Object.entries(a.edit?.changes ?? {})) {
+                    if (from) {
+                        // in a notebook only what changes this cell is offered: an import added at the top of the file would land in another cell
+                        for (const e of list) {
+                            const inCell = notebook.locate(target, e.range);
+                            if (inCell?.model === model)
+                                edits.push({ resource: model.uri, versionId: undefined, textEdit: { range: toRange(inCell.range), text: e.newText } });
+                            else
+                                elsewhere = true;
+                        }
+                        continue;
+                    }
                     const m = await modelForUri(target);
                     if (!m)
                         continue;
                     for (const e of list)
                         edits.push({ resource: m.uri, versionId: undefined, textEdit: { range: toRange(e.range), text: e.newText } });
                 }
+                if (elsewhere)
+                    continue;
                 actions.push({
                     title: a.title, kind: a.kind, isPreferred: a.isPreferred,
                     edit: edits.length ? { edits } : undefined,
@@ -447,6 +477,33 @@ function registerProviders() {
                 });
             }
             return { actions, dispose() { } };
+        },
+    });
+    monaco.languages.registerSignatureHelpProvider(CODE_LANGUAGES, {
+        signatureHelpTriggerCharacters: ['(', ','],
+        signatureHelpRetriggerCharacters: [')'],
+        async provideSignatureHelp(model, position) {
+            const cell = notebook?.targetOf(model, position); // targetOf also brings the notebook's file up to date
+            const uri = cell ? cell.uri : serverUri.get(model);
+            if (!uri)
+                return null;
+            // what is being typed is not at the server yet
+            if (!cell)
+                lsp.notify('textDocument/didChange', {
+                    textDocument: { uri, version: model.getVersionId() },
+                    contentChanges: [{ text: model.getValue() }],
+                });
+            const h = await lsp.request('textDocument/signatureHelp', { textDocument: { uri }, position: cell ? cell.position : toPos(position) });
+            if (!h)
+                return null;
+            return {
+                value: {
+                    signatures: h.signatures.map((s) => ({ label: s.label, parameters: s.parameters.map((p) => ({ label: p.label })) })),
+                    activeSignature: h.activeSignature,
+                    activeParameter: h.activeParameter,
+                },
+                dispose() { },
+            };
         },
     });
     const convert = (s) => ({
