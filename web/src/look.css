@@ -441,3 +441,17 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 .merge-side pre { margin: 0; padding: 6px 8px; max-height: 160px; overflow: auto; border-radius: 6px; background: var(--raised); border: 1px solid var(--line); font: 12px/1.45 var(--mono, Consolas, monospace); white-space: pre; }
 .merge-ways { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .merge-conflict-line { background: rgba(255, 176, 64, .13); }
+.rebase-box { width: min(920px, 96vw); height: min(640px, 90vh); }
+.rebase-note { padding: 8px 14px; color: var(--dim); font-size: 12px; border-bottom: 1px solid var(--line); }
+.rebase-list { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+.rebase-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; }
+.rebase-row:hover { background: var(--hover); }
+.rebase-row.dropped .rebase-subject, .rebase-row.dropped .rebase-hash { text-decoration: line-through; opacity: .55; }
+.rebase-move { width: 26px; padding: 2px 0; }
+.rebase-action { width: 96px; }
+.rebase-hash { font-family: var(--mono); font-size: 12px; color: var(--accent-text); }
+.rebase-subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rebase-author { color: var(--dim); font-size: 12px; }
+.rebase-message { margin: 0 0 6px 150px; width: calc(100% - 160px); font: 12.5px/1.45 var(--mono); background: var(--panel); color: var(--fg); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 8px; resize: vertical; }
+.rebase-foot { padding: 9px 14px; border-top: 1px solid var(--line); color: var(--dim); min-height: 20px; }
+.rebase-foot.bad { color: var(--bad-text); }

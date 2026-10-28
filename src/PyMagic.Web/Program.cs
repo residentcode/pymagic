@@ -885,6 +885,8 @@ app.MapPost("/api/git/branch", async (HttpRequest req) =>
 // ---- remotes, branch management, conflicts, stash, tags, commit actions ------------------------------------------------
 
 app.MapGet("/api/git/remotes", () => GitCall(r => r.Remotes()));
+// the commits after one, oldest first: what an interactive rebase onto it would replay
+app.MapGet("/api/git/rebase/plan", (string baseHash) => GitCall(r => r.RebasePlan(baseHash)));
 app.MapGet("/api/git/stashes", () => GitCall(r => r.Stashes()));
 app.MapGet("/api/git/tags", () => GitCall(r => r.Tags()));
 app.MapGet("/api/git/stash/files", (int index) => GitCall(r => r.StashFiles(index)));
@@ -921,6 +923,9 @@ app.MapPost("/api/git/action", async (HttpRequest req) =>
             case "applyStash": return r.ApplyStash(Int("index"), Flag("drop"));
             case "dropStash": r.DropStash(Int("index")); return Ok();
             case "revert": return r.Revert(Str("hash"));
+            case "rebaseInteractive":
+                return r.RebaseInteractive(Str("base"), (body?["steps"] as JsonArray ?? new JsonArray())
+                    .Select(x => new GitRebaseStep(x?["hash"]?.GetValue<string>() ?? "", x?["action"]?.GetValue<string>() ?? "", x?["message"]?.GetValue<string>())).ToList());
             case "cherryPick": return r.CherryPick(Str("hash"));
             case "reset": r.Reset(Str("hash"), Str("mode")); return Ok();
             case "createTag": r.CreateTag(Str("name"), Str("hash"), Str("message")); return Ok();

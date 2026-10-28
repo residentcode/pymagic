@@ -4,6 +4,7 @@ import * as monaco from 'monaco-editor';
 import { diffLines } from './preview';
 import { showTab } from './panel';
 import { toast } from './toast';
+import { openRebase } from './rebase';
 import { changedLines, counts, hunkState, numbering, payload, selectAll, selectNone, stateOf, toggleHunk, toggleLine } from './hunks';
 const $ = (id) => document.getElementById(id);
 async function api(url, init) {
@@ -775,6 +776,7 @@ export function setupGit(deps) {
                 ['Revert', 'Make a new commit that undoes this one', () => commitAction({ op: 'revert', hash }, 'Reverted')],
                 ['Cherry-pick', 'Apply this commit on top of the current branch', () => commitAction({ op: 'cherryPick', hash }, 'Cherry-picked')],
                 ['Reset to here…', 'Move the current branch to this commit', () => resetTo(hash)],
+                ['Rebase from here…', 'Reorder, reword, squash or drop this commit and the ones after it', () => rebaseFrom(hash)],
                 ['Tag…', 'Put a tag on this commit', () => tagCommit(hash)],
             ]) {
                 const b = document.createElement('button');
@@ -816,6 +818,11 @@ export function setupGit(deps) {
         logEnd = false;
         $('git-log').replaceChildren();
         await refresh();
+    }
+    async function rebaseFrom(hash) {
+        try { await deps.saveAll(); }
+        catch (e) { toast(String(e.message ?? e), true); return; }
+        await openRebase({ base: hash + '^', label: hash.slice(0, 7), start: (plan) => commitAction({ op: 'rebaseInteractive', base: hash + '^', steps: plan }, 'Rebased') });
     }
     async function resetTo(hash) {
         const mode = window.prompt(`Move the current branch to ${hash.slice(0, 7)}.\n\nsoft: keep the changes staged\nmixed: keep the changes as changes\nhard: throw the changes away (cannot be undone)\n\nWhich?`, 'mixed');
