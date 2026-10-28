@@ -100,6 +100,14 @@ public sealed partial class LanguageService
         string text = m.Source;
         switch (code)
         {
+            case "missing-return":
+            {
+                // the function may end without a value: say so in the annotation
+                var f = AstChildren.Descendants(m.Ast).OfType<FunctionDef>().FirstOrDefault(d => d.NameStart == start && d.Returns != null);
+                if (f?.Returns is not { } r) return true;
+                add("Make the return type optional", true, new[] { new Edit(r.End, r.End, " | None") });
+                return true;
+            }
             case "shadowing-names":
                 RenameAction(m, uri, start, $"Rename to '{text[start..end]}_'", text[start..end] + "_", actions);
                 return true;
