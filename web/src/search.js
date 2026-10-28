@@ -1,6 +1,7 @@
 // Find in files (the Search tab of the bottom panel, Ctrl+Shift+F), replace in files, and go to symbol in the workspace.
 import * as monaco from 'monaco-editor';
 import { showTab } from './panel';
+import { fileScore } from './filescore';
 const $ = (id) => document.getElementById(id);
 const KINDS = { 2: 'module', 5: 'class', 6: 'method', 7: 'property', 8: 'field', 9: 'constructor', 12: 'function', 13: 'variable', 14: 'constant' };
 export function setupSearch(deps) {
@@ -272,5 +273,126 @@ export function setupSearch(deps) {
         const root = deps.uriFor('');
         return uri.toLowerCase().startsWith(root.toLowerCase()) ? decodeURIComponent(uri.slice(root.length)) : undefined;
     }
-    return { open, symbolPicker };
+    // ---------------------------------------------------------------- search everywhere: the files of the project and its symbols
+    function anythingPicker() {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.id = 'sigdialog';
+            const box = document.createElement('div');
+            box.className = 'box';
+            const title = document.createElement('h2');
+            title.textContent = 'Search everywhere';
+            const input = document.createElement('input');
+            input.placeholder = 'a file, function, class, method or variable name';
+            input.spellcheck = false;
+            const list = document.createElement('div');
+            list.className = 'picklist';
+            box.append(title, input, list);
+            overlay.appendChild(box);
+            let files = [];
+            let symbols = [];
+            let shown = [];
+            let index = 0;
+            let ticket = 0;
+            const finish = (target) => {
+                overlay.remove();
+                if (target?.file)
+                    void deps.openFile(target.file);
+                else if (target?.symbol) {
+                    const r = target.symbol.location.range;
+                    void deps.openFile(relOf(target.symbol.location.uri) ?? decodeURIComponent(target.symbol.location.uri).split('/').slice(-1)[0], new monaco.Range(r.start.line + 1, r.start.character + 1, r.end.line + 1, r.end.character + 1));
+                }
+                else
+                    editor.focus();
+                resolve();
+            };
+            function matches() {
+                const q = input.value.trim();
+                const byFile = files.map((f) => ({ file: f, score: fileScore(f, q) })).filter((x) => x.score >= 0)
+                    .sort((a, b) => a.score - b.score || a.file.length - b.file.length).slice(0, 30);
+                return [...byFile.map((x) => ({ file: x.file })), ...symbols.slice(0, 40).map((s) => ({ symbol: s }))];
+            }
+            function draw() {
+                list.replaceChildren();
+                if (shown.length === 0) {
+                    const none = document.createElement('div');
+                    none.className = 'dim';
+                    none.textContent = 'Nothing matches.';
+                    list.appendChild(none);
+                }
+                let heading = '';
+                shown.forEach((entry, i) => {
+                    const group = entry.file ? 'Files' : 'Symbols';
+                    if (group !== heading) {
+                        heading = group;
+                        const head = document.createElement('div');
+                        head.className = 'pick-head';
+                        head.textContent = group;
+                        list.appendChild(head);
+                    }
+                    const row = document.createElement('div');
+                    row.className = i === index ? 'pick sel' : 'pick';
+                    const name = document.createElement('span');
+                    const detail = document.createElement('span');
+                    detail.className = 'pick-detail';
+                    if (entry.file) {
+                        name.textContent = entry.file.slice(entry.file.lastIndexOf('/') + 1);
+                        detail.textContent = entry.file.includes('/') ? entry.file.slice(0, entry.file.lastIndexOf('/')) : '';
+                    }
+                    else {
+                        name.textContent = entry.symbol.name;
+                        detail.textContent = `${KINDS[entry.symbol.kind] ?? ''}  ${entry.symbol.containerName ?? ''}`;
+                    }
+                    row.append(name, detail);
+                    row.onclick = () => finish(entry);
+                    list.appendChild(row);
+                });
+                list.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
+            }
+            async function refresh() {
+                const mine = ++ticket;
+                shown = matches();
+                index = 0;
+                draw();
+                const q = input.value.trim();
+                const found = q ? (await lsp.request('workspace/symbol', { query: q })) ?? [] : [];
+                if (mine !== ticket)
+                    return;
+                symbols = found;
+                shown = matches();
+                draw();
+            }
+            input.oninput = () => void refresh();
+            overlay.onkeydown = (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    finish();
+                }
+                else if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    index = Math.min(index + 1, shown.length - 1);
+                    draw();
+                }
+                else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    index = Math.max(index - 1, 0);
+                    draw();
+                }
+                else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (shown[index])
+                        finish(shown[index]);
+                }
+            };
+            overlay.onmousedown = (e) => { if (e.target === overlay)
+                finish(); };
+            document.body.appendChild(overlay);
+            input.focus();
+            void fetch('/api/files').then((r) => r.json()).then((all) => {
+                files = all.map((f) => (typeof f === 'string' ? f : f.path)).filter(Boolean);
+                void refresh();
+            });
+        });
+    }
+    return { open, symbolPicker, anythingPicker };
 }

@@ -58,6 +58,14 @@
     <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
     <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
     <symbol id="i-folders" viewBox="0 0 24 24"><path d="M3.500 7.500a2 2 0 0 1 2-2h3.800a2 2 0 0 1 1.600.8l1 1.400a2 2 0 0 0 1.600.8h4a2 2 0 0 1 2 2v7.500a2 2 0 0 1-2 2h-12a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M19.500 12h-14M11 6.500 5.500 12 11 17.500"/></symbol>
+    <symbol id="i-forward" viewBox="0 0 24 24"><path d="M4.500 12h14M13 6.500l5.500 5.500-5.500 5.500"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M5.500 5.500A1.500 1.500 0 0 1 7 4h8.500l4 4V18a1.500 1.500 0 0 1-1.500 1.500H7A1.500 1.500 0 0 1 5.500 18z"/><path d="M8.500 4v4.500h6V4M8.500 19.500v-5.500h7v5.500"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 6.500 4.500 11 9 15.500"/><path d="M5 11h9.500a4.500 4.500 0 0 1 0 9H11"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 6.500 19.500 11 15 15.500"/><path d="M19 11H9.500a4.500 4.500 0 0 0 0 9H13"/></symbol>
+    <symbol id="i-refactor" viewBox="0 0 24 24"><path d="M5 8h12l-3.500-3.500M19 16H7l3.500 3.500"/></symbol>
+    <symbol id="i-find" viewBox="0 0 24 24"><path d="M4 6.500h8M4 10.500h5M4 14.500h4"/><circle cx="15" cy="14" r="4"/><path d="M18 17l3 3"/></symbol>
+    <symbol id="i-commit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.500"/><path d="M8.500 12.200l2.500 2.500 4.500-5"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.800 5.200L19 10l-5.200 1.800L12 17l-1.800-5.200L5 10l5.200-1.800z" fill="currentColor"/></symbol>
   </svg>
   <div id="app">
@@ -85,8 +93,20 @@
         <span id="project"></span>
         <span id="branch-chip" title="Branches and Git"><svg class="i" style="width:13px;height:13px"><use href="#i-branch"/></svg><span></span></span>
       </div>
+      <span class="grp grp-nav">
+      <button id="b-back" class="iconbtn" title="Back to the previous place (Ctrl+Alt+Left)" disabled><svg class="i"><use href="#i-back"/></svg></button>
+      <button id="b-forward" class="iconbtn" title="Forward (Ctrl+Alt+Right)" disabled><svg class="i"><use href="#i-forward"/></svg></button>
+      </span>
+      <span class="grp grp-file">
+      <button id="b-save" class="iconbtn" title="Save (Ctrl+S)"><svg class="i"><use href="#i-save"/></svg></button>
+      <button id="b-undo" class="iconbtn" title="Undo (Ctrl+Z)"><svg class="i"><use href="#i-undo"/></svg></button>
+      <button id="b-redo" class="iconbtn" title="Redo (Ctrl+Y)"><svg class="i"><use href="#i-redo"/></svg></button>
+      </span>
+      <span class="sep"></span>
+      <span id="run-target" title="The file Run, Debug and Coverage work on: the one open in the editor"><svg class="i"><use href="#i-file"/></svg><span></span></span>
       <button id="b-run" class="run" title="Run (Ctrl+F5)"><svg class="i fill"><use href="#i-run"/></svg><span class="lbl">Run</span></button>
       <button id="b-debug" class="dbg" title="Debug / Resume (F5)"><svg class="i"><use href="#i-debug"/></svg><span class="lbl">Debug</span></button>
+      <button id="b-cov" class="optional" title="Run all the tests and mark the lines that ran"><svg class="i"><use href="#i-shield"/></svg><span class="lbl lbl-opt">Coverage</span></button>
       <button id="b-profile" class="optional" title="Run the file under the profiler and list where the time went"><svg class="i"><use href="#i-profile"/></svg><span class="lbl lbl-opt">Profile</span></button>
       <button id="b-stop" class="stop" title="Stop (Shift+F5)" disabled><svg class="i fill"><use href="#i-stop"/></svg><span class="lbl lbl-opt">Stop</span></button>
       <span class="sep"></span>
@@ -96,12 +116,21 @@
       </select>
       <button id="b-imports" class="optional" title="Remove unused imports and sort the rest (Shift+Alt+O)"><svg class="i"><use href="#i-imports"/></svg><span class="lbl lbl-opt">Imports</span></button>
       <label class="fmtsave" title="Format the file whenever it is saved"><input type="checkbox" id="fmt-save"><span class="lbl-opt">on save</span></label>
+      <button id="b-refactor" class="optional" title="Refactor: rename, extract, inline, change signature, move"><svg class="i"><use href="#i-refactor"/></svg><span class="lbl lbl-opt">Refactor</span></button>
       <span class="sep"></span>
+      <span class="grp grp-vcs">
+      <button id="b-update" class="iconbtn" title="Update: fetch and join the upstream into this branch (Git)"><svg class="i"><use href="#i-down"/></svg></button>
+      <button id="b-commit" class="iconbtn" title="Commit: open the Git panel on the commit message (Alt+9)"><svg class="i"><use href="#i-commit"/></svg></button>
+      <button id="b-push" class="iconbtn" title="Push this branch to its upstream (Git)"><svg class="i"><use href="#i-up"/></svg></button>
+      </span>
       <button id="b-tests" class="optional" title="Test explorer (Ctrl+Shift+F10 runs the test at the cursor)"><svg class="i"><use href="#i-tests"/></svg><span class="lbl lbl-opt">Tests</span></button>
       <button id="b-over" title="Step over (F10)" disabled>Step over</button>
       <button id="b-into" title="Step into (F11)" disabled>Step into</button>
       <button id="b-out" title="Step out (Shift+F11)" disabled>Step out</button>
       <span class="spacer"></span>
+      <button id="b-find" class="iconbtn" title="Find in files (Ctrl+Shift+F)"><svg class="i"><use href="#i-find"/></svg></button>
+      <button id="b-anything" class="optional" title="Search everywhere: files and symbols (Ctrl+P)"><svg class="i"><use href="#i-search"/></svg><span class="lbl lbl-opt">Search</span></button>
+      <span class="sep"></span>
       <span id="interp-note"></span>
       <select id="interp" title="Python interpreter"></select>
       <button id="b-venv" class="iconbtn" title="Create a .venv in the project with the selected interpreter"><svg class="i"><use href="#i-venv"/></svg></button>

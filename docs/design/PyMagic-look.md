@@ -7,6 +7,8 @@ PyMagic has a look and a layout of its own. It is not a copy of PyCharm, and it 
 | ![before](before-problems.png) | ![after](after-problems.png) |
 | ![before](before-git.png) | ![after](after-git.png) |
 
+The command bar's menus and picker: ![refactor](after-refactor-menu.png) ![search](after-search-everywhere.png)
+
 At 1100 x 700 the dock keeps only the icons of the tools that are shut, and the command bar drops its labels: ![narrow](after-narrow.png)
 
 ## What was wrong
@@ -50,7 +52,7 @@ Type: the interface is Segoe UI Variable at 13 px (12 px for hints and chips, 11
 +------------------------------------------------------------------------------+
 ```
 
-- **Command bar.** The mark, the project and its branch, then the run group (Run is the one solid button), formatting, and on the right the interpreter and the buttons that add one. The stepping buttons are hidden until the debugger has paused. Labels go below 1500 px.
+- **Command bar.** Left to right: the mark, the project and its branch; back and forward through the places you were at; save, undo, redo; the file Run works on, then Run (the one solid button), Debug, Coverage, Profile and Stop; Format (with its engine and the on-save switch), Imports and the Refactor menu; the three Git actions (update, commit, push); Tests; and on the right find in files, Search everywhere, the interpreter and the buttons that add one. The stepping buttons are hidden until the debugger has paused. Labels go below 1500 px, the file chip below 1500 px, the Git and file groups below 1380 px and the history, Refactor, Search and Coverage below 1120 px.
 - **Rail.** A 48 px column that opens the tools you reach for most (files, search, Git, tests, problems, terminal, packages). It only presses the button the tool already has; the explorer button shows and hides the explorer.
 - **Explorer.** 26 px rows, a violet bar on the open file, our own folder and file icons (Python files are the brand tile with "py").
 - **Editor tabs.** Rounded tabs that join the editor, a violet line on the open one, a dot for unsaved changes.

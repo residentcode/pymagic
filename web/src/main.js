@@ -21,6 +21,7 @@ import { setupInspections } from './inspections';
 import { setupGit } from './git';
 import { toast } from './toast';
 import { setupChrome } from './rail';
+import { setupToolbar } from './toolbar';
 import { THEME, EDITOR_FONT, defineTheme } from './theme';
 self.MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
 const toPos = (p) => ({ line: p.lineNumber - 1, character: p.column - 1 });
@@ -668,7 +669,7 @@ async function main() {
     setupInterpreters();
     setupPackages();
     const refactor = setupRefactor({ editor, lsp, modelForUri, uriOf: (model) => serverUri.get(model) });
-    setupSearch({
+    const search = setupSearch({
         editor, lsp, openFile, uriFor,
         applyEdits: refactor.applyEdits,
         isEditable: (rel) => rel.endsWith('.py'),
@@ -682,6 +683,7 @@ async function main() {
             return out;
         },
     });
+    setupToolbar({ monaco, editor, save, openFile, currentFile: () => currentRel, refactor, search });
     const git = setupGit({
         editor,
         relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')),
