@@ -5,6 +5,8 @@ const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
 const http = require('node:http');
+const os = require('node:os');
+const { hostEnvironment } = require('./host-env');
 
 const repo = path.resolve(__dirname, '..');
 const packaged = app.isPackaged;
@@ -105,9 +107,10 @@ async function startHost(dll, folder) {
   const args = [dll, '--root', folder, '--www', www, '--port', String(port)];
   const ts = typeshed();
   if (ts) args.push('--typeshed', ts);
+  const env = hostEnvironment(os.cpus().length);
   host = packaged
-    ? spawn(dll, args.slice(1), { cwd: path.dirname(dll), windowsHide: true })
-    : spawn('dotnet', args, { cwd: repo, windowsHide: true });
+    ? spawn(dll, args.slice(1), { cwd: path.dirname(dll), windowsHide: true, env })
+    : spawn('dotnet', args, { cwd: repo, windowsHide: true, env });
   host.on('exit', () => { host = null; });
   await waitFor(`http://127.0.0.1:${port}/api/info`);
 }
