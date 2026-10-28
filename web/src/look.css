@@ -366,3 +366,7 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 .about-table { margin-top: 8px; }
 .about-value { justify-self: end; color: var(--fg); text-align: right; overflow-wrap: anywhere; }
 #panel { overflow: hidden; }
+
+/* the mark opens the main menu */
+#brand .mark { cursor: pointer; border-radius: 12px; transition: background-color .12s; }
+#brand .mark:hover { background: var(--hover2); }

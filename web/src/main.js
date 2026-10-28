@@ -22,6 +22,8 @@ import { setupGit } from './git';
 import { toast } from './toast';
 import { setupChrome } from './rail';
 import { setupToolbar } from './toolbar';
+import { setupMainMenu } from './mainmenu';
+import { setupRecent } from './recent';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
 import { loadSettings, editorOptions, applySettings, themeNow, settings } from './settings';
@@ -505,6 +507,8 @@ function updateProblems() {
 }
 let explorer = null;
 let tabs = null;
+let recents = null;
+let knownFiles = new Set();   // the files of the project, as the engine listed them last
 let notebook = null;
 const isDirtyRel = (rel) => { const m = models.get(normalise(uriFor(rel))); return !!m && m.getValue() !== savedText.get(rel); };
 /** Writes one open file to disk (a tab being closed with Save). */
@@ -546,6 +550,7 @@ async function forgetPath(rel) {
  */
 async function syncPyModels() {
     const files = await (await fetch('/api/files')).json();
+    knownFiles = new Set(files);
     const wanted = new Set(files.map((f) => normalise(uriFor(f))));
     for (const [key] of Array.from(models))
         if (!wanted.has(key) && relPathOf.get(key)?.endsWith('.py'))
@@ -579,6 +584,7 @@ async function openFile(rel, reveal) {
         notebook?.hide();
     explorer?.reveal(rel);
     tabs?.opened(rel);
+    recents?.opened(rel);
     if (reveal) {
         editor.setSelection(reveal);
         editor.revealRangeInCenter(reveal);
@@ -686,6 +692,11 @@ async function main() {
     });
     setupToolbar({ monaco, editor, save, openFile, currentFile: () => currentRel, refactor, search });
     setupAutoSave({ editor, saveAll: common.saveAll });
+    recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
+    setupMainMenu({
+        editor, save, saveAll: common.saveAll, reload: reloadFromDisk, openFile, tabs: () => tabs, currentFile: () => currentRel, search, refactor,
+        breakpoints: runHooks.breakpoints, recent: (current) => recents.list(current),
+    });
     const git = setupGit({
         editor,
         relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')),
@@ -758,6 +769,7 @@ async function main() {
     registerProviders();
     void refreshFormatters();
     const files = await (await fetch('/api/files')).json();
+    knownFiles = new Set(files);
     explorer = setupExplorer({
         openFile, refreshDirty, saveAll: common.saveAll, forget: forgetPath, synced: syncPyModels,
         current: () => currentRel, openAnother,

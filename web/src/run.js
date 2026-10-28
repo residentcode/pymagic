@@ -532,5 +532,12 @@ export function setupRun(deps) {
     };
     // which interpreter will be used
     setButtons();
-    return { onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null };
+    return {
+        onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null,
+        /** The breakpoint commands of the editor (F9, Shift+F9), for the menus. */
+        breakpoints: {
+            toggle() { const model = editor.getModel(), pos = editor.getPosition(); if (model && pos) toggleBreakpoint(model, pos.lineNumber); },
+            edit() { const model = editor.getModel(), pos = editor.getPosition(); if (model && pos) void editBreakpointAt(model, pos.lineNumber); },
+        },
+    };
 }
