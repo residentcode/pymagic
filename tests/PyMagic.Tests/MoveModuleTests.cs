@@ -110,6 +110,44 @@ public class MoveModuleTests
         Assert.Contains("would not be importable", plan.Warnings.Single());
     }
 
+    /// <summary>
+    /// Checked with Python 3.13: before the move `import app` works; after it, importing app runs other/__init__.py, which imports app while app is
+    /// partially initialized, and Python stops with ImportError.
+    /// </summary>
+    static readonly (string, string)[] Loop =
+    {
+        ("app.py", "from pkg.b import VALUE\n\nNAME = 'app'\n"),
+        ("pkg/__init__.py", ""),
+        ("pkg/b.py", "VALUE = 1\n"),
+        ("other/__init__.py", "from app import NAME\n"),
+    };
+
+    [Fact]
+    public void AMoveThatMakesACircularImportIsReported()
+    {
+        var (_, plan) = Move(Loop, "pkg/b.py", "other/b.py");
+        Assert.Contains("app → other → app import each other in a loop", plan.Warnings.Single());
+    }
+
+    [Fact]
+    public void ALoopThatWasThereBeforeOrAPackageThatIsAlreadyRunningIsNotReported()
+    {
+        // other/__init__ imports helpers, which imports the moved module: other is already running when helpers imports other.b
+        var inside = new[] { ("other/__init__.py", "from other.helpers import thing\n"), ("other/helpers.py", "from pkg.b import VALUE\n\nthing = VALUE\n"), ("pkg/__init__.py", ""), ("pkg/b.py", "VALUE = 1\n") };
+        Assert.Equal("", string.Join("\n", Move(inside, "pkg/b.py", "other/b.py").Plan.Warnings));
+        // x and y imported each other before; moving y does not make that loop
+        var pair = new[] { ("x.py", "import y\n"), ("y.py", "import x\n"), ("other/__init__.py", "") };
+        Assert.Equal("", string.Join("\n", Move(pair, "y.py", "other/y.py").Plan.Warnings));
+    }
+
+    /// <summary>Checked with Python 3.13: before the move pkg, pkg.a and pkg.b all import; after it `import other.b` stops with "partially initialized module 'other.b'".</summary>
+    [Fact]
+    public void ALoopThroughThePackageOfTheImporter()
+    {
+        var (_, plan) = Move(Project, "pkg/b.py", "other/b.py");
+        Assert.Contains("pkg → other.b → pkg import each other in a loop", plan.Warnings.Single());
+    }
+
     [Fact]
     public void NothingToDoForAFileThatIsNotPython()
     {

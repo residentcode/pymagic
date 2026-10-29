@@ -75,8 +75,112 @@ public sealed partial class LanguageService
             var lines = Lines(x);
             changes[xUri] = edits.OrderBy(e => e.Start).Select(e => new TextEdit(lines.RangeOf(e.Start, e.End), e.Text)).ToList();
         }
+        warnings.AddRange(NewImportCycles(snap, Map));
         string first = moved.OrderBy(m => m.Name.Length).First().Name;
         return new ModuleMovePlan(changes, warnings, first, Map(first));
+    }
+
+    // ------------------------------------------------------------ circular imports a move makes
+
+    /// <summary>
+    /// The circular imports that exist only after the move. A move renames modules, so the imports keep their shape, except that importing a module first runs
+    /// the `__init__.py` of each package it is in: `app` importing `other.b` now runs `other/__init__.py`, and when that imports `app` the two import each
+    /// other (Python stops with "partially initialized module"). Packages the importing module is itself in are already running and add nothing.
+    /// </summary>
+    static List<string> NewImportCycles(Snapshot snap, Func<string, string?> map)
+    {
+        var oldNames = new HashSet<string>(snap.Project.Where(m => !m.IsStub).Select(m => m.Name), StringComparer.Ordinal);
+        string New(string name) => map(name) ?? name;
+        var newNames = new HashSet<string>(oldNames.Select(New), StringComparer.Ordinal);
+
+        // what each module imports, by the names before the move
+        var raw = new List<(string From, string To)>();
+        foreach (var m in snap.Project)
+        {
+            if (m.IsStub) continue;
+            foreach (var n in AstChildren.Descendants(m.Ast))
+            {
+                switch (n)
+                {
+                    case ImportStmt i:
+                        foreach (var al in i.Names) raw.Add((m.Name, al.Name));
+                        break;
+                    case ImportFromStmt f when Workspace.AbsoluteName(m, f.Level, f.Module) is { } abs:
+                        if (abs.Length > 0) raw.Add((m.Name, abs));
+                        foreach (var al in f.Names)
+                        {
+                            string sub = abs.Length == 0 ? al.Name : abs + "." + al.Name;
+                            if (oldNames.Contains(sub)) raw.Add((m.Name, sub));
+                        }
+                        break;
+                }
+            }
+        }
+
+        static IEnumerable<string> SelfAndPackages(string name)
+        {
+            for (string n = name; n.Length > 0; n = Parent(n)) yield return n;
+        }
+        // the edges of a graph: the module imported and the packages around it, less those the importer is in
+        Dictionary<string, HashSet<string>> Graph(Func<string, string> rename, HashSet<string> names)
+        {
+            var graph = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var (from, to) in raw)
+            {
+                string f = rename(from), t = rename(to);
+                var own = new HashSet<string>(SelfAndPackages(f), StringComparer.Ordinal);
+                if (!graph.TryGetValue(f, out var set)) graph[f] = set = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var target in SelfAndPackages(t))
+                    if (names.Contains(target) && !own.Contains(target)) set.Add(target);
+            }
+            return graph;
+        }
+        var before = Graph(n => n, oldNames);
+        var after = Graph(New, newNames);
+        var back = oldNames.ToDictionary(New, n => n, StringComparer.Ordinal);
+
+        bool Reaches(Dictionary<string, HashSet<string>> g, string start, string goal, out List<string> path)
+        {
+            var from = new Dictionary<string, string>(StringComparer.Ordinal);
+            var queue = new Queue<string>();
+            queue.Enqueue(start);
+            from[start] = "";
+            while (queue.Count > 0)
+            {
+                var cur = queue.Dequeue();
+                if (!g.TryGetValue(cur, out var next)) continue;
+                foreach (var nx in next)
+                {
+                    if (nx == goal)
+                    {
+                        path = new List<string> { goal };
+                        for (string p = cur; p.Length > 0; p = from[p]) path.Add(p);
+                        path.Reverse();
+                        return true;
+                    }
+                    if (from.TryAdd(nx, cur)) queue.Enqueue(nx);
+                }
+            }
+            path = new List<string>();
+            return false;
+        }
+
+        var warnings = new List<string>();
+        var reported = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (node, targets) in after)
+            foreach (var t in targets)
+            {
+                // an edge of a loop after the move, whose loop was not there before
+                if (!Reaches(after, t, node, out var path)) continue;
+                // the two already imported each other, one way or another, before the move
+                if (back.TryGetValue(node, out var oldNode) && back.TryGetValue(t, out var oldT) && Reaches(before, oldNode, oldT, out _) && Reaches(before, oldT, oldNode, out _)) continue;
+                var loop = new List<string> { node };
+                loop.AddRange(path);
+                string key = string.Join(",", loop.Skip(1).OrderBy(x => x, StringComparer.Ordinal));
+                if (!reported.Add(key)) continue;
+                warnings.Add($"After the move {string.Join(" → ", loop)} import each other in a loop (importing a module runs the __init__.py of its package first): Python may stop with \"partially initialized module\". Move the import into a function, or choose another place.");
+            }
+        return warnings;
     }
 
     /// <summary>The dotted name of a file or folder under a source folder: `root/pkg/b.py` is `pkg.b`, `root/pkg/__init__.py` is `pkg`; null when it cannot be imported.</summary>
