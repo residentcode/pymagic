@@ -176,20 +176,19 @@ kbd { font: 11px var(--mono); background: var(--raised); border: 1px solid var(-
 
 /* ------------------------------------------------------------------ editor and its tabs */
 #editor-groups { position: relative; display: flex; min-width: 0; min-height: 0; }
-#editor-area, #split-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+#editor-area, .split-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
 #editor-area { flex: 1 1 0; }
-#split-area { flex: 0 0 50%; }
-#split-area[hidden], #split-divider[hidden], #split-drop[hidden], #split-drop-down[hidden] { display: none; }
-/* split down: the second side under the first, the divider across */
+#split-drop[hidden], #split-drop-down[hidden] { display: none; }
+/* split down: the sides under the first editor, the dividers across */
 #editor-groups.split-down { flex-direction: column; }
-#editor-groups.split-down #split-divider { width: auto; height: 5px; cursor: row-resize; border: 0; border-top: 2px solid var(--panel); border-bottom: 2px solid var(--panel); }
-#split-divider { flex: none; width: 5px; cursor: col-resize; background: var(--line); border-left: 2px solid var(--panel); border-right: 2px solid var(--panel); }
-#split-divider:hover { background: var(--accent); }
+#editor-groups.split-down .split-divider { width: auto; height: 5px; cursor: row-resize; border: 0; border-top: 2px solid var(--panel); border-bottom: 2px solid var(--panel); }
+.split-divider { flex: none; width: 5px; cursor: col-resize; background: var(--line); border-left: 2px solid var(--panel); border-right: 2px solid var(--panel); }
+.split-divider:hover { background: var(--accent); }
 body.col-resizing { cursor: col-resize; user-select: none; }
-#editor, #split-editor { flex: 1; min-width: 0; min-height: 0; }
-/* the side that has the focus: its bar is marked */
-#editor-groups.side-focused #split-area .etab.active, #editor-groups:not(.side-focused) #editor-area .etab.active { box-shadow: 0 -2px 0 0 var(--accent) inset; }
-#editor-groups.side-focused #editor-area .etab.active, #editor-groups:not(.side-focused):has(#split-area:not([hidden])) #split-area .etab.active { box-shadow: 0 -2px 0 0 var(--line-strong) inset; }
+#editor, .split-editor { flex: 1; min-width: 0; min-height: 0; }
+/* the editor that has the focus: its bar is marked; the others, when the editor is split, are marked more quietly */
+.focused-group .etab.active { box-shadow: 0 -2px 0 0 var(--accent) inset; }
+#editor-groups:has(.split-area) > :not(.focused-group) .etab.active { box-shadow: 0 -2px 0 0 var(--line-strong) inset; }
 #split-drop, #split-drop-down { position: absolute; z-index: 30; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--line-strong); border-radius: 10px; background: color-mix(in srgb, var(--panel) 55%, transparent); color: var(--dim); pointer-events: auto; }
 #split-drop { top: 0; bottom: 0; right: 0; width: 30%; }
 #split-drop-down { left: 0; right: calc(30% + 6px); bottom: 0; height: 35%; }

@@ -495,14 +495,19 @@ export function setupGit(deps) {
         const result = await barsOf(x.ed);
         if (result === undefined)
             return;
-        if (result === null)
+        if (result === null) {
             x.decorations.clear();
-        else
+            x.hunks = [];
+        }
+        else {
             x.decorations.set(result.bars);
+            x.hunks = result.hunks;
+        }
     }
     function attach(ed) {
-        const x = { ed, decorations: ed.createDecorationsCollection(), timer: 0 };
+        const x = { ed, decorations: ed.createDecorationsCollection(), timer: 0, hunks: [] };
         others.push(x);
+        hunkPopups(ed, () => x.hunks);
         const later = (delay) => { clearTimeout(x.timer); x.timer = window.setTimeout(() => void paintOther(x), delay); };
         ed.onDidChangeModel(() => later(50));
         ed.onDidChangeModelContent(() => later(300));
@@ -515,8 +520,8 @@ export function setupGit(deps) {
         void loadBlame(); });
     editor.onDidChangeModelContent(() => { schedulePaint(); if (annotate)
         editor.updateOptions({ lineNumbers: lineNumberFor }); });
-    function hunkAt(line1) {
-        const model = editor.getModel();
+    function hunkAt(ed, hunks, line1) {
+        const model = ed.getModel();
         const lines = model?.getLineCount() ?? 0;
         return hunks.find((h) => {
             const kind = hunkKind(h);
@@ -526,8 +531,8 @@ export function setupGit(deps) {
         });
     }
     /** Puts a stretch of lines back as it was: replaces the changed lines with the old ones, or inserts the deleted ones. */
-    function revert(h) {
-        const model = editor.getModel();
+    function revert(ed, h) {
+        const model = ed.getModel();
         if (!model)
             return;
         const eol = model.getEOL();
@@ -562,47 +567,51 @@ export function setupGit(deps) {
             range = new monaco.Range(n, model.getLineMaxColumn(n), n, model.getLineMaxColumn(n));
             text = eol + h.oldLines.join(eol);
         }
-        editor.pushUndoStop();
-        editor.executeEdits('git-revert', [{ range, text }]);
-        editor.pushUndoStop();
+        ed.pushUndoStop();
+        ed.executeEdits('git-revert', [{ range, text }]);
+        ed.pushUndoStop();
     }
-    editor.onMouseDown((e) => {
-        if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS || !e.target.position)
-            return;
-        const h = hunkAt(e.target.position.lineNumber);
-        if (!h)
-            return;
-        closePopup();
-        const kind = hunkKind(h);
-        popup = document.createElement('div');
-        popup.className = 'git-popup';
-        const title = document.createElement('div');
-        title.className = 'meta';
-        title.textContent = kind === 'added' ? `${h.newCount} line${h.newCount === 1 ? '' : 's'} added` : kind === 'deleted' ? `${h.oldLines.length} line${h.oldLines.length === 1 ? '' : 's'} deleted` : 'Changed from:';
-        popup.append(title);
-        if (h.oldLines.length) {
-            const pre = document.createElement('pre');
-            pre.textContent = h.oldLines.join('\n');
-            popup.append(pre);
-        }
-        const undo = document.createElement('button');
-        undo.textContent = 'Revert';
-        undo.onclick = () => { closePopup(); revert(h); };
-        const diff = document.createElement('button');
-        diff.textContent = 'Show diff';
-        diff.onclick = async () => {
+    /** A click on a change bar of `ed` shows what the lines were, with Revert and Show diff; `hunksOf` gives that editor's hunks. */
+    function hunkPopups(ed, hunksOf) {
+        ed.onMouseDown((e) => {
+            if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS || !e.target.position)
+                return;
+            const h = hunkAt(ed, hunksOf(), e.target.position.lineNumber);
+            if (!h)
+                return;
             closePopup();
-            const rel = deps.currentRel();
-            const model = editor.getModel();
-            if (model)
-                showDiff(`${rel} — working copy against the last commit`, (await headText(rel)) ?? '', model.getValue(), rel);
-        };
-        popup.append(undo, diff);
-        const ev = e.event.browserEvent;
-        popup.style.left = `${Math.min(ev.clientX + 8, window.innerWidth - 360)}px`;
-        popup.style.top = `${Math.min(ev.clientY, window.innerHeight - 220)}px`;
-        document.body.append(popup);
-    });
+            const kind = hunkKind(h);
+            popup = document.createElement('div');
+            popup.className = 'git-popup';
+            const title = document.createElement('div');
+            title.className = 'meta';
+            title.textContent = kind === 'added' ? `${h.newCount} line${h.newCount === 1 ? '' : 's'} added` : kind === 'deleted' ? `${h.oldLines.length} line${h.oldLines.length === 1 ? '' : 's'} deleted` : 'Changed from:';
+            popup.append(title);
+            if (h.oldLines.length) {
+                const pre = document.createElement('pre');
+                pre.textContent = h.oldLines.join('\n');
+                popup.append(pre);
+            }
+            const undo = document.createElement('button');
+            undo.textContent = 'Revert';
+            undo.onclick = () => { closePopup(); revert(ed, h); };
+            const diff = document.createElement('button');
+            diff.textContent = 'Show diff';
+            diff.onclick = async () => {
+                closePopup();
+                const model = ed.getModel();
+                const rel = model && deps.relOf(model);
+                if (rel)
+                    showDiff(`${rel} — working copy against the last commit`, (await headText(rel)) ?? '', model.getValue(), rel);
+            };
+            popup.append(undo, diff);
+            const ev = e.event.browserEvent;
+            popup.style.left = `${Math.min(ev.clientX + 8, window.innerWidth - 360)}px`;
+            popup.style.top = `${Math.min(ev.clientY, window.innerHeight - 220)}px`;
+            document.body.append(popup);
+        });
+    }
+    hunkPopups(editor, () => hunks);
     // ------------------------------------------------------------------ blame
     let annotate = false;
     let inline = false;

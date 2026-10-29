@@ -10,7 +10,7 @@ export function setupCoverage(deps) {
     const summary = $('cov-summary');
     const filter = $('cov-filter');
     let data = null;           // { when, files: { rel: { executable, executed } } }
-    let decorations = [];
+    const editors = new Map(); // every editor that shows the marks (the sides of a split too), with its decorations
     let show = true;
 
     function percent(f) {
@@ -24,11 +24,16 @@ export function setupCoverage(deps) {
     }
 
     function mark() {
-        const model = editor.getModel();
+        for (const ed of editors.keys()) markIn(ed);
+    }
+
+    function markIn(ed) {
+        const model = ed.getModel();
         const rel = model && deps.relOf(model);
         const file = data && show && rel ? data.files[rel] : null;
+        const decorations = editors.get(ed);
         if (!file || !model) {
-            decorations = editor.deltaDecorations(decorations, []);
+            decorations.clear();
             return;
         }
         const ran = new Set(file.executed);
@@ -38,7 +43,15 @@ export function setupCoverage(deps) {
                 range: { startLineNumber: n, startColumn: 1, endLineNumber: n, endColumn: 1 },
                 options: { isWholeLine: true, linesDecorationsClassName: ran.has(n) ? 'cov-hit' : 'cov-miss', className: ran.has(n) ? '' : 'cov-miss-line' },
             }));
-        decorations = editor.deltaDecorations(decorations, next);
+        decorations.set(next);
+    }
+
+    /** Shows the marks in another editor (a side of the split) for the file it shows. */
+    function attach(ed) {
+        editors.set(ed, ed.createDecorationsCollection());
+        ed.onDidChangeModel(() => markIn(ed));
+        ed.onDidDispose(() => editors.delete(ed));
+        markIn(ed);
     }
 
     function paint() {
@@ -102,7 +115,8 @@ export function setupCoverage(deps) {
     $('cov-show').onchange = (e) => { show = e.target.checked; mark(); };
     $('cov-clear').onclick = () => { data = null; paint(); mark(); };
     filter.oninput = paint;
-    editor.onDidChangeModel(mark);
+    attach(editor);
     window.addEventListener('pymagic:coverage', () => void load(true));
     paint();
+    return { attach };
 }

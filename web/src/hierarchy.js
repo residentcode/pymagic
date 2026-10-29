@@ -19,10 +19,14 @@ export function setupHierarchy(deps) {
     let mode = 'callers';
     let selectedRow = null;
     // ---------------------------------------------------------------- navigation
-    async function goTo(uri, range) {
+    async function goTo(uri, range, from) {
         const rel = deps.relOfUri(uri);
         if (!rel) {
             toast('That place is outside the project.', true);
+            return;
+        }
+        if (from && from !== editor && deps.openIn) {
+            await deps.openIn(from, rel, toRange(range));
             return;
         }
         await deps.openFile(rel, toRange(range));
@@ -189,52 +193,68 @@ export function setupHierarchy(deps) {
     });
     // ---------------------------------------------------------------- gutter marks
     const Lane = monaco.editor.GlyphMarginLane.Right; // the left lane belongs to breakpoints
-    const decorations = editor.createDecorationsCollection();
-    let byLine = new Map();
-    let timer;
     let menu = null;
     const isUp = (m) => m.kind === 'overrides' || m.kind === 'implements';
-    async function refreshMarks() {
-        const model = editor.getModel();
-        const uri = model && deps.uriOf(model);
-        if (!model || !uri || !model.uri.path.endsWith('.py')) {
-            decorations.clear();
+    /** The marks in one editor (the first one, and each side of a split); returns what schedules a refresh. */
+    function gutter(editor) {
+        const decorations = editor.createDecorationsCollection();
+        let byLine = new Map();
+        let timer;
+        async function refreshMarks() {
+            const model = editor.getModel();
+            const uri = model && deps.uriOf(model);
+            if (!model || !uri || !model.uri.path.endsWith('.py')) {
+                decorations.clear();
+                byLine = new Map();
+                return;
+            }
+            let list;
+            try {
+                list = (await lsp.request('pymagic/inheritance', { textDocument: { uri } })) ?? [];
+            }
+            catch {
+                return;
+            }
+            if (editor.getModel() !== model)
+                return;
             byLine = new Map();
-            return;
+            for (const m of list)
+                byLine.set(m.line, [...(byLine.get(m.line) ?? []), m]);
+            decorations.set([...byLine].map(([line, marks]) => ({
+                range: new monaco.Range(line + 1, 1, line + 1, 1),
+                options: {
+                    glyphMargin: { position: Lane },
+                    glyphMarginClassName: 'inh-glyph ' + (marks.some(isUp) && marks.some((m) => !isUp(m)) ? 'inh-both' : marks.some(isUp) ? 'inh-up' : 'inh-down'),
+                    glyphMarginHoverMessage: { value: marks.map((m) => m.label).join('  \n') },
+                },
+            })));
         }
-        let list;
-        try {
-            list = (await lsp.request('pymagic/inheritance', { textDocument: { uri } })) ?? [];
+        function schedule(delay) {
+            clearTimeout(timer);
+            timer = window.setTimeout(() => void refreshMarks(), delay);
         }
-        catch {
-            return;
-        }
-        if (editor.getModel() !== model)
-            return;
-        byLine = new Map();
-        for (const m of list)
-            byLine.set(m.line, [...(byLine.get(m.line) ?? []), m]);
-        decorations.set([...byLine].map(([line, marks]) => ({
-            range: new monaco.Range(line + 1, 1, line + 1, 1),
-            options: {
-                glyphMargin: { position: Lane },
-                glyphMarginClassName: 'inh-glyph ' + (marks.some(isUp) && marks.some((m) => !isUp(m)) ? 'inh-both' : marks.some(isUp) ? 'inh-up' : 'inh-down'),
-                glyphMarginHoverMessage: { value: marks.map((m) => m.label).join('  \n') },
-            },
-        })));
+        editor.onDidChangeModel(() => schedule(400));
+        editor.onDidChangeModelContent(() => schedule(1200)); // after the edit has reached the server, and the typing has paused
+        const connected = () => schedule(200);
+        window.addEventListener('pymagic:connected', connected);
+        editor.onDidDispose(() => { clearTimeout(timer); window.removeEventListener('pymagic:connected', connected); });
+        editor.onMouseDown((e) => {
+            if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN || !e.target.position)
+                return;
+            if (e.target.detail?.glyphMarginLane !== Lane)
+                return;
+            const marks = byLine.get(e.target.position.lineNumber - 1);
+            if (!marks)
+                return;
+            pick(editor, marks.flatMap((m) => m.targets.map((loc) => ({ label: m.targets.length > 1 ? `${m.label} · ${m.kind}` : m.label, loc }))), e.event.browserEvent.clientX, e.event.browserEvent.clientY);
+        });
+        return schedule;
     }
-    function schedule(delay) {
-        clearTimeout(timer);
-        timer = window.setTimeout(() => void refreshMarks(), delay);
-    }
-    editor.onDidChangeModel(() => schedule(400));
-    editor.onDidChangeModelContent(() => schedule(1200)); // after the edit has reached the server, and the typing has paused
-    window.addEventListener('pymagic:connected', () => schedule(200));
     function closeMenu() { menu?.remove(); menu = null; }
-    function pick(entries, x, y) {
+    function pick(editor, entries, x, y) {
         closeMenu();
         if (entries.length === 1) {
-            void goTo(entries[0].loc.uri, entries[0].loc.range);
+            void goTo(entries[0].loc.uri, entries[0].loc.range, editor);
             return;
         }
         menu = document.createElement('div');
@@ -247,7 +267,7 @@ export function setupHierarchy(deps) {
             where.className = 'where';
             where.textContent = `${rel}:${e.loc.range.start.line + 1}`;
             item.append(where);
-            item.onclick = () => { closeMenu(); void goTo(e.loc.uri, e.loc.range); };
+            item.onclick = () => { closeMenu(); void goTo(e.loc.uri, e.loc.range, editor); };
             menu.append(item);
         }
         menu.style.left = `${Math.min(x, window.innerWidth - 320)}px`;
@@ -259,15 +279,10 @@ export function setupHierarchy(deps) {
         closeMenu(); }, true);
     document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape')
         closeMenu(); }, true);
-    editor.onMouseDown((e) => {
-        if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN || !e.target.position)
-            return;
-        if (e.target.detail?.glyphMarginLane !== Lane)
-            return;
-        const marks = byLine.get(e.target.position.lineNumber - 1);
-        if (!marks)
-            return;
-        pick(marks.flatMap((m) => m.targets.map((loc) => ({ label: m.targets.length > 1 ? `${m.label} · ${m.kind}` : m.label, loc }))), e.event.browserEvent.clientX, e.event.browserEvent.clientY);
-    });
-    return { refreshMarks: () => schedule(0) };
+    const scheduleMain = gutter(editor);
+    return {
+        refreshMarks: () => scheduleMain(0),
+        /** The same marks in another editor (a side of the split). */
+        attach: (ed) => { gutter(ed)(400); },
+    };
 }

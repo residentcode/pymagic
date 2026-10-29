@@ -617,8 +617,9 @@ async function forgetPath(rel) {
         savedText.delete(path);
         if (editor.getModel() === model)
             editor.setModel(null);
-        if (split?.editor()?.getModel() === model)
-            split.editor().setModel(null);
+        for (const side of split?.editors() ?? [])
+            if (side.getModel() === model)
+                side.setModel(null);
         model.dispose();
     }
     notebook?.close(rel);
@@ -865,10 +866,12 @@ async function main() {
         reloadAll: reloadAllFromDisk,
     });
     setupGitSync({ git, deps: { saveAll: common.saveAll, reloadAll: reloadAllFromDisk, openFile, monaco } });
-    setupHierarchy({
+    const hierarchy = setupHierarchy({
         editor, lsp, openFile, modelForUri,
         uriOf: (model) => serverUri.get(model),
         relOfUri: (uri) => relPathOf.get(normalise(uri)),
+        // a mark's target, clicked on a side of the split, opens on that side
+        openIn: (ed, rel, sel) => split.openIn(ed, rel, sel),
     });
     setupInspections(lsp);
     setupRoutes({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
@@ -876,7 +879,7 @@ async function main() {
     setupProblems({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
     setupTodo({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
     setupTerminal();
-    setupCoverage(common);
+    const coverage = setupCoverage(common);
     setupProfiler(common);
     // code actions that need the page (not just a text edit) arrive as commands
     monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name) => {
@@ -911,9 +914,9 @@ async function main() {
             const sel = !selectionOrPosition ? undefined
                 : 'startLineNumber' in selectionOrPosition ? selectionOrPosition
                     : new monaco.Range(selectionOrPosition.lineNumber, selectionOrPosition.column, selectionOrPosition.lineNumber, selectionOrPosition.column);
-            // from the right side of a split, the definition opens on that side
-            if (split?.editor() && source === split.editor())
-                void split.open(rel, sel);
+            // from a side of the split, the definition opens on that side
+            if (split?.editors().includes(source))
+                void split.openIn(source, rel, sel);
             else
                 void openFile(rel, sel);
             return true;
@@ -974,9 +977,11 @@ async function main() {
             const e = createEditor(el);
             followSettings(e);
             e.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { const rel = e.getModel() && relPathOf.get(normalise(serverUri.get(e.getModel()) ?? '')); if (rel) void saveFile(rel); });
-            // breakpoints, the run and debug keys, and the Git change bars on this side too
+            // breakpoints, the run and debug keys, the Git change bars, coverage and inheritance marks on this side too
             runHooks.attach(e);
             git.attach(e);
+            coverage.attach(e);
+            hierarchy.attach(e);
             return e;
         },
         mainEditor: editor,
