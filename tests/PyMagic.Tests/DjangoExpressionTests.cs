@@ -179,4 +179,56 @@ public class DjangoExpressionTests
         var missing = Project(Head + "Book.objects.aggregat(Sum('price'))\n").Svc.Diagnostics(Views).Where(d => d.Message.StartsWith("Cannot find reference")).ToList();
         Assert.Equal(1, missing.Count);
     }
+
+    // ------------------------------------------------------------ values() and values_list()
+
+    static string Hover(string marked)
+    {
+        var (svc, pos) = Project(marked);
+        return (svc.Hover(Views, pos)?.Contents.Value ?? "(nothing)").Replace("\n", " ");
+    }
+
+    [Fact]
+    public void ValuesGivesDicts()
+    {
+        Assert.Contains("dict[str", Hover(Head + "\nrow = Book.objects.values('title').first()\nr|ow\n").Replace("row:", "row:"));
+        Assert.Contains("dict[str", Hover(Head + "for r|ow in Book.objects.filter(pages=1).values('title'):\n    pass\n"));
+    }
+
+    [Fact]
+    public void ValuesListGivesTuplesOfTheFieldsTypes()
+    {
+        string code = Head + "for t|itle, pages in Book.objects.values_list('title', 'pages'):\n    pass\n";
+        Assert.Contains("title: str", Hover(code));
+        Assert.Contains("pages: int", Hover(Head + "for title, p|ages in Book.objects.values_list('title', 'pages'):\n    pass\n"));
+    }
+
+    [Fact]
+    public void FlatGivesTheValueItself()
+    {
+        Assert.Contains("title: str", Hover(Head + "for t|itle in Book.objects.values_list('title', flat=True):\n    pass\n"));
+        Assert.Contains("rating: float | None", Hover(Head + "for r|ating in Book.objects.values_list('rating', flat=True):\n    pass\n"));
+    }
+
+    [Fact]
+    public void ARelationGivesItsTargetsKey()
+    {
+        Assert.Contains("a: int", Hover(Head + "for |a in Book.objects.values_list('author', flat=True):\n    pass\n"));
+        Assert.Contains("n: str", Hover(Head + "for |n in Book.objects.values_list('author__name', flat=True):\n    pass\n"));
+        Assert.Contains("k: int", Hover(Head + "for |k in Book.objects.values_list('pk', flat=True):\n    pass\n"));
+    }
+
+    [Fact]
+    public void FilteringKeepsTheRowsAndTheRestOfTheMethodsStillWork()
+    {
+        Assert.Contains("first: str | None", Hover(Head + "\nf|irst = Book.objects.values_list('title', flat=True).filter(pages=1).order_by('title').first()\n"));
+        Assert.Contains("n: int", Hover(Head + "\n|n = Book.objects.values_list('title', flat=True).count()\n"));
+    }
+
+    [Fact]
+    public void WhatCannotBeToldStaysUnknown()
+    {
+        Assert.Contains("x: Unknown", Hover(Head + "for |x in Book.objects.values_list('title', 'pages', named=True):\n    pass\n"));
+        Assert.Contains("x: Unknown", Hover(Head + "for |x in Book.objects.values_list('title', flat=True).values_list('pages', flat=True):\n    pass\n"));
+    }
 }

@@ -364,9 +364,30 @@ public sealed partial class LanguageService
                         return (parts[j], allowLookups ? QueryLookups : Array.Empty<string>());
                 return null;
             }
-            return (part, names);
+            // a model Django or a library ships may have relations from other installed apps that are not known here (`auth_token` on the user): only a name
+            // that is a near miss of a field it has is a mistake
+            return IsLibraryModel(current) && !names.Any(n => Near(part, n)) ? null : (part, names);
         }
         return null;
+    }
+
+    static bool IsLibraryModel(ClassInfo c) => c.Module.Kind is not (ResolutionKind.InMemory or ResolutionKind.UserCode);
+
+    /// <summary>Whether two names differ by at most two edits (a typo away).</summary>
+    static bool Near(string a, string b)
+    {
+        if (Math.Abs(a.Length - b.Length) > 2) return false;
+        var previous = new int[b.Length + 1];
+        var current = new int[b.Length + 1];
+        for (int j = 0; j <= b.Length; j++) previous[j] = j;
+        for (int i = 1; i <= a.Length; i++)
+        {
+            current[0] = i;
+            for (int j = 1; j <= b.Length; j++)
+                current[j] = Math.Min(Math.Min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1));
+            (previous, current) = (current, previous);
+        }
+        return previous[b.Length] <= 2;
     }
 
     IEnumerable<Diag> DjangoDiagnostics(ModuleInfo m, TypeEvaluator ev)

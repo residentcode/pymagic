@@ -267,6 +267,9 @@ public sealed partial class TypeEvaluator
         if (TypedDictGet(m, call) is PyType tdGet)
             return Single(new CallTarget(callee, tdGet, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 
+        if (DjangoSpecialCall(m, call, callee) is { } djangoResult)
+            return Single(new CallTarget(callee, djangoResult, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
+
         var targets = CallValue(callee, args, call);
         return new CallResolution(targets.Count == 0 ? PyType.Unknown : PyType.Union(targets.Select(t => t.Returns)), targets);
     }

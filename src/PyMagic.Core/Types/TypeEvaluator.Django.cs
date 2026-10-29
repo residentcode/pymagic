@@ -92,8 +92,9 @@ public sealed partial class TypeEvaluator
             if (s == "self") return owner;
             string name = s.Contains('.') ? s[(s.LastIndexOf('.') + 1)..] : s;
             if (owner.Module.Semantics.ModuleScope.Symbols.TryGetValue(name, out var sym) && TypeOfSymbol(sym) is ClassType { IsInstance: false } local && IsDjangoModel(local.Info)) return local.Info;
-            return DjangoProjectModels().FirstOrDefault(c => c.Name == name);
+            return DjangoProjectModels().FirstOrDefault(c => c.Name == name) ?? DjangoContribModel(s);
         }
+        if (e is AttributeExpr { Attr: "AUTH_USER_MODEL" }) return DjangoUserModel();
         return TypeOf(owner.Module, e) is ClassType { IsInstance: false } ct && IsDjangoModel(ct.Info) ? ct.Info : null;
     }
 
@@ -132,7 +133,7 @@ public sealed partial class TypeEvaluator
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var entry in Mro(model))
         {
-            if (entry is not ClassType e || IsDjangoInternal(e.Info) || !IsDjangoModel(e.Info)) continue;
+            if (entry is not ClassType e || !IsDjangoModel(e.Info) || e.Info.Name == "Model" && IsDjangoInternal(e.Info)) continue;
             foreach (var sym in e.Info.Scope.Symbols.Values)
             {
                 if (sym.Redirect != null || !names.Add(sym.Name)) continue;
@@ -216,18 +217,21 @@ public sealed partial class TypeEvaluator
         return qs;
     }
 
-    void AddQuerySetMembers(ClassInfo target, ClassInfo model, PyType self)
+    void AddQuerySetMembers(ClassInfo target, ClassInfo model, PyType self, PyType? rows = null)
     {
         var modelInstance = InstanceOfClass(model);
-        var qsInstance = InstanceOfClass(DjangoQuerySetOf(model));
-        var optionalModel = PyType.Union(new[] { (PyType)modelInstance, NoneInstance });
+        // a queryset of values() / values_list() keeps its rows when it is filtered, and gives them back when it is read
+        var qsInstance = rows == null ? InstanceOfClass(DjangoQuerySetOf(model)) : self;
+        var element = rows ?? modelInstance;
+        var optionalModel = PyType.Union(new[] { element, NoneInstance });
         foreach (var name in new[]
         {
             "filter", "exclude", "order_by", "reverse", "distinct", "select_related", "prefetch_related", "annotate", "defer", "only", "using",
             "select_for_update", "none", "alias", "extra", "union", "intersection", "difference",
         }) AddSyntheticMember(target, name, Method(qsInstance));
         AddSyntheticMember(target, "all", Method(qsInstance));
-        foreach (var name in new[] { "get", "create", "earliest", "latest" }) AddSyntheticMember(target, name, Method(modelInstance));
+        foreach (var name in new[] { "get", "earliest", "latest" }) AddSyntheticMember(target, name, Method(element));
+        AddSyntheticMember(target, "create", Method(modelInstance));
         foreach (var name in new[] { "first", "last" }) AddSyntheticMember(target, name, Method(optionalModel));
         foreach (var name in new[] { "get_or_create", "update_or_create" })
             AddSyntheticMember(target, name, Method(TupleOf(new PyType[] { modelInstance, Inst("bool") })));
@@ -235,19 +239,21 @@ public sealed partial class TypeEvaluator
         AddSyntheticMember(target, "update", Method(Inst("int")));
         AddSyntheticMember(target, "exists", Method(Inst("bool")));
         AddSyntheticMember(target, "bulk_create", Method(Inst("list", modelInstance)));
-        AddSyntheticMember(target, "__iter__", Method(TypingInst("Iterator", modelInstance)));
+        AddSyntheticMember(target, "__iter__", Method(TypingInst("Iterator", element)));
         AddSyntheticMember(target, "__len__", Method(Inst("int")));
         AddSyntheticMember(target, "__bool__", Method(Inst("bool")));
         AddSyntheticMember(target, "model", new ClassType(model, false));
-        AddSyntheticMember(target, "iterator", Method(TypingInst("Iterator", modelInstance)));
+        AddSyntheticMember(target, "iterator", Method(TypingInst("Iterator", element)));
         // the rest of what a QuerySet offers; what they give is not a model (dicts, tuples, counts), so it is left unknown rather than guessed wrong
         foreach (var name in new[]
         {
-            "values", "values_list", "aggregate", "in_bulk", "bulk_update", "delete", "dates", "datetimes", "explain", "raw", "complex_filter", "contains",
+            "aggregate", "in_bulk", "bulk_update", "delete", "dates", "datetimes", "explain", "raw", "complex_filter", "contains",
             "resolve_expression", "db_manager", "check",
             "aget", "acreate", "aget_or_create", "aupdate_or_create", "afirst", "alast", "acount", "aexists", "aaggregate", "aupdate", "adelete", "aiterator",
             "abulk_create", "abulk_update", "aearliest", "alatest", "ain_bulk", "acontains", "aexplain",
         }) AddSyntheticMember(target, name, Method(PyType.Unknown));
+        // what values() and values_list() give depends on the call (DjangoSpecialCall); where it cannot be told it stays unknown
+        foreach (var name in new[] { "values", "values_list" }) AddSyntheticMember(target, name, Method(PyType.Unknown));
         foreach (var name in new[] { "query", "db", "ordered" }) AddSyntheticMember(target, name, PyType.Unknown);
     }
 
@@ -386,12 +392,13 @@ public sealed partial class TypeEvaluator
     /// <summary>A field read through an instance gives its value, a manager read through the class gives a manager of this model.</summary>
     PyType? DjangoBoundMember(MemberHit hit, ClassType receiver, bool receiverIsInstance)
     {
-        if (hit.ClassSymbol == null || !IsDjangoModel(receiver.Info) || IsDjangoInternal(hit.Owner.Info)) return null;
+        if (hit.ClassSymbol == null || !IsDjangoModel(receiver.Info) || hit.Owner.Info.Name == "Model" && IsDjangoInternal(hit.Owner.Info)) return null;
         if (receiverIsInstance && DjangoFieldOf(hit.Owner.Info, hit.ClassSymbol) is { } field) return DjangoValueType(field);
         if (!receiverIsInstance && TypeOfSymbol(hit.ClassSymbol) is ClassType { IsInstance: true } manager && IsDjangoManagerClass(manager.Info))
         {
             // `objects = BookManager()`: the manager of this model, with the custom methods still in reach
-            return InstanceOfClass(DjangoManagerOf(receiver.Info, IsDjangoInternal(manager.Info) ? null : manager.Info));
+            // Django's plain Manager is replaced by the synthetic one; a manager of its own that Django ships (`UserManager`) stays in the chain for its methods
+            return InstanceOfClass(DjangoManagerOf(receiver.Info, IsDjangoInternal(manager.Info) && manager.Info.Name is "Manager" or "BaseManager" ? null : manager.Info));
         }
         return null;
     }
