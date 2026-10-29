@@ -446,39 +446,69 @@ export function setupGit(deps) {
     }
     // ------------------------------------------------------------------ the gutter
     let paintTimer;
-    async function paint() {
-        const model = editor.getModel();
+    /** The changes of an editor's file against the last commit, as hunks and the bars beside the line numbers; null when there is nothing to show. */
+    async function barsOf(ed) {
+        const model = ed.getModel();
         const rel = model && deps.relOf(model);
-        if (!model || !rel || !status.available) {
-            decorations.clear();
-            hunks = [];
-            hunksFor = '';
-            return;
-        }
+        if (!model || !rel || !status.available)
+            return null;
         const entry = fileStatus(rel);
         let base = await headText(rel);
-        if (editor.getModel() !== model)
-            return;
+        if (ed.getModel() !== model)
+            return undefined;   // another file was opened meanwhile: its own paint follows
         if (base === null) {
             // not in the last commit: all green when git knows the file as new, nothing when it is outside git's eyes (ignored)
-            if (!entry || entry.worktree === 'D') {
-                decorations.clear();
-                hunks = [];
-                hunksFor = '';
-                return;
-            }
+            if (!entry || entry.worktree === 'D')
+                return null;
             base = '';
         }
-        const now = normalise(model.getValue());
-        hunks = lineHunks(normalise(base), now);
-        hunksFor = rel;
+        const found = lineHunks(normalise(base), normalise(model.getValue()));
         const lines = model.getLineCount();
-        decorations.set(hunks.map((h) => {
+        const bars = found.map((h) => {
             const kind = hunkKind(h);
             const first = Math.min(h.newStart + 1, lines);
             const last = kind === 'deleted' ? first : Math.min(h.newStart + h.newCount, lines);
             return { range: new monaco.Range(first, 1, last, 1), options: { isWholeLine: false, linesDecorationsClassName: `git-bar-${kind}` } };
-        }));
+        });
+        return { rel, hunks: found, bars };
+    }
+    async function paint() {
+        const result = await barsOf(editor);
+        if (result === undefined)
+            return;
+        if (result === null) {
+            decorations.clear();
+            hunks = [];
+            hunksFor = '';
+        }
+        else {
+            hunks = result.hunks;
+            hunksFor = result.rel;
+            decorations.set(result.bars);
+        }
+        for (const x of others)
+            void paintOther(x);
+    }
+    // other editors (the right side of a split) show the same bars for their own file
+    const others = [];
+    async function paintOther(x) {
+        const result = await barsOf(x.ed);
+        if (result === undefined)
+            return;
+        if (result === null)
+            x.decorations.clear();
+        else
+            x.decorations.set(result.bars);
+    }
+    function attach(ed) {
+        const x = { ed, decorations: ed.createDecorationsCollection(), timer: 0 };
+        others.push(x);
+        const later = (delay) => { clearTimeout(x.timer); x.timer = window.setTimeout(() => void paintOther(x), delay); };
+        ed.onDidChangeModel(() => later(50));
+        ed.onDidChangeModelContent(() => later(300));
+        ed.onDidDispose(() => { const i = others.indexOf(x); if (i >= 0)
+            others.splice(i, 1); });
+        later(50);
     }
     const schedulePaint = (delay = 300) => { clearTimeout(paintTimer); paintTimer = window.setTimeout(() => void paint(), delay); };
     editor.onDidChangeModel(() => { schedulePaint(50); if (annotate)
@@ -953,5 +983,5 @@ export function setupGit(deps) {
     $('git-annotate').checked = annotate;
     $('git-inline').checked = inline;
     void refresh();
-    return { refresh, showDiff, status: () => status };
+    return { refresh, showDiff, attach, status: () => status };
 }

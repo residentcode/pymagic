@@ -338,6 +338,7 @@ export function setupTabs(deps) {
         if (pinned.size > 0) entries.push(['Close all, even pinned', () => closeMany([], true)]);
         entries.push(['—'], pinned.has(rel) ? ['Unpin tab', () => pin(rel, false)] : ['Pin tab', () => pin(rel, true)]);
         if (deps.split) entries.push([deps.splitLabel ?? 'Split right', () => deps.split(rel)]);
+        if (deps.splitDown) entries.push(['Split down', () => deps.splitDown(rel)]);
         entries.push(['—'], ['Copy path', () => navigator.clipboard?.writeText(rel)]);
         showMenu(x, y, entries);
     }

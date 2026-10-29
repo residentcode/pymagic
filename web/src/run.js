@@ -540,8 +540,35 @@ export function setupRun(deps) {
     };
     // which interpreter will be used
     setButtons();
+    /** Another editor (the right side of a split) takes breakpoints with a click in its margin, F9 and Shift+F9, and the run and debug keys. */
+    function attach(other) {
+        other.onMouseDown((e) => {
+            if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN || !e.target.position)
+                return;
+            if (e.target.detail?.glyphMarginLane === monaco.editor.GlyphMarginLane.Right)
+                return;
+            const model = other.getModel();
+            if (!model)
+                return;
+            if (e.event.rightButton)
+                void editBreakpointAt(model, e.target.position.lineNumber);
+            else
+                toggleBreakpoint(model, e.target.position.lineNumber);
+        });
+        const at = (fn) => () => { const model = other.getModel(), pos = other.getPosition(); if (model && pos)
+            fn(model, pos.lineNumber); };
+        other.addCommand(monaco.KeyCode.F9, at(toggleBreakpoint));
+        other.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.F9, at((m, l) => void editBreakpointAt(m, l)));
+        other.addCommand(K.F5, () => (paused ? resume('continue') : void start(true)));
+        other.addCommand(M.CtrlCmd | K.F5, () => void start(false));
+        other.addCommand(M.Shift | K.F5, () => run?.send({ type: 'stop' }));
+        other.addCommand(K.F10, () => resume('next'));
+        other.addCommand(K.F11, () => resume('stepIn'));
+        other.addCommand(M.Shift | K.F11, () => resume('stepOut'));
+    }
     return {
         onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null,
+        attach,
         /** The breakpoint commands of the editor (F9, Shift+F9), for the menus. */
         breakpoints: {
             toggle() { const model = editor.getModel(), pos = editor.getPosition(); if (model && pos) toggleBreakpoint(model, pos.lineNumber); },

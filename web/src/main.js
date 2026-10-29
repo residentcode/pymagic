@@ -966,13 +966,17 @@ async function main() {
         // closing a tab asks about unsaved changes only when the other side of a split does not show the file too
         askOnClose: (rel) => isDirtyRel(rel) && !split?.has(rel),
         isActive: () => split?.focused() !== 'side',
-        split: (rel) => split.open(rel),
+        split: (rel) => split.open(rel, undefined, 'right'),
+        splitDown: (rel) => split.open(rel, undefined, 'down'),
     });
     split = setupSplit({
         createEditor: (el) => {
             const e = createEditor(el);
             followSettings(e);
             e.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { const rel = e.getModel() && relPathOf.get(normalise(serverUri.get(e.getModel()) ?? '')); if (rel) void saveFile(rel); });
+            // breakpoints, the run and debug keys, and the Git change bars on this side too
+            runHooks.attach(e);
+            git.attach(e);
             return e;
         },
         mainEditor: editor,
