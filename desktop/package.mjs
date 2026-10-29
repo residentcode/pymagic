@@ -6,6 +6,9 @@ import { resolve } from 'node:path';
 import { packager } from '@electron/packager';
 import { Arch, Platform, build } from 'electron-builder';
 import { installerConfig, packagerOptions } from './build-config.mjs';
+import webPackages from './web-packages.js';
+
+const { missingWebPackages } = webPackages;
 
 const desktop = resolve(import.meta.dirname);
 const repo = resolve(desktop, '..');
@@ -23,6 +26,7 @@ rmSync(stage, { recursive: true, force: true });
 mkdirSync(stage, { recursive: true });
 
 console.log('== editor');
+if (missingWebPackages(resolve(repo, 'web')).length) sh('npm', ['install'], resolve(repo, 'web'));
 sh('node', ['build.mjs'], resolve(repo, 'web'));
 cpSync(resolve(repo, 'web', 'dist'), resolve(stage, 'www'), { recursive: true });
 

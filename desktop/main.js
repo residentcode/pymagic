@@ -8,6 +8,7 @@ const http = require('node:http');
 const os = require('node:os');
 const { hostEnvironment } = require('./host-env');
 const { remember, existing } = require('./recent-projects');
+const { missingWebPackages } = require('./web-packages');
 
 const repo = path.resolve(__dirname, '..');
 const packaged = app.isPackaged;
@@ -59,8 +60,8 @@ function run(cmd, args, cwd) {
 function prepare(report) {
   if (packaged) return path.join(process.resourcesPath, 'host', 'pymagic-web.exe');
   const web = path.join(repo, 'web');
-  if (!fs.existsSync(path.join(web, 'node_modules', 'monaco-editor'))) {
-    report('Installing the editor packages (first run only)...');
+  if (missingWebPackages(web).length) {
+    report('Installing the editor packages...');
     if (run('npm', ['install'], web).status !== 0) throw new Error('npm install failed');
   }
   const newest = dir => {
