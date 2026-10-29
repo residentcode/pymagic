@@ -224,6 +224,7 @@ public sealed partial class LanguageService
         return RouteIndexOf(snap).Routes
             .Select(r => Describe(r, ev))
             .Where(e => e.Uri.Length > 0)
+            .Concat(DjangoRoutes())
             .ToList();
     }
 

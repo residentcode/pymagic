@@ -122,7 +122,7 @@
 .route:hover { background: var(--hover); }
 .route .verb { min-width: 70px; font-weight: 700; font-size: 11px; }
 .verb-get { color: var(--info); } .verb-post { color: var(--good); } .verb-put { color: var(--warn); } .verb-patch { color: var(--violet); }
-.verb-delete { color: var(--bad); } .verb-ws { color: var(--teal); }
+.verb-delete { color: var(--bad); } .verb-ws { color: var(--teal); } .verb-any, .verb-head, .verb-options { color: var(--dim); }
 .route .rpath { font-family: var(--mono, monospace); }
 .route .twist { width: 12px; color: var(--dim); text-align: center; flex: none; }
 .route .rcount { margin-left: auto; }
