@@ -19,6 +19,7 @@ import { setupGitSync } from './git-sync';
 import { setupExplorer } from './explorer';
 import { setupTabs } from './tabs';
 import { setupSplit } from './split';
+import { relUnderRoot } from './uripath';
 import { setupDiskWatch } from './diskwatch';
 import { setupInspections } from './inspections';
 import { setupGit } from './git';
@@ -63,6 +64,8 @@ const relPathOf = new Map(); // normalised uri -> relative path
 const loading = new Map();
 const normalise = (uri) => decodeURIComponent(uri).toLowerCase();
 const uriFor = (rel) => rootUri + rel.split('/').map(encodeURIComponent).join('/');
+// a file's path in the project: those the page has loaded, else any address under the project folder (a file the engine reports that is not open)
+const relOfUri = (uri) => relPathOf.get(normalise(uri)) ?? relUnderRoot(uri, rootUri);
 function ensureModel(rel) {
     const key = normalise(uriFor(rel));
     let p = loading.get(key);
@@ -869,15 +872,15 @@ async function main() {
     const hierarchy = setupHierarchy({
         editor, lsp, openFile, modelForUri,
         uriOf: (model) => serverUri.get(model),
-        relOfUri: (uri) => relPathOf.get(normalise(uri)),
+        relOfUri,
         // a mark's target, clicked on a side of the split, opens on that side
         openIn: (ed, rel, sel) => split.openIn(ed, rel, sel),
     });
     setupInspections(lsp);
-    setupRoutes({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
+    setupRoutes({ editor, lsp, openFile, relOfUri });
     setupDjango({ openFile, run: runHooks });
-    setupProblems({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
-    setupTodo({ editor, lsp, openFile, relOfUri: (uri) => relPathOf.get(normalise(uri)) });
+    setupProblems({ editor, lsp, openFile, relOfUri });
+    setupTodo({ editor, lsp, openFile, relOfUri });
     setupTerminal();
     const coverage = setupCoverage(common);
     setupProfiler(common);
