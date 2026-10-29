@@ -772,6 +772,9 @@ public sealed partial class LanguageService
         foreach (var tag in a.Parsed.Tags.Where(t => t.Name is not ("raw" or "macro")))
             CheckFiltersAndTests(tag.Args, tag.ArgsStart, tag.Name == "filter");
 
+        // macro calls against the macros' parameters
+        CheckMacroCalls(a, Add);
+
         // url_for in the template
         var index = RouteIndexOf(snap);
         var statics = new Lazy<List<(string Name, string Path)>>(() => FilesBelowFolder("static"));

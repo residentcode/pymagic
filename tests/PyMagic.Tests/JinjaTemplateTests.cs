@@ -273,4 +273,37 @@ public class JinjaTemplateTests
         Assert.True(svc.Diagnostics(jinja).Any(d => d.Code == "jinja-tag"));
         Assert.Equal(0, svc.Diagnostics(plain).Count);
     }
+
+    // ------------------------------------------------------------ macro calls (item 145); each case was rendered with jinja2 3.1.6
+
+    [Fact]
+    public void MacroCallsThatJinjaRejectsAreErrors()
+    {
+        var r = Make(
+            "{% import 'macros.html' as forms %}\n{% from 'macros.html' import input as field, card %}\n" +
+            "{% macro m(a, b=2) %}[{{ a }}|{{ b }}]{% endmacro %}\n" +
+            "{{ m(1, 2, 3) }}\n{{ m(1, c=3) }}\n{{ m(1, a=5) }}\n{{ forms.input('q', 'v', 'text', 'x') }}\n{{ field('q', size=3) }}\n{% call m(1) %}body{% endcall %}\n");
+        var d = DiagnosticsOf(r, "jinja-macro-call");
+        Assert.Equal(
+            "4: jinja-macro-call macro 'm' takes not more than 2 argument(s), and 3 are given\n" +
+            "5: jinja-macro-call macro 'm' has no parameter 'c' (it takes a, b)\n" +
+            "6: jinja-macro-call 'a' is already given as the first argument: Jinja stops with \"macro 'm' takes no keyword argument 'a'\"\n" +
+            "7: jinja-macro-call macro 'input' takes not more than 3 argument(s), and 4 are given\n" +
+            "8: jinja-macro-call macro 'input' has no parameter 'size' (it takes name, value, type)\n" +
+            "9: jinja-macro-call macro 'm' never calls caller(), so {% call %} cannot give it a body: Jinja stops with \"invoked with two values for the special caller argument\"",
+            Messages(d.OrderBy(x => x.Range.Start.Line)));
+        Assert.True(d.All(x => x.Severity == Severity.Error));
+    }
+
+    [Fact]
+    public void ALeftOutParameterIsAWarningAndWhatJinjaAcceptsIsNotReported()
+    {
+        var r = Make(
+            "{% from 'macros.html' import card %}\n" +
+            "{% macro m(a, b=2) %}[{{ a }}|{{ b }}]{% endmacro %}\n{% macro v(a) %}{{ varargs }}{{ kwargs }}{% endmacro %}\n" +
+            "{{ m() }}\n{{ m(1) }}{{ m(a=1, b=3) }}{{ m(*[1, 2]) }}{{ v(1, 2, 3, z=4) }}\n{% call card('t') %}x{% endcall %}\n{{ 'a,b'.split(',') }}{{ [1]|join(',') }}\n");
+        var d = DiagnosticsOf(r, "jinja-macro-call");
+        Assert.Equal("4: jinja-macro-call 'a' of macro 'm' is not given: Jinja passes it undefined, which prints as nothing", Messages(d));
+        Assert.Equal(Severity.Warning, d[0].Severity);
+    }
 }

@@ -128,6 +128,7 @@ public sealed partial class LanguageService
         ("jinja-syntax", "Jinja templates", "Expression Jinja cannot read", "An empty {{ }}, a bracket or string left open, a closer nothing opened, Django's |filter:argument.", "error"),
         ("jinja-tag", "Jinja templates", "Tag Jinja does not know", "Django's tags (load, url, static, empty, comment) and the tags of extensions the environment does not load (break, do, trans).", "error"),
         ("jinja-filter", "Jinja templates", "Unknown filter or test", "A filter or test neither Jinja nor the project registers: rendering fails with 'No filter named'.", "warning"),
+        ("jinja-macro-call", "Jinja templates", "Macro call that does not fit the macro", "Too many arguments, a keyword the macro has no parameter for, {% call %} of a macro that never calls caller(): rendering stops with TypeError. A parameter left out prints as nothing.", "error"),
         ("jinja-undefined", "Jinja templates", "Name no view gives", "A variable no view passes to the template and nothing in it defines: Jinja prints it as an empty string.", "weak"),
     };
 
