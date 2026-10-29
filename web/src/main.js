@@ -868,6 +868,29 @@ async function main() {
         current: () => currentRel, openAnother,
         // the tabs of a moved or renamed file keep their places under the new path
         renamed: (from, to) => { tabs?.rename(from, to); split?.rename(from, to); },
+        // a Python module or package that moves: the engine says what its imports become, the preview shows it, and it is saved before the move
+        beforeMove: async (from, to) => {
+            const name = from.slice(from.lastIndexOf('/') + 1);
+            if (name.includes('.') && !/\.pyi?$/.test(name))
+                return true;
+            let plan;
+            try {
+                plan = await lsp.request('pymagic/moveModule', { from: uriFor(from), to: uriFor(to) });
+            }
+            catch {
+                return true;   // the engine could not say: the files move without it
+            }
+            const changes = plan?.changes ?? {};
+            if (Object.keys(changes).length === 0) {
+                if (plan?.warnings?.length)
+                    toast(plan.warnings[0], true);
+                return true;
+            }
+            if (!(await refactor.applyEdits(`Move ${plan.from} to ${plan.to}: the imports that follow it`, changes, { alwaysPreview: true, warnings: plan.warnings ?? [] })))
+                return false;
+            await common.saveAll();
+            return true;
+        },
     });
     await explorer.refresh();
     tabs = setupTabs({

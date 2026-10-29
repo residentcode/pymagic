@@ -243,6 +243,7 @@ export function setupExplorer(deps) {
         if (INVALID.test(name) || name.includes('/') || name.includes('\\')) { toast('That is not a usable name.', true); return; }
         await deps.saveAll();
         const target = parentOf(path) ? `${parentOf(path)}/${name}` : name;
+        if (!(await deps.beforeMove(path, target))) return;
         if (!(await post({ op: 'rename', from: path, to: target }))) return;
         await afterMove(path, target, isDir);
     }
@@ -277,6 +278,8 @@ export function setupExplorer(deps) {
         if (exists(target)) { toast(`${dir || 'The project folder'} already has a ${baseName(path)}.`, true); return false; }
         const isDir = dirs.includes(path);
         await deps.saveAll();
+        // the imports of a Python module or package follow it (shown first; Cancel leaves everything as it was)
+        if (!(await deps.beforeMove(path, target))) return false;
         if (!(await post({ op: 'rename', from: path, to: target }))) return false;
         await afterMove(path, target, isDir);
         toast(`Moved ${baseName(path)} to ${dir || 'the project folder'}`);
