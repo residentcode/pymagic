@@ -26,18 +26,6 @@ public sealed class ConsoleSession : IDisposable
 
     public int ProcessId => _processId;
 
-    /// <summary>The shell the console runs: `PYMAGIC_SHELL` when set, else PowerShell 7 (`pwsh.exe`) when it is on the PATH, else Windows PowerShell.</summary>
-    public static string DefaultShell()
-    {
-        if (Environment.GetEnvironmentVariable("PYMAGIC_SHELL") is { Length: > 0 } chosen) return chosen;
-        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
-        {
-            try { if (dir.Length > 0 && File.Exists(Path.Combine(dir, "pwsh.exe"))) return "pwsh.exe -NoLogo"; }
-            catch (ArgumentException) { /* a broken PATH entry */ }
-        }
-        return "powershell.exe -NoLogo";
-    }
-
     /// <summary>Starts <paramref name="commandLine"/> in a pseudo console of the given size.</summary>
     /// <param name="output">Receives what the console writes, as it comes; called from a background thread.</param>
     /// <param name="exited">Receives the exit code once the program has ended and its last output was read.</param>

@@ -155,6 +155,19 @@ const SPECIAL = {
         buttons.append(pressButton('Open the Inspections panel', $('t-insp'), close));
         page.append(buttons);
     },
+    terminal(page) {
+        const sel = document.createElement('select');
+        sel.add(new Option('Automatic', 'auto'));
+        sel.value = 'auto';
+        sel.onchange = () => change({ terminalShell: sel.value });
+        page.append(row('Shell', sel, 'New terminals start it; open ones keep theirs. The ▾ beside + in the Terminal panel starts one terminal in another shell.'));
+        fetch('/api/shells').then((r) => r.json()).then(({ auto, shells }) => {
+            sel.options[0].textContent = `Automatic (${auto})`;
+            for (const s of shells) sel.add(new Option(s.name, s.id));
+            const want = settings().terminalShell;
+            sel.value = shells.some((s) => s.id === want) ? want : 'auto';
+        }).catch(() => { /* only Automatic */ });
+    },
     git(page) {
         page.append(
             mirrorCheck($('git-annotate'), 'Show who last changed each line', 'In the line numbers.'),
@@ -200,7 +213,7 @@ const SPECIAL = {
     },
 };
 
-const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections', 'Inspections'], ['git', 'Git'], ['keymap', 'Keymap'], ['about', 'About']];
+const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections', 'Inspections'], ['terminal', 'Terminal'], ['git', 'Git'], ['keymap', 'Keymap'], ['about', 'About']];
 
 let isOpen = false;
 

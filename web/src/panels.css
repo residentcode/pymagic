@@ -197,9 +197,17 @@
 .listbar label { color: var(--dim); display: flex; gap: 4px; align-items: center; }
 #terminal-main { flex: 1; }
 #term-views { flex: 1; min-height: 0; position: relative; }
-#term-views .term-view { position: absolute; inset: 4px 0 0 10px; }
-#term-views .term-view:not(.active) { display: none; }
+#term-views .term-group { position: absolute; inset: 4px 0 0 10px; display: flex; }
+#term-views .term-group:not(.active) { display: none; }
+#term-views .term-pane { flex: 1 1 0; min-width: 0; position: relative; }
+#term-views .term-pane + .term-pane { border-left: 1px solid var(--line); padding-left: 8px; }
+#term-views .term-group.split .term-pane { border-top: 2px solid transparent; }
+#term-views .term-group.split .term-pane.focused { border-top-color: var(--accent); }
 #term-views .xterm { height: 100%; }
+.term-pane-close { display: none; position: absolute; top: 2px; right: 14px; z-index: 5; width: 16px; text-align: center; font-size: 10px; border-radius: 3px; color: var(--dim); cursor: pointer; background: var(--bg); }
+.term-group.split .term-pane:hover .term-pane-close { display: block; }
+.term-pane-close:hover { background: var(--hover3); color: var(--fg); }
+#term-split:disabled { opacity: .45; }
 #term-views .xterm-viewport { scrollbar-width: thin; }
 .ttab.ended .ttab-name { opacity: .55; text-decoration: line-through; }
 .term-output .err { color: var(--red); } .term-output .info { color: var(--dim); } .term-output .cmd { color: var(--info); }

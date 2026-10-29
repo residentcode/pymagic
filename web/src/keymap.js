@@ -8,5 +8,5 @@ export const KEYMAP = [
         ['Find usages', 'Shift+F12'], ['Back', 'Ctrl+Alt+Left'], ['Forward', 'Ctrl+Alt+Right'], ['Find in files', 'Ctrl+Shift+F'], ['Type hierarchy', 'Ctrl+H (in the editor)'], ['Toggle a bookmark', 'Ctrl+F2'], ['Next bookmark', 'Alt+F2'], ['Previous bookmark', 'Shift+Alt+F2']]],
     ['Refactor', [['Rename', 'F2'], ['Extract variable', 'Ctrl+Alt+V'], ['Extract constant', 'Ctrl+Alt+C'], ['Extract method', 'Ctrl+Alt+M'], ['Inline variable', 'Ctrl+Alt+N'],
         ['Inline method', 'Ctrl+Alt+P'], ['Change signature', 'Ctrl+F6'], ['Move to another file', 'F6']]],
-    ['Tools', [['Terminal', 'Ctrl+`'], ['Git: commit message', 'Alt+9'], ['Settings', 'Ctrl+,']]],
+    ['Tools', [['Terminal', 'Ctrl+`'], ['New terminal', 'Ctrl+Shift+`'], ['Split the terminal', 'Ctrl+Shift+5'], ['Git: commit message', 'Alt+9'], ['Settings', 'Ctrl+,']]],
 ];

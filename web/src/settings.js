@@ -21,6 +21,7 @@ export const DEFAULTS = {
     ruler: 0,                 // the column of a vertical guide, 0 for none
     autoSave: 'off',          // off | blur (when the window is left) | delay (a second after the last change)
     confirmGit: true,         // the bar's update and push ask first
+    terminalShell: 'auto',    // the id of the shell new terminals start (/api/shells), auto for PowerShell 7 or Windows PowerShell
 };
 
 let current = { ...DEFAULTS };

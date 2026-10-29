@@ -584,6 +584,14 @@ app.MapGet("/api/profile", () =>
 
 // ---- the terminal: one command line at a time in the project folder -------------------------------------------------
 
+// the shells the Terminal panel can start on this PC, and the one "auto" stands for
+app.MapGet("/api/shells", () =>
+{
+    var found = ConsoleShells.Found();
+    var auto = ConsoleShells.Choose(ConsoleShells.Auto, found);
+    return Results.Json(new { auto = auto.Name, shells = found.Select(s => new { id = s.Id, name = s.Name }) });
+});
+
 // a real console for each terminal tab: the page sends {type:"input", data} and {type:"resize", cols, rows}, and gets {type:"output", data},
 // {type:"exit", code} or {type:"error", text}; the size of the first screen comes as ?cols=&rows=
 app.Map("/console", async (HttpContext ctx) =>
@@ -615,9 +623,13 @@ app.Map("/console", async (HttpContext ctx) =>
     // the host's own settings are not the user's (the garbage collector's, the server's URLs)
     foreach (var k in env.Keys.Where(k => k.StartsWith("DOTNET_", StringComparison.OrdinalIgnoreCase) || k.StartsWith("ASPNETCORE_", StringComparison.OrdinalIgnoreCase)).ToList()) env.Remove(k);
     TerminalSession.WithInterpreter(env, interpreters.Current is { Target.IsLocal: true } c ? c.Path : null);
+    // the page names a shell by its id (?shell=); the command line is the one found here
+    var shell = ConsoleShells.Choose(ctx.Request.Query["shell"], ConsoleShells.Found());
+    foreach (var (k, v) in shell.Environment ?? new Dictionary<string, string>()) env[k] = v;
+    Send(new JsonObject { ["type"] = "shell", ["id"] = shell.Id, ["name"] = shell.Name });
     try
     {
-        console.Start(ConsoleSession.DefaultShell(), root, env, Query("cols", 100), Query("rows", 30),
+        console.Start(shell.CommandLine, root, env, Query("cols", 100), Query("rows", 30),
             data => Send(new JsonObject { ["type"] = "output", ["data"] = data }),
             code => { Send(new JsonObject { ["type"] = "exit", ["code"] = code }); outbox.CompleteAdding(); });
     }

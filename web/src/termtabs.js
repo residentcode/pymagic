@@ -19,6 +19,35 @@ export function afterClose(ids, closing, active) {
     return rest[Math.min(Math.max(at, 0), rest.length - 1)];
 }
 
+export const MAX_PANES = 4;     // terminals side by side in one tab
+export const KEPT_LINES = 1000; // lines of each terminal's screen kept for the next start
+export const RESTORED = '[restored from the last session]';
+
+/** The last `max` lines of a screen, without the empty ones at its end and without the line that marked an earlier restore. */
+export function keptLines(lines, max = KEPT_LINES) {
+    lines = lines.filter((l) => String(l).trim() !== RESTORED);
+    let end = lines.length;
+    while (end > 0 && !String(lines[end - 1]).trim()) end--;
+    return lines.slice(Math.max(0, end - max), end).map(String);
+}
+
+/**
+ * The terminal tabs to open again from what was kept (`raw`, parsed JSON): only for the same project folder, each tab with its name and its
+ * terminals (the shell's id and the screen's lines); anything of the wrong shape is dropped.
+ */
+export function restoredTabs(raw, root) {
+    if (!raw || typeof raw !== 'object' || raw.root !== root || !Array.isArray(raw.tabs)) return [];
+    const tabs = [];
+    for (const t of raw.tabs) {
+        const panes = (Array.isArray(t?.panes) ? t.panes : []).filter((p) => p && typeof p === 'object').slice(0, MAX_PANES).map((p) => ({
+            shell: typeof p.shell === 'string' && /^[\w-]{1,40}$/.test(p.shell) ? p.shell : null,
+            lines: Array.isArray(p.lines) ? keptLines(p.lines.filter((l) => typeof l === 'string')) : [],
+        }));
+        if (panes.length) tabs.push({ name: cleanName(t.name) ?? 'Terminal', panes });
+    }
+    return tabs;
+}
+
 /** The name typed when renaming a tab: spaces folded, at most 40 characters; null keeps the old name. */
 export function cleanName(typed) {
     const name = String(typed ?? '').replace(/\s+/g, ' ').trim().slice(0, 40).trim();
