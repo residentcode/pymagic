@@ -30,7 +30,8 @@ public sealed partial class LanguageService
         }
 
         /// <summary>
-        /// The plugin modules pytest loads for a module: those `pytest_plugins` names in the module and its conftest.py files, then the installed plugins.
+        /// The plugin modules pytest loads for a module: those `pytest_plugins` names in the module and its conftest.py files, then those of every run (the
+        /// `-p` options of the configuration and the installed plugins it does not switch off), and the `pytest_plugins` of each of those in turn.
         /// A name the workspace cannot find is left out.
         /// </summary>
         IReadOnlyList<ModuleInfo> PluginsFor(Workspace ws, ModuleInfo m)
@@ -38,12 +39,19 @@ public sealed partial class LanguageService
             if (_plugins.TryGetValue(m, out var cached)) return cached;
             var list = new List<ModuleInfo>();
             _plugins[m] = list;
-            var names = new List<string>();
+            var queue = new Queue<string>();
             foreach (var source in new[] { m }.Concat(ConftestsFor(ws, m)))
-                if (FixtureModel.PytestPluginsOf(source) is { } named) names.AddRange(named);
-            names.AddRange(_installedPlugins());
-            foreach (var name in names.Distinct(StringComparer.Ordinal))
-                if (ws.GetModule(name) is { } module && !ReferenceEquals(module, m) && !list.Contains(module)) list.Add(module);
+                if (FixtureModel.PytestPluginsOf(source) is { } named) foreach (var n in named) queue.Enqueue(n);
+            foreach (var n in _installedPlugins()) queue.Enqueue(n);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            while (queue.Count > 0 && seen.Count < 200)
+            {
+                string name = queue.Dequeue();
+                if (!seen.Add(name) || ws.GetModule(name) is not { } module || ReferenceEquals(module, m) || list.Contains(module)) continue;
+                list.Add(module);
+                // a plugin that loads plugins itself
+                if (FixtureModel.PytestPluginsOf(module) is { } more) foreach (var n in more) queue.Enqueue(n);
+            }
             return list;
         }
 
@@ -97,18 +105,40 @@ public sealed partial class LanguageService
 
     // ------------------------------------------------------------ installed plugins
 
-    readonly Dictionary<string, (DateTime Stamp, List<string> Modules)> _pluginEntryPoints = new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, (DateTime Stamp, List<(string Name, string Module)> Entries)> _pluginEntryPoints = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The plugin modules an entry_points.txt registers with pytest.</summary>
     public static IEnumerable<string> PytestEntryPoints(string entryPointsText) => FixtureModel.PytestEntryPoints(entryPointsText);
 
     /// <summary>
-    /// The modules installed packages register with pytest: the `[pytest11]` section of the entry_points.txt of every package in the library folders
-    /// (`anyio = anyio.pytest_plugin`). pytest loads them, and so their fixtures, in every run. Read again when a library folder changes.
+    /// The plugin modules every pytest run of the project loads: the `-p name` options of its configuration (pytest.ini, pyproject.toml, tox.ini, setup.cfg),
+    /// then what installed packages register (the `[pytest11]` section of the entry_points.txt of every package in the library folders,
+    /// `anyio = anyio.pytest_plugin`) less those `-p no:name` switches off. Read again when a library folder changes.
     /// </summary>
     IReadOnlyList<string> PytestPluginModules()
     {
-        var all = new List<string>();
+        var (enabled, disabled) = PytestPluginOptions();
+        var all = new List<string>(enabled);
+        foreach (var (name, module) in InstalledPytestPlugins())
+            if (!disabled.Contains(name) && !disabled.Contains(module)) all.Add(module);
+        return all.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>The `-p` options of the pytest configuration in a folder; null when the folder has none.</summary>
+    public static (List<string> Enabled, List<string> Disabled)? PytestOptionsIn(string folder) =>
+        FixtureModel.AddoptsIn(folder) is { } addopts ? FixtureModel.PluginOptions(addopts) : null;
+
+    /// <summary>The `-p` options of the project's pytest configuration (in the first source folder that has one).</summary>
+    (List<string> Enabled, List<string> Disabled) PytestPluginOptions()
+    {
+        foreach (var root in SourceRootsNow())
+            if (Directory.Exists(root) && FixtureModel.AddoptsIn(root) is { } addopts) return FixtureModel.PluginOptions(addopts);
+        return (new List<string>(), new List<string>());
+    }
+
+    List<(string Name, string Module)> InstalledPytestPlugins()
+    {
+        var all = new List<(string, string)>();
         foreach (var root in EffectiveLibraryRoots())
         {
             if (!Directory.Exists(root)) continue;
@@ -116,21 +146,21 @@ public sealed partial class LanguageService
             try { stamp = Directory.GetLastWriteTimeUtc(root); } catch (IOException) { continue; }
             if (!_pluginEntryPoints.TryGetValue(root, out var cached) || cached.Stamp != stamp)
             {
-                var found = new List<string>();
+                var found = new List<(string, string)>();
                 try
                 {
                     foreach (var dist in Directory.EnumerateDirectories(root, "*.dist-info").Concat(Directory.EnumerateDirectories(root, "*.egg-info")))
                     {
                         string file = System.IO.Path.Combine(dist, "entry_points.txt");
-                        if (File.Exists(file)) found.AddRange(FixtureModel.PytestEntryPoints(File.ReadAllText(file)));
+                        if (File.Exists(file)) found.AddRange(FixtureModel.PytestEntryPointsNamed(File.ReadAllText(file)));
                     }
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* an unreadable folder adds nothing */ }
                 _pluginEntryPoints[root] = cached = (stamp, found);
             }
-            all.AddRange(cached.Modules);
+            all.AddRange(cached.Entries);
         }
-        return all.Distinct(StringComparer.Ordinal).ToList();
+        return all;
     }
 
     /// <summary>A workspace whose test and fixture parameters take the types of the fixtures they ask for.</summary>

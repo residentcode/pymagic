@@ -315,7 +315,8 @@ public sealed partial class LanguageService
         bool dynamic(string marker) => m.Source.Contains(marker) || ctx.ConftestsOf(ws, m).Any(c => c.Source.Contains(marker));
         // pytest_generate_tests can provide any name, and so can a pytest_plugins whose modules cannot be read
         bool pluginsKnown = new[] { m }.Concat(ctx.ConftestsOf(ws, m))
-            .All(src => FixtureModel.PytestPluginsReadable(src) && (FixtureModel.PytestPluginsOf(src) ?? new List<string>()).All(n => ws.GetModule(n) != null));
+            .All(src => FixtureModel.PytestPluginsReadable(src) && (FixtureModel.PytestPluginsOf(src) ?? new List<string>()).All(n => ws.GetModule(n) != null))
+            && PytestPluginOptions().Enabled.All(n => ws.GetModule(n) != null);   // a -p plugin that cannot be read may bring any fixture
         if (!pytestAround || !pluginsKnown || dynamic("pytest_generate_tests")) yield break;
         var parametrized = FixtureModel.AllParametrizedNames(m);
 
@@ -332,6 +333,61 @@ public sealed partial class LanguageService
                 if (!Suppressed(m.Source, finding)) yield return AsDiag(finding);
             }
         }
+    }
+
+    // ------------------------------------------------------------ inspection: fixture scopes (item 151; checked with pytest 9.1.1)
+
+    static readonly string[] ScopeOrder = { "function", "class", "module", "package", "session" };
+    static readonly Dictionary<string, string> WiderInstead = new(StringComparer.Ordinal) { ["tmp_path"] = "tmp_path_factory", ["tmpdir"] = "tmpdir_factory" };
+
+    /// <summary>The scope a fixture's decorator writes, and where; Known is false for a scope pytest decides when it runs (`scope=callable`).</summary>
+    static (string Scope, ConstExpr? At, bool Known) DecoratorScope(FunctionDef f)
+    {
+        foreach (var d in f.Decorators)
+        {
+            if (d is not CallExpr call || !FixtureModel.IsFixture(f)) continue;
+            var arg = call.Args.FirstOrDefault(a => a.Name == "scope")?.Value ?? call.Args.FirstOrDefault(a => a.Name == null && a.Stars == 0)?.Value;
+            if (arg == null) continue;
+            return FixtureModel.StringValue(arg) is { } s && arg is ConstExpr c ? (s, c, true) : ("function", null, false);
+        }
+        return ("function", null, true);
+    }
+
+    /// <summary>
+    /// A scope pytest does not know (`scope="sesion"`: collecting the module stops), and a fixture that asks for a fixture of a narrower scope: a session
+    /// fixture asking for `tmp_path` fails with ScopeMismatch when a test uses it. `request` serves every scope.
+    /// </summary>
+    IEnumerable<Diag> FixtureScopeDiagnostics(ModuleInfo m, TypeEvaluator ev)
+    {
+        if (m.IsStub || !m.Source.Contains("fixture", StringComparison.Ordinal) || FixturesOf(ev.Workspace) is not { } ctx) yield break;
+        var ws = ev.Workspace;
+        var findings = new List<Finding>();
+        foreach (var f in AstChildren.Descendants(m.Ast).OfType<FunctionDef>().Where(FixtureModel.IsFixture))
+        {
+            var (scope, at, known) = DecoratorScope(f);
+            if (!known) continue;
+            int rank = Array.IndexOf(ScopeOrder, scope);
+            if (rank < 0)
+            {
+                string? near = ScopeOrder.OrderBy(s => Distance(s, scope, 3)).First() is { } best && Distance(best, scope, 3) <= 2 ? best : null;
+                (int Start, int End) span = at != null && FixtureModel.StringSpan(at) is { } sp ? (sp.Start, sp.End) : (f.NameStart, f.NameStart + f.Name.Length);
+                findings.Add(new Finding(span.Start, span.End - span.Start, $"pytest has no scope '{scope}'{(near != null ? $" (did you mean '{near}'?)" : "")}: collecting the module stops with \"Fixture '{f.Name}' ... got an unexpected scope value '{scope}'\". The scopes are {string.Join(", ", ScopeOrder)}", "fixture-scope", FindingLevel.Error));
+                continue;
+            }
+            if (rank == 0) continue;
+            foreach (var p in FixtureModel.RequestedParameters(m, f))
+            {
+                if (p.Name == "request") continue;
+                var res = ctx.Resolver.Resolve(ws, m, f, p.Name, f);
+                string? depScope = res.Def is { } def ? (DecoratorScope(def.Def).Known ? def.Scope : null) : res.Builtin?.Scope;
+                int depRank = depScope == null ? -1 : Array.IndexOf(ScopeOrder, depScope);
+                if (depRank < 0 || depRank >= rank) continue;
+                var (s, e) = ParamNameSpan(m, p);
+                string hint = WiderInstead.TryGetValue(p.Name, out var wider) ? $" Ask for {wider} instead, or" : "";
+                findings.Add(new Finding(s, e - s, $"'{f.Name}' is a {scope} fixture and '{p.Name}' a {depScope} one: a test that uses '{f.Name}' fails with ScopeMismatch (\"You tried to access the {depScope} scoped fixture {p.Name} with a {scope} scoped request object\").{hint} narrow the scope of '{f.Name}'", "fixture-scope", FindingLevel.Error));
+            }
+        }
+        foreach (var finding in findings) if (!Suppressed(m.Source, finding)) yield return AsDiag(finding);
     }
 
     /// <summary>`@pytest.fixture def name(): ...` above the test that asks for it (and `import pytest` when the module lacks it).</summary>

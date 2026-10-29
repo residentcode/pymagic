@@ -59,7 +59,10 @@ internal static class FixtureModel
     // ------------------------------------------------------------ plugins
 
     /// <summary>The modules of the `[pytest11]` section of an entry_points.txt: `anyio = anyio.pytest_plugin` gives `anyio.pytest_plugin` (`module:attr` its module).</summary>
-    public static IEnumerable<string> PytestEntryPoints(string text)
+    public static IEnumerable<string> PytestEntryPoints(string text) => PytestEntryPointsNamed(text).Select(e => e.Module);
+
+    /// <summary>The `[pytest11]` entries with their names (`anyio`), which `-p no:anyio` switches off.</summary>
+    public static IEnumerable<(string Name, string Module)> PytestEntryPointsNamed(string text)
     {
         bool inSection = false;
         foreach (var raw in text.Split('\n'))
@@ -74,7 +77,7 @@ internal static class FixtureModel
             if (colon >= 0) target = target[..colon].Trim();
             int bracket = target.IndexOf('[');   // `module [extra]`
             if (bracket >= 0) target = target[..bracket].Trim();
-            if (Regex.IsMatch(target, @"^[A-Za-z_][\w.]*$")) yield return target;
+            if (Regex.IsMatch(target, @"^[A-Za-z_][\w.]*$")) yield return (line[..eq].Trim(), target);
         }
     }
 
@@ -88,6 +91,57 @@ internal static class FixtureModel
             var items = stmt.Value switch { ListExpr l => l.Items, TupleExpr t => t.Items, _ => new[] { stmt.Value } };
             var names = items.Select(StringValue).ToList();
             return names.All(n => n != null) ? names!.Select(n => n!).ToList() : null;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The plugins pytest's options name: `-p helpers.fixtures` (or `-phelpers.fixtures`) loads a module, `-p no:anyio` switches off a plugin by its
+    /// entry point name or module. <paramref name="addopts"/> is the option text of a configuration file.
+    /// </summary>
+    public static (List<string> Enabled, List<string> Disabled) PluginOptions(string addopts)
+    {
+        var enabled = new List<string>();
+        var disabled = new List<string>();
+        var tokens = Regex.Matches(addopts, "\"[^\"]*\"|'[^']*'|\\S+").Select(t => t.Value.Trim('"', '\'')).ToList();
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            string? value = tokens[i] == "-p" && i + 1 < tokens.Count ? tokens[++i] : tokens[i].StartsWith("-p", StringComparison.Ordinal) && tokens[i].Length > 2 && !tokens[i].StartsWith("--", StringComparison.Ordinal) ? tokens[i][2..] : null;
+            if (value == null) continue;
+            if (value.StartsWith("no:", StringComparison.Ordinal)) disabled.Add(value[3..]);
+            else if (Regex.IsMatch(value, @"^[A-Za-z_][\w.]*$")) enabled.Add(value);
+        }
+        return (enabled, disabled);
+    }
+
+    /// <summary>
+    /// The `addopts` of the configuration file pytest reads in a folder, as pytest picks it: pytest.ini (its [pytest] section, even empty), pyproject.toml
+    /// ([tool.pytest.ini_options]), tox.ini ([pytest]), setup.cfg ([tool:pytest]); null when the folder has none. A value that goes on over indented lines is joined.
+    /// </summary>
+    public static string? AddoptsIn(string folder)
+    {
+        foreach (var (file, section) in new[] { ("pytest.ini", "[pytest]"), ("pyproject.toml", "[tool.pytest.ini_options]"), ("tox.ini", "[pytest]"), ("setup.cfg", "[tool:pytest]") })
+        {
+            string path = Path.Combine(folder, file);
+            if (!File.Exists(path)) continue;
+            string[] lines;
+            try { lines = File.ReadAllLines(path); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            int start = Array.FindIndex(lines, l => l.Trim() == section);
+            if (start < 0) { if (file == "pytest.ini") return ""; continue; }
+            var value = new System.Text.StringBuilder();
+            bool inAddopts = false;
+            for (int i = start + 1; i < lines.Length && !lines[i].TrimStart().StartsWith('['); i++)
+            {
+                string line = lines[i];
+                var m = Regex.Match(line, @"^addopts\s*[=:]\s*(?<v>.*)$");
+                if (m.Success) { inAddopts = true; value.Append(' ').Append(m.Groups["v"].Value); continue; }
+                // ini: indented lines go on; toml: a list over several lines goes on until it closes
+                if (inAddopts && (line.StartsWith(' ') || line.StartsWith('\t') || value.ToString().Contains('[') && !value.ToString().Contains(']'))) value.Append(' ').Append(line.Trim());
+                else inAddopts = false;
+            }
+            // toml: "a b" or ["-p", "x"]; plugin names have no quotes or spaces, so the quotes go too
+            return Regex.Replace(value.ToString(), "[\\[\\],\"']", " ");
         }
         return null;
     }

@@ -103,6 +103,7 @@ public sealed partial class LanguageService
         ("naming-variable", "PEP 8 naming", "Variable names", "Variables are written snake_case.", "weak"),
         ("shadowed-builtin", "PEP 8 naming", "Shadowing a built-in name", "A variable, parameter or function that hides a built-in.", "weak"),
         ("fixture-not-found", "pytest", "Fixture not found", "A test parameter that no fixture provides.", "weak"),
+        ("fixture-scope", "pytest", "Fixture scope pytest refuses", "A scope pytest does not know (collecting stops), and a fixture that asks for one of a narrower scope: a session fixture asking for tmp_path fails with ScopeMismatch.", "error"),
         ("django-field", "Django", "Unknown field in a query", "A keyword or string that is not a field of the model.", "warning"),
         ("django-meta-field", "Django", "Unknown field in Meta, form, serializer or admin", "A name in fields, ordering, list_display, search_fields and the like that the model does not have.", "warning"),
         ("django-view-serializer", "Django", "Serializer for another model than the queryset", "A REST framework view whose serializer_class is for a model its queryset does not return.", "warning"),

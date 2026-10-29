@@ -35,7 +35,8 @@ public class DjangoMigrationTests
     public void WhatMakemigrationsWouldWriteIsReported()
     {
         if (RealDjangoTests.Site == null) return;
-        Assert.Equal(Fixture("expected.txt").TrimEnd('\n'), string.Join("\n", Found("models.py", Both)));
+        // a checkout may give the file Windows line ends
+        Assert.Equal(Fixture("expected.txt").Replace("\r\n", "\n").TrimEnd('\n'), string.Join("\n", Found("models.py", Both)));
     }
 
     [Fact]

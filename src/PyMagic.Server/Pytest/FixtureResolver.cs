@@ -197,7 +197,25 @@ internal sealed class FixtureResolver
             return t is UnknownType ? null : t;
         }
         if (res.Builtin is { Module: not null, Class: not null } b)
-            return ev.InstanceOf(b.Module, b.Class, b.StrArgument ? new[] { ev.BuiltinInstance("str") } : Array.Empty<PyType>());
+        {
+            var t = ev.InstanceOf(b.Module, b.Class, b.StrArgument ? new[] { ev.BuiltinInstance("str") } : Array.Empty<PyType>());
+            // request in a fixture with params=[...]: request.param is one of those values
+            if (b.Name == "request" && t is ClassType request && FixtureModel.IsFixture(f) && ParamsOf(f) is { } values)
+            {
+                var param = PyType.Union(values.Select(v => ev.TypeOf(m, v)).Select(x => x is ClassType { LiteralValue: not null } lit ? lit.Widened() : x));
+                if (!param.Members.Any(x => x is UnknownType)) return ev.WithAttributes(m, f, request, new[] { ("param", param) });
+            }
+            return t;
+        }
+        return null;
+    }
+
+    /// <summary>The values of `@pytest.fixture(params=[...])` written as a list or tuple; null when the fixture has none (or they are not written out).</summary>
+    static IReadOnlyList<Expr>? ParamsOf(FunctionDef f)
+    {
+        foreach (var d in f.Decorators.OfType<CallExpr>())
+            if (d.Args.FirstOrDefault(a => a.Name == "params")?.Value is { } v)
+                return v switch { ListExpr l when l.Items.Count > 0 => l.Items, TupleExpr t when t.Items.Count > 0 => t.Items, _ => null };
         return null;
     }
 }

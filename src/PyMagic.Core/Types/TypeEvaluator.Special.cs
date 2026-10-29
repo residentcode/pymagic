@@ -57,6 +57,13 @@ public sealed partial class TypeEvaluator
         return info;
     }
 
+    /// <summary>
+    /// An instance of <paramref name="instance"/>'s class with some attributes given their types, made once per node <paramref name="at"/>: what the
+    /// server knows and the class does not say (pytest's `request.param` in a fixture with `params=[...]`). The class keeps its name and everything else.
+    /// </summary>
+    public ClassType WithAttributes(ModuleInfo m, Node at, ClassType instance, IEnumerable<(string Name, PyType Type)> attributes) =>
+        new(MakeSyntheticClass(m, instance.Info.Name, at, instance.AsClassObject(), attributes), true);
+
     static string? StringValue(Expr? e)
     {
         if (e is not ConstExpr { Kind: ConstKind.Str, IsFString: false } c) return null;
