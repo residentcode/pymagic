@@ -131,6 +131,28 @@ public class RealDrfTests
         Assert.Contains("titel", found[0].Message);
     }
 
+    /// <summary>Each class has the mistakes the real DRF 3.18.3 fails on (AssertionError, AttributeError, TypeError) or serializes wrongly (a manager without many=True).</summary>
+    [Fact]
+    public void DeclaredAndNestedFieldsAreCheckedOnTheRealDrf()
+    {
+        if (Missing) return;
+        string serializers = Serializers + "\n\nfrom django.contrib.auth.models import User, Group\n\n\n" +
+            "class GroupSerializer(serializers.ModelSerializer):\n    class Meta:\n        model = Group\n        fields = ['id', 'name']\n\n\n" +
+            "class Bad(serializers.ModelSerializer):\n    extra = serializers.CharField(source='title')\n    nickname = serializers.CharField()\n    secret = serializers.CharField(write_only=True)\n" +
+            "    shout = serializers.SerializerMethodField()\n    author = AuthorSerializer(many=True)\n\n    class Meta:\n        model = Book\n        fields = ['id', 'nickname', 'secret', 'shout', 'author']\n\n\n" +
+            "class AuthorBooks(serializers.ModelSerializer):\n    books = BookSerializer(many=True)\n    book_set = BookSerializer(many=True)\n\n    class Meta:\n        model = Author\n        fields = ['id', 'books', 'book_set']\n\n\n" +
+            "class UserGroups(serializers.ModelSerializer):\n    groups = GroupSerializer()\n    full = serializers.ReadOnlyField(source='get_full_name')\n    staff = GroupSerializer(source='groups', many=True)\n\n" +
+            "    class Meta:\n        model = User\n        fields = ['id', 'groups', 'full', 'staff']\n";
+        var svc = Project(serializers);
+        string uri = LanguageService.UriOfPath(Directory.GetDirectories(Path.GetTempPath(), "pm_realdrf_*").OrderByDescending(Directory.GetCreationTimeUtc).First() + "/shop/serializers.py");
+        var found = svc.Diagnostics(uri).Where(d => d.Code == "drf-serializer-field").Select(d => $"{d.Range.Start.Line + 1}: {d.Message.Split(':')[0]}").ToList();
+        Assert.Equal(string.Join("\n", new[]
+        {
+            "28: 'extra' is declared on Bad but not listed in Meta.fields", "29: Book has no attribute 'nickname'", "31: 'shout' is a SerializerMethodField and Bad has no method 'get_shout'",
+            "32: 'author' is one Author", "40: Author has no attribute 'books'", "49: 'groups' holds many Groups",
+        }), string.Join("\n", found));
+    }
+
     [Fact]
     public void AViewWhoseSerializerIsForAnotherModelIsReportedOnTheRealDrf()
     {

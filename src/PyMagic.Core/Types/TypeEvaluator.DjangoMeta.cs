@@ -85,6 +85,16 @@ public sealed partial class TypeEvaluator
                 }
             }
         }
+        // no serializer_class: the first serializer get_serializer_class returns
+        if (serializer == null)
+            foreach (var entry in Mro(c))
+            {
+                if (entry is not ClassType e || e.Info.Module.IsStub || e.Info.Module.Name.StartsWith("rest_framework", StringComparison.Ordinal)) continue;
+                if (e.Info.Node.Body.OfType<FunctionDef>().FirstOrDefault(f => f.Name == "get_serializer_class") is not { } picker) continue;
+                foreach (var ret in AstChildren.Descendants(picker).OfType<ReturnStmt>())
+                    if (ret.Value != null && TypeOf(e.Info.Module, ret.Value) is ClassType { IsInstance: false } sc && DjangoRoleOf(sc.Info) == DjangoClassRole.Serializer) { serializer = sc.Info; break; }
+                break;
+            }
         return (query, serializer, serializerExpr);
     }
 

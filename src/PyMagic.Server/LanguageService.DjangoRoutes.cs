@@ -248,10 +248,10 @@ public sealed partial class LanguageService
         || BaseNamesOf(ev, cls).Any(n => n is "APIView" or "GenericAPIView" or "ViewSet" or "GenericViewSet" or "ModelViewSet" or "ReadOnlyModelViewSet" || n.EndsWith("APIView", StringComparison.Ordinal));
 
     /// <summary>What a REST framework view takes in a request body, filters on, and requires: from its serializer, its filter attributes and its permission classes.</summary>
-    (List<RouteParam> Query, string? Serializer, List<string> Tags) DrfFacts(TypeEvaluator ev, ClassInfo cls)
+    (List<RouteParam> Query, SerializerChoice Serializers, List<string> Tags) DrfFacts(TypeEvaluator ev, ClassInfo cls)
     {
         var query = new List<RouteParam>();
-        var (_, serializer, _) = ev.DjangoViewParts(cls);
+        var serializers = SerializersOf(ev, cls);
         if (ClassAttribute(ev, cls, "filterset_fields") is { } fields)
             foreach (var name in NamesIn(fields.Module, fields.Value)) query.Add(new RouteParam(name, "query", null, false, "filter"));
         if (ClassAttribute(ev, cls, "search_fields") is not null) query.Add(new RouteParam("search", "query", "str", false, "search_fields"));
@@ -259,7 +259,16 @@ public sealed partial class LanguageService
         if (ClassAttribute(ev, cls, "pagination_class") is { Value: not ConstExpr { Kind: ConstKind.None } }) query.Add(new RouteParam("page", "query", "int", false, "pagination"));
         var tags = new List<string>();
         if (ClassAttribute(ev, cls, "permission_classes") is { } perms) tags.AddRange(perms.Value is ListExpr or TupleExpr ? (perms.Value is ListExpr pl ? pl.Items : ((TupleExpr)perms.Value).Items).Select(p => "permission " + SourceText(perms.Module, p)) : Array.Empty<string>());
-        return (query, serializer?.Name, tags);
+        return (query, serializers, tags);
+    }
+
+    /// <summary>The request body of a view that writes with these serializers: the serializer, and (when there is one) its writable fields.</summary>
+    RouteParam BodyOf(TypeEvaluator ev, SerializerChoice choice, string? action, string method, bool required, string detail)
+    {
+        string type = choice.For(action, method)!;
+        var picked = choice.All.Select(x => x.Class).Distinct().Where(c => c.Name == type).ToList();
+        var fields = picked.Count == 1 ? SerializerFieldParams(ev, picked[0], body: true) : null;
+        return new RouteParam("data", "body", type, required, detail, fields is { Count: > 0 } ? fields : null);
     }
 
     RouteEntry DescribeClassView(TypeEvaluator ev, ClassInfo cls, string rawPath, string? actionName)
@@ -271,10 +280,11 @@ public sealed partial class LanguageService
         List<string>? tags = null;
         if (rest)
         {
-            var (query, serializer, permissions) = DrfFacts(ev, cls);
+            var (query, serializers, permissions) = DrfFacts(ev, cls);
             if (methods.Contains("GET")) parameters.AddRange(query);
-            if (serializer != null && methods.Any(x => x is "POST" or "PUT" or "PATCH")) parameters.Add(new RouteParam("data", "body", serializer, true, "request body"));
-            response = serializer;
+            string? writer = methods.FirstOrDefault(x => x is "POST" or "PUT" or "PATCH");
+            if (writer != null && serializers.For(null, writer) != null) parameters.Add(BodyOf(ev, serializers, null, writer, true, "request body"));
+            response = serializers.For(null, methods.Contains("GET") ? "GET" : methods.FirstOrDefault() ?? "GET");
             tags = permissions;
         }
         return EntryOf(methods.Count > 0 ? string.Join(", ", methods) : "ANY", rawPath, cls.Name, rest ? "drf" : "django", cls.Module, cls.Node.NameStart, parameters, response, null, tags);
@@ -315,7 +325,7 @@ public sealed partial class LanguageService
         var own = mro.Where(t => !t.Info.Module.IsStub && !t.Info.Module.Name.StartsWith("rest_framework", StringComparison.Ordinal)).SelectMany(t => t.Info.Node.Body.OfType<FunctionDef>()).ToList();
         string lookup = ClassAttribute(ev, vs, "lookup_url_kwarg") is { } kw && FixtureModel.StringValue(kw.Value) is { } k1 ? k1
             : ClassAttribute(ev, vs, "lookup_field") is { } lf && FixtureModel.StringValue(lf.Value) is { } k2 ? k2 : "pk";
-        var (query, serializer, permissions) = DrfFacts(ev, vs);
+        var (query, serializers, permissions) = DrfFacts(ev, vs);
         bool model = names.Contains("ModelViewSet");
         bool readOnly = names.Contains("ReadOnlyModelViewSet");
         string basePath = rawPrefix.TrimEnd('/');
@@ -327,7 +337,8 @@ public sealed partial class LanguageService
             var parameters = detail ? new List<RouteParam> { new(lookup, "path", "str", true, "lookup") } : new List<RouteParam>();
             parameters.AddRange(PathParamsOf(basePath));
             if (action == "list") parameters.AddRange(query);
-            if (serializer != null && action is "create" or "update" or "partial_update") parameters.Add(new RouteParam("data", "body", serializer, action != "partial_update", action == "partial_update" ? "any of the fields" : "request body"));
+            string? serializer = serializers.For(action, method);
+            if (serializer != null && action is "create" or "update" or "partial_update") parameters.Add(BodyOf(ev, serializers, action, method, action != "partial_update", action == "partial_update" ? "any of the fields" : "request body"));
             string? response = serializer == null || action == "destroy" ? null : action == "list" ? $"list[{serializer}]" : serializer;
             string? status = action == "create" ? "201" : action == "destroy" ? "204" : null;
             int at = own.FirstOrDefault(f => f.Name == action)?.NameStart ?? vs.Node.NameStart;
@@ -346,7 +357,10 @@ public sealed partial class LanguageService
                 parameters.AddRange(PathParamsOf(basePath));
                 string path = detail ? $"{basePath}/{{{lookup}}}/{urlPath}/" : $"{basePath}/{urlPath}/";
                 var module = ev.MroOf(vs).OfType<ClassType>().First(t => t.Info.Node.Body.Contains(f)).Info.Module;
-                found.Add(EntryOf(string.Join(", ", methods), path, $"{vs.Name}.{f.Name}", "drf", module, f.NameStart, parameters, tags: permissions));
+                // @action(serializer_class=X), or what get_serializer_class gives for this action by name
+                string? actionSerializer = d.Args.FirstOrDefault(a => a.Name == "serializer_class")?.Value is { } se && ev.TypeOf(module, se) is ClassType { IsInstance: false } sc ? sc.Info.Name
+                    : serializers.ByAction.ContainsKey(f.Name) ? serializers.For(f.Name, methods.FirstOrDefault() ?? "GET") : null;
+                found.Add(EntryOf(string.Join(", ", methods), path, $"{vs.Name}.{f.Name}", "drf", module, f.NameStart, parameters, actionSerializer, tags: permissions));
             }
     }
 }
