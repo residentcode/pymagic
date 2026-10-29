@@ -2,11 +2,21 @@
 // environment). Each terminal has its own /term connection, so the host gives it its own session and folder.
 import { showTab } from './panel';
 import { afterClose, cleanName, nextName } from './termtabs';
+import { ansiReader, cssOf } from './ansi';
 
 const $ = (id) => document.getElementById(id);
 
-// ANSI colour and cursor sequences some tools print even when they are not on a terminal
-const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g;
+/** The pieces of coloured output as spans (`cls` marks what PyMagic itself prints: the command, errors). */
+export function colouredSpans(reader, text, cls = '') {
+    return reader.feed(text).map((piece) => {
+        const span = document.createElement('span');
+        const css = cssOf(piece.style);
+        span.className = [cls, css.className].filter(Boolean).join(' ');
+        if (css.style) span.style.cssText = css.style;
+        span.textContent = piece.text;
+        return span;
+    });
+}
 
 /** Asks before closing a terminal whose command is still running. Resolves to true to stop it and close. */
 function askClose(name) {
@@ -57,10 +67,9 @@ export function setupTerminal() {
     }
 
     function print(t, text, cls) {
-        const span = document.createElement('span');
-        if (cls) span.className = cls;
-        span.textContent = text.replace(ANSI, '').replace(/\r(?!\n)/g, '');
-        t.output.appendChild(span);
+        // the colours programs ask for are shown; a carriage return alone (a progress bar redrawing its line) is dropped
+        t.ansi ??= ansiReader();
+        t.output.append(...colouredSpans(t.ansi, text.replace(/\r(?!\n)/g, ''), cls));
         // keep the page light: the oldest output goes after a lot of it
         while (t.output.childNodes.length > 4000) t.output.removeChild(t.output.firstChild);
         t.output.scrollTop = t.output.scrollHeight;

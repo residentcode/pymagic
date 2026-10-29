@@ -4,6 +4,8 @@ import { startOf } from './runconfig-model.js';
 import { RunClient } from './runclient';
 import { showTab } from './panel';
 import { editBreakpoint, isPlain } from './bpdialog';
+import { ansiReader } from './ansi';
+import { colouredSpans } from './terminal';
 const $ = (id) => document.getElementById(id);
 const STORAGE_KEY = 'pymagic.breakpoints';
 const norm = (p) => p.replace(/\\/g, '/').toLowerCase();
@@ -139,13 +141,11 @@ export function setupRun(deps) {
     $('t-output').onclick = () => showTab('output');
     $('t-debug').onclick = () => showTab('debug');
     $('t-close').onclick = () => panel.classList.remove('open');
+    let colours = ansiReader();
     function append(text, cls = '') {
-        const span = document.createElement('span');
-        if (cls)
-            span.className = cls;
-        span.textContent = text.split('\r\n').join('\n');
         const stick = output.scrollTop + output.clientHeight >= output.scrollHeight - 20;
-        output.appendChild(span);
+        // a program that prints colours (rich, colorama, pytest --color=yes) shows them
+        output.append(...colouredSpans(colours, text.split('\r\n').join('\n'), cls));
         if (stick)
             output.scrollTop = output.scrollHeight;
     }
@@ -456,6 +456,7 @@ export function setupRun(deps) {
                 breakpoints[r] = wire(bps);
         }
         output.textContent = '';
+        colours = ansiReader();
         debugging = debug;
         profiling = profile;
         paused = false;

@@ -107,11 +107,36 @@ public sealed class TerminalSession : IDisposable
         catch (ObjectDisposedException) { }
     }
 
+    /// <summary>
+    /// The terminal reads output through pipes, so programs think nobody is looking and print no colours; these ask them to anyway (the page draws them):
+    /// `FORCE_COLOR` (rich, click, many others), `CLICOLOR_FORCE`, `PY_COLORS` (pytest), `PYTHON_COLORS` (Python 3.13's tracebacks) and git's `color.ui`.
+    /// Nothing is added when the user said `NO_COLOR`, and a value the user set stays.
+    /// </summary>
+    public static void AskForColours(IDictionary<string, string?> env)
+    {
+        if (env.Keys.Any(k => string.Equals(k, "NO_COLOR", StringComparison.OrdinalIgnoreCase))) return;
+        void Put(string key, string value)
+        {
+            if (!env.Keys.Any(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase))) env[key] = value;
+        }
+        Put("FORCE_COLOR", "1");
+        Put("CLICOLOR_FORCE", "1");
+        Put("PY_COLORS", "1");
+        Put("PYTHON_COLORS", "1");
+        if (!env.Keys.Any(k => k.StartsWith("GIT_CONFIG_", StringComparison.OrdinalIgnoreCase)))
+        {
+            env["GIT_CONFIG_COUNT"] = "1";
+            env["GIT_CONFIG_KEY_0"] = "color.ui";
+            env["GIT_CONFIG_VALUE_0"] = "always";
+        }
+    }
+
     /// <summary>Puts the interpreter's folders first on the PATH, sets VIRTUAL_ENV for an environment, and makes Python write UTF-8 without waiting.</summary>
     void PrepareEnvironment(ProcessStartInfo info)
     {
         info.Environment["PYTHONUNBUFFERED"] = "1";
         info.Environment["PYTHONIOENCODING"] = "utf-8";
+        AskForColours(info.Environment);
         string? python = _python();
         if (python == null || !File.Exists(python)) return;
         string folder = Path.GetDirectoryName(python)!;

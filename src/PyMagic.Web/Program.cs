@@ -225,6 +225,28 @@ app.MapGet("/api/history/text", (string path, string id) =>
     catch (UnauthorizedAccessException) { return Results.NotFound(); }
 });
 
+// the files that change on disk, as server-sent events: "kind|path" (changed, created, deleted; "all|*" when there were too many to tell)
+var projectWatcher = new ProjectWatcher(root);
+app.Lifetime.ApplicationStopping.Register(projectWatcher.Dispose);
+app.MapGet("/api/watch", async (HttpContext ctx) =>
+{
+    ctx.Response.Headers.ContentType = "text/event-stream";
+    ctx.Response.Headers.CacheControl = "no-cache";
+    var reader = projectWatcher.Subscribe(out var handle);
+    try
+    {
+        await ctx.Response.WriteAsync(": watching\n\n", ctx.RequestAborted);
+        await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+        await foreach (var rel in reader.ReadAllAsync(ctx.RequestAborted))
+        {
+            await ctx.Response.WriteAsync("data: " + System.Text.Json.JsonSerializer.Serialize(rel) + "\n\n", ctx.RequestAborted);
+            await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+        }
+    }
+    catch (OperationCanceledException) { /* the page went away */ }
+    finally { projectWatcher.Unsubscribe(handle); }
+});
+
 // a folder and everything in it, for Explorer's Copy and Paste
 static void CopyFolder(string from, string to)
 {

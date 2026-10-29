@@ -19,6 +19,7 @@ import { setupGitSync } from './git-sync';
 import { setupExplorer } from './explorer';
 import { setupTabs } from './tabs';
 import { setupSplit } from './split';
+import { setupDiskWatch } from './diskwatch';
 import { setupInspections } from './inspections';
 import { setupGit } from './git';
 import { toast } from './toast';
@@ -643,6 +644,72 @@ function showNothing() {
     editor.setModel(null);
     refreshDirty();
 }
+/** The view of an empty editor: the files opened lately and the keys that start the work. */
+function updateWelcome() {
+    const box = $('welcome');
+    if (!box || !editor)
+        return;
+    const empty = !editor.getModel();
+    box.hidden = !empty;
+    $('editor').classList.toggle('nb-hidden', empty);
+    if (!empty)
+        return;
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
+        e.className = cls; if (text)
+        e.textContent = text; return e; };
+    const files = recents?.list('') ?? [];
+    const recent = el('div', 'welcome-recent');
+    recent.append(el('h3', '', files.length ? 'Recent files' : 'No file opened yet'));
+    for (const rel of files.slice(0, 8)) {
+        const b = el('button', 'welcome-file');
+        b.append(el('span', 'welcome-name', rel.slice(rel.lastIndexOf('/') + 1)), el('span', 'welcome-path', rel));
+        b.onclick = () => void openFile(rel);
+        recent.append(b);
+    }
+    const keys = el('div', 'welcome-keys');
+    keys.append(el('h3', '', 'Get going'));
+    for (const [key, what] of [['Ctrl+P', 'Search everywhere: files, classes, functions'], ['Ctrl+Shift+A', 'Find any command'], ['Ctrl+Shift+F', 'Find in files'], ['Ctrl+F5', 'Run the file'], ['Ctrl+`', 'Terminal'], ['Ctrl+,', 'Settings']]) {
+        const row = el('div', 'welcome-key');
+        row.append(el('kbd', '', key), el('span', '', what));
+        keys.append(row);
+    }
+    const head = el('div', 'welcome-head');
+    head.append(el('div', 'welcome-title', 'PyMagic'), el('div', 'welcome-sub', 'Open a file from Files on the left, or pick one below.'));
+    box.replaceChildren(head, el('div', 'welcome-cols'));
+    box.lastChild.append(recent, keys);
+}
+/** A file with unsaved changes was changed on disk by something else: which version stays. Resolves to 'disk' or 'mine'. */
+function askDiskOrMine(rel) {
+    return new Promise((resolve) => {
+        const shade = document.createElement('div');
+        shade.className = 'ask-shade';
+        const box = document.createElement('div');
+        box.className = 'ask-box';
+        const title = document.createElement('div');
+        title.className = 'ask-title';
+        title.textContent = `${rel} changed on disk`;
+        const text = document.createElement('div');
+        text.className = 'ask-hint';
+        text.textContent = 'Something outside PyMagic changed this file while you have unsaved changes in it. Keep yours (saving writes them over the file), or load the version on disk (Ctrl+Z brings yours back).';
+        const row = document.createElement('div');
+        row.className = 'ask-buttons';
+        const done = (value) => { shade.remove(); resolve(value); };
+        for (const [label, value, cls] of [['Keep mine', 'mine', ''], ['Load the version on disk', 'disk', 'danger']]) {
+            const b = document.createElement('button');
+            b.textContent = label;
+            if (cls)
+                b.className = cls;
+            b.onclick = () => done(value);
+            row.append(b);
+        }
+        box.append(title, text, row);
+        shade.append(box);
+        shade.onkeydown = (e) => { if (e.key === 'Escape')
+            done('mine'); };
+        document.body.append(shade);
+        row.firstChild.focus();
+    });
+}
 async function openAnother() {
     const next = tabs?.mruFirst();
     if (next)
@@ -732,6 +799,7 @@ async function main() {
         suggest: { showWords: false, insertMode: 'replace' },
     });
     editor = createEditor($('editor'));
+    editor.onDidChangeModel(() => updateWelcome());
     applySettings(monaco, THEMES, editor);
     $('build').textContent = buildLabel();
     notebook = setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, lsp, formatEngine: () => formatOptions().pymagicEngine, rootUri: () => rootUri, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
@@ -923,6 +991,32 @@ async function main() {
     else if (files.length)
         await openFile(files[0]);
     split.restore((rel) => explorer.has(rel));
+    updateWelcome();
+    // files changed outside the page: the tree follows, open files without unsaved changes take the new text, the others ask
+    setupDiskWatch({
+        openFiles: () => Array.from(models.keys()).map((k) => relPathOf.get(k)).filter(Boolean),
+        refreshTree: async () => { await explorer.refresh(); await syncPyModels(); },
+        diskText: async (rel) => {
+            try {
+                const res = await fetch('/api/file?path=' + encodeURIComponent(rel));
+                return res.ok ? await res.text() : null;
+            }
+            catch {
+                return null;
+            }
+        },
+        savedText: (rel) => savedText.get(rel),
+        currentText: (rel) => models.get(normalise(uriFor(rel)))?.getValue(),
+        takeDisk: (rel, text) => {
+            savedText.set(rel, text);
+            const model = models.get(normalise(uriFor(rel)));
+            // an edit, not setValue: Ctrl+Z still brings back what was there
+            if (model && model.getValue() !== text)
+                model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
+            refreshDirty();
+        },
+        ask: askDiskOrMine,
+    });
     window.pymagic.split = split;
     window.pymagic.tabs = tabs;
 }

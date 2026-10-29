@@ -479,3 +479,43 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 .rebase-message { margin: 0 0 6px 150px; width: calc(100% - 160px); font: 12.5px/1.45 var(--mono); background: var(--panel); color: var(--fg); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 8px; resize: vertical; }
 .rebase-foot { padding: 9px 14px; border-top: 1px solid var(--line); color: var(--dim); min-height: 20px; }
 .rebase-foot.bad { color: var(--bad-text); }
+
+/* ------------------------------------------------------------------ colours in program output (Terminal, Run) */
+:root {
+  --ansi-0: #3b3f51; --ansi-1: #f07178; --ansi-2: #a5d97a; --ansi-3: #ffcb6b; --ansi-4: #82aaff; --ansi-5: #c792ea; --ansi-6: #89ddff; --ansi-7: #c8ccdc;
+  --ansi-8: #676e95; --ansi-9: #ff8b92; --ansi-10: #c3e88d; --ansi-11: #ffe08a; --ansi-12: #9cc4ff; --ansi-13: #ddb0ff; --ansi-14: #a6f0ff; --ansi-15: #ffffff;
+}
+:root[data-theme="light"] {
+  --ansi-0: #1f2330; --ansi-1: #c2263b; --ansi-2: #2f7d32; --ansi-3: #9a6a00; --ansi-4: #2457c5; --ansi-5: #8a3ab9; --ansi-6: #0a7c8c; --ansi-7: #5c6070;
+  --ansi-8: #6f7487; --ansi-9: #e0364e; --ansi-10: #3c9a3f; --ansi-11: #b88300; --ansi-12: #3b6fe0; --ansi-13: #a24fd6; --ansi-14: #0e94a6; --ansi-15: #1f2330;
+}
+.ansi-fg0 { color: var(--ansi-0); } .ansi-fg1 { color: var(--ansi-1); } .ansi-fg2 { color: var(--ansi-2); } .ansi-fg3 { color: var(--ansi-3); }
+.ansi-fg4 { color: var(--ansi-4); } .ansi-fg5 { color: var(--ansi-5); } .ansi-fg6 { color: var(--ansi-6); } .ansi-fg7 { color: var(--ansi-7); }
+.ansi-fg8 { color: var(--ansi-8); } .ansi-fg9 { color: var(--ansi-9); } .ansi-fg10 { color: var(--ansi-10); } .ansi-fg11 { color: var(--ansi-11); }
+.ansi-fg12 { color: var(--ansi-12); } .ansi-fg13 { color: var(--ansi-13); } .ansi-fg14 { color: var(--ansi-14); } .ansi-fg15 { color: var(--ansi-15); }
+.ansi-bg0 { background: var(--ansi-0); } .ansi-bg1 { background: var(--ansi-1); } .ansi-bg2 { background: var(--ansi-2); } .ansi-bg3 { background: var(--ansi-3); }
+.ansi-bg4 { background: var(--ansi-4); } .ansi-bg5 { background: var(--ansi-5); } .ansi-bg6 { background: var(--ansi-6); } .ansi-bg7 { background: var(--ansi-7); }
+.ansi-bg8 { background: var(--ansi-8); } .ansi-bg9 { background: var(--ansi-9); } .ansi-bg10 { background: var(--ansi-10); } .ansi-bg11 { background: var(--ansi-11); }
+.ansi-bg12 { background: var(--ansi-12); } .ansi-bg13 { background: var(--ansi-13); } .ansi-bg14 { background: var(--ansi-14); } .ansi-bg15 { background: var(--ansi-15); }
+.ansi-fg-default-bg { color: var(--bg); } .ansi-bg-default-fg { background: var(--fg); }
+.ansi-bold { font-weight: 700; } .ansi-dim { opacity: .65; } .ansi-italic { font-style: italic; } .ansi-underline { text-decoration: underline; }
+
+/* ------------------------------------------------------------------ the bottom panel's top edge can be dragged */
+#panel { position: relative; }
+#panel-resize { position: absolute; top: 0; left: 0; right: 0; height: 5px; cursor: row-resize; z-index: 5; }
+#panel-resize:hover { background: color-mix(in srgb, var(--accent) 60%, transparent); }
+body.row-resizing { cursor: row-resize; user-select: none; }
+
+/* ------------------------------------------------------------------ the view of an empty editor */
+#welcome { flex: 1; min-height: 0; overflow: auto; padding: 48px 56px; color: var(--dim); }
+#welcome[hidden] { display: none; }
+.welcome-title { font-size: 28px; font-weight: 600; color: var(--fg); letter-spacing: -.01em; }
+.welcome-sub { margin-top: 6px; }
+.welcome-cols { display: flex; flex-wrap: wrap; gap: 48px; margin-top: 32px; }
+.welcome-cols h3 { margin: 0 0 10px; font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); font-weight: 600; }
+.welcome-recent { min-width: 280px; max-width: 460px; flex: 1; }
+.welcome-file { display: flex; gap: 10px; align-items: baseline; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--fg); text-align: left; cursor: pointer; }
+.welcome-file:hover { background: var(--hover); }
+.welcome-path { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.welcome-key { display: flex; gap: 12px; align-items: center; padding: 5px 0; }
+.welcome-key kbd { min-width: 104px; font: 12px var(--mono); color: var(--fg); }
