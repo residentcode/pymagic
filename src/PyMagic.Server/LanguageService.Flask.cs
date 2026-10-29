@@ -86,7 +86,8 @@ public sealed partial class LanguageService
         return string.Join(" or ", reasons.Distinct());
     }
 
-    static string Article(string name) => ("aeiouAEIOU".Contains(name[0]) ? "an " : "a ") + name;
+    // "an int", "an Order", but "a User" and "a UUID": a leading u is mostly said "you"
+    static string Article(string name) => ("aeioAEIO".Contains(name[0]) ? "an " : "a ") + name;
 
     static FunctionDef? OwnerFunction(ModuleInfo m, Node n)
     {

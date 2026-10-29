@@ -5,7 +5,7 @@ namespace PyMagic.Tests;
 /// <summary>FastAPI and pydantic as the real packages describe themselves (item 126). Skipped where they are not installed.</summary>
 public class RealFastApiTests
 {
-    static readonly string? Site = FindSite();
+    internal static readonly string? Site = FindSite();
 
     static string? FindSite()
     {
@@ -17,7 +17,7 @@ public class RealFastApiTests
         return candidates.FirstOrDefault(c => !string.IsNullOrEmpty(c) && File.Exists(Path.Combine(c, "fastapi", "__init__.py")) && File.Exists(Path.Combine(c, "pydantic", "__init__.py")));
     }
 
-    sealed class Project
+    internal sealed class Project
     {
         public LanguageService Svc = null!;
         public string Uri = "";
@@ -33,7 +33,7 @@ public class RealFastApiTests
         public List<LspDiagnostic> Problems() => Svc.Diagnostics(Uri).ToList();
     }
 
-    static Project Open(string code)
+    internal static Project Open(string code)
     {
         string dir = Path.Combine(Path.GetTempPath(), "pm_realfastapi_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
