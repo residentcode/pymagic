@@ -1,0 +1,4 @@
+8: The migrations of shop still have 'subtitle' on Book, which the model no longer has: `python manage.py makemigrations shop` will remove it
+11: 'rating' is a DecimalField here and a FloatField in the migrations of shop: `python manage.py makemigrations shop` will write an AlterField
+12: 'price' is in no migration of shop: until `python manage.py makemigrations shop` and `migrate`, queries of Book fail with "no such column: shop_book.price"
+16: Review is in no migration of shop: until `python manage.py makemigrations shop` and `migrate`, its queries fail with "no such table: shop_review"

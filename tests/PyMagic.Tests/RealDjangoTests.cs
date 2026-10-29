@@ -5,7 +5,7 @@ namespace PyMagic.Tests;
 /// <summary>Django as the real package describes itself (its own source, not the small stand-in): `User`, `get_user_model()`, `values()` (item 125). Skipped where Django is not installed.</summary>
 public class RealDjangoTests
 {
-    static readonly string? Site = FindSite();
+    internal static readonly string? Site = FindSite();
 
     static string? FindSite()
     {
@@ -68,7 +68,7 @@ public class RealDjangoTests
         return new Project { Svc = svc, Uri = uri, Code = code };
     }
 
-    const string Head = "from django.contrib.auth import get_user_model\nfrom django.contrib.auth.models import User\nfrom django.conf import settings\nfrom shop.models import Book, Review\n";
+    const string Head = "from django.contrib.auth import get_user_model\nfrom django.db.models import F\nfrom django.contrib.auth.models import User\nfrom django.conf import settings\nfrom shop.models import Book, Review\n";
 
     // ------------------------------------------------------------ User
 
@@ -151,9 +151,39 @@ public class RealDjangoTests
     {
         if (Site == null) return;
         var p = Open(Head + "\nrows = Book.objects.values('title')\nfirst = rows.first()\npairs = Book.objects.values_list('title', 'pages')\nflat = Book.objects.values_list('title', flat=True)\nfor t, n in pairs:\n    pass\nfor f in flat:\n    pass\n");
-        Assert.Contains("dict[str", p.Var("first"));
+        Assert.Contains("BookRow(title)", p.Var("first"));
         Assert.Contains("t: str", p.Hover("for t, n", 4));
         Assert.Contains("n: int", p.Hover("for t, n", 7));
         Assert.Contains("f: str", p.Hover("for f in", 4));
+    }
+
+    // values() rows typed per key (item 150); the keys checked with Django 6.1
+
+    [Fact]
+    public void EachKeyOfAValuesRowHasItsType()
+    {
+        if (Site == null) return;
+        var p = Open(Head + "\nfor row in Book.objects.values('title', 'author', 'author__name', 'pk', 'rating'):\n" +
+            "    title = row['title']\n    author = row['author']\n    name = row['author__name']\n    pk = row['pk']\n    rating = row['rating']\n" +
+            "every = Book.objects.values().first()\nauthor_id = every['author_id'] if every else 0\n");
+        Assert.Contains("title: str", p.Hover("    title =", 5));
+        Assert.Contains("author: int", p.Hover("    author =", 5));
+        Assert.Contains("name: str", p.Hover("    name =", 5));
+        Assert.Contains("pk: int", p.Hover("    pk =", 5));
+        Assert.Contains("rating: float | None", p.Hover("    rating =", 5));
+        // without arguments: every field, a relation as author_id
+        Assert.Contains("BookRow(id, title, pages, rating, author_id)", p.Var("every"));
+        Assert.Contains("author_id: int", p.Var("author_id"));
+        Assert.Equal("", string.Join("\n", p.Problems().Where(d => d.Severity <= 2).Select(d => d.Message)));
+    }
+
+    [Fact]
+    public void AKeyTheValuesCallDidNotAskForIsReported()
+    {
+        if (Site == null) return;
+        var p = Open(Head + "\nfor row in Book.objects.values('title'):\n    print(row['pages'])\n\nfor row in Book.objects.values('title', n=F('pages')):\n    print(row['n'])\n");
+        var found = p.Problems().Where(d => d.Severity <= 2).Select(d => $"{d.Range.Start.Line + 1}: {d.Code} {d.Message}").ToList();
+        Assert.Equal(1, found.Count);
+        Assert.Contains("pages", found[0]);
     }
 }

@@ -63,7 +63,7 @@ public sealed partial class TypeEvaluator
         foreach (var member in receiver.Members)
             if (member is ClassType c && _djangoRowSetClasses.Contains(c.Info)) return null;
 
-        if (access.Attr == "values") return InstanceOfClass(DjangoRowsQuerySetOf(model, Inst("dict", Inst("str"), PyType.Unknown)));
+        if (access.Attr == "values") return InstanceOfClass(DjangoValuesRowsOf(model, call) is { } typed ? DjangoRowsQuerySetOf(model, InstanceOfClass(typed)) : DjangoRowsQuerySetOf(model, Inst("dict", Inst("str"), PyType.Unknown)));
 
         var fields = call.Args.Where(a => a.Name == null && a.Stars == 0).ToList();
         bool flat = call.Args.Any(a => a.Name == "flat" && a.Value is ConstExpr { Kind: ConstKind.True });
@@ -72,6 +72,46 @@ public sealed partial class TypeEvaluator
         var types = fields.Select(a => StringValue(a.Value) is { } path ? DjangoValuesType(model, path) : PyType.Unknown).ToList();
         PyType row = flat && types.Count == 1 ? types[0] : TupleOf(types);
         return InstanceOfClass(DjangoRowsQuerySetOf(model, row));
+    }
+
+    readonly Dictionary<(ClassInfo Model, string Keys), ClassInfo> _djangoValueRows = new();
+
+    /// <summary>
+    /// The row of `values(...)` as a TypedDict, so that each key has its type and a key that was not asked for is reported (Django raises KeyError):
+    /// `values("title", "author")` has the keys as written (a relation gives its target's primary key, `author__name` the name), `n=F(...)` adds `n`,
+    /// and `values()` without arguments has every field that is not many-to-many, a relation as `author_id`. Null when the keys cannot be told (`*names`, `**exprs`).
+    /// </summary>
+    ClassInfo? DjangoValuesRowsOf(ClassInfo model, CallExpr call)
+    {
+        if (call.Args.Any(a => a.Stars > 0)) return null;
+        var keys = new List<(string Name, PyType Type)>();
+        var positional = call.Args.Where(a => a.Name == null).ToList();
+        if (positional.Count == 0 && call.Args.Count == 0)
+        {
+            if (!DjangoFieldsOf(model).Any(f => f.PrimaryKey)) keys.Add(("id", Inst("int")));
+            foreach (var f in DjangoFieldsOf(model))
+            {
+                if (f.Kind == "many-to-many") continue;
+                keys.Add(f.Kind is "foreign" or "one-to-one" ? (f.Name + "_id", f.Target != null ? DjangoPrimaryKeyType(f.Target) : PyType.Unknown) : (f.Name, DjangoValueType(f)));
+            }
+        }
+        else
+        {
+            foreach (var a in positional)
+            {
+                if (StringValue(a.Value) is not { } path) return null;
+                keys.Add((path, DjangoValuesType(model, path)));
+            }
+            // values(n=F("author__name")): the keyword is the key, the expression's value is not told
+            foreach (var a in call.Args.Where(a => a.Name != null)) keys.Add((a.Name!, PyType.Unknown));
+        }
+        if (keys.Count == 0) return null;
+        string signature = string.Join(", ", keys.Select(k => k.Name + ": " + k.Type.Display()));
+        if (_djangoValueRows.TryGetValue((model, signature), out var known)) return known;
+        var row = MakeSyntheticClass(model.Module, $"{model.Name}Row({string.Join(", ", keys.Select(k => k.Name))})", call, BuiltinClass("dict"), Array.Empty<(string, PyType)>());
+        ClassDataOf(row).IsTypedDict = true;
+        _syntheticTypedDictFields[row] = keys.Select(k => (new FieldInfo(k.Name, k.Type, false), true)).ToList();
+        return _djangoValueRows[(model, signature)] = row;
     }
 
     /// <summary>A queryset whose rows are <paramref name="row"/>: filtering keeps it, reading it gives the rows.</summary>

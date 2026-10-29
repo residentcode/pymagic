@@ -191,8 +191,8 @@ public class DjangoExpressionTests
     [Fact]
     public void ValuesGivesDicts()
     {
-        Assert.Contains("dict[str", Hover(Head + "\nrow = Book.objects.values('title').first()\nr|ow\n").Replace("row:", "row:"));
-        Assert.Contains("dict[str", Hover(Head + "for r|ow in Book.objects.filter(pages=1).values('title'):\n    pass\n"));
+        Assert.Contains("BookRow(title)", Hover(Head + "\nrow = Book.objects.values('title').first()\nr|ow\n"));
+        Assert.Contains("BookRow(title)", Hover(Head + "for r|ow in Book.objects.filter(pages=1).values('title'):\n    pass\n"));
     }
 
     [Fact]
