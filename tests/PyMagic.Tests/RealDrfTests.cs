@@ -164,4 +164,46 @@ public class RealDrfTests
         svc.Open(uri, wrong, 2);
         Assert.Equal(1, svc.Diagnostics(uri).Count(d => d.Code == "django-view-serializer"));
     }
+
+    // ------------------------------------------------------------ plain serializers and depth in the views (item 149); each case run with Django 6.1 and DRF 3.18.3
+
+    const string PlainAndDeep =
+        "\n\nclass PlainBook(serializers.Serializer):\n    title = serializers.CharField()\n    titel = serializers.CharField()\n    secret = serializers.CharField(write_only=True)\n" +
+        "    shout = serializers.SerializerMethodField()\n\n    def get_shout(self, obj):\n        return obj.title.upper()\n\n\n" +
+        "class SavingBook(serializers.Serializer):\n    title = serializers.CharField()\n\n    def create(self, validated_data):\n        return Book.objects.create(**validated_data)\n\n\n" +
+        "class DeepBook(serializers.ModelSerializer):\n    class Meta:\n        model = Book\n        fields = ['id', 'title', 'author']\n        depth = 1\n";
+
+    const string MoreViews =
+        "\n\nfrom shop.serializers import PlainBook, SavingBook, DeepBook\n\n\n" +
+        "class PlainList(generics.ListCreateAPIView):\n    queryset = Book.objects.all()\n    serializer_class = PlainBook\n\n\n" +
+        "class SavingDetail(generics.RetrieveUpdateAPIView):\n    queryset = Book.objects.all()\n    serializer_class = SavingBook\n\n\n" +
+        "class SavingList(generics.ListCreateAPIView):\n    queryset = Book.objects.all()\n    serializer_class = SavingBook\n\n\n" +
+        "class Custom(generics.CreateAPIView):\n    queryset = Author.objects.all()\n    serializer_class = SavingBook\n\n    def perform_create(self, serializer):\n        serializer.save()\n\n\n" +
+        "class DeepList(generics.ListCreateAPIView):\n    queryset = Book.objects.all()\n    serializer_class = DeepBook\n\n\n" +
+        "class DeepRead(generics.ListAPIView):\n    queryset = Book.objects.all()\n    serializer_class = DeepBook\n";
+
+    [Fact]
+    public void PlainSerializersAndDepthAreCheckedAgainstTheViewOnTheRealDrf()
+    {
+        if (Missing) return;
+        var svc = Project(Serializers + PlainAndDeep);
+        string dir = Directory.GetDirectories(Path.GetTempPath(), "pm_realdrf_*").OrderByDescending(Directory.GetCreationTimeUtc).First();
+        string uri = LanguageService.UriOfPath(dir + "/shop/views.py");
+        string views = Views + MoreViews;
+        svc.Open(uri, views, 2);
+        var lines = views.Split('\n');
+        var found = svc.Diagnostics(uri).Where(d => d.Code == "drf-view-serializer")
+            .Select(d => $"{lines[d.Range.Start.Line - 2].Trim().TrimEnd(':')}: {d.Message.Split(':')[0]}").ToList();
+        Assert.Equal(string.Join("\n", new[]
+        {
+            "class PlainList(generics.ListCreateAPIView): PlainBook is a plain Serializer without create()",
+            "class PlainList(generics.ListCreateAPIView): PlainBook reads 'titel' from each Book (its field 'titel'), and Book has no such attribute",
+            "class SavingDetail(generics.RetrieveUpdateAPIView): SavingBook is a plain Serializer without update()",
+            "class DeepList(generics.ListCreateAPIView): With depth = 1 in the Meta of DeepBook, 'author' is nested and read-only",
+        }), string.Join("\n", found.OrderBy(x => views.IndexOf(x.Split(':')[0], StringComparison.Ordinal))));
+        // the view of the depth serializer: author is not in what a POST may send
+        svc.Open(LanguageService.UriOfPath(dir + "/shop/urls.py"), Urls.Replace("    path('ping/'", "    path('deep/', views.DeepList.as_view()),\n    path('ping/'"), 2);
+        var body = svc.DjangoRoutes().Single(r => r.Name == "DeepList").Params!.Single(p => p.Kind == "body");
+        Assert.Equal("title", string.Join(",", body.Children!.Select(c => c.Name)));
+    }
 }

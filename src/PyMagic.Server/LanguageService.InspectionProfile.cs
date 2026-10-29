@@ -107,6 +107,7 @@ public sealed partial class LanguageService
         ("django-meta-field", "Django", "Unknown field in Meta, form, serializer or admin", "A name in fields, ordering, list_display, search_fields and the like that the model does not have.", "warning"),
         ("django-view-serializer", "Django", "Serializer for another model than the queryset", "A REST framework view whose serializer_class is for a model its queryset does not return.", "warning"),
         ("drf-serializer-field", "Django", "Serializer field DRF cannot use", "A declared field missing from Meta.fields or listed in exclude, a field or source the model does not have, a SerializerMethodField without its method, a nested serializer for another model or with the wrong many=.", "warning"),
+        ("drf-view-serializer", "Django", "Serializer the view cannot run as it is", "A plain Serializer without create() or update() in a view that creates or updates (NotImplementedError), one whose fields the view's model does not have (AttributeError), and Meta.depth hiding a required relation from a POST (IntegrityError).", "warning"),
         ("django-url-name", "Django", "Unknown URL name", "A URL name no path() defines.", "weak"),
         ("django-template", "Django", "Missing template", "A template name no templates folder has.", "weak"),
         ("route-path-parameter", "Web routes", "Path parameter not taken by the function", "{id} in the route and no parameter 'id' (a warning for Flask, weak for FastAPI).", "warning"),

@@ -361,6 +361,8 @@ public sealed partial class LanguageService
             bool readOnly = readOnlyFields.Contains(name) || name is "id" or "pk" || field != null && (field.PrimaryKey || field.FieldClass.Name.Contains("AutoField", StringComparison.Ordinal)
                 || field.Call.Args.Any(a => a.Name is "auto_now" or "auto_now_add" && a.Value is ConstExpr { Kind: ConstKind.True } || a.Name == "editable" && a.Value is ConstExpr { Kind: ConstKind.False }));
             if (field == null && model != null && name is not ("id" or "pk")) readOnly = true;   // a property or method of the model
+            // Meta.depth: a relation is the related object, nested and read-only, so a request body cannot set it (DRF drops it)
+            if (field?.Target != null && body && MetaDepth(ev, serializer) > 0) continue;
             if (body && readOnly) continue;
             string? fieldType = field == null ? null : field.Target != null ? (field.Kind == "many-to-many" ? $"list[pk of {field.Target.Name}]" : $"pk of {field.Target.Name}") : field.FieldClass.Name;
             bool required = body && field != null && !field.Nullable && !field.Call.Args.Any(a => a.Name is "default" || a.Name == "blank" && a.Value is ConstExpr { Kind: ConstKind.True });
