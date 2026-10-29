@@ -33,6 +33,8 @@ cpSync(resolve(repo, 'web', 'dist'), resolve(stage, 'www'), { recursive: true })
 console.log('== engine (self-contained)');
 sh('dotnet', ['publish', `"${resolve(repo, 'src', 'PyMagic.Web', 'PyMagic.Web.csproj')}"`, '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--source', 'https://api.nuget.org/v3/index.json', '--source', '"C:/Program Files (x86)/Microsoft SDKs/NuGetPackages"', '-o', `"${resolve(stage, 'host')}"`, '--nologo', '-v', 'quiet'], repo);
 cpSync(resolve(repo, 'examples', 'demo'), resolve(stage, 'demo'), { recursive: true });
+// the standard library's and third-party packages' stubs, so the type checks do not depend on PyCharm being installed
+cpSync(resolve(repo, 'typeshed'), resolve(stage, 'typeshed'), { recursive: true });
 
 console.log('== app');
 const paths = await packager(packagerOptions(desktop, stage));

@@ -30,6 +30,8 @@ for (int i = 0; i < args.Length - 1; i++)
 }
 root = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 www ??= FindWww();
+// without --typeshed or PYMAGIC_TYPESHED: the typeshed shipped with PyMagic (the repo's typeshed/ when run from Visual Studio)
+typeshed ??= FindTypeshed();
 
 // ---- the project's interpreter ---------------------------------------------------------------------------------
 
@@ -63,6 +65,16 @@ static string FindWww()
         if (Directory.Exists(candidate)) return candidate;
     }
     return Path.Combine(Directory.GetCurrentDirectory(), "web", "dist");
+}
+
+static string? FindTypeshed()
+{
+    for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
+    {
+        string candidate = Path.Combine(d.FullName, "typeshed");
+        if (File.Exists(Path.Combine(candidate, "stdlib", "VERSIONS"))) return candidate;
+    }
+    return null;
 }
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = Array.Empty<string>() });

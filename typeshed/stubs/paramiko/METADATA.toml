@@ -1,0 +1,8 @@
+version = "5.1.*"
+upstream-repository = "https://github.com/paramiko/paramiko"
+# Requires a version of cryptography with cryptography.hazmat.primitives.asymmetric.mlkem
+dependencies = ["cryptography>=47.0.0"]
+
+[tool.stubtest]
+# linux and darwin are equivalent
+ci-platforms = ["linux", "win32"]

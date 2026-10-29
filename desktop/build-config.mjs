@@ -20,7 +20,7 @@ export function packagerOptions(desktop, stage) {
     prune: true,
     // the build tools, the tests and the icon's source stay out of the app; the .ico itself goes in for the window
     ignore: [/^\/out/, /^\/stage/, /^\/test/, /^\/package\.mjs$/, /^\/build-config\.mjs$/, /^\/icon\/(?!pymagic\.ico$)/],
-    extraResource: ['www', 'host', 'demo'].map(d => resolve(stage, d)),
+    extraResource: ['www', 'host', 'demo', 'typeshed'].map(d => resolve(stage, d)),
   };
 }
 

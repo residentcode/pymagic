@@ -40,8 +40,11 @@ function freePort(start) {
   });
 }
 
+/** The typeshed the engine reads: PYMAGIC_TYPESHED, else the one shipped with PyMagic (typeshed/), else PyCharm's. */
 function typeshed() {
   if (process.env.PYMAGIC_TYPESHED) return process.env.PYMAGIC_TYPESHED;
+  const own = packaged ? path.join(process.resourcesPath, 'typeshed') : path.join(repo, 'typeshed');
+  if (fs.existsSync(path.join(own, 'stdlib', 'VERSIONS'))) return own;
   const root = 'C:\\Program Files\\JetBrains';
   try {
     for (const d of fs.readdirSync(root).filter(n => n.startsWith('PyCharm')).sort().reverse()) {
