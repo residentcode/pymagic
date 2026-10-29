@@ -13,16 +13,25 @@ internal sealed record FixtureResolution(FixtureDef? Def, BuiltinFixture? Builti
 
 /// <summary>
 /// pytest's lookup rules: a fixture is visible from the class of the test, then its module (also what the module imports),
-/// then the conftest.py files from the test's directory upwards; the nearest definition wins, and a fixture that asks for its
-/// own name gets the definition it overrides.
+/// then the conftest.py files from the test's directory upwards, then the plugins (installed ones and those `pytest_plugins` names);
+/// the nearest definition wins, and a fixture that asks for its own name gets the definition it overrides.
 /// </summary>
 internal sealed class FixtureResolver
 {
     readonly Func<Workspace, ModuleInfo, IReadOnlyList<ModuleInfo>> _conftests;
+    readonly Func<Workspace, ModuleInfo, IReadOnlyList<ModuleInfo>> _plugins;
     readonly Dictionary<object, List<FixtureDef>> _defined = new(ReferenceEqualityComparer.Instance);   // keyed by the class, or by the module for module level
 
     /// <param name="conftests">The conftest.py modules that apply to a module, nearest first, not including the module itself.</param>
-    public FixtureResolver(Func<Workspace, ModuleInfo, IReadOnlyList<ModuleInfo>> conftests) { _conftests = conftests; }
+    /// <param name="plugins">The plugin modules pytest loads for a module: installed plugins and those its conftest files name.</param>
+    public FixtureResolver(Func<Workspace, ModuleInfo, IReadOnlyList<ModuleInfo>> conftests, Func<Workspace, ModuleInfo, IReadOnlyList<ModuleInfo>>? plugins = null)
+    {
+        _conftests = conftests;
+        _plugins = plugins ?? ((_, _) => Array.Empty<ModuleInfo>());
+    }
+
+    /// <summary>The plugin modules that apply to a module.</summary>
+    public IReadOnlyList<ModuleInfo> PluginsOf(Workspace ws, ModuleInfo m) => _plugins(ws, m);
 
     // ------------------------------------------------------------ lookup
 
@@ -62,6 +71,7 @@ internal sealed class FixtureResolver
             foreach (var (module, c) in Lineage(ws, m, cls).Classes) yield return DefinedIn(ws, module, c);
         yield return DefinedIn(ws, m, null);
         foreach (var conf in _conftests(ws, m)) yield return DefinedIn(ws, conf, null);
+        foreach (var plugin in _plugins(ws, m)) yield return DefinedIn(ws, plugin, null);
     }
 
     /// <summary>A class and its base classes, nearest first; <c>Complete</c> is false when a base could not be found.</summary>

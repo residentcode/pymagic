@@ -56,6 +56,46 @@ internal static class FixtureModel
 
     public static bool IsPluginFixture(string name) => PluginFixtures.Contains(name) || name.StartsWith("django_") || name.StartsWith("pytest_");
 
+    // ------------------------------------------------------------ plugins
+
+    /// <summary>The modules of the `[pytest11]` section of an entry_points.txt: `anyio = anyio.pytest_plugin` gives `anyio.pytest_plugin` (`module:attr` its module).</summary>
+    public static IEnumerable<string> PytestEntryPoints(string text)
+    {
+        bool inSection = false;
+        foreach (var raw in text.Split('\n'))
+        {
+            string line = raw.Trim();
+            if (line.StartsWith('[')) { inSection = line == "[pytest11]"; continue; }
+            if (!inSection || line.Length == 0 || line.StartsWith('#') || line.StartsWith(';')) continue;
+            int eq = line.IndexOf('=');
+            if (eq < 0) continue;
+            string target = line[(eq + 1)..].Trim();
+            int colon = target.IndexOf(':');
+            if (colon >= 0) target = target[..colon].Trim();
+            int bracket = target.IndexOf('[');   // `module [extra]`
+            if (bracket >= 0) target = target[..bracket].Trim();
+            if (Regex.IsMatch(target, @"^[A-Za-z_][\w.]*$")) yield return target;
+        }
+    }
+
+    /// <summary>`pytest_plugins = "x.y"` or `= ["a", "b"]` at the top of a module: the modules named, or null when it has none; a value that is not plain strings is null too.</summary>
+    public static List<string>? PytestPluginsOf(ModuleInfo m)
+    {
+        if (!m.Source.Contains("pytest_plugins", StringComparison.Ordinal)) return null;
+        foreach (var stmt in m.Ast.Body.OfType<AssignStmt>())
+        {
+            if (stmt.Targets.Count != 1 || stmt.Targets[0] is not NameExpr { Name: "pytest_plugins" }) continue;
+            var items = stmt.Value switch { ListExpr l => l.Items, TupleExpr t => t.Items, _ => new[] { stmt.Value } };
+            var names = items.Select(StringValue).ToList();
+            return names.All(n => n != null) ? names!.Select(n => n!).ToList() : null;
+        }
+        return null;
+    }
+
+    /// <summary>True when every `pytest_plugins` of the module is a list of plain names (so what they bring can be read).</summary>
+    public static bool PytestPluginsReadable(ModuleInfo m) =>
+        !m.Ast.Body.OfType<AssignStmt>().Any(a => a.Targets.Count == 1 && a.Targets[0] is NameExpr { Name: "pytest_plugins" }) || PytestPluginsOf(m) != null;
+
     // ------------------------------------------------------------ literals
 
     static readonly Regex PlainString = new("^([rRuU]?)(\"\"\"|'''|\"|')(?<body>.*)\\2$", RegexOptions.Singleline | RegexOptions.Compiled);

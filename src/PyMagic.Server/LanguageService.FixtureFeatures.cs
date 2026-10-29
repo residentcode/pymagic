@@ -177,6 +177,10 @@ public sealed partial class LanguageService
 
     // ------------------------------------------------------------ hover
 
+    /// <summary>True when a plugin module brings this fixture by importing it (`from .fixtures import db` in pytest_django.plugin).</summary>
+    static bool DefinesThrough(Snapshot snap, ModuleInfo plugin, FixtureDef def) =>
+        snap.Fixtures.Resolver.DefinedIn(snap.Workspace, plugin, null).Any(f => ReferenceEquals(f.Def, def.Def));
+
     Hover? FixtureHover(Snapshot snap, ModuleInfo m, int offset)
     {
         var target = FixtureTargetAt(snap, m, offset);
@@ -194,6 +198,9 @@ public sealed partial class LanguageService
             details.Add($"scope: `{def.Scope}`" + (def.Autouse ? ", autouse" : ""));
             string file = UriOfModule(def.Module) is { } u ? System.IO.Path.GetFileName(PathOfUri(u) ?? u) : def.Module.Name;
             details.Add($"defined in `{file}:{Lines(def.Module).PositionOf(def.Def.NameStart).Line + 1}`");
+            // a fixture of an installed plugin, or of a module pytest_plugins names
+            if (snap.Fixtures.Resolver.PluginsOf(snap.Workspace, m).FirstOrDefault(p => ReferenceEquals(p, def.Module) || DefinesThrough(snap, p, def)) is { } plugin)
+                details.Add($"from the pytest plugin `{plugin.Name}`");
             if (FirstParagraphOfDocstring(def.Def) is { } doc) details.Add(doc);
         }
         else
@@ -306,8 +313,10 @@ public sealed partial class LanguageService
         var ws = ev.Workspace;
         bool pytestAround = m.Source.Contains("pytest") || ctx.ConftestsOf(ws, m).Count > 0;
         bool dynamic(string marker) => m.Source.Contains(marker) || ctx.ConftestsOf(ws, m).Any(c => c.Source.Contains(marker));
-        // plugins and pytest_generate_tests can provide any name
-        if (!pytestAround || dynamic("pytest_plugins") || dynamic("pytest_generate_tests")) yield break;
+        // pytest_generate_tests can provide any name, and so can a pytest_plugins whose modules cannot be read
+        bool pluginsKnown = new[] { m }.Concat(ctx.ConftestsOf(ws, m))
+            .All(src => FixtureModel.PytestPluginsReadable(src) && (FixtureModel.PytestPluginsOf(src) ?? new List<string>()).All(n => ws.GetModule(n) != null));
+        if (!pytestAround || !pluginsKnown || dynamic("pytest_generate_tests")) yield break;
         var parametrized = FixtureModel.AllParametrizedNames(m);
 
         foreach (var f in AstChildren.Descendants(m.Ast).OfType<FunctionDef>())
