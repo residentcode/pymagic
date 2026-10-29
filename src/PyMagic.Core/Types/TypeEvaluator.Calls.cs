@@ -382,14 +382,123 @@ public sealed partial class TypeEvaluator
         _ => false,
     };
 
-    /// <summary>The literal an argument is: a written constant, or a name assigned once, from a constant (`mode = "r"` is always that literal).</summary>
-    PyType? ArgumentLiteral(ModuleInfo m, Expr e)
+    /// <summary>
+    /// The literal an argument is: a written constant, a name every assignment of which is a literal (`mode = "r"`, then `mode = "rb"`:
+    /// Literal['r', 'rb']), or arithmetic of literals (`1 << 3`, `"r" + "b"`). Null when any part is not known as a literal.
+    /// </summary>
+    PyType? ArgumentLiteral(ModuleInfo m, Expr e) => LiteralOf(m, e, new HashSet<Declaration>());
+
+    PyType? LiteralOf(ModuleInfo m, Expr e, HashSet<Declaration> path)
     {
         if (ConstantLiteral(e) is { } direct) return direct;
-        if (e is NameExpr n && m.Semantics.Resolve(n) is { Declarations.Count: 1 } sym
-            && sym.Declarations[0] is { Kind: DeclKind.Variable } d && m.ParentOf(d.Node) is AssignStmt { Targets.Count: 1 } a && ReferenceEquals(a.Targets[0], d.Node))
-            return ConstantLiteral(a.Value);
-        return null;
+        switch (e)
+        {
+            case NameExpr n when m.Semantics.Resolve(n) is { Declarations.Count: > 0 } sym:
+            {
+                // a local: only the assignments that reach this use; a name of an outer scope: all of them
+                var decls = m.Flow.ReachingDefinitions(n) is { Definitions.Count: > 0 } reach ? reach.Definitions : sym.Declarations;
+                if (path.Count > 16 || decls.Count > 16) return null;
+                var parts = new List<PyType>();
+                foreach (var d in decls)
+                {
+                    var value = d.Kind != DeclKind.Variable ? null : m.ParentOf(d.Node) switch
+                    {
+                        AssignStmt a when a.Targets.Any(t => ReferenceEquals(t, d.Node)) => a.Value,
+                        AnnAssignStmt { Annotation: NameExpr { Name: "Final" } or AttributeExpr { Attr: "Final" } } an when ReferenceEquals(an.Target, d.Node) => an.Value,
+                        _ => null,
+                    };
+                    // `x = x + 1` in a loop is no literal: a value that needs itself is not known
+                    if (value == null || !path.Add(d)) return null;
+                    var lit = LiteralOf(m, value, path);
+                    path.Remove(d);
+                    if (lit == null) return null;
+                    parts.Add(lit);
+                }
+                return PyType.Union(parts);
+            }
+            case UnaryExpr u when LiteralOf(m, u.Operand, path) is { } operand:
+                return LiteralMap(operand, null, (x, _) => LiteralUnary(u.Op, x));
+            case BinaryExpr b when LiteralOf(m, b.Left, path) is { } left && LiteralOf(m, b.Right, path) is { } right:
+                return LiteralMap(left, right, (x, y) => LiteralBinary(b.Op, x, y!));
+            case CompareExpr c when c.Comparators.Count == 1 && LiteralOf(m, c.Left, path) is { } cl && LiteralOf(m, c.Comparators[0], path) is { } cr:
+                return LiteralMap(cl, cr, (x, y) => LiteralCompare(c.Ops[0], x, y!) is bool r ? r : null);
+            default: return null;
+        }
+    }
+
+    /// <summary>An operation on each value of one or two literal unions (a few at most); null when any result is not a literal.</summary>
+    PyType? LiteralMap(PyType left, PyType? right, Func<object, object?, object?> op)
+    {
+        static List<object>? Values(PyType t) => t.Members.All(x => x is ClassType { LiteralValue: not null, EnumMember: null })
+            ? t.Members.Select(x => ((ClassType)x).LiteralValue!).ToList() : null;
+        var xs = Values(left);
+        var ys = right == null ? new List<object?> { null } : Values(right)?.Cast<object?>().ToList();
+        if (xs == null || ys == null || xs.Count * ys.Count > 32) return null;
+        var results = new List<PyType>();
+        foreach (var x in xs)
+            foreach (var y in ys)
+            {
+                var r = op(x, y);
+                string? cls = r switch { bool => "bool", long => "int", string => "str", LiteralBytes => "bytes", _ => null };
+                if (cls == null || Inst(cls) is not ClassType c) return null;
+                results.Add(c with { LiteralValue = r });
+            }
+        return PyType.Union(results);
+    }
+
+    static bool Truthy(object v) => v switch { bool b => b, long l => l != 0, string s => s.Length > 0, LiteralBytes by => by.Raw.Length > 0, _ => true };
+
+    static object? LiteralUnary(string op, object x) => (op, x) switch
+    {
+        ("not", _) => !Truthy(x),
+        ("-", long l) => l == long.MinValue ? null : -l,
+        ("+", long l) => l,
+        ("~", long l) => ~l,
+        _ => null,
+    };
+
+    /// <summary>`a op b` on two literal values, as Python computes it; null past 64-bit ints or a few KB of text, and for what Python would raise.</summary>
+    static object? LiteralBinary(string op, object x, object y)
+    {
+        if (op == "and") return Truthy(x) ? y : x;
+        if (op == "or") return Truthy(x) ? x : y;
+        switch (x, y)
+        {
+            case (string s, string t) when op == "+": return s.Length + t.Length <= 4096 ? s + t : null;
+            case (LiteralBytes s, LiteralBytes t) when op == "+": return s.Raw.Length + t.Raw.Length <= 4096 ? new LiteralBytes(s.Raw + t.Raw) : null;
+            case (long a, long b):
+            {
+                System.Numerics.BigInteger p = a, q = b, r;
+                switch (op)
+                {
+                    case "+": r = p + q; break;
+                    case "-": r = p - q; break;
+                    case "*": r = p * q; break;
+                    // Python rounds the quotient down, and the remainder takes the divisor's sign
+                    case "//" when b != 0: r = System.Numerics.BigInteger.Divide(p - (((p % q) + q) % q), q); break;
+                    case "%" when b != 0: r = ((p % q) + q) % q; break;
+                    case "**" when b is >= 0 and <= 64: r = System.Numerics.BigInteger.Pow(p, (int)b); break;
+                    case "<<" when b is >= 0 and <= 64: r = p << (int)b; break;
+                    case ">>" when b >= 0: r = p >> (int)Math.Min(b, 64); break;
+                    case "&": r = p & q; break;
+                    case "|": r = p | q; break;
+                    case "^": r = p ^ q; break;
+                    default: return null;
+                }
+                return r >= long.MinValue && r <= long.MaxValue ? (long)r : null;
+            }
+            default: return null;
+        }
+    }
+
+    static bool? LiteralCompare(string op, object x, object y)
+    {
+        // values of different classes (1 == True, "a" == b"a") are left to the plain types
+        if (x.GetType() != y.GetType()) return null;
+        if (op == "==") return x.Equals(y);
+        if (op == "!=") return !x.Equals(y);
+        int? order = (x, y) switch { (long a, long b) => a.CompareTo(b), (string a, string b) => string.CompareOrdinal(a, b), _ => null };
+        return order is not int o ? null : op switch { "<" => o < 0, "<=" => o <= 0, ">" => o > 0, ">=" => o >= 0, _ => null };
     }
 
     /// <summary>
