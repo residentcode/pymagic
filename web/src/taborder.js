@@ -24,6 +24,18 @@ export function moveTo(tabs, rel, index) {
     return rest;
 }
 
+/** The pinned tabs first, each group keeping its order. The same array when that is already the order. */
+export function pinFirst(tabs, pinned) {
+    const next = [...tabs.filter((r) => pinned.has(r)), ...tabs.filter((r) => !pinned.has(r))];
+    return next.every((r, i) => r === tabs[i]) ? tabs : next;
+}
+
+/** Where a dragged tab may land: a pinned one among the pinned tabs, another after them. */
+export function clampToGroup(tabs, pinned, rel, index) {
+    const count = tabs.filter((r) => pinned.has(r)).length;
+    return pinned.has(rel) ? Math.min(index, count) : Math.max(index, count);
+}
+
 /** The tabs with rel moved `offset` places along the bar, stopping at either end. The same array when nothing moves. */
 export function moveBy(tabs, rel, offset) {
     const from = tabs.indexOf(rel);

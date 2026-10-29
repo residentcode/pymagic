@@ -1,5 +1,8 @@
 // The project tree in the sidebar: folders that open and close, every text file, and new / rename / delete.
 import { toast } from './toast';
+import { copyName, join, moveProblem, movedPath } from './explorer-model';
+
+const FILE_TYPE = 'application/x-pymagic-file';   // a row of the tree being dragged; the editor and the tab bars take nothing from it
 
 const $ = (id) => document.getElementById(id);
 
@@ -111,6 +114,8 @@ export function setupExplorer(deps) {
     let files = [];
     let open = new Set();
     let selected = '';
+    let clip = null;          // { path, cut }: what Ctrl+X / Ctrl+C took, for Ctrl+V
+    let dragging = null;      // the row being dragged onto a folder
     try { open = new Set(JSON.parse(localStorage.getItem('pymagic.explorer.open') ?? '[]')); } catch { /* storage unavailable */ }
     list.tabIndex = 0;
 
@@ -140,6 +145,14 @@ export function setupExplorer(deps) {
         label.textContent = name;
         li.append(twisty, icon, label);
         if (path === selected) li.classList.add('sel');
+        if (clip?.cut && clip.path === path) li.classList.add('cut');
+        li.draggable = true;
+        li.ondragstart = (e) => {
+            dragging = path;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData(FILE_TYPE, path);
+        };
+        li.ondragend = () => { dragging = null; markTarget(null); };
         li.onclick = () => {
             selected = path;
             if (isDir) {
@@ -231,20 +244,113 @@ export function setupExplorer(deps) {
         await deps.saveAll();
         const target = parentOf(path) ? `${parentOf(path)}/${name}` : name;
         if (!(await post({ op: 'rename', from: path, to: target }))) return;
+        await afterMove(path, target, isDir);
+    }
+
+    /** What follows a rename or a move: open folders, the selection and the file in the editor go along to the new place. */
+    async function afterMove(path, target, isDir) {
         if (isDir) {
-            const moved = [...open].filter((d) => d === path || d.startsWith(path + '/')).map((d) => target + d.slice(path.length));
+            const moved = [...open].filter((d) => d === path || d.startsWith(path + '/')).map((d) => movedPath(d, path, target));
             for (const d of [...open]) if (d === path || d.startsWith(path + '/')) open.delete(d);
             for (const d of moved) open.add(d);
-            remember();
         }
+        if (parentOf(target)) open.add(parentOf(target));
+        remember();
+        if (clip) clip = { ...clip, path: movedPath(clip.path, path, target) };
         selected = target;
+        const current = deps.current();
+        deps.renamed?.(path, target);
         await deps.forget(path);
         await refresh();
+        reveal(target);
         await deps.synced();
-        const current = deps.current();
-        if (!isDir && current === path) await deps.openFile(target);
-        else if (isDir && current.startsWith(path + '/')) await deps.openFile(target + current.slice(path.length));
+        if (current && movedPath(current, path, target) !== current) await deps.openFile(movedPath(current, path, target));
     }
+
+    const exists = (path) => dirs.includes(path) || files.some((f) => f.path === path);
+
+    /** Moves a file or folder into the folder `dir` ('' is the project folder), keeping its name. True when it moved. */
+    async function move(path, dir) {
+        const problem = moveProblem(path, dir);
+        if (problem) { toast(`${baseName(path)} cannot be moved there: ${problem}.`, true); return false; }
+        const target = join(dir, baseName(path));
+        if (exists(target)) { toast(`${dir || 'The project folder'} already has a ${baseName(path)}.`, true); return false; }
+        const isDir = dirs.includes(path);
+        await deps.saveAll();
+        if (!(await post({ op: 'rename', from: path, to: target }))) return false;
+        await afterMove(path, target, isDir);
+        toast(`Moved ${baseName(path)} to ${dir || 'the project folder'}`);
+        return true;
+    }
+
+    // ------------------------------------------------------------ cut, copy and paste
+
+    /** The folder a paste or a drop goes into: a folder itself, the folder of a file, or the project folder. */
+    const folderOf = (path) => (!path ? '' : dirs.includes(path) ? path : parentOf(path));
+
+    function take(path, cut) {
+        if (!path) return;
+        clip = { path, cut };
+        paint();
+        toast(`${cut ? 'Cut' : 'Copied'} ${baseName(path)}: paste it into a folder with Ctrl+V`);
+    }
+
+    async function paste(dir) {
+        if (!clip) return;
+        const { path, cut } = clip;
+        if (!exists(path)) { clip = null; paint(); toast(`${path} is not there any more.`, true); return; }
+        if (cut) {
+            if (await move(path, dir)) { clip = null; paint(); }
+            return;
+        }
+        if (dirs.includes(path) && (dir === path || dir.startsWith(path + '/'))) { toast('A folder cannot be copied into itself.', true); return; }
+        const { subdirs, names } = children(dir);
+        const name = copyName(baseName(path), [...subdirs.map(baseName), ...names.map((f) => baseName(f.path))]);
+        const target = join(dir, name);
+        await deps.saveAll();
+        if (!(await post({ op: 'copy', from: path, to: target }))) return;
+        if (dir) open.add(dir);
+        remember();
+        selected = target;
+        await refresh();
+        reveal(target);
+        await deps.synced();
+        toast(`Copied ${baseName(path)} to ${target}`);
+    }
+
+    // ------------------------------------------------------------ dragging rows onto folders
+
+    let opener = null;   // a closed folder opens when a row is held over it
+    function markTarget(dir, li = null) {
+        for (const el of list.querySelectorAll('.drop-target')) el.classList.remove('drop-target');
+        list.classList.toggle('drop-root', dir === '');
+        if (li && dir) li.classList.add('drop-target');
+    }
+    list.addEventListener('dragover', (e) => {
+        if (!dragging || !e.dataTransfer.types.includes(FILE_TYPE)) return;
+        const li = e.target.closest?.('li');
+        const dir = li ? folderOf(li.dataset.path) : '';
+        if (moveProblem(dragging, dir)) { markTarget(null); return; }
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const holder = li && li.dataset.kind === 'dir' ? li : list.querySelector(`li[data-kind="dir"][data-path="${CSS.escape(dir)}"]`);
+        markTarget(dir, holder);
+        if (li?.dataset.kind === 'dir' && !open.has(dir)) {
+            if (opener?.dir !== dir) { clearTimeout(opener?.timer); opener = { dir, timer: setTimeout(() => { open.add(dir); remember(); paint(); }, 700) }; }
+        }
+    });
+    list.addEventListener('dragleave', (e) => { if (!list.contains(e.relatedTarget)) { markTarget(null); clearTimeout(opener?.timer); opener = null; } });
+    list.addEventListener('drop', (e) => {
+        if (!dragging || !e.dataTransfer.types.includes(FILE_TYPE)) return;
+        e.preventDefault();
+        const li = e.target.closest?.('li');
+        const path = dragging;
+        dragging = null;
+        markTarget(null);
+        clearTimeout(opener?.timer);
+        opener = null;
+        void move(path, li ? folderOf(li.dataset.path) : '');
+    });
 
     async function remove(path, isDir) {
         const what = isDir ? `the folder "${path}" and everything in it` : `the file "${path}"`;
@@ -270,6 +376,8 @@ export function setupExplorer(deps) {
             ['New file…', () => create(dir, false)],
             ['New folder…', () => create(dir, true)],
         ];
+        if (path) entries.push(['—'], ['Cut  Ctrl+X', () => take(path, true)], ['Copy  Ctrl+C', () => take(path, false)]);
+        if (clip) entries.push([`Paste ${baseName(clip.path)}  Ctrl+V`, () => paste(dir)]);
         if (path) {
             entries.push(['—'], ['Rename…  F2', () => rename(path, isDir)], ['Delete…  Del', () => remove(path, isDir)], ['—'],
                 ['Copy path', () => navigator.clipboard?.writeText(path)]);
@@ -295,9 +403,14 @@ export function setupExplorer(deps) {
 
     list.onkeydown = (e) => {
         const isDir = dirs.includes(selected);
+        const ctrl = e.ctrlKey && !e.altKey && !e.shiftKey;
+        if (ctrl && (e.key === 'v' || e.key === 'V')) { e.preventDefault(); void paste(folderOf(selected)); return; }
+        if (e.key === 'Escape' && clip) { clip = null; paint(); return; }
         if (!selected) return;
         if (e.key === 'F2') { e.preventDefault(); void rename(selected, isDir); }
         else if (e.key === 'Delete') { e.preventDefault(); void remove(selected, isDir); }
+        else if (ctrl && (e.key === 'x' || e.key === 'X')) { e.preventDefault(); take(selected, true); }
+        else if (ctrl && (e.key === 'c' || e.key === 'C')) { e.preventDefault(); take(selected, false); }
     };
 
     $('ex-new-file').onclick = () => void create(dirs.includes(selected) ? selected : parentOf(selected), false);

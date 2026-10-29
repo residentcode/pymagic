@@ -107,7 +107,7 @@ kbd { font: 11px var(--mono); background: var(--raised); border: 1px solid var(-
 #toolbar { grid-area: bar; }
 #rail { grid-area: rail; }
 #sidebar { grid-area: side; }
-#editor-area { grid-area: editor; }
+#editor-groups { grid-area: editor; }
 #panel { grid-area: dock; }
 #status { grid-area: status; }
 
@@ -175,11 +175,35 @@ kbd { font: 11px var(--mono); background: var(--raised); border: 1px solid var(-
 #files li.git-M { color: var(--info); } #files li.git-A { color: var(--good); } #files li.git-D { color: var(--bad); } #files li.git-U { color: var(--warn); }
 
 /* ------------------------------------------------------------------ editor and its tabs */
-#editor-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
-#editor { flex: 1; min-width: 0; min-height: 0; }
-#tabs-bar { display: flex; align-items: flex-end; gap: 2px; padding: 6px 8px 0; overflow-x: auto; flex: none; background: var(--panel); border-bottom: 1px solid var(--line); scrollbar-width: none; }
-#tabs-bar::-webkit-scrollbar { display: none; }
-#tabs-bar:empty { display: none; }
+#editor-groups { position: relative; display: flex; min-width: 0; min-height: 0; }
+#editor-area, #split-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+#editor-area { flex: 1 1 0; }
+#split-area { flex: 0 0 50%; }
+#split-area[hidden], #split-divider[hidden], #split-drop[hidden] { display: none; }
+#split-divider { flex: none; width: 5px; cursor: col-resize; background: var(--line); border-left: 2px solid var(--panel); border-right: 2px solid var(--panel); }
+#split-divider:hover { background: var(--accent); }
+body.col-resizing { cursor: col-resize; user-select: none; }
+#editor, #split-editor { flex: 1; min-width: 0; min-height: 0; }
+/* the side that has the focus: its bar is marked */
+#editor-groups.side-focused #split-area .etab.active, #editor-groups:not(.side-focused) #editor-area .etab.active { box-shadow: 0 -2px 0 0 var(--accent) inset; }
+#editor-groups.side-focused #editor-area .etab.active, #editor-groups:not(.side-focused):has(#split-area:not([hidden])) #split-area .etab.active { box-shadow: 0 -2px 0 0 var(--line-strong) inset; }
+#split-drop { position: absolute; top: 0; bottom: 0; right: 0; width: 40%; z-index: 30; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--line-strong); border-radius: 10px; background: color-mix(in srgb, var(--panel) 55%, transparent); color: var(--dim); pointer-events: auto; }
+#split-drop.over { border-color: var(--accent); color: var(--fg); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.tabs-row { display: flex; align-items: stretch; flex: none; background: var(--panel); border-bottom: 1px solid var(--line); }
+.tabs-row:has(> .tabs-bar:empty) { display: none; }
+.tabs-bar { display: flex; flex: 1; min-width: 0; align-items: flex-end; gap: 2px; padding: 6px 8px 0; overflow-x: auto; scrollbar-width: none; }
+.tabs-bar::-webkit-scrollbar { display: none; }
+.tabs-bar.drop-into { box-shadow: 0 0 0 2px var(--accent) inset; }
+.tabs-list { flex: none; align-self: center; width: 28px; height: 26px; margin: 4px 6px 0 0; padding: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--dim); cursor: pointer; }
+.tabs-list[hidden] { display: none; }
+.tabs-list:hover { background: var(--hover); color: var(--fg); }
+.etab-pin { opacity: .75 !important; font-size: 0; display: grid; place-items: center; }
+.etab-pin .i { width: 13px; height: 13px; }
+.etab.pinned .etab-name { font-weight: 600; }
+.ctx-item.current { font-weight: 600; color: var(--fg); }
+li.cut { opacity: .5; }
+#files li.drop-target { background: color-mix(in srgb, var(--accent) 18%, transparent); outline: 1px dashed var(--accent); outline-offset: -1px; }
+#files.drop-root { box-shadow: 0 0 0 2px var(--accent) inset; }
 .etab { position: relative; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px 0 14px; border-radius: 8px 8px 0 0; cursor: pointer; white-space: nowrap; color: var(--dim); user-select: none; }
 .etab:hover { background: var(--hover); color: var(--fg); }
 .etab.active { background: var(--bg); color: var(--fg); box-shadow: 0 -2px 0 0 var(--accent) inset; }

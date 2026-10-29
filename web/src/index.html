@@ -69,6 +69,7 @@
     <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.200"/><path d="M12 3.500v2.600M12 17.900v2.600M3.500 12h2.600M17.900 12h2.600M6 6l1.900 1.900M16.100 16.100 18 18M18 6l-1.900 1.900M7.900 16.100 6 18"/><circle cx="12" cy="12" r="6.800"/></symbol>
     <symbol id="i-tick" viewBox="0 0 24 24"><path d="M5.500 12.500l4.200 4.200L18.500 7.500"/></symbol>
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4.500 7h15M4.500 12h15M4.500 17h15"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 4.500h6M10 4.500v5L7 13h10l-3-3.500v-5M12 13v6.500"/></symbol>
     <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M7 4.500h10v15l-5-4-5 4z"/></symbol>
     <symbol id="i-sort" viewBox="0 0 24 24"><path d="M4.500 7h8M4.500 12h5.500M4.500 17h3M17 6v12M13.500 15l3.500 3.500 3.500-3.500"/></symbol>
     <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.500"/><circle cx="12" cy="12" r="2.200"/><path d="M12 2.500v3M12 18.500v3M2.500 12h3M18.500 12h3"/></symbol>
@@ -157,7 +158,12 @@
       <button id="b-remote" class="iconbtn" title="Use a Python interpreter from a WSL distribution, a Docker image or an SSH host"><svg class="i"><use href="#i-remote"/></svg></button>
       <button id="b-gear" class="iconbtn" title="Settings and appearance (Ctrl+,)"><svg class="i"><use href="#i-gear"/></svg></button>
     </div>
-    <div id="editor-area"><div id="tabs-bar"></div><div id="editor"></div></div>
+    <div id="editor-groups">
+      <div id="editor-area"><div class="tabs-row"><div id="tabs-bar" class="tabs-bar"></div><button id="tabs-list" class="tabs-list" hidden><svg class="i"><use href="#i-chev-down"/></svg></button></div><div id="editor"></div></div>
+      <div id="split-divider" hidden></div>
+      <div id="split-area" hidden><div class="tabs-row"><div id="split-tabs" class="tabs-bar"></div><button id="split-list" class="tabs-list" hidden><svg class="i"><use href="#i-chev-down"/></svg></button></div><div id="split-editor"></div></div>
+      <div id="split-drop" hidden><span>Open on the right</span></div>
+    </div>
     <section id="panel">
       <div id="tabs">
         <button id="t-output" class="active" title="Output"><svg class="i"><use href="#i-output"/></svg><span class="lbl">Output</span></button>

@@ -225,10 +225,18 @@ app.MapGet("/api/history/text", (string path, string id) =>
     catch (UnauthorizedAccessException) { return Results.NotFound(); }
 });
 
+// a folder and everything in it, for Explorer's Copy and Paste
+static void CopyFolder(string from, string to)
+{
+    Directory.CreateDirectory(to);
+    foreach (var file in Directory.EnumerateFiles(from)) File.Copy(file, Path.Combine(to, Path.GetFileName(file)));
+    foreach (var dir in Directory.EnumerateDirectories(from)) CopyFolder(dir, Path.Combine(to, Path.GetFileName(dir)));
+}
+
 bool IsInsideGit(string full) =>
     Path.GetRelativePath(root, full).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(p => string.Equals(p, ".git", StringComparison.OrdinalIgnoreCase));
 
-// create, rename and delete files and folders of the project
+// create, rename (or move), copy and delete files and folders of the project
 app.MapPost("/api/fs", async (HttpRequest req) =>
 {
     var body = await JsonNode.ParseAsync(req.Body) as JsonObject;
@@ -254,6 +262,19 @@ app.MapPost("/api/fs", async (HttpRequest req) =>
                 Directory.CreateDirectory(Path.GetDirectoryName(to)!);
                 if (Directory.Exists(from)) Directory.Move(from, to);
                 else if (File.Exists(from)) File.Move(from, to);
+                else return Results.NotFound();
+                return Results.NoContent();
+            }
+            case "copy":
+            {
+                string from = ResolveInRoot(body!["from"]!.GetValue<string>()), to = ResolveInRoot(body["to"]!.GetValue<string>());
+                if (IsInsideGit(from) || IsInsideGit(to)) return Results.BadRequest(new { error = "not inside .git" });
+                if (File.Exists(to) || Directory.Exists(to)) return Results.Conflict(new { error = "the target exists already" });
+                string sep = Path.DirectorySeparatorChar.ToString();
+                if (Directory.Exists(from) && (to + sep).StartsWith(from + sep, StringComparison.OrdinalIgnoreCase)) return Results.BadRequest(new { error = "a folder cannot be copied into itself" });
+                Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+                if (File.Exists(from)) File.Copy(from, to);
+                else if (Directory.Exists(from)) CopyFolder(from, to);
                 else return Results.NotFound();
                 return Results.NoContent();
             }

@@ -8,7 +8,7 @@ const $ = (id) => document.getElementById(id);
 const press = (id) => () => $(id).click();
 let findActionOpen = () => {};
 
-export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, currentFile, search, refactor, breakpoints, recent, chrome, bookmarks, runConfigs }) {
+export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, split, currentFile, search, refactor, breakpoints, recent, chrome, bookmarks, runConfigs }) {
     // the desktop app lets the page open another folder (preload.js); in a browser the engine is started with its folder and these stay dim
     const desktop = window.pymagicDesktop;
     let recentProjects = [];
@@ -104,6 +104,9 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, c
                 { label: 'Bookmarks', checked: sidebarShown && chrome.view() === 'bookmarks', run: press('r-bookmarks') },
                 { label: 'Tool windows', submenu: windows },
                 { label: 'Hide the tool window', run: press('t-close') },
+                '-',
+                { label: 'Split right', run: () => { const rel = currentFile(); if (rel) void split?.()?.open(rel); }, disabled: !currentFile() },
+                { label: 'Close the split', run: () => split?.()?.close(), disabled: !split?.()?.editor() },
                 '-',
                 { label: 'Theme', submenu: [theme('dark', 'Dark'), theme('light', 'Light'), theme('system', 'Follow the system')] },
                 { label: 'Wrap long lines', checked: s.wordWrap === 'on', run: () => change({ wordWrap: s.wordWrap === 'on' ? 'off' : 'on' }) },

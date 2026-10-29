@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 
 // web/package.json does not say "type": "module", so Node would read src/*.js as CommonJS; load the file as a module instead
 const source = readFileSync(new URL('../src/taborder.js', import.meta.url), 'utf8');
-const { dropIndex, staysPut, moveTo, moveBy } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { dropIndex, staysPut, moveTo, moveBy, pinFirst, clampToGroup } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const abc = ['a.py', 'b.py', 'c.py'];
 
@@ -48,6 +48,23 @@ test('moveBy: one place left and right, stopping at the ends', () => {
     assert.deepEqual(moveBy(abc, 'a.py', 5), ['b.py', 'c.py', 'a.py']);
     assert.equal(moveBy(['only.py'], 'only.py', 1).length, 1);
     assert.equal(moveBy(abc, 'zzz.py', 1), abc);
+});
+
+test('pinFirst: the pinned tabs come first in their own order, the rest keep theirs', () => {
+    const tabs = ['a.py', 'b.py', 'c.py', 'd.py'];
+    assert.deepEqual(pinFirst(tabs, new Set(['c.py', 'a.py'])), ['a.py', 'c.py', 'b.py', 'd.py']);
+    assert.equal(pinFirst(tabs, new Set(['a.py'])), tabs);
+    assert.equal(pinFirst(tabs, new Set()), tabs);
+});
+
+test('clampToGroup: a pinned tab stays among the pinned ones, another stays after them', () => {
+    const tabs = ['p1.py', 'p2.py', 'a.py', 'b.py'];
+    const pinned = new Set(['p1.py', 'p2.py']);
+    assert.equal(clampToGroup(tabs, pinned, 'p1.py', 4), 2);
+    assert.equal(clampToGroup(tabs, pinned, 'p2.py', 0), 0);
+    assert.equal(clampToGroup(tabs, pinned, 'b.py', 0), 2);
+    assert.equal(clampToGroup(tabs, pinned, 'a.py', 4), 4);
+    assert.deepEqual(moveTo(tabs, 'b.py', clampToGroup(tabs, pinned, 'b.py', 1)), ['p1.py', 'p2.py', 'b.py', 'a.py']);
 });
 
 test('paths that share a prefix are kept apart', () => {

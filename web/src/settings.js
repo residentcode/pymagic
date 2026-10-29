@@ -90,8 +90,19 @@ export function editorOptions(s = current) {
     };
 }
 
+// the editors that take all of the editor's choices: the main one and the right side of a split
+const fullEditors = new Set();
+
+/** An editor that follows every setting, as the main one does (the right side of a split). */
+export function followSettings(editor) {
+    fullEditors.add(editor);
+    editor.updateOptions(editorOptions(current));
+    editor.onDidDispose(() => fullEditors.delete(editor));
+}
+
 /** Makes the page and the editors follow the settings, now and whenever they change; `themes` maps 'dark' and 'light' to Monaco's theme names. */
 export function applySettings(monaco, themes, main) {
+    fullEditors.add(main);
     const apply = (s) => {
         const theme = themeNow(s);
         document.documentElement.dataset.theme = theme;
@@ -99,7 +110,7 @@ export function applySettings(monaco, themes, main) {
         const opts = editorOptions(s);
         // the cells of a notebook share the type, not the rest of the editor's choices
         const type = { fontFamily: opts.fontFamily, fontSize: opts.fontSize, fontLigatures: opts.fontLigatures };
-        for (const e of monaco.editor.getEditors()) e.updateOptions(e === main ? opts : type);
+        for (const e of monaco.editor.getEditors()) e.updateOptions(fullEditors.has(e) ? opts : type);
     };
     onSettings(apply);
     window.matchMedia?.('(prefers-color-scheme: light)').addEventListener?.('change', () => { if (current.theme === 'system') apply(current); });

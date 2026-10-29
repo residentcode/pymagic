@@ -18,6 +18,7 @@ import { buildInfo, buildLabel } from './build-info.js';
 import { setupGitSync } from './git-sync';
 import { setupExplorer } from './explorer';
 import { setupTabs } from './tabs';
+import { setupSplit } from './split';
 import { setupInspections } from './inspections';
 import { setupGit } from './git';
 import { toast } from './toast';
@@ -31,7 +32,7 @@ import { setupRunConfigurations } from './runconfig';
 import { setupHistory } from './history';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
-import { loadSettings, editorOptions, applySettings, themeNow, settings } from './settings';
+import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings } from './settings';
 self.MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
 const toPos = (p) => ({ line: p.lineNumber - 1, character: p.column - 1 });
 const toRange = (r) => ({
@@ -573,6 +574,7 @@ function refreshDirty() {
         li.classList.toggle('active', rel === currentRel);
     }
     tabs?.refresh();
+    split?.refresh();
 }
 function updateProblems() {
     const all = monaco.editor.getModelMarkers({}).filter((m) => m.severity >= monaco.MarkerSeverity.Warning);
@@ -581,6 +583,7 @@ function updateProblems() {
 }
 let explorer = null;
 let tabs = null;
+let split = null;
 let recents = null;
 let runConfigs = null;
 let knownFiles = new Set();   // the files of the project, as the engine listed them last
@@ -613,10 +616,13 @@ async function forgetPath(rel) {
         savedText.delete(path);
         if (editor.getModel() === model)
             editor.setModel(null);
+        if (split?.editor()?.getModel() === model)
+            split.editor().setModel(null);
         model.dispose();
     }
     notebook?.close(rel);
     tabs?.drop(rel);
+    split?.drop(rel);
     refreshDirty();
 }
 /**
@@ -709,7 +715,8 @@ async function main() {
     defineTheme(monaco);
     defineLightTheme(monaco);
     await loadSettings();
-    editor = monaco.editor.create($('editor'), {
+    // the main editor and the right side of a split are made alike
+    const createEditor = (el) => monaco.editor.create(el, {
         theme: THEMES[themeNow()],
         automaticLayout: true,
         ...editorOptions(settings()),
@@ -724,6 +731,7 @@ async function main() {
         snippetSuggestions: 'inline',
         suggest: { showWords: false, insertMode: 'replace' },
     });
+    editor = createEditor($('editor'));
     applySettings(monaco, THEMES, editor);
     $('build').textContent = buildLabel();
     notebook = setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, lsp, formatEngine: () => formatOptions().pymagicEngine, rootUri: () => rootUri, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
@@ -775,7 +783,7 @@ async function main() {
     setupHistory({ monaco, editor, currentFile: () => currentRel });
     recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
     setupMainMenu({
-        editor, save, saveAll: common.saveAll, reload: reloadFromDisk, openFile, tabs: () => tabs, currentFile: () => currentRel, search, refactor,
+        editor, save, saveAll: common.saveAll, reload: reloadFromDisk, openFile, tabs: () => tabs, split: () => split, currentFile: () => currentRel, search, refactor,
         breakpoints: runHooks.breakpoints, recent: (current) => recents.list(current), chrome, bookmarks, runConfigs,
     });
     const git = setupGit({
@@ -830,12 +838,16 @@ async function main() {
     editor.onDidChangeCursorPosition((e) => { $('cursor').textContent = `Ln ${e.position.lineNumber}, Col ${e.position.column}`; });
     // go-to-definition into another file switches the editor to it
     monaco.editor.registerEditorOpener({
-        openCodeEditor(_source, resource, selectionOrPosition) {
+        openCodeEditor(source, resource, selectionOrPosition) {
             const rel = resource.path.replace(/^\//, '');
             const sel = !selectionOrPosition ? undefined
                 : 'startLineNumber' in selectionOrPosition ? selectionOrPosition
                     : new monaco.Range(selectionOrPosition.lineNumber, selectionOrPosition.column, selectionOrPosition.lineNumber, selectionOrPosition.column);
-            void openFile(rel, sel);
+            // from the right side of a split, the definition opens on that side
+            if (split?.editor() && source === split.editor())
+                void split.open(rel, sel);
+            else
+                void openFile(rel, sel);
             return true;
         },
     });
@@ -854,14 +866,41 @@ async function main() {
     explorer = setupExplorer({
         openFile, refreshDirty, saveAll: common.saveAll, forget: forgetPath, synced: syncPyModels,
         current: () => currentRel, openAnother,
+        // the tabs of a moved or renamed file keep their places under the new path
+        renamed: (from, to) => { tabs?.rename(from, to); split?.rename(from, to); },
     });
     await explorer.refresh();
-    tabs = setupTabs({ openFile, isDirty: isDirtyRel, save: saveFile, revert: reloadFromDisk, empty: showNothing });
+    tabs = setupTabs({
+        openFile, isDirty: isDirtyRel, save: saveFile, revert: reloadFromDisk, empty: showNothing,
+        // closing a tab asks about unsaved changes only when the other side of a split does not show the file too
+        askOnClose: (rel) => isDirtyRel(rel) && !split?.has(rel),
+        isActive: () => split?.focused() !== 'side',
+        split: (rel) => split.open(rel),
+    });
+    split = setupSplit({
+        createEditor: (el) => {
+            const e = createEditor(el);
+            followSettings(e);
+            e.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { const rel = e.getModel() && relPathOf.get(normalise(serverUri.get(e.getModel()) ?? '')); if (rel) void saveFile(rel); });
+            return e;
+        },
+        mainEditor: editor,
+        modelFor: ensureModel,
+        openMain: openFile,
+        isDirty: isDirtyRel,
+        askOnClose: (rel) => isDirtyRel(rel) && !tabs.has(rel),
+        save: saveFile,
+        revert: reloadFromDisk,
+        onCursor: (p) => { $('cursor').textContent = `Ln ${p.lineNumber}, Col ${p.column}`; },
+    });
     // only the tabs that were open last time are loaded: the server finds the other files of the project on disk
     const restored = tabs.restore((rel) => explorer.has(rel));
     if (restored)
         await openFile(restored);
     else if (files.length)
         await openFile(files[0]);
+    split.restore((rel) => explorer.has(rel));
+    window.pymagic.split = split;
+    window.pymagic.tabs = tabs;
 }
 main().catch((e) => { $('conn').textContent = String(e.message ?? e); $('conn').className = 'bad'; });
