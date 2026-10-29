@@ -26,3 +26,10 @@ def test_conn(conn):
 
 def test_fine(fine):
     pass
+
+
+LIMIT = 3
+
+
+def helper(LIMIT):
+    return LIMIT

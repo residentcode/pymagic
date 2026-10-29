@@ -13,7 +13,7 @@ public sealed partial class LanguageService
     IEnumerable<Diag> InspectionDiagnostics(ModuleInfo m, TypeEvaluator ev)
     {
         foreach (var f in CodeInspections.Run(m))
-            if (!Suppressed(m.Source, f)) yield return AsDiag(f);
+            if (!Suppressed(m.Source, f) && !(f.Code == "shadowing-names" && AsksForFixture(m, f.Start))) yield return AsDiag(f);
         foreach (var d in ClassDiagnostics(m, ev)) yield return d;
         foreach (var d in MoreTypedDiagnostics(m, ev)) yield return d;
         foreach (var d in StructureDiagnostics(m, ev)) yield return d;
@@ -29,6 +29,24 @@ public sealed partial class LanguageService
         foreach (var d in SerializerClassDiagnostics(m, ev)) yield return d;
         foreach (var d in ViewSerializerDiagnostics(m, ev)) yield return d;
         foreach (var d in MigrationDiagnostics(m, ev)) yield return d;
+    }
+
+    /// <summary>
+    /// The parameter at <paramref name="start"/> asks pytest for the fixture the module defines under that name (`def test_db(db)` below `@pytest.fixture
+    /// def db()`): that is how fixtures are used, so it does not "shadow" anything (PyCharm leaves it alone too).
+    /// </summary>
+    static bool AsksForFixture(ModuleInfo m, int start)
+    {
+        if (!m.Source.Contains("fixture", StringComparison.Ordinal)) return false;
+        foreach (var f in AstChildren.Descendants(m.Ast).OfType<FunctionDef>())
+        {
+            if (f.Params.Count == 0 || start < f.Params[0].Start || start > f.Params[^1].End || !Pytest.FixtureModel.RequestsFixtures(m, f)) continue;
+            var p = Pytest.FixtureModel.RequestedParameters(m, f).FirstOrDefault(x => x.Start <= start && start < x.End);
+            if (p == null) continue;
+            var fixtures = AstChildren.Descendants(m.Ast).OfType<FunctionDef>().Where(Pytest.FixtureModel.IsFixture).Select(d => Pytest.FixtureModel.Parse(m, d));
+            if (fixtures.Any(d => d != null && (d.Def.Name == p.Name || d.Name == p.Name))) return true;
+        }
+        return false;
     }
 
     /// <summary>A comment on the line says to leave it alone: `# noqa`, `# noqa: code, code` or `# noinspection ...`.</summary>

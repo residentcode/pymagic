@@ -105,6 +105,15 @@ public class PytestOptionsTests
         Assert.True(found[0].Message.StartsWith("pytest has no scope 'sesion' (did you mean 'session'?)", StringComparison.Ordinal), found[0].Message);
     }
 
+    [Fact]
+    public void AParameterThatAsksForAFixtureDoesNotShadowIt()
+    {
+        var r = Open();
+        // db, conn and fine are asked for by name, as pytest wants; helper's LIMIT really shadows the module's LIMIT
+        var found = r.Problems("test_scope.py", "shadowing-names");
+        Assert.Equal("Shadows name 'LIMIT' from outer scope", string.Join("\n", found.Select(d => d.Message)));
+    }
+
     // ------------------------------------------------------------ request.param
 
     [Fact]
