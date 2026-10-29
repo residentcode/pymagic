@@ -32,10 +32,16 @@ public sealed partial class TypeEvaluator
         if (c.Left is CallExpr { Func: NameExpr { Name: "type" }, Args.Count: 1 } tc && IsReferenceSide(m, tc.Args[0].Value, assertion))
             return equal ? NarrowExactType(m, right, t) : t;
 
-        // len(x) == 2
-        if (c.Left is CallExpr { Func: NameExpr { Name: "len" }, Args.Count: 1 } lc && lc.Args[0] is { Name: null, Stars: 0 } && op is "==" or "!=" && IsReferenceSide(m, lc.Args[0].Value, assertion)
-            && LiteralOf(right) is ("int", long length))
-            return NarrowLength(t, length, equal);
+        // len(x) == 2, len(x) < 3, 3 > len(x)
+        if (op is "==" or "!=" or "<" or "<=" or ">" or ">=")
+        {
+            string? lenOp = null;
+            long length = 0;
+            if (CfgBuilder.LenArgument(c.Left) is { } a && IsReferenceSide(m, a, assertion) && LiteralOf(right) is ("int", long n1)) (lenOp, length) = (op, n1);
+            else if (CfgBuilder.LenArgument(right) is { } b && IsReferenceSide(m, b, assertion) && LiteralOf(c.Left) is ("int", long n2)) (lenOp, length) = (Flipped(op), n2);
+            if (lenOp != null) return NarrowLength(t, positive ? lenOp : Negated(lenOp), length);
+            if (op is not ("==" or "!=")) return t;
+        }
 
         Expr other;
         if (IsReferenceSide(m, c.Left, assertion)) other = right;
@@ -54,17 +60,26 @@ public sealed partial class TypeEvaluator
         return t;
     }
 
-    /// <summary>`len(x) == n`: a fixed tuple stays when its length is n (or is not n on the other branch); `tuple[X, ...]` becomes n of X.</summary>
-    PyType NarrowLength(PyType t, long n, bool equal)
+    static string Flipped(string op) => op switch { "<" => ">", "<=" => ">=", ">" => "<", ">=" => "<=", _ => op };
+    static string Negated(string op) => op switch { "==" => "!=", "!=" => "==", "<" => ">=", "<=" => ">", ">" => "<=", _ => "<" };
+
+    /// <summary>`len(x) == n`, `len(x) < n` and the like (<paramref name="op"/> holds on this branch): a fixed tuple stays when its length fits; `tuple[X, ...]` becomes the fixed tuples of the lengths that fit, when none is longer than 8.</summary>
+    PyType NarrowLength(PyType t, string op, long n)
     {
+        bool Fits(long k) => op switch { "==" => k == n, "!=" => k != n, "<" => k < n, "<=" => k <= n, ">" => k > n, _ => k >= n };
+        long? longest = op switch { "==" or "<=" => n, "<" => Math.Max(n, 0) - 1, _ => null };     // null: no longest length
         var result = new List<PyType>();
         foreach (var x in t.Members)
         {
             if (x is ClassType { IsInstance: true, Info.Name: "tuple" } tup && tup.Info.Module.Name == "builtins")
             {
                 // tuple[int, *Ts] has no fixed length
-                if (tup.TupleItems != null && !tup.TupleItems.Any(i => i is TypeVarTupleType)) { if ((tup.TupleItems.Count == n) == equal) result.Add(x); continue; }
-                if (equal && tup.Args.Count == 1 && n is >= 0 and <= 8) { result.Add(TupleOf(Enumerable.Repeat(tup.Args[0], (int)n).ToList())); continue; }
+                if (tup.TupleItems != null && !tup.TupleItems.Any(i => i is TypeVarTupleType)) { if (Fits(tup.TupleItems.Count)) result.Add(x); continue; }
+                if (tup.TupleItems == null && tup.Args.Count == 1 && longest is <= 8)
+                {
+                    for (int k = 0; k <= longest; k++) if (Fits(k)) result.Add(TupleOf(Enumerable.Repeat(tup.Args[0], k).ToList()));
+                    continue;
+                }
             }
             result.Add(x);
         }

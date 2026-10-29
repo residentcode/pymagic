@@ -116,6 +116,10 @@ internal sealed class CfgBuilder
 
     static bool IsChain(Expr e) => TryChain(Referent(e), out _, out _);
 
+    /// <summary>The argument of `len(arg)`; null for anything else.</summary>
+    internal static Expr? LenArgument(Expr e) =>
+        e is CallExpr { Func: NameExpr { Name: "len" }, Args.Count: 1 } lc && lc.Args[0] is { Name: null, Stars: 0 } ? lc.Args[0].Value : null;
+
     /// <summary>The reference a condition narrows, if it has one of the recognised shapes.</summary>
     static bool NarrowedReference(Expr cond, out Expr reference)
     {
@@ -140,14 +144,13 @@ internal sealed class CfgBuilder
                     reference = Referent(left);
                     return true;
                 }
-                if (op is not ("is" or "is not" or "==" or "!=")) return false;
-
-                // len(x) == 2
-                if (op is "==" or "!=" && left is CallExpr { Func: NameExpr { Name: "len" }, Args.Count: 1 } lc && lc.Args[0] is { Name: null, Stars: 0 } && IsChain(lc.Args[0].Value))
+                // len(x) == 2, len(x) < 3, 3 > len(x)
+                if (op is "==" or "!=" or "<" or "<=" or ">" or ">=" && (LenArgument(left) ?? LenArgument(right)) is { } sized && IsChain(sized))
                 {
-                    reference = Referent(lc.Args[0].Value);
+                    reference = Referent(sized);
                     return true;
                 }
+                if (op is not ("is" or "is not" or "==" or "!=")) return false;
 
                 // type(x) is C
                 if (left is CallExpr { Func: NameExpr { Name: "type" }, Args.Count: 1 } tc && tc.Args[0] is { Name: null, Stars: 0 } && IsChain(tc.Args[0].Value))
