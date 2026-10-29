@@ -70,11 +70,17 @@ public sealed partial class LanguageService
         foreach (var x in snap.Project)
         {
             if (x.IsStub || !snap.UriOf.TryGetValue(x, out var xUri) || x.SyntaxErrors.Count > 0) continue;
+            // the code of an open notebook (.pymagic/notebooks/...): the notebook's own file takes the edits
+            if (xUri.Contains("/.pymagic/", StringComparison.Ordinal)) continue;
             var edits = ImportEditsFor(x, Map, Map(x.Name) ?? x.Name, x.IsPackage, warnings);
+            if (x.IsPackage) edits.AddRange(AllListEdits(x, Map, warnings));
             if (edits.Count == 0) continue;
             var lines = Lines(x);
             changes[xUri] = edits.OrderBy(e => e.Start).Select(e => new TextEdit(lines.RangeOf(e.Start, e.End), e.Text)).ToList();
         }
+        // the notebooks' imports, and the templates that load a tag library by its file name
+        foreach (var (uri, edits) in NotebookMoveEdits(Map, warnings)) changes[uri] = edits;
+        foreach (var (uri, edits) in TemplateLoadEdits(snap, Map, warnings)) changes[uri] = edits;
         warnings.AddRange(NewImportCycles(snap, Map));
         string first = moved.OrderBy(m => m.Name.Length).First().Name;
         return new ModuleMovePlan(changes, warnings, first, Map(first));

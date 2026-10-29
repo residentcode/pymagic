@@ -1037,15 +1037,7 @@ public sealed partial class LanguageService
     /// <summary>`{% url 'name' %}` in every template file (the open buffers win over the files): file, URI, name span and the name.</summary>
     IEnumerable<(string Uri, string Text, int Start, int End, string Value)> TemplateUrlUses()
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var sources = new List<(string Uri, string Text)>();
-        foreach (var (uri, doc) in _templateDocs) { sources.Add((uri, doc.Text)); if (PathOfUri(uri) is { } p) seen.Add(p); }
-        foreach (var t in Templates())
-        {
-            if (!seen.Add(t.Path)) continue;
-            if (TemplateTextOf(t.Path) is { } text) sources.Add((UriOfPath(t.Path), text));
-        }
-        foreach (var (uri, text) in sources)
+        foreach (var (uri, text) in TemplateTexts())
         {
             if (text.IndexOf("url", StringComparison.Ordinal) < 0) continue;
             foreach (var tag in DjangoTemplateParser.Parse(text).Tags.Where(t => t.Name == "url"))

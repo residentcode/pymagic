@@ -5,8 +5,11 @@ namespace PyMagic.Tests;
 /// <summary>Moving or renaming a module or package in Explorer (item 132): the imports of the project follow it.</summary>
 public class MoveModuleTests
 {
-    /// <summary>A project on disk with these files; the plan of moving `from` to `to` (paths relative to the project), applied to the texts.</summary>
-    static (Dictionary<string, string> After, ModuleMovePlan Plan) Move((string Rel, string Text)[] files, string from, string to)
+    /// <summary>
+    /// A project on disk with these files (the Python ones open in the engine, notebooks and templates only on disk); the plan of moving `from` to `to`
+    /// (paths relative to the project), applied to the texts.
+    /// </summary>
+    internal static (Dictionary<string, string> After, ModuleMovePlan Plan) Move((string Rel, string Text)[] files, string from, string to)
     {
         string dir = Path.Combine(Path.GetTempPath(), "pm_movemod_" + Guid.NewGuid().ToString("N"));
         var svc = new LanguageService();
@@ -17,7 +20,7 @@ public class MoveModuleTests
             string full = Path.Combine(dir, rel.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(full)!);
             File.WriteAllText(full, text);
-            svc.Open(LanguageService.UriOfPath(full), text, 1);
+            if (rel.EndsWith(".py", StringComparison.Ordinal)) svc.Open(LanguageService.UriOfPath(full), text, 1);
             texts[rel] = text;
         }
         string Full(string rel) => Path.Combine(dir, rel.Replace('/', Path.DirectorySeparatorChar));
