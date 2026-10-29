@@ -63,6 +63,11 @@ public sealed partial class LanguageService
                 yield return new NamedString(m, DjangoNamed.RouteUrl, route.Value, route.Start, route.End, call);
             else if (TemplateReaders.Contains(callee) && StringIn(call, 0, "template_name", "template_name_list") is { } t0)
                 yield return new NamedString(m, DjangoNamed.Template, t0.Value, t0.Start, t0.End, call);
+            else if (FieldExpressions.Contains(callee) || FieldListExpressions.Contains(callee))
+            {
+                foreach (var (value, start, end) in FieldStringsOf(call, callee))
+                    if (LooksLikeFieldPath(value.Replace("__", "_"))) yield return new NamedString(m, DjangoNamed.QueryField, value, start, end, call);
+            }
             else if (QueryStringMethods.Contains(callee) && call.Func is AttributeExpr)
                 foreach (var arg in call.Args.Where(a => a.Name == null && a.Stars == 0))
                     if (arg.Value is ConstExpr lit && FixtureModel.StringValue(lit) is { } field && FixtureModel.StringSpan(lit) is { } span)
@@ -313,10 +318,11 @@ public sealed partial class LanguageService
     static readonly HashSet<string> NameAddingMethods = new(StringComparer.Ordinal) { "annotate", "alias", "extra", "values", "values_list", "raw", "aggregate", "union", "intersection", "difference" };
 
     /// <summary>The model a query call works on, when the receiver is a plain chain from a manager (`Book.objects.filter(...)`): otherwise names added along the way cannot be told apart from typos.</summary>
-    ClassInfo? QueryModelOf(Snapshot snap, ModuleInfo m, CallExpr call)
+    ClassInfo? QueryModelOf(Snapshot snap, ModuleInfo m, CallExpr call) => QueryModelOf(snap.Workspace.Evaluator, m, call);
+
+    ClassInfo? QueryModelOf(TypeEvaluator ev, ModuleInfo m, CallExpr call)
     {
         if (call.Func is not AttributeExpr access) return null;
-        var ev = snap.Workspace.Evaluator;
         for (Expr e = access.Value; ;)
         {
             if (e is CallExpr inner && inner.Func is AttributeExpr ia)
@@ -398,6 +404,8 @@ public sealed partial class LanguageService
             if (finding != null && !Suppressed(m.Source, finding)) yield return AsDiag(finding);
         }
 
+        foreach (var expressionFinding in DjangoExpressionDiagnostics(fullModule, fev)) yield return expressionFinding;
+
         foreach (var call in AstChildren.Descendants(fullModule.Ast).OfType<CallExpr>())
         {
             if (CalleeName(call) is not { } name || !(LookupMethods.Contains(name) || FieldOnlyMethods.Contains(name))) continue;
@@ -416,8 +424,10 @@ public sealed partial class LanguageService
     List<Location> QueryFieldTargets(Snapshot snap, NamedString s)
     {
         var result = new List<Location>();
-        if (s.Call == null || QueryModelOf(snap, s.Module, s.Call) is not { } model) return result;
         var ev = snap.Workspace.Evaluator;
+        // an expression (F, Sum, ...) takes its model from the query around it; a query method from its own receiver
+        var found = s.Call == null ? null : CalleeName(s.Call) is { } callee && IsExpression(callee) ? ModelAround(ev, s.Module, s.Call) : QueryModelOf(snap, s.Module, s.Call);
+        if (found is not { } model) return result;
         var current = model;
         foreach (var part in s.Value.TrimStart('-', '?').Split("__"))
         {
@@ -441,7 +451,7 @@ public sealed partial class LanguageService
         int lineStart = LineStart(text, offset);
         string before = text[lineStart..offset];
         // the opening quote of a string argument: how much of it has been typed
-        var m = Regex.Match(before, @"(?<callee>\b(?:reverse|reverse_lazy|redirect|resolve_url|render|render_to_string|get_template|select_template|TemplateResponse|template_name|order_by|values|values_list|only|defer|select_related|prefetch_related)\b)\s*[(=][^""']*?[""'](?<typed>[-\w:/.\\]*)$");
+        var m = Regex.Match(before, @"(?<callee>\b(?:reverse|reverse_lazy|redirect|resolve_url|render|render_to_string|get_template|select_template|TemplateResponse|template_name|order_by|values|values_list|only|defer|select_related|prefetch_related|F|Sum|Avg|Min|Max|Count|StdDev|Variance|Lower|Upper|Length|Coalesce|Greatest|Least)\b)\s*[(=][^""']*?[""'](?<typed>[-\w:/.\\]*)$");
         if (!m.Success) return null;
         string callee = m.Groups["callee"].Value;
         string typed = m.Groups["typed"].Value;
@@ -466,8 +476,14 @@ public sealed partial class LanguageService
         var pev = ws.Evaluator;
         var literal = AstChildren.Descendants(patched.Ast).OfType<ConstExpr>().FirstOrDefault(c => c.Kind == ConstKind.Str && c.Text.Contains(CursorMark));
         var call = literal == null ? null : patched.ParentOf(literal) is Argument a ? patched.ParentOf(a) as CallExpr : null;
-        if (call == null || call.Func is not AttributeExpr access) return null;
-        var model = pev.DjangoModelOfQuery(pev.TypeOf(patched, access.Value));
+        if (call == null) return null;
+        ClassInfo? model;
+        if (CalleeName(call) is { } expression && IsExpression(expression))
+            model = ModelAround(pev, patched, call);
+        else if (call.Func is AttributeExpr access)
+            model = pev.DjangoModelOfQuery(pev.TypeOf(patched, access.Value));
+        else
+            return null;
         if (model == null) return null;
         string pathTyped = typed.TrimStart('-', '?');
         string sign = typed[..(typed.Length - pathTyped.Length)];
@@ -494,10 +510,21 @@ public sealed partial class LanguageService
     {
         if (patched.ParentOf(placeholder) is not Argument { Name: null } arg || patched.ParentOf(arg) is not CallExpr call) yield break;
         string? method = CalleeName(call);
-        if (method == null || !(LookupMethods.Contains(method) || FieldOnlyMethods.Contains(method)) || call.Func is not AttributeExpr access) yield break;
-        var model = ev.DjangoModelOfQuery(ev.TypeOf(patched, access.Value));
+        if (method == null) yield break;
+        ClassInfo? model;
+        bool lookups;
+        if (method == "Q")
+        {
+            model = ModelAround(ev, patched, call);
+            lookups = true;
+        }
+        else
+        {
+            if (!(LookupMethods.Contains(method) || FieldOnlyMethods.Contains(method)) || call.Func is not AttributeExpr access) yield break;
+            model = ev.DjangoModelOfQuery(ev.TypeOf(patched, access.Value));
+            lookups = LookupMethods.Contains(method);
+        }
         if (model == null) yield break;
-        bool lookups = LookupMethods.Contains(method);
 
         var parts = prefix.Split("__");
         var current = model;

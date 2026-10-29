@@ -239,6 +239,16 @@ public sealed partial class TypeEvaluator
         AddSyntheticMember(target, "__len__", Method(Inst("int")));
         AddSyntheticMember(target, "__bool__", Method(Inst("bool")));
         AddSyntheticMember(target, "model", new ClassType(model, false));
+        AddSyntheticMember(target, "iterator", Method(TypingInst("Iterator", modelInstance)));
+        // the rest of what a QuerySet offers; what they give is not a model (dicts, tuples, counts), so it is left unknown rather than guessed wrong
+        foreach (var name in new[]
+        {
+            "values", "values_list", "aggregate", "in_bulk", "bulk_update", "delete", "dates", "datetimes", "explain", "raw", "complex_filter", "contains",
+            "resolve_expression", "db_manager", "check",
+            "aget", "acreate", "aget_or_create", "aupdate_or_create", "afirst", "alast", "acount", "aexists", "aaggregate", "aupdate", "adelete", "aiterator",
+            "abulk_create", "abulk_update", "aearliest", "alatest", "ain_bulk", "acontains", "aexplain",
+        }) AddSyntheticMember(target, name, Method(PyType.Unknown));
+        foreach (var name in new[] { "query", "db", "ordered" }) AddSyntheticMember(target, name, PyType.Unknown);
     }
 
     /// <summary>`Manager[Model]`: the queryset methods too, since a manager passes them on. A custom manager class stays in the chain, so its own methods are found.</summary>
