@@ -40,6 +40,59 @@ tests/PyMagic.Tests       dependency-free test runner:  dotnet run --project tes
 The test project is a plain console runner because this machine's NuGet only has an offline source
 (no xunit). Switch to xunit once nuget.org is configured.
 
+## Open work
+
+Everything that is known to be left, in one place, gathered on 30 October 2026 from the "Not done" and "Still open" notes of items 2 to 154 (the item a line comes from is in brackets). **How it is kept:** when an item does one of these, the line goes from here and the item says so; a new item's own "Not done" note is added here too. Code signing, auto-update and anything else for selling PyMagic are left out on purpose.
+
+**Frameworks**
+- Django admin: `list_display` entries that are callables from other modules, and `get_queryset` / `formfield_for_*` overrides (37).
+- Django forms: `clean_<field>` methods and `cleaned_data` keys (37).
+- Django templates: the context `{% include ... with a=b %}` gives the included file, the project's context processors, `{% blocktrans %}` bodies, the tags of third-party libraries (`crispy`), and the HTML itself (35).
+- Django project: reading `INSTALLED_APPS` (an app is a folder that looks like one), choosing the settings module for commands that need a database (76); the custom managers of other installed apps (125); reverse relations in the project-wide Problems scan, which therefore skips some prefetch names (154).
+- REST framework: `DEFAULT_ROUTER` extras (`.json` suffixes, the API root), the routes of other installed apps' urls (`allauth`, `rest_framework.authtoken`) (127); `to_representation` overrides, writable nested serializers without `create()`, the serializer per method in the detail of `@action` routes (130).
+- FastAPI: `Security` scopes checked against the OAuth2 scheme, `Annotated[X, Depends(...)]` navigation from the annotation, request-body rules (a body on a `GET`), OpenAPI output, sending a request to a running server from the Endpoints detail (34, 126).
+- Flask: the `request.args` names a view reads, checked against its template (128).
+- Jinja: `{% include %}` of a list or a variable, line statements (`# for x in y`), the expressions beyond brackets and strings (`{{ a b }}`) (129).
+- pytest: `request.param` of `parametrize(..., indirect=True)` (151), fixtures registered by hooks at run time (134), a fixtures panel and a run icon in the gutter (29).
+
+**Editor**
+- Hover and signature help: a parameter's documentation in hover and in completion's `name=` items, the class docstring for a constructor call, `name=` after a `*`, documentation of methods of library base classes (119, 121); signature help inside decorators and class bases (118).
+- Completion: dictionary keys and `Literal[...]` strings, a setting to leave out the call parentheses (31).
+- Find in files: replacing in the selected results only, multi-line patterns, searching library files, a list of recent searches, filtering symbols by kind (20).
+- Notebooks: formatting a selection of a cell, formatting on save, cells with magics (120).
+- Refactoring: choosing which files or hunks of a preview to apply, word-level highlighting in the diff (19); a module reached through `from pkg import *` and imports written over lines with backslashes are not followed by a move (143).
+- Unresolved imports: asking PyPI whether a suggested package exists, an install command for other LSP clients, remembering "ignore this import" (15).
+- Language server: semantic tokens, cancelling a request, UTF-8 position encoding (8).
+- Formatter: the import settings of ruff and isort not read yet: `lines-after-imports`, `section-order`, `force-wrap-aliases`, `from-first`, `relative-imports-order`, `split-on-trailing-comma` (44).
+
+**Run, debug and tests**
+- Debugger: pausing a running program, attaching to a running process, breakpoints added while a frame is already running (they only count in new calls) (10); the stacks of other threads (76); setting attributes and items of objects, watches that expand, exception filters by type, function and data breakpoints (21).
+- Test runner: debugging a test, stopping a test run, `unittest` subtests as their own nodes, tests in classes whose bases live in other files (11).
+- Coverage: branch coverage, combining runs, exporting a report, running one test with coverage (52).
+
+**Git, packages and interpreters**
+- Git: pushing tags (72); choosing lines from the editor's gutter, moving single lines between changelists (73); a merge result built from three editors, picking lines inside one side, conflicts of binary files (116); interactive rebase's *edit*, `--rebase-merges`, rebasing onto another branch, reordering by dragging (117).
+- Packages: extra index URLs and proxies, installing from a path or a git URL (refused until there is a confirmation step), version pickers, dependency trees, lock files (uv, poetry, pip-tools), conda or uv-managed environments (14).
+- Remote interpreters: a terminal inside WSL or Docker, Linux paths in tracebacks, a Docker container that is already running (71).
+
+**Installer**
+- A checkbox for the desktop shortcut and a safe folder page (they need NSIS script), PyMagic's own pictures in the wizard (66).
+
+**Type engine** (ibnbolbna's area; the order is in [issue #3](https://github.com/residentcode/pymagic/issues/3))
+- `NoReturn` calls, `with` blocks that swallow exceptions, `break`/`return` through `finally` (4, 5); call-site parameter inference (5).
+- Overrides: a rename that follows overriding methods, a change of signature passed on to them, a call hierarchy that includes them, marks and hierarchy for library classes (8, 17, 30).
+- Narrowing: class patterns inside sequence patterns, item types from sub-patterns (41), the "at least n" tuple form for `len(t) >= n` (152); `Literal` through tuples (40).
+- attrs and hooks: `attr.s` options such as `these=`, `__init_subclass__` hook parameter types (42).
+- Small gaps: `pop` of a required TypedDict key (87), a constant index past the end of a tuple subclass (88).
+- The PyCharm inspections that need full types and are not done yet, and those for other tools (pandas, Spark, mock, notebooks) (47, 77).
+- Speed on large projects: find usages and rename on one thread, the Problems of unchanged files not remembered, parsing only the edited region, about 1 to 1.5 GB while the problems are computed (78). Keeping the types of unchanged files across edits was measured and left out: the files they depend on are only about a fifth of an edit's time.
+
+**To check** (old notes that later work may have covered; each needs a look before it is counted as open or done)
+- Parser: store-context validation and finer error messages (2). Scopes: `__all__`, `try/except ImportError` fallbacks, definitions under conditions (3).
+- Typeshed: `__init__.pyi` re-exports of `import a as a`, `__all__ +=`, overloads with an explicit `self`, a cache of parsed stubs on disk (7).
+- Black's last corner cases: parentheses in `print((1))`, `with` and `await`, `# type:` comment placement, blank lines inside brackets (22, 43, 75).
+- Automated tests of the page itself (the checks in a real browser are scripted by hand for now) (9).
+
 ## Roadmap (matches the behaviour notes)
 
 1. **Lexer** - indent/dedent, brackets, continuations, strings (PEP 701 f-strings), numbers. *Done.*
