@@ -83,10 +83,45 @@ public sealed partial class LanguageService
 
     static bool LooksLikeFieldPath(string value) => value.Length > 0 && value.All(ch => char.IsLetterOrDigit(ch) || ch == '_');
 
+    /// <summary>
+    /// The model `OuterRef("...")` refers to: that of the query a `Subquery(...)` or `Exists(...)` around it is used in, written inline
+    /// (`Author.objects.annotate(n=Subquery(Book.objects.filter(author=OuterRef("pk"))))`) or through the variable the inner query was put in
+    /// (`newest = Book.objects.filter(...)`, then `Subquery(newest)` in the same function). Null when it cannot be told, or when the uses disagree.
+    /// </summary>
+    ClassInfo? OuterModelOf(TypeEvaluator ev, ModuleInfo m, CallExpr outerRef)
+    {
+        Node? scope = null;
+        for (Node? n = m.ParentOf(outerRef); n != null; n = m.ParentOf(n))
+        {
+            if (n is CallExpr { Func: NameExpr { Name: "Subquery" or "Exists" } } wrapper) return ModelAround(ev, m, wrapper);
+            if (n is AssignStmt { Targets: [NameExpr { Name: var name }] } assign && ReferenceEquals(scope, null))
+            {
+                // the inner query in a variable: the Subquery(name) / Exists(name) of the same function or module
+                Node body = m.ParentOf(assign) is { } parent ? parent : m.Ast;
+                for (Node? p = assign; p != null; p = m.ParentOf(p)) if (p is FunctionDef or PyMagic.Core.Syntax.Module) { body = p; break; }
+                var models = AstChildren.Descendants(body).OfType<CallExpr>()
+                    .Where(c => c is { Func: NameExpr { Name: "Subquery" or "Exists" } } && c.Args.FirstOrDefault()?.Value is NameExpr { Name: var used } && used == name)
+                    .Select(c => ModelAround(ev, m, c)).Distinct().ToList();
+                return models.Count == 1 ? models[0] : null;
+            }
+            if (n is FunctionDef or LambdaExpr or ClassDef) return null;
+        }
+        return null;
+    }
+
     IEnumerable<Diag> DjangoExpressionDiagnostics(ModuleInfo m, TypeEvaluator ev)
     {
         foreach (var call in AstChildren.Descendants(m.Ast).OfType<CallExpr>())
         {
+            // OuterRef("pk") names a field of the outer query's model, not of the query it is written in
+            if (CalleeName(call) == "OuterRef" && IsOrmExpression(m, ev, call))
+            {
+                if (StringIn(call, 0, "name") is not { } outerField || !LooksLikeFieldPath(outerField.Value.Replace("__", "_")) || outerField.Value == "pk") continue;
+                if (OuterModelOf(ev, m, call) is not { } outer || CheckLookup(ev, outer, outerField.Value, allowLookups: false) is not { } wrong) continue;
+                var outerFinding = new Finding(outerField.Start, outerField.End - outerField.Start, $"Cannot resolve '{wrong.Bad}' into a field of {outer.Name}, the model of the outer query OuterRef reads from. Choices are: {string.Join(", ", wrong.Choices.Take(12))}", "django-field", FindingLevel.Warning);
+                if (!Suppressed(m.Source, outerFinding)) yield return AsDiag(outerFinding);
+                continue;
+            }
             if (CalleeName(call) is not { } name || !IsExpression(name) || !IsOrmExpression(m, ev, call)) continue;
             if (ModelAround(ev, m, call) is not { } model) continue;
             var added = NamesAddedAround(m, call);

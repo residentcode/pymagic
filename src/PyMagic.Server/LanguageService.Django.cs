@@ -34,6 +34,14 @@ public sealed partial class LanguageService
         return (value, span.Start, span.End);
     }
 
+    /// <summary>The `prefetch_related(...)` call a `Prefetch(...)` is an argument of; null when it is built elsewhere.</summary>
+    static CallExpr? PrefetchCallOf(ModuleInfo m, CallExpr prefetch)
+    {
+        Node? up = m.ParentOf(prefetch);
+        if (up is Argument) up = m.ParentOf(up);
+        return up is CallExpr { Func: AttributeExpr { Attr: "prefetch_related" } } around ? around : null;
+    }
+
     /// <summary>Every such string of a module.</summary>
     IEnumerable<NamedString> NamedStringsIn(ModuleInfo m, TypeEvaluator? ev)
     {
@@ -68,6 +76,9 @@ public sealed partial class LanguageService
                 foreach (var (value, start, end) in FieldStringsOf(call, callee))
                     if (LooksLikeFieldPath(value.Replace("__", "_"))) yield return new NamedString(m, DjangoNamed.QueryField, value, start, end, call);
             }
+            // Prefetch("book_set", queryset=...): its lookup is a string of the prefetch_related it is given to
+            else if (callee == "Prefetch" && StringIn(call, 0, "lookup") is { } lookup && PrefetchCallOf(m, call) is { } around)
+                yield return new NamedString(m, DjangoNamed.QueryField, lookup.Value, lookup.Start, lookup.End, around);
             else if (QueryStringMethods.Contains(callee) && call.Func is AttributeExpr)
                 foreach (var arg in call.Args.Where(a => a.Name == null && a.Stars == 0))
                     if (arg.Value is ConstExpr lit && FixtureModel.StringValue(lit) is { } field && FixtureModel.StringSpan(lit) is { } span)
@@ -334,14 +345,49 @@ public sealed partial class LanguageService
             if (e is AttributeExpr { Attr: "objects" or "_default_manager" } or NameExpr or AttributeExpr) break;
             return null;
         }
-        // a variable may hold a queryset built with annotations somewhere else: only chains that start at the model's manager are checked
+        // a variable may hold a queryset built with annotations somewhere else: only chains that start at the model's manager, or at a related
+        // manager of a model instance (author.book_set, book.tags: always the related model's plain queryset), are checked
         Expr root = access.Value;
         while (root is CallExpr rc && rc.Func is AttributeExpr ra) root = ra.Value;
-        if (root is not AttributeExpr { Attr: "objects" or "_default_manager" }) return null;
+        bool fromManager = root is AttributeExpr { Attr: "objects" or "_default_manager" };
+        bool fromRelated = !fromManager && root is AttributeExpr related && ev.TypeOf(m, related.Value) is ClassType { IsInstance: true } owner && ev.IsDjangoModel(owner.Info)
+            && ev.DjangoModelOfQuery(ev.TypeOf(m, related)) != null;
+        if (!fromManager && !fromRelated) return null;
         var model = ev.DjangoModelOfQuery(ev.TypeOf(m, access.Value));
         if (model == null || ev.MroOf(model).Any(t => t is not ClassType)) return null;
         return model;
     }
+
+    /// <summary>
+    /// Walks a prefetch path (`book_set__tags`) as Django does, attribute by attribute: each part must be an attribute of the model that gives related
+    /// objects (a relation, a reverse accessor, a related_name). The part that is not, with its model and the relations it has; null when the path is
+    /// fine or cannot be followed (an attribute of unknown type).
+    /// </summary>
+    static (string Bad, string Model, IReadOnlyList<string> Choices)? CheckPrefetchPath(TypeEvaluator ev, ClassInfo model, string path)
+    {
+        var current = model;
+        foreach (var part in path.Split("__"))
+        {
+            var attr = ModelAttribute(ev, current, part);
+            // not an attribute at all, or one the editor cannot tell (the relations may not be read yet) that does not look like a relation either:
+            // not a query name, not a reverse accessor (`book_set`), not a related_name
+            if (attr is null || attr.Value.Target == null && attr.Value.Type is UnknownType && !LooksLikeRelation(ev, current, part))
+            {
+                var choices = ev.MemberNames(new ClassType(current, Array.Empty<PyType>(), true)).Select(x => x.Name).Distinct()
+                    .Where(n => !n.StartsWith('_') && ModelAttribute(ev, current, n) is { Target: not null }).OrderBy(n => n, StringComparer.Ordinal).ToList();
+                // a model whose relations are not known here at all (they come from the other models, which may not be read): a name shaped like one is not judged
+                if (choices.Count == 0 && LooksLikeRelation(ev, current, part)) return null;
+                return (part, current.Name, choices);
+            }
+            if (attr.Value.Target is not { } next) return null;
+            current = next;
+        }
+        return null;
+    }
+
+    static bool LooksLikeRelation(TypeEvaluator ev, ClassInfo model, string name) =>
+        CheckLookup(ev, model, name, allowLookups: false) == null || name.EndsWith("_set", StringComparison.Ordinal)
+        || ev.DjangoFieldsOf(model).Any(f => f.Call.Args.Any(a => a.Name == "related_name" && FixtureModel.StringValue(a.Value) == name));
 
     /// <summary>Walks a lookup path (`author__name__icontains`): the part that is not a field or lookup, with what would have been valid there.</summary>
     static (string Bad, IReadOnlyList<string> Choices)? CheckLookup(TypeEvaluator ev, ClassInfo model, string path, bool allowLookups)
@@ -417,6 +463,13 @@ public sealed partial class LanguageService
                 {
                     string path = s.Value.TrimStart('-', '?');
                     if (path.Length == 0 || path == "*" || s.Call.Func is AttributeExpr { Attr: "order_by" } && path == "pk" ) break;
+                    // prefetch_related walks attributes (book_set, a related_name), not query names
+                    if (s.Call.Func is AttributeExpr { Attr: "prefetch_related" })
+                    {
+                        if (CheckPrefetchPath(fev, model, path) is { } wrong)
+                            finding = new Finding(s.Start, s.End - s.Start, $"Cannot find '{wrong.Bad}' on {wrong.Model} to prefetch: prefetch_related follows the relations of the model (book_set, a related_name), and Django raises AttributeError{(wrong.Choices.Count > 0 ? ". Choices are: " + string.Join(", ", wrong.Choices.Take(12)) : "")}", "django-field", FindingLevel.Warning);
+                        break;
+                    }
                     if (CheckLookup(fev, model, path, allowLookups: false) is { } bad)
                         finding = new Finding(s.Start, s.End - s.Start, $"Cannot resolve '{bad.Bad}' into a field of {model.Name}. Choices are: {string.Join(", ", bad.Choices.Take(12))}", "django-field", FindingLevel.Warning);
                     break;

@@ -34,7 +34,7 @@ public class DjangoEditorTests
     }
 
     static List<LspDiagnostic> Diagnostics(string code, string? templates = null) =>
-        Project(code + "|", templates).Svc.Diagnostics(Views).Where(d => d.Message.StartsWith("No URL") || d.Message.StartsWith("Template") || d.Message.StartsWith("Cannot resolve")).ToList();
+        Project(code + "|", templates).Svc.Diagnostics(Views).Where(d => d.Message.StartsWith("No URL") || d.Message.StartsWith("Template") || d.Message.StartsWith("Cannot resolve") || d.Message.StartsWith("Cannot find")).ToList();
 
     // ------------------------------------------------------------ URL names
 
