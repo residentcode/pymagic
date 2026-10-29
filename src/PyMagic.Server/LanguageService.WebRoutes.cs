@@ -20,6 +20,8 @@ public sealed partial class LanguageService
     sealed class RouteIndex
     {
         public List<RouteDef> Routes { get; } = new();
+        /// <summary>The prefix and kind of the application or router an expression of a module names (`bp` in `bp.add_url_rule(...)`), as the decorators get them.</summary>
+        public Func<ModuleInfo, Expr, (string Prefix, RouterInfo? Info)> RouterOf { get; set; } = (_, _) => ("", null);
     }
 
     static readonly Regex WebFramework = new(@"\b(?:fastapi|starlette|flask|quart)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -145,6 +147,11 @@ public sealed partial class LanguageService
             }
             index.Routes.AddRange(RoutesIn(module, Resolve));
         }
+        index.RouterOf = (module, expr) =>
+        {
+            (ModuleInfo, string)? key = ReceiverName(expr) is { } name && routers.ContainsKey((module, name)) ? (module, name) : RouterTarget(module, expr, routers, modules);
+            return key is { } k ? (PrefixOf(k), routers.GetValueOrDefault(k)) : ("", null);
+        };
         return index;
     }
 
@@ -316,6 +323,7 @@ public sealed partial class LanguageService
                 findings.Add(new Finding(r.PathStart, r.PathEnd - r.PathStart, $"Route '{r.Methods.First(x => other.Methods.Contains(x))} {r.Path}' is already handled by {other.Def.Name}() in {System.IO.Path.GetFileName(other.Module.Path ?? other.Module.Name)}", "duplicate-route", FindingLevel.Warning));
 
             findings.AddRange(FlaskResponseFindings(m, ev, r));
+            findings.AddRange(FlaskReturnFindings(m, ev, r));
             if (ShadowingRoute(index, r, m, OrderOf) is { } shadow)
                 findings.Add(new Finding(r.PathStart, r.PathEnd - r.PathStart, $"Route '{r.Methods.First(x => shadow.Methods.Contains(x))} {r.Path}' is never reached: {shadow.Def.Name}() declared earlier handles '{shadow.Path}' first. Declare the fixed path before the one with a parameter.", "route-shadowed", FindingLevel.Warning));
 

@@ -116,6 +116,7 @@ public sealed partial class LanguageService
         ("depends-called", "Web routes", "Dependency called instead of passed", "Depends(get_db()) hands over what the function returned, not the function.", "warning"),
         ("async-blocking-call", "Python", "Blocking call in an async function", "time.sleep, requests.get, subprocess.run and the like in an async def stop every other request until they return.", "warning"),
         ("flask-no-response", "Web routes", "Flask view that gives no response", "A view that returns None or can end without returning: Flask answers 'The view function did not return a valid response'.", "warning"),
+        ("flask-response-type", "Web routes", "Flask view that returns what Flask cannot answer with", "An int, float, bool or set, an object that is neither a Response nor a WSGI application, a tuple of one or of four and more: the view stops with 'did not return a valid response'.", "error"),
         ("flask-url-for-arguments", "Web routes", "url_for without what the route needs", "A path parameter the route has and the call does not give (BuildError), or a non-number for an int parameter.", "warning"),
         ("route-endpoint", "Web routes", "Unknown endpoint name", "url_for or url_path_for with a name no route has.", "weak"),
         ("template-structure", "Django templates", "Unclosed or unmatched tags", "Block tags that do not close, extends that is not first, a block defined twice.", "error"),

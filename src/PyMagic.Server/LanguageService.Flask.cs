@@ -30,6 +30,64 @@ public sealed partial class LanguageService
             yield return new Finding(def.NameStart, def.Name.Length, $"The view '{def.Name}' can end without returning a response (a path that falls off the end gives None)", "flask-no-response", FindingLevel.Warning);
     }
 
+    /// <summary>
+    /// A `return` of a Flask view that Flask cannot turn into a response (each case answered with Flask 3.1.3 first): an int, float, bool or set, an object of a
+    /// project class that is neither a response nor a WSGI callable, a tuple of one or of four and more, a tuple whose body is one of those, and a float status.
+    /// str, bytes, dict, list (Flask 2.2 and later), Response, generators and tuples of two or three are fine; types PyMagic does not know are left alone.
+    /// </summary>
+    IEnumerable<Finding> FlaskReturnFindings(ModuleInfo m, TypeEvaluator ev, RouteDef r)
+    {
+        var def = r.Def;
+        if (!r.Flask || m.ParentOf(def) is ClassDef || HasYield(def.Body)) yield break;
+        foreach (var ret in AstChildren.Descendants(def).OfType<ReturnStmt>().Where(x => OwnerFunction(m, x) == def && x.Value != null))
+        {
+            var value = ret.Value!;
+            string? problem;
+            if (value is TupleExpr tuple) problem = TupleProblem(tuple.Items.Count, i => ev.TypeOf(m, tuple.Items[i]));
+            else
+            {
+                var type = ev.TypeOf(m, value);
+                problem = type is ClassType { IsInstance: true, Info.QualifiedName: "builtins.tuple", TupleItems: { } items } ? TupleProblem(items.Count, i => items[i]) : BodyProblem(ev, type);
+            }
+            if (problem != null)
+                yield return new Finding(value.Start, value.End - value.Start, $"Flask cannot answer with {problem}: the view stops with \"The view function did not return a valid response\" (it takes a str, bytes, dict, list, Response or a tuple (body, status, headers))", "flask-response-type", FindingLevel.Error);
+        }
+
+        string? TupleProblem(int count, Func<int, PyType> item)
+        {
+            if (count is 1 or >= 4) return $"a tuple of {count}";
+            if (BodyProblem(ev, item(0)) is { } body) return body + " as the body of the tuple";
+            // (body, status) or (body, headers): the second is a status unless it is headers; (body, status, headers)
+            var status = item(1);
+            if (status.Members.All(t => t is ClassType { IsInstance: true, Info.QualifiedName: "builtins.float" })) return "a float as the status";
+            return null;
+        }
+    }
+
+    static readonly HashSet<string> NotAResponse = new(StringComparer.Ordinal) { "builtins.int", "builtins.float", "builtins.bool", "builtins.complex", "builtins.set", "builtins.frozenset" };
+
+    /// <summary>What is wrong with a value as the body of a response ("an int", "a Thing ..."), when every type it can have is wrong; null when one may be right or it is not known.</summary>
+    static string? BodyProblem(TypeEvaluator ev, PyType type)
+    {
+        var members = type.Members;
+        if (members.Count == 0 || members.Any(t => t is not ClassType { IsInstance: true })) return null;
+        var reasons = new List<string>();
+        foreach (ClassType c in members)
+        {
+            string name = c.Info.QualifiedName;
+            if (NotAResponse.Contains(name)) { reasons.Add(Article(c.Info.Name)); continue; }
+            // a class of the project: a response only through a library base (a Response subclass) or a __call__ (a WSGI application)
+            if (c.Info.Module.IsStub || c.Info.Module.Kind != ResolutionKind.UserCode && c.Info.Module.Kind != ResolutionKind.InMemory) return null;
+            var mro = ev.MroOf(c.Info).OfType<ClassType>().ToList();
+            if (mro.Any(t => t.Info.QualifiedName != "builtins.object" && (t.Info.Module.IsStub || t.Info.Module.Kind is not (ResolutionKind.UserCode or ResolutionKind.InMemory)))) return null;
+            if (mro.Any(t => t.Info.Node.Body.OfType<FunctionDef>().Any(f => f.Name == "__call__"))) return null;
+            reasons.Add($"{Article(c.Info.Name)} (not a Response, and not a WSGI application: {c.Info.Name} has no __call__)");
+        }
+        return string.Join(" or ", reasons.Distinct());
+    }
+
+    static string Article(string name) => ("aeiouAEIOU".Contains(name[0]) ? "an " : "a ") + name;
+
     static FunctionDef? OwnerFunction(ModuleInfo m, Node n)
     {
         for (Node? p = m.ParentOf(n); p != null; p = m.ParentOf(p))
@@ -176,6 +234,7 @@ public sealed partial class LanguageService
     {
         var snap = Full();
         var ev = snap.Workspace.Evaluator;
+        var index = RouteIndexOf(snap);
         var found = new List<RouteEntry>();
         foreach (var m in snap.Project.Where(x => !x.IsStub && (x.Source.Contains("add_url_rule", StringComparison.Ordinal) || x.Source.Contains("add_resource", StringComparison.Ordinal)) && WebFramework.IsMatch(x.Source)))
             foreach (var call in AstChildren.Descendants(m.Ast).OfType<CallExpr>())
@@ -186,6 +245,9 @@ public sealed partial class LanguageService
                     string? rule = positional.Count > 0 ? FixtureModel.StringValue(positional[0].Value) : FixtureModel.StringValue(call.Args.FirstOrDefault(a => a.Name == "rule")?.Value ?? new NameExpr("_"));
                     var view = call.Args.FirstOrDefault(a => a.Name == "view_func")?.Value ?? (positional.Count > 2 ? positional[2].Value : positional.Count > 1 && FixtureModel.StringValue(positional[1].Value) == null ? positional[1].Value : null);
                     if (rule == null || view == null) continue;
+                    // a blueprint's rule is served under its url_prefix (and that of the blueprint or app it is registered on)
+                    string prefix = index.RouterOf(m, ((AttributeExpr)call.Func).Value).Prefix;
+                    if (prefix.Length > 0) rule = JoinPath(prefix, rule);
                     var methods = StringItems(call.Args.FirstOrDefault(a => a.Name == "methods")?.Value).Select(x => x.ToUpperInvariant()).ToList();
                     if (view is CallExpr { Func: AttributeExpr { Attr: "as_view", Value: var classRef } } && ev.TypeOf(m, classRef) is ClassType { IsInstance: false } cls)
                         found.Add(FlaskClassEntry(m, ev, cls.Info, rule, methods));

@@ -104,10 +104,13 @@ public class RealFlaskTests
     public void TheRealFlaskChecksStillFire()
     {
         if (Missing) return;
-        string app = App + "\n\n@app.route('/save', methods=['POST'])\ndef save():\n    session['x'] = request.form['x']\n\n\nurl_for('profile')\nurl_for('profile', user_id='abc')\n";
+        string app = App + "\n\n@app.route('/save', methods=['POST'])\ndef save():\n    session['x'] = request.form['x']\n\n\nurl_for('profile')\nurl_for('profile', user_id='abc')\n" +
+            "\n\n@app.route('/count')\ndef count():\n    return len(session)\n\n\n@app.route('/pair')\ndef pair():\n    return make_response('x'), 2.5\n\n\nbp.add_url_rule('/extra', 'extra', count)\n";
         var (svc, uri, _) = Project(app);
         var codes = svc.Diagnostics(uri).Select(d => d.Code).ToList();
         Assert.Equal(1, codes.Count(c => c == "flask-no-response"));
         Assert.Equal(2, codes.Count(c => c == "flask-url-for-arguments"));
+        Assert.Equal(2, codes.Count(c => c == "flask-response-type"));
+        Assert.True(svc.Routes().Any(r => r.Path == "/shop/extra"));
     }
 }

@@ -153,6 +153,65 @@ public class FlaskTests
         Assert.Equal("blueprint shop", string.Join(",", Open(src).Routes().Single().Tags!));
     }
 
+    // ------------------------------------------------------------ flask-response-type (item 146); each case answered by Flask 3.1.3 first
+
+    [Fact]
+    public void ReturnsFlaskCannotAnswerWithAreErrors()
+    {
+        string src = Head + Src(
+            "class Thing:", "    pass", "", "",
+            "@app.route('/a')", "def a():", "    return 5", "", "",
+            "@app.route('/b')", "def b():", "    count = len([1])", "    return count", "", "",
+            "@app.route('/c')", "def c():", "    return Thing()", "", "",
+            "@app.route('/d')", "def d():", "    return ('x',)", "", "",
+            "@app.route('/e')", "def e():", "    return 'x', 200, {}, 1", "", "",
+            "@app.route('/f')", "def f():", "    return {1, 2}, 201", "", "",
+            "@app.route('/g')", "def g():", "    return 'x', 2.5", "", "",
+            "@app.route('/h')", "def h():", "    return True");
+        var d = Found(src, "flask-response-type");
+        // one for each view a to h, in that order
+        Assert.Equal(
+            "int|int|Thing (not a Response, and not a WSGI application: Thing has no __call__)|a tuple of 1|a tuple of 4|set as the body of the tuple|a float as the status|bool",
+            string.Join("|", d.OrderBy(x => x.Range.Start.Line).Select(x => Between(x.Message))));
+        Assert.True(d.All(x => x.Severity == Severity.Error));
+    }
+
+    static string Between(string message)
+    {
+        string m = message["Flask cannot answer with ".Length..message.IndexOf(": the view stops", StringComparison.Ordinal)];
+        return m.StartsWith("an ", StringComparison.Ordinal) ? m[3..] : m.StartsWith("a ", StringComparison.Ordinal) && !m.StartsWith("a tuple", StringComparison.Ordinal) && !m.StartsWith("a float", StringComparison.Ordinal) ? m[2..] : m;
+    }
+
+    [Fact]
+    public void WhatFlaskAcceptsIsNotReported()
+    {
+        string src = Head + Src(
+            "class App:", "    def __call__(self, environ, start_response):", "        return []", "", "",
+            "def rows() -> list[int]:", "    return [1]", "", "",
+            "@app.route('/a')", "def a():", "    return 'x'", "", "",
+            "@app.route('/b')", "def b():", "    return b'x'", "", "",
+            "@app.route('/c')", "def c():", "    return {'a': 1}", "", "",
+            "@app.route('/d')", "def d():", "    return rows()", "", "",
+            "@app.route('/e')", "def e():", "    return 'x', 201", "", "",
+            "@app.route('/f')", "def f():", "    return 'x', {'X': '1'}", "", "",
+            "@app.route('/g')", "def g():", "    return jsonify(a=1), 201, {'X': '1'}", "", "",
+            "@app.route('/h')", "def h():", "    return App()", "", "",
+            "@app.route('/i')", "def i():", "    return 'x', '201 CREATED'", "", "",
+            "@app.route('/j')", "def j():", "    return redirect('/')", "", "",
+            "@app.route('/k')", "def k(n):", "    return n", "", "",
+            "def helper():", "    return 5");
+        Assert.Equal("", string.Join("\n", Found(src, "flask-response-type").Select(x => x.Message)));
+    }
+
+    [Fact]
+    public void ARuleAddedToABlueprintHasItsPrefix()
+    {
+        string src = "from flask import Flask, Blueprint\n\napp = Flask(__name__)\napi = Blueprint('api', __name__, url_prefix='/api')\nadmin = Blueprint('admin', __name__, url_prefix='/admin')\n\n\n" +
+            "def users():\n    return 'users'\n\n\nadmin.add_url_rule('/users', 'users', users)\napi.register_blueprint(admin)\napp.register_blueprint(api)\napp.add_url_rule('/health', 'health', users)\n";
+        var paths = Open(src).Routes().Select(r => r.Path).OrderBy(x => x, StringComparer.Ordinal);
+        Assert.Equal("/api/admin/users,/health", string.Join(",", paths));
+    }
+
     // ------------------------------------------------------------ routes that are not decorators
 
     [Fact]
