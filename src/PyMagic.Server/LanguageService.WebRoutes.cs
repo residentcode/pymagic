@@ -220,9 +220,9 @@ public sealed partial class LanguageService
     public IReadOnlyList<RouteEntry> Routes()
     {
         var snap = Full();
+        var ev = snap.Workspace.Evaluator;
         return RouteIndexOf(snap).Routes
-            .Select(r => new RouteEntry(string.Join(", ", r.Methods), r.Path, r.Def.Name, r.Flask ? "flask" : "fastapi",
-                UriOfModule(r.Module) ?? "", Lines(r.Module).PositionOf(r.Def.NameStart).Line))
+            .Select(r => Describe(r, ev))
             .Where(e => e.Uri.Length > 0)
             .ToList();
     }
@@ -312,6 +312,9 @@ public sealed partial class LanguageService
                 && (OrderOf(o) < OrderOf(r) || OrderOf(o) == OrderOf(r) && o.PathStart < r.PathStart));
             if (other != null)
                 findings.Add(new Finding(r.PathStart, r.PathEnd - r.PathStart, $"Route '{r.Methods.First(x => other.Methods.Contains(x))} {r.Path}' is already handled by {other.Def.Name}() in {System.IO.Path.GetFileName(other.Module.Path ?? other.Module.Name)}", "duplicate-route", FindingLevel.Warning));
+
+            if (ShadowingRoute(index, r, m, OrderOf) is { } shadow)
+                findings.Add(new Finding(r.PathStart, r.PathEnd - r.PathStart, $"Route '{r.Methods.First(x => shadow.Methods.Contains(x))} {r.Path}' is never reached: {shadow.Def.Name}() declared earlier handles '{shadow.Path}' first. Declare the fixed path before the one with a parameter.", "route-shadowed", FindingLevel.Warning));
 
             foreach (var f in findings)
                 if (!Suppressed(m.Source, f)) yield return AsDiag(f);

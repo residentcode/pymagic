@@ -21,6 +21,7 @@ public sealed partial class LanguageService
         foreach (var d in FixtureDiagnostics(m, ev)) yield return d;
         foreach (var d in DjangoDiagnostics(m, ev)) yield return d;
         foreach (var d in WebRouteDiagnostics(m, ev)) yield return d;
+        foreach (var d in FastApiDiagnostics(m, ev)) yield return d;
         foreach (var d in MetaDiagnostics(m, ev, Current())) yield return d;
         foreach (var d in ViewDiagnostics(m, ev)) yield return d;
     }
@@ -113,6 +114,9 @@ public sealed partial class LanguageService
                     add(code == "none-comparison" ? "Replace equality comparison with 'is' / 'is not'" : "Replace 'is' with '=='", true, edits.ToArray());
                 break;
             }
+            case "depends-called" or "async-blocking-call":
+                FastApiFix(code, m, start, end, add);
+                break;
             case "bare-except":
                 if (start + 6 <= text.Length && text.AsSpan(start, 6).SequenceEqual("except"))
                     add("Replace with 'except Exception:'", true, new[] { new Edit(start + 6, start + 6, " Exception") });
