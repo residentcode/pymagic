@@ -195,12 +195,18 @@ public sealed partial class LanguageService
             if (module.IsStub || module.Source.IndexOf(templateName, StringComparison.Ordinal) < 0) continue;
             foreach (var s in NamedStringsIn(module, ev).Where(x => x.Kind == DjangoNamed.Template && x.Value == templateName))
             {
-                if (s.Call != null)
+                if (s.Call != null && CalleeName(s.Call) is "render_template" or "stream_template")
+                    FlaskRenderContext(module, s.Call, result);
+                else if (s.Call != null)
                 {
                     string? callee = CalleeName(s.Call);
-                    int index = callee == "render_to_string" ? 1 : 2;
-                    var arg = s.Call.Args.Where(a => a.Name == null && a.Stars == 0).Skip(index).FirstOrDefault() ?? s.Call.Args.FirstOrDefault(a => a.Name == "context");
+                    // the context follows the template name: render(request, name, ctx), TemplateResponse(name, ctx) or TemplateResponse(request, name, ctx)
+                    var positional = s.Call.Args.Where(a => a.Name == null && a.Stars == 0).ToList();
+                    int nameAt = positional.FindIndex(a => a.Value.Start <= s.Start && s.End <= a.Value.End);
+                    int index = nameAt >= 0 ? nameAt + 1 : callee == "render_to_string" ? 1 : 2;
+                    var arg = positional.Skip(index).FirstOrDefault() ?? s.Call.Args.FirstOrDefault(a => a.Name == "context");
                     if (arg != null) CollectDictEntries(module, arg.Value, s.Call, "view", result);
+                    if (arg != null && arg.Value is not (DictExpr or NameExpr or CallExpr { Func: NameExpr { Name: "dict" } })) result.Add(UnknownContext(module, s.Call));
                 }
                 else ClassContext(module, s, ev, result);
             }
@@ -325,6 +331,8 @@ public sealed partial class LanguageService
         public ParsedTemplate Parsed = null!;
         public List<ContextEntry> Context = new();
         public Snapshot Snap = null!;
+        /// <summary>Jinja rather than Django: Flask, Starlette and FastAPI templates, `.jinja` / `.j2` files and a Django project's `jinja2` folders.</summary>
+        public bool Jinja;
     }
 
     TemplateAnalysis AnalyzeTemplate(string uri)
@@ -338,7 +346,8 @@ public sealed partial class LanguageService
             var match = Templates().FirstOrDefault(t => string.Equals(t.Path, path, StringComparison.OrdinalIgnoreCase));
             if (match.Name != null) name = match.Name;
         }
-        return new TemplateAnalysis { Uri = uri, Text = text, Name = name, Parsed = DjangoTemplateParser.Parse(text), Snap = snap, Context = name == null ? new() : ContextOf(snap, name) };
+        bool jinja = IsJinjaTemplate(uri, snap);
+        return new TemplateAnalysis { Uri = uri, Text = text, Name = name, Parsed = DjangoTemplateParser.Parse(text, jinja), Snap = snap, Context = name == null ? new() : ContextOf(snap, name), Jinja = jinja };
     }
 
     PyType? TypeOfEntry(TemplateAnalysis a, ContextEntry e)
@@ -357,7 +366,8 @@ public sealed partial class LanguageService
     {
         var scope = new TemplateScope();
         var ev = a.Snap.Workspace.Evaluator;
-        foreach (var e in a.Context.GroupBy(e => e.Name).Select(g => g.First()))
+        if (a.Jinja) return JinjaScopeAt(a, offset);
+        foreach (var e in a.Context.Where(e => e.Name != UnknownContextName).GroupBy(e => e.Name).Select(g => g.First()))
             scope.Frames[0].Vars.Add(new TemplateVar(e.Name, TypeOfEntry(a, e), e.Start, e.End, "context", e));
         foreach (var n in AlwaysInContext.Where(n => scope.Find(n) == null))
         {
@@ -454,7 +464,8 @@ public sealed partial class LanguageService
         var parts = expr.Split('.');
         var first = scope.Find(parts[0]);
         PyType? t = first?.Type;
-        for (int i = 1; i < parts.Length && t != null; i++) t = TemplateStep(ev, t, parts[i]);
+        // Jinja calls with (): d.items() is what items returns
+        for (int i = 1; i < parts.Length && t != null; i++) t = TemplateStep(ev, t, parts[i].EndsWith("()", StringComparison.Ordinal) ? parts[i][..^2] : parts[i]);
         return t is UnknownType ? null : t;
     }
 
@@ -538,6 +549,9 @@ public sealed partial class LanguageService
         var ev = snap.Workspace.Evaluator;
         string Code(string s) => "```python\n" + s + "\n```";
 
+        // url_for('endpoint'), url_for('static', filename='...'), the template of import / from
+        if (a.Jinja && JinjaStringTarget(a, offset) is { } named) return named;
+
         // {{ expression }}
         var variable = a.Parsed.Variables.FirstOrDefault(v => offset >= v.Start && offset <= v.End);
         if (variable != null) return ExpressionTarget(a, variable.Expression, variable.ExprStart, offset);
@@ -546,7 +560,8 @@ public sealed partial class LanguageService
         if (tag == null) return null;
 
         // the tag's own name
-        int nameStart = tag.Start + 2 + (a.Text[(tag.Start + 2)..].Length - a.Text[(tag.Start + 2)..].TrimStart().Length);
+        int nameStart = TagNameStart(a.Text, tag);
+        if (a.Jinja) return JinjaTagTarget(a, tag, nameStart, offset);
         if (offset >= nameStart && offset <= nameStart + tag.Name.Length)
         {
             var custom = CustomTag(snap, a, tag.Name);
@@ -630,7 +645,7 @@ public sealed partial class LanguageService
             if (file.Path == null || !seen.Add(file.Path)) return null;
             string? text = TemplateTextOf(file.Path);
             if (text == null) return null;
-            current = DjangoTemplateParser.Parse(text);
+            current = DjangoTemplateParser.Parse(text, a.Jinja);
             foreach (var t in current.Tags.Where(t => t.Name == "block"))
             {
                 var parts = DjangoTemplateParser.SplitArguments(t.Args, t.ArgsStart);
@@ -647,6 +662,7 @@ public sealed partial class LanguageService
         if (ChainAt(a.Text, exprStart, expression, offset) is not { } at) return null;
 
         // a filter after a pipe
+        if (at.Index < 0 && a.Jinja) return JinjaFilterTarget(a, at.Chain[0], at.Start, at.End);
         if (at.Index < 0)
         {
             string filter = at.Chain[0];
@@ -660,12 +676,15 @@ public sealed partial class LanguageService
         var scope = ScopeAt(a, offset);
         var variable = scope.Find(at.Chain[0]);
         if (variable == null) return null;
+        if (a.Jinja && JinjaMacroTarget(a, variable, at.Chain, at.Index, at.Start, at.End) is { } macro) return macro;
         var locations = new List<Location>();
         PyType? t = variable.Type;
         string description = variable.Origin switch
         {
             "context" => $"(context) {variable.Name}" + (variable.Entry != null ? $" — from `{variable.Entry.Source}`" : ""),
+            "builtin" when a.Jinja => $"(global) {variable.Name} — " + JinjaGlobalDocs.GetValueOrDefault(variable.Name, "a global of the template environment"),
             "builtin" => $"(context) {variable.Name} — added by Django's context processors",
+            "loop" => "(loop) loop — index, index0, revindex, first, last, length, cycle(...), depth, previtem, nextitem, changed(...)",
             "forloop" => "(loop) forloop — counter, counter0, revcounter, first, last, parentloop",
             "block" => "(block) block — block.super renders the parent's block",
             _ => $"(variable) {variable.Name} — from `{{% {variable.Origin} %}}`",
@@ -673,7 +692,7 @@ public sealed partial class LanguageService
         if (at.Index == 0)
         {
             if (variable.Entry != null && FixtureLocation(variable.Entry.Module, variable.Entry.Start, variable.Entry.End) is { } vl) locations.Add(vl);
-            else if (variable.Origin is "for" or "with" or "url" or "trans" or "translate" or "firstof" or "cycle" or "now" or "regroup" && InTemplate(a, variable.Start, variable.End) is { } tl) locations.Add(tl);
+            else if (variable.Origin is "for" or "with" or "url" or "trans" or "translate" or "firstof" or "cycle" or "now" or "regroup" or "set" or "macro" or "call" && InTemplate(a, variable.Start, variable.End) is { } tl) locations.Add(tl);
         }
         else
         {
@@ -708,8 +727,8 @@ public sealed partial class LanguageService
     IReadOnlyList<LspDiagnostic> TemplateDiagnostics(string uri)
     {
         var result = new List<LspDiagnostic>();
-        if (IsJinjaFile(uri)) return result;
         var a = AnalyzeTemplate(uri);
+        if (a.Jinja) return ApplyTemplateProfile(JinjaDiagnostics(a));
         var lines = new LineMap(a.Text);
         var snap = a.Snap;
         bool django = snap.Project.Any(m => !m.IsStub && m.Source.Contains("django", StringComparison.OrdinalIgnoreCase));
@@ -748,7 +767,7 @@ public sealed partial class LanguageService
             {
                 if (tag.Name.Length == 0 || tags.Contains(tag.Name) || tag.Name.StartsWith("end", StringComparison.Ordinal) && tags.Contains(tag.Name[3..])
                     || DjangoTemplateParser.Closers.ContainsValue(tag.Name) || tag.Name is "plural" or "endcomment" or "endverbatim") continue;
-                int nameStart = tag.Start + 2 + (a.Text[(tag.Start + 2)..].Length - a.Text[(tag.Start + 2)..].TrimStart().Length);
+                int nameStart = TagNameStart(a.Text, tag);
                 Add(nameStart, nameStart + tag.Name.Length, $"Unknown tag '{tag.Name}': it may need a {{% load %}}", Severity.Information, "template-tag");
             }
             foreach (var v in a.Parsed.Variables) CheckFilters(v.Expression, v.ExprStart);
@@ -812,33 +831,35 @@ public sealed partial class LanguageService
             }
 
         // attributes that cannot exist on a class of the project
-        foreach (var v in a.Parsed.Variables) CheckAttributes(v.Expression, v.ExprStart, v.Start);
-        foreach (var tag in a.Parsed.Tags.Where(t => t.Name is "if" or "elif" or "for" or "with")) CheckAttributes(tag.Args, tag.ArgsStart, tag.End);
+        foreach (var v in a.Parsed.Variables) CheckTemplateAttributes(a, v.Expression, v.ExprStart, Add);
+        foreach (var tag in a.Parsed.Tags.Where(t => t.Name is "if" or "elif" or "for" or "with")) CheckTemplateAttributes(a, tag.Args, tag.ArgsStart, Add);
+        return ApplyTemplateProfile(result);
+    }
 
-        void CheckAttributes(string expression, int start, int scopeOffset)
+    /// <summary>`book.titel` where `book` is an instance of a class of the project that has no `titel`.</summary>
+    void CheckTemplateAttributes(TemplateAnalysis a, string expression, int start, Action<int, int, string, int, string> add)
+    {
+        var snap = a.Snap;
+        var ev = snap.Workspace.Evaluator;
+        foreach (Match m in Regex.Matches(FirstOfFilters(expression), @"(?<![\w.""'])[A-Za-z_]\w*(?:\.\w+)+"))
         {
-            foreach (Match m in Regex.Matches(FirstOfFilters(expression), @"(?<![\w.""'])[A-Za-z_]\w*(?:\.\w+)+"))
+            int at = start + m.Index;
+            var scope = ScopeAt(a, at);
+            var parts = m.Value.Split('.');
+            var t = scope.Find(parts[0])?.Type;
+            int offset = at + parts[0].Length;
+            for (int i = 1; i < parts.Length && t != null; i++)
             {
-                int at = start + m.Index;
-                var scope = ScopeAt(a, at);
-                var parts = m.Value.Split('.');
-                var t = scope.Find(parts[0])?.Type;
-                var ev = snap.Workspace.Evaluator;
-                int offset = at + parts[0].Length;
-                for (int i = 1; i < parts.Length && t != null; i++)
+                offset++;
+                if (t is ClassType { IsInstance: true } c && IsProjectClass(snap, c.Info) && !parts[i].All(char.IsDigit))
                 {
-                    offset++;
-                    if (t is ClassType { IsInstance: true } c && IsProjectClass(snap, c.Info) && !parts[i].All(char.IsDigit))
-                    {
-                        var r = ev.AttributeType(t, parts[i]);
-                        if (r.Missing.Count > 0 && r.Type is UnknownType) { Add(offset, offset + parts[i].Length, $"'{c.Info.Name}' has no attribute '{parts[i]}'", Severity.Information, "template-attribute"); break; }
-                    }
-                    t = TemplateStep(ev, t, parts[i]);
-                    offset += parts[i].Length;
+                    var r = ev.AttributeType(t, parts[i]);
+                    if (r.Missing.Count > 0 && r.Type is UnknownType) { add(offset, offset + parts[i].Length, $"'{c.Info.Name}' has no attribute '{parts[i]}'", Severity.Information, "template-attribute"); break; }
                 }
+                t = TemplateStep(ev, t, parts[i]);
+                offset += parts[i].Length;
             }
         }
-        return ApplyTemplateProfile(result);
     }
 
     bool IsProjectClass(Snapshot snap, ClassInfo c) => snap.Project.Any(m => ReferenceEquals(m, c.Module)) || snap.Workspace.UserModules.Any(m => ReferenceEquals(m, c.Module));
@@ -858,7 +879,7 @@ public sealed partial class LanguageService
             if (file.Path == null || !seen.Add(file.Path)) return false;
             string? text = TemplateTextOf(file.Path);
             if (text == null) return false;
-            current = DjangoTemplateParser.Parse(text);
+            current = DjangoTemplateParser.Parse(text, a.Jinja);
         }
         return false;
     }
@@ -884,6 +905,7 @@ public sealed partial class LanguageService
         if (!inTag && !inVar) return items;
 
         string inside = text[((inTag ? openTag : openVar) + 2)..offset];
+        if (a.Jinja) return JinjaCompletion(a, inTag, inside.Length > 0 && inside[0] is '-' or '+' ? " " + inside[1..] : inside, offset, closedAfter: inTag ? text[offset..LineEndOf(text, offset)].Contains("%}") : text[offset..LineEndOf(text, offset)].Contains("}}"));
         var snap = a.Snap;
         var ev = snap.Workspace.Evaluator;
         string lineRest = text[offset..LineEndOf(text, offset)];

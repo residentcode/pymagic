@@ -124,6 +124,10 @@ public sealed partial class LanguageService
         ("template-block", "Django templates", "Block no parent has", "A block whose content is never shown.", "weak"),
         ("template-url-arguments", "Django templates", "Wrong number of URL arguments", "A url tag with more or fewer arguments than the route takes.", "warning"),
         ("template-attribute", "Django templates", "Unknown attribute", "An attribute a class of the project does not have.", "weak"),
+        ("jinja-syntax", "Jinja templates", "Expression Jinja cannot read", "An empty {{ }}, a bracket or string left open, a closer nothing opened, Django's |filter:argument.", "error"),
+        ("jinja-tag", "Jinja templates", "Tag Jinja does not know", "Django's tags (load, url, static, empty, comment) and the tags of extensions the environment does not load (break, do, trans).", "error"),
+        ("jinja-filter", "Jinja templates", "Unknown filter or test", "A filter or test neither Jinja nor the project registers: rendering fails with 'No filter named'.", "warning"),
+        ("jinja-undefined", "Jinja templates", "Name no view gives", "A variable no view passes to the template and nothing in it defines: Jinja prints it as an empty string.", "weak"),
     };
 
     static readonly string[] InspectionLevels = { "error", "warning", "weak", "hint", "off" };

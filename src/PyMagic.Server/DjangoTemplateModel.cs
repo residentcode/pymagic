@@ -33,55 +33,81 @@ internal static class DjangoTemplateParser
 
     static readonly HashSet<string> Opaque = new(StringComparer.Ordinal) { "comment", "verbatim" };
 
-    public static ParsedTemplate Parse(string text)
+    /// <summary>Jinja: comments may span lines, and `{%-` / `-%}` (or `+`) control the whitespace around a tag.</summary>
+    static readonly Regex JinjaToken = new(@"\{%(?<tag>.*?)%\}|\{\{(?<var>.*?)\}\}|\{#.*?#\}", RegexOptions.Singleline | RegexOptions.Compiled);
+
+    /// <summary>Jinja's tags that open a block and the tag that closes it (`set` only in its block form, `{% set x %}...{% endset %}`).</summary>
+    public static readonly Dictionary<string, string> JinjaClosers = new(StringComparer.Ordinal)
+    {
+        ["if"] = "endif", ["for"] = "endfor", ["block"] = "endblock", ["macro"] = "endmacro", ["call"] = "endcall", ["filter"] = "endfilter",
+        ["set"] = "endset", ["with"] = "endwith", ["autoescape"] = "endautoescape", ["trans"] = "endtrans",
+    };
+
+    static readonly HashSet<string> JinjaOpaque = new(StringComparer.Ordinal) { "raw" };
+
+    public static Dictionary<string, string> ClosersOf(bool jinja) => jinja ? JinjaClosers : Closers;
+
+    /// <summary>The body of a Jinja tag or variable without its whitespace control marks: `- if x -` gives ` if x `.</summary>
+    static (string Body, int Offset) WithoutMarks(string body, int offset, bool jinja)
+    {
+        if (!jinja) return (body, offset);
+        if (body.Length > 0 && body[0] is '-' or '+') { body = body[1..]; offset++; }
+        if (body.Length > 0 && body[^1] is '-' or '+') body = body[..^1];
+        return (body, offset);
+    }
+
+    public static ParsedTemplate Parse(string text, bool jinja = false)
     {
         var result = new ParsedTemplate();
         var stack = new List<TemplateTag>();
         var blocks = new Dictionary<string, TemplateTag>(StringComparer.Ordinal);
+        var closers = ClosersOf(jinja);
         bool nodeBeforeExtends = false;
         bool sawExtends = false;
         int at = 0;
         while (at < text.Length)
         {
-            var m = Token.Match(text, at);
+            var m = (jinja ? JinjaToken : Token).Match(text, at);
             if (!m.Success) break;
             at = m.Index + m.Length;
             if (m.Groups["var"].Success)
             {
                 var g = m.Groups["var"];
-                string expr = g.Value.Trim();
-                int lead = g.Value.Length - g.Value.TrimStart().Length;
-                result.Variables.Add(new TemplateVariable(expr, g.Index + lead, m.Index, m.Index + m.Length));
+                var (raw, rawAt) = WithoutMarks(g.Value, g.Index, jinja);
+                string expr = raw.Trim();
+                int lead = raw.Length - raw.TrimStart().Length;
+                result.Variables.Add(new TemplateVariable(expr, rawAt + lead, m.Index, m.Index + m.Length));
                 nodeBeforeExtends = true;
                 continue;
             }
             if (!m.Groups["tag"].Success) continue;   // a comment
 
             var tg = m.Groups["tag"];
-            string body = tg.Value;
+            var (body, bodyAt) = WithoutMarks(tg.Value, tg.Index, jinja);
             int bodyLead = body.Length - body.TrimStart().Length;
             string trimmed = body.Trim();
             var nameMatch = Regex.Match(trimmed, @"^[\w]*");
             string name = nameMatch.Value;
-            int afterName = tg.Index + bodyLead + name.Length;
+            int afterName = bodyAt + bodyLead + name.Length;
             string args = trimmed[name.Length..].TrimStart();
             int argsStart = afterName + (trimmed.Length - name.Length - args.Length > 0 ? trimmed.Length - name.Length - args.Length : 0);
             var tag = new TemplateTag(name, args.TrimEnd(), m.Index, m.Index + m.Length, argsStart);
             result.Tags.Add(tag);
 
-            if (Opaque.Contains(name))
+            if ((jinja ? JinjaOpaque : Opaque).Contains(name))
             {
                 // the text up to the matching end tag is not template syntax
-                var end = Regex.Match(text[at..], @"\{%\s*end" + name + @"\b[^%]*%\}");
+                var end = Regex.Match(text[at..], @"\{%[-+]?\s*end" + name + @"\b[^%]*%\}");
                 if (end.Success) { at += end.Index + end.Length; result.Tags.Add(new TemplateTag("end" + name, "", at - end.Length, at, at - 2)); }
                 else result.Problems.Add(new TemplateProblem(tag.Start, tag.End, $"Unclosed tag '{name}': add {{% end{name} %}}", "template-structure", true));
                 nodeBeforeExtends = true;
                 continue;
             }
 
+            // Jinja prints what comes before {% extends %}, it does not refuse it
             if (name == "extends")
             {
-                if (nodeBeforeExtends) result.Problems.Add(new TemplateProblem(tag.Start, tag.End, "{% extends %} must be the first tag in the template", "template-structure", true));
+                if (nodeBeforeExtends && !jinja) result.Problems.Add(new TemplateProblem(tag.Start, tag.End, "{% extends %} must be the first tag in the template", "template-structure", true));
                 sawExtends = true;
             }
             else if (name.Length > 0) nodeBeforeExtends = true;
@@ -93,26 +119,28 @@ internal static class DjangoTemplateParser
                     result.Problems.Add(new TemplateProblem(tag.Start, tag.End, $"Block '{blockName}' is defined twice", "template-structure", true));
             }
 
-            if (Closers.ContainsKey(name)) { stack.Add(tag); continue; }
-            if (name.StartsWith("end", StringComparison.Ordinal) && Closers.ContainsValue(name))
+            // {% set x = 1 %} is a statement; only {% set x %}...{% endset %} is a block
+            bool opens = closers.ContainsKey(name) && !(jinja && name == "set" && args.Contains('='));
+            if (opens) { stack.Add(tag); continue; }
+            if (name.StartsWith("end", StringComparison.Ordinal) && closers.ContainsValue(name))
             {
-                string opener = Closers.First(c => c.Value == name).Key;
+                string opener = closers.First(c => c.Value == name).Key;
                 int depth = stack.FindLastIndex(t => t.Name == opener);
                 if (depth < 0) { result.Problems.Add(new TemplateProblem(tag.Start, tag.End, $"'{name}' has no matching {{% {opener} %}}", "template-structure", true)); continue; }
                 for (int i = stack.Count - 1; i > depth; i--)
-                    result.Problems.Add(new TemplateProblem(stack[i].Start, stack[i].End, $"Unclosed tag '{stack[i].Name}': add {{% {Closers[stack[i].Name]} %}}", "template-structure", true));
+                    result.Problems.Add(new TemplateProblem(stack[i].Start, stack[i].End, $"Unclosed tag '{stack[i].Name}': add {{% {closers[stack[i].Name]} %}}", "template-structure", true));
                 stack.RemoveRange(depth, stack.Count - depth);
                 continue;
             }
-            if (name is "elif" or "else" or "empty")
+            if (name is "elif" or "else" || name == "empty" && !jinja)
             {
                 string? top = stack.Count > 0 ? stack[^1].Name : null;
-                bool fine = name switch { "elif" => top == "if", "empty" => top == "for", _ => top is "if" or "for" or "ifchanged" };
+                bool fine = name switch { "elif" => top == "if", "empty" => top == "for", _ => top is "if" or "for" || !jinja && top == "ifchanged" };
                 if (!fine) result.Problems.Add(new TemplateProblem(tag.Start, tag.End, $"'{name}' is not inside a tag that takes it", "template-structure", true));
             }
         }
         foreach (var open in stack)
-            result.Problems.Add(new TemplateProblem(open.Start, open.End, $"Unclosed tag '{open.Name}': add {{% {Closers[open.Name]} %}}", "template-structure", true));
+            result.Problems.Add(new TemplateProblem(open.Start, open.End, $"Unclosed tag '{open.Name}': add {{% {closers[open.Name]} %}}", "template-structure", true));
         _ = sawExtends;
         return result;
     }

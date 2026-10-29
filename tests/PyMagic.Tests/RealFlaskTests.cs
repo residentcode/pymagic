@@ -27,7 +27,7 @@ public class RealFlaskTests
         "@app.before_request\ndef before():\n    g.user = session.get('name')\n\n\n" +
         "if __name__ == '__main__':\n    app.run(debug=True)\n";
 
-    static (LanguageService svc, string uri) Project(string? app = null)
+    static (LanguageService svc, string uri, string dir) Project(string? app = null)
     {
         var svc = new LanguageService();
         string dir = Path.Combine(Path.GetTempPath(), "pm_realflask_" + Guid.NewGuid().ToString("N"));
@@ -38,14 +38,14 @@ public class RealFlaskTests
         svc.LibraryRoots.Add(Site!);
         string uri = LanguageService.UriOfPath(full);
         svc.Open(uri, app ?? App, 1);
-        return (svc, uri);
+        return (svc, uri, dir);
     }
 
     [Fact]
     public void ARealFlaskAppHasNoWarnings()
     {
         if (Missing) return;
-        var (svc, uri) = Project();
+        var (svc, uri, dir) = Project();
         var problems = svc.Diagnostics(uri).Where(d => d.Severity <= 2).Select(d => $"{d.Range.Start.Line + 1}: {d.Code} {d.Message}").ToList();
         Assert.Equal("", string.Join("\n", problems));
     }
@@ -80,11 +80,32 @@ public class RealFlaskTests
     }
 
     [Fact]
+    public void ARealFlaskTemplateKnowsTheRequestAndTheRoutes()
+    {
+        if (Missing) return;
+        var (svc, uri, dir) = Project();
+        string page = "{% extends 'base.html' %}\n{% block content %}\n<a href=\"{{ url_for('profile', user_id=1) }}\">{{ request.path }}</a>\n" +
+            "{% for m in get_flashed_messages() %}{{ m }}{% endfor %}{{ session.get('name') }}{{ g.user }}{{ config['DEBUG'] }}\n{% endblock %}\n";
+        string path = Path.Combine(dir, "templates", "index.html");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, page);
+        File.WriteAllText(Path.Combine(dir, "templates", "base.html"), "{% block content %}{% endblock %}");
+        string t = LanguageService.UriOfPath(path);
+        svc.Open(t, page, 1);
+        Assert.Equal("", string.Join("\n", svc.Diagnostics(t).Select(d => $"{d.Range.Start.Line + 1}: {d.Code} {d.Message}")));
+        var hover = svc.Hover(t, new Position(2, page.Split('\n')[2].IndexOf("path", StringComparison.Ordinal) + 1))?.Contents.Value ?? "";
+        Assert.Contains("str", hover);
+        string wrong = page.Replace("user_id=1", "user_id='me'");
+        svc.Open(t, wrong, 2);
+        Assert.Equal(1, svc.Diagnostics(t).Count(d => d.Code == "flask-url-for-arguments"));
+    }
+
+    [Fact]
     public void TheRealFlaskChecksStillFire()
     {
         if (Missing) return;
         string app = App + "\n\n@app.route('/save', methods=['POST'])\ndef save():\n    session['x'] = request.form['x']\n\n\nurl_for('profile')\nurl_for('profile', user_id='abc')\n";
-        var (svc, uri) = Project(app);
+        var (svc, uri, _) = Project(app);
         var codes = svc.Diagnostics(uri).Select(d => d.Code).ToList();
         Assert.Equal(1, codes.Count(c => c == "flask-no-response"));
         Assert.Equal(2, codes.Count(c => c == "flask-url-for-arguments"));

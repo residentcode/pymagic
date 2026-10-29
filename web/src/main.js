@@ -68,14 +68,14 @@ function ensureModel(rel) {
         loading.set(key, (p = loadModel(rel, key)));
     return p;
 }
-// Django and Jinja templates: HTML with {{ variables }}, {% tags %} and {# comments #}. Monaco's own HTML mode needs a language worker this page does not ship.
+// Django and Jinja templates: HTML with {{ variables }}, {% tags %} and {# comments #} (Jinja's may span lines). Monaco's own HTML mode needs a language worker this page does not ship.
 monaco.languages.register({ id: 'django-html', extensions: ['.html', '.htm', '.jinja', '.jinja2', '.j2'], aliases: ['Django template'] });
 monaco.languages.setMonarchTokensProvider('django-html', {
     tokenizer: {
         root: [
             [/\{#/, 'comment', '@djangoComment'],
-            [/\{%/, { token: 'keyword', next: '@djangoTag' }],
-            [/\{\{/, { token: 'variable', next: '@djangoVariable' }],
+            [/\{%[-+]?/, { token: 'keyword', next: '@djangoTag' }],
+            [/\{\{[-+]?/, { token: 'variable', next: '@djangoVariable' }],
             [/<!--/, 'comment', '@htmlComment'],
             [/(<\/?)([\w:-]+)/, ['delimiter.html', 'tag']],
             [/\/?>/, 'delimiter.html'],
@@ -83,10 +83,11 @@ monaco.languages.setMonarchTokensProvider('django-html', {
             [/"[^"{]*/, { token: 'attribute.value', next: '@dq' }],
             [/'[^'{]*/, { token: 'attribute.value', next: '@sq' }],
         ],
-        dq: [[/\{%/, { token: 'keyword', next: '@djangoTag' }], [/\{\{/, { token: 'variable', next: '@djangoVariable' }], [/[^"{]+/, 'attribute.value'], [/"/, 'attribute.value', '@pop'], [/\{/, 'attribute.value']],
-        sq: [[/\{%/, { token: 'keyword', next: '@djangoTag' }], [/\{\{/, { token: 'variable', next: '@djangoVariable' }], [/[^'{]+/, 'attribute.value'], [/'/, 'attribute.value', '@pop'], [/\{/, 'attribute.value']],
-        djangoTag: [[/%\}/, { token: 'keyword', next: '@pop' }], [/"[^"]*"|'[^']*'/, 'string'], [/(?:if|elif|else|endif|for|endfor|empty|block|endblock|extends|include|load|url|with|endwith|csrf_token|comment|endcomment|autoescape|endautoescape|static|trans|blocktrans|endblocktrans|spaceless|endspaceless|now|firstof|cycle|in|not|and|or|as)/, 'keyword'], [/[^%"']+/, 'keyword']],
-        djangoVariable: [[/\}\}/, { token: 'variable', next: '@pop' }], [/"[^"]*"|'[^']*'/, 'string'], [/\|\s*\w+/, 'type'], [/[^}"'|]+/, 'variable'], [/[}|]/, 'variable']],
+        dq: [[/\{%[-+]?/, { token: 'keyword', next: '@djangoTag' }], [/\{\{[-+]?/, { token: 'variable', next: '@djangoVariable' }], [/[^"{]+/, 'attribute.value'], [/"/, 'attribute.value', '@pop'], [/\{/, 'attribute.value']],
+        sq: [[/\{%[-+]?/, { token: 'keyword', next: '@djangoTag' }], [/\{\{[-+]?/, { token: 'variable', next: '@djangoVariable' }], [/[^'{]+/, 'attribute.value'], [/'/, 'attribute.value', '@pop'], [/\{/, 'attribute.value']],
+        // Django's tags and Jinja's (macro, call, set, import, raw, ...), with Jinja's whitespace marks {%- -%}
+        djangoTag: [[/[-+]?%\}/, { token: 'keyword', next: '@pop' }], [/"[^"]*"|'[^']*'/, 'string'], [/\|\s*\w+/, 'type'], [/\b(?:if|elif|else|endif|for|endfor|empty|block|endblock|extends|include|load|url|with|endwith|csrf_token|comment|endcomment|autoescape|endautoescape|static|trans|endtrans|pluralize|blocktrans|endblocktrans|spaceless|endspaceless|now|firstof|cycle|macro|endmacro|call|endcall|set|endset|import|from|raw|endraw|filter|endfilter|do|break|continue|recursive|is|in|not|and|or|as)\b/, 'keyword'], [/[^%"'|+-]+/, 'keyword'], [/[%|+-]/, 'keyword']],
+        djangoVariable: [[/[-+]?\}\}/, { token: 'variable', next: '@pop' }], [/"[^"]*"|'[^']*'/, 'string'], [/\|\s*\w+/, 'type'], [/[^}"'|+-]+/, 'variable'], [/[}|+-]/, 'variable']],
         djangoComment: [[/#\}/, 'comment', '@pop'], [/[^#]+/, 'comment'], [/#/, 'comment']],
         htmlComment: [[/-->/, 'comment', '@pop'], [/[^-]+/, 'comment'], [/-/, 'comment']],
     },

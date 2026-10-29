@@ -54,7 +54,7 @@ public sealed partial class LanguageService
                 yield return new NamedString(m, DjangoNamed.Template, t1.Value, t1.Start, t1.End, call);
             else if (callee == "TemplateResponse" && StringIn(call, 0, "name") is { } t2)
                 yield return new NamedString(m, DjangoNamed.Template, t2.Value, t2.Start, t2.End, call);
-            else if (callee == "render_template" && StringIn(call, 0, "template_name_or_list") is { } t3)
+            else if (callee is "render_template" or "stream_template" && StringIn(call, 0, "template_name_or_list") is { } t3)
                 yield return new NamedString(m, DjangoNamed.Template, t3.Value, t3.Start, t3.End, call);
             else if (callee is "url_for" or "url_path_for" && StringIn(call, 0, "endpoint", "name") is { } ep && EndpointShape.IsMatch(ep.Value))
                 yield return new NamedString(m, DjangoNamed.Endpoint, ep.Value, ep.Start, ep.End, call);
