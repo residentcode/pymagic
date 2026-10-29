@@ -196,8 +196,12 @@
 .cov-miss-line { background: rgba(229,83,75,.10); }
 .listbar label { color: var(--dim); display: flex; gap: 4px; align-items: center; }
 #terminal-main { flex: 1; }
-#terminal-main .term-output { flex: 1; margin: 0; padding: 4px 10px; overflow: auto; font: 12.5px/1.45 Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; word-break: break-all; }
-#terminal-main .term-output:not(.active) { display: none; }
+#term-views { flex: 1; min-height: 0; position: relative; }
+#term-views .term-view { position: absolute; inset: 4px 0 0 10px; }
+#term-views .term-view:not(.active) { display: none; }
+#term-views .xterm { height: 100%; }
+#term-views .xterm-viewport { scrollbar-width: thin; }
+.ttab.ended .ttab-name { opacity: .55; text-decoration: line-through; }
 .term-output .err { color: var(--red); } .term-output .info { color: var(--dim); } .term-output .cmd { color: var(--info); }
 #term-tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
 .ttab { display: flex; align-items: center; gap: 4px; padding: 1px 3px 1px 8px; border: 1px solid var(--line); border-radius: 3px; color: var(--dim); cursor: pointer; white-space: nowrap; user-select: none; }

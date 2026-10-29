@@ -360,6 +360,8 @@ export function setupTabs(deps) {
 
     window.addEventListener('keydown', (e) => {
         if (!isActive()) return;
+        // in a terminal, Ctrl+W and the PageUp/PageDown keys belong to the shell (Ctrl+Tab still switches the editor's tabs)
+        if (e.target?.closest?.('.xterm') && !(e.ctrlKey && e.key === 'Tab')) return;
         if (e.ctrlKey && e.key === 'Tab') {
             e.preventDefault();
             if (mru.length < 2) return;

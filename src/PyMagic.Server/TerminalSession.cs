@@ -137,19 +137,24 @@ public sealed class TerminalSession : IDisposable
         info.Environment["PYTHONUNBUFFERED"] = "1";
         info.Environment["PYTHONIOENCODING"] = "utf-8";
         AskForColours(info.Environment);
-        string? python = _python();
+        WithInterpreter(info.Environment, _python());
+    }
+
+    /// <summary>The project's interpreter first on the PATH (with its Scripts folder), and its virtual environment active (`VIRTUAL_ENV`, no `PYTHONHOME`).</summary>
+    public static void WithInterpreter(IDictionary<string, string?> env, string? python)
+    {
         if (python == null || !File.Exists(python)) return;
         string folder = Path.GetDirectoryName(python)!;
         var added = new List<string> { folder };
         string? parent = Path.GetDirectoryName(folder);
         if (parent != null && File.Exists(Path.Combine(parent, "pyvenv.cfg")))
         {
-            info.Environment["VIRTUAL_ENV"] = parent;
-            info.Environment.Remove("PYTHONHOME");
+            env["VIRTUAL_ENV"] = parent;
+            foreach (var k in env.Keys.Where(k => string.Equals(k, "PYTHONHOME", StringComparison.OrdinalIgnoreCase)).ToList()) env.Remove(k);
         }
         else if (OperatingSystem.IsWindows() && Directory.Exists(Path.Combine(folder, "Scripts"))) added.Add(Path.Combine(folder, "Scripts"));
-        string key = info.Environment.Keys.FirstOrDefault(k => string.Equals(k, "PATH", StringComparison.OrdinalIgnoreCase)) ?? "PATH";
-        info.Environment[key] = string.Join(Path.PathSeparator, added) + Path.PathSeparator + (info.Environment.TryGetValue(key, out var old) ? old : "");
+        string key = env.Keys.FirstOrDefault(k => string.Equals(k, "PATH", StringComparison.OrdinalIgnoreCase)) ?? "PATH";
+        env[key] = string.Join(Path.PathSeparator, added) + Path.PathSeparator + (env.TryGetValue(key, out var old) ? old : "");
     }
 
     /// <summary>`cd`, `cd path`, `Set-Location path` change the folder of the session itself (a child process cannot).</summary>

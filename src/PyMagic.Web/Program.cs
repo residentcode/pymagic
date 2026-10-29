@@ -584,6 +584,79 @@ app.MapGet("/api/profile", () =>
 
 // ---- the terminal: one command line at a time in the project folder -------------------------------------------------
 
+// a real console for each terminal tab: the page sends {type:"input", data} and {type:"resize", cols, rows}, and gets {type:"output", data},
+// {type:"exit", code} or {type:"error", text}; the size of the first screen comes as ?cols=&rows=
+app.Map("/console", async (HttpContext ctx) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+    var outbox = new BlockingCollection<string>();
+    void Send(JsonObject o) { if (!outbox.IsAddingCompleted) try { outbox.Add(o.ToJsonString()); } catch (InvalidOperationException) { } }
+    var sender = Task.Run(async () =>
+    {
+        foreach (var text in outbox.GetConsumingEnumerable())
+        {
+            if (ws.State != WebSocketState.Open) break;
+            try { await ws.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, CancellationToken.None); }
+            catch (WebSocketException) { break; }
+        }
+    });
+    if (!OperatingSystem.IsWindows())
+    {
+        Send(new JsonObject { ["type"] = "error", ["text"] = "The console needs Windows." });
+        outbox.CompleteAdding();
+        await sender;
+        return;
+    }
+    int Query(string name, int fallback) => int.TryParse(ctx.Request.Query[name], out var n) ? n : fallback;
+    using var console = new ConsoleSession();
+    var env = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+    foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables()) env[(string)e.Key] = (string?)e.Value;
+    // the host's own settings are not the user's (the garbage collector's, the server's URLs)
+    foreach (var k in env.Keys.Where(k => k.StartsWith("DOTNET_", StringComparison.OrdinalIgnoreCase) || k.StartsWith("ASPNETCORE_", StringComparison.OrdinalIgnoreCase)).ToList()) env.Remove(k);
+    TerminalSession.WithInterpreter(env, interpreters.Current is { Target.IsLocal: true } c ? c.Path : null);
+    try
+    {
+        console.Start(ConsoleSession.DefaultShell(), root, env, Query("cols", 100), Query("rows", 30),
+            data => Send(new JsonObject { ["type"] = "output", ["data"] = data }),
+            code => { Send(new JsonObject { ["type"] = "exit", ["code"] = code }); outbox.CompleteAdding(); });
+    }
+    catch (System.ComponentModel.Win32Exception e)
+    {
+        Send(new JsonObject { ["type"] = "error", ["text"] = e.Message });
+        outbox.CompleteAdding();
+        await sender;
+        return;
+    }
+
+    var buffer = new byte[16 * 1024];
+    try
+    {
+        while (ws.State == WebSocketState.Open)
+        {
+            using var ms = new MemoryStream();
+            WebSocketReceiveResult r;
+            do
+            {
+                r = await ws.ReceiveAsync(buffer, CancellationToken.None);
+                if (r.MessageType == WebSocketMessageType.Close) goto done;
+                ms.Write(buffer, 0, r.Count);
+            } while (!r.EndOfMessage);
+            var msg = JsonNode.Parse(ms.ToArray());
+            switch (msg?["type"]?.GetValue<string>())
+            {
+                case "input": console.Write(msg["data"]?.GetValue<string>() ?? ""); break;
+                case "resize": console.Resize(msg["cols"]?.GetValue<int>() ?? 100, msg["rows"]?.GetValue<int>() ?? 30); break;
+            }
+        }
+    }
+    catch (Exception e) when (e is WebSocketException or System.Text.Json.JsonException) { }
+    done:
+    outbox.CompleteAdding();
+    try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch (Exception e) when (e is WebSocketException or InvalidOperationException) { }
+    await sender;
+});
+
 app.Map("/term", async (HttpContext ctx) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
