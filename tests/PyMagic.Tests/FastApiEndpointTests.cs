@@ -136,11 +136,13 @@ public class FastApiEndpointTests
     }
 
     [Fact]
-    public void FlaskRoutesHaveNoDetails()
+    public void FlaskRoutesHaveTheirPathParametersToo()
     {
         var svc = new LanguageService();
         svc.SourceRoots.Add("c:/proj");
         svc.Open(Main, "from flask import Flask\n\napp = Flask(__name__)\n\n\n@app.route('/x/<int:i>')\ndef x(i): ...\n", 1);
-        Assert.True(svc.Routes().Single().Params == null);
+        var p = svc.Routes().Single().Params!.Single();
+        Assert.Equal("path", p.Kind);
+        Assert.Equal("int", p.Type);
     }
 }

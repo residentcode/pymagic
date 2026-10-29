@@ -173,7 +173,7 @@ public sealed partial class LanguageService
                 // exhaustive only through a last case that takes everything
                 return ms.Cases.Count > 0 && ms.Cases[^1] is { Guard: null, Pattern: MatchCapture } && ms.Cases.All(c => AlwaysExits(m, c.Body, ev));
             case ExprStmt { Value: CallExpr call }:
-                return ev.TypeOf(m, call) is NeverType || call.Func is NameExpr { Name: "exit" or "quit" } || call.Func is AttributeExpr { Attr: "exit" or "_exit" or "abort", Value: NameExpr { Name: "sys" or "os" } };
+                return ev.TypeOf(m, call) is NeverType || call.Func is NameExpr { Name: "exit" or "quit" or "abort" } || call.Func is AttributeExpr { Attr: "exit" or "_exit" or "abort", Value: NameExpr { Name: "sys" or "os" or "flask" } };
             default: return false;
         }
     }

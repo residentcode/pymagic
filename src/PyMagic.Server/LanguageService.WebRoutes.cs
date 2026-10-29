@@ -224,6 +224,7 @@ public sealed partial class LanguageService
         return RouteIndexOf(snap).Routes
             .Select(r => Describe(r, ev))
             .Where(e => e.Uri.Length > 0)
+            .Concat(FlaskExtraRoutes())
             .Concat(DjangoRoutes())
             .ToList();
     }
@@ -314,6 +315,7 @@ public sealed partial class LanguageService
             if (other != null)
                 findings.Add(new Finding(r.PathStart, r.PathEnd - r.PathStart, $"Route '{r.Methods.First(x => other.Methods.Contains(x))} {r.Path}' is already handled by {other.Def.Name}() in {System.IO.Path.GetFileName(other.Module.Path ?? other.Module.Name)}", "duplicate-route", FindingLevel.Warning));
 
+            findings.AddRange(FlaskResponseFindings(m, ev, r));
             if (ShadowingRoute(index, r, m, OrderOf) is { } shadow)
                 findings.Add(new Finding(r.PathStart, r.PathEnd - r.PathStart, $"Route '{r.Methods.First(x => shadow.Methods.Contains(x))} {r.Path}' is never reached: {shadow.Def.Name}() declared earlier handles '{shadow.Path}' first. Declare the fixed path before the one with a parameter.", "route-shadowed", FindingLevel.Warning));
 
@@ -324,6 +326,7 @@ public sealed partial class LanguageService
         if (index.Routes.Count == 0) yield break;
         foreach (var s in NamedStringsIn(m, ev).Where(x => x.Kind == DjangoNamed.Endpoint))
         {
+            foreach (var uf in UrlForFindings(index, s)) if (!Suppressed(m.Source, uf)) yield return AsDiag(uf);
             if (s.Value.StartsWith('.') || s.Value == "static" || s.Value.EndsWith(".static") || EndpointRoutes(index, s.Value).Any()) continue;
             var f = new Finding(s.Start, s.End - s.Start, $"No route has the endpoint name '{s.Value}'", "route-endpoint", FindingLevel.Weak);
             if (!Suppressed(m.Source, f)) yield return AsDiag(f);

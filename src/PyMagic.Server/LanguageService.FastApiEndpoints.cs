@@ -88,7 +88,7 @@ public sealed partial class LanguageService
     RouteEntry Describe(RouteDef r, TypeEvaluator ev)
     {
         var entry = new RouteEntry(string.Join(", ", r.Methods), r.Path, r.Def.Name, r.Flask ? "flask" : "fastapi", UriOfModule(r.Module) ?? "", Lines(r.Module).PositionOf(r.Def.NameStart).Line);
-        if (r.Flask) return entry;
+        if (r.Flask) return DescribeFlask(r, entry);
 
         var pathNames = PathParameters(r).Select(x => x.Name).ToHashSet();
         var parameters = DescribeParameters(r.Module, ev, r.Def, pathNames, 0).ToList();
