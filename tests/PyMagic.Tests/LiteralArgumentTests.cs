@@ -48,10 +48,11 @@ public class LiteralArgumentTests
     }
 
     [Fact]
-    public void ANameAssignedTwiceIsNotGuessed()
+    public void ANameAssignedTwiceIsTheLiteralsThatReachTheCall()
     {
         var found = Mismatches("def open_it(mode: Literal[\"r\", \"w\"]): ...\n\n\nmode = \"q\"\nmode = \"r\"\nopen_it(mode)\n\n\ndef g(flag: bool):\n    m = \"q\"\n    if flag:\n        m = \"r\"\n    open_it(m)\n");
-        Assert.Equal(0, found.Count);
+        Assert.Equal(1, found.Count);
+        Assert.True(found[0].Contains("Literal['q', 'r']"), found[0]);
     }
 
     [Fact]
