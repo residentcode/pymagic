@@ -58,7 +58,7 @@ public class RunTests
             int id = ++_id;
             body["type"] = type; body["id"] = id;
             Session.Handle(body);
-            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", "values" => "values", "jump" => "jumped", "table" => "table", _ => "evaluated" };
+            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", "values" => "values", "jump" => "jumped", "table" => "table", "setName" => "setName", "reprOf" => "reprOf", "typeSource" => "typeSource", _ => "evaluated" };
             return Next(e => e["type"]?.GetValue<string>() == reply && e["id"]?.GetValue<int>() == id);
         }
 
@@ -731,5 +731,164 @@ public class RunTests
         Assert.Equal(5002, full["result"]!.GetValue<string>().Length);
         h.Command("continue");
         h.Type("exited");
+    }
+
+    // ---------------------------------------------------------------- item 160: the rest of the debugger
+
+    const string Spinner =
+        "import threading, time\n" +            // 1
+        "count = 0\n" +                         // 2
+        "def spin():\n" +                       // 3
+        "    global count\n" +                  // 4
+        "    while True:\n" +                   // 5
+        "        count += 1\n" +                // 6
+        "        if count % 500 == 0:\n" +      // 7
+        "            time.sleep(0.001)\n" +     // 8
+        "threading.Thread(target=spin, daemon=True).start()\n" +   // 9
+        "time.sleep(0.3)\n" +                   // 10
+        "here = 1\n" +                          // 11
+        "print('done')\n";                      // 12
+
+    /// <summary>How far the spinning thread counts while the main thread is stopped for 400 ms.</summary>
+    static long CountsWhileStopped(Harness h)
+    {
+        long Count() => long.Parse(h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "count", ["evalOnly"] = true })["result"]!.GetValue<string>());
+        long before = Count();
+        Thread.Sleep(400);
+        return Count() - before;
+    }
+
+    [Fact]
+    public void AStopSuspendsTheOtherThreadsUnlessTheBreakpointSaysThisThreadOnly()
+    {
+        if (!HavePython) return;
+        using (var h = new Harness())
+        {
+            h.Script("spin.py", Spinner);
+            h.Session.Start(h.Root, "spin.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["spin.py"] = new() { 11 } });
+            var stopped = h.Type("stopped");
+            Assert.Equal("all", stopped["suspended"]!.GetValue<string>());
+            Assert.Equal(0L, CountsWhileStopped(h));   // the spinning thread waits at its next line
+            h.Command("continue");
+            h.Type("exited");
+        }
+        using (var h = new Harness())
+        {
+            h.Script("spin.py", Spinner);
+            h.Session.Start(h.Root, "spin.py", true, Array.Empty<string>());
+            h.Session.Handle(new JsonObject { ["type"] = "setBreakpoints", ["file"] = Path.Combine(h.Root, "spin.py"),
+                ["lines"] = new JsonArray(new JsonObject { ["line"] = 11, ["suspend"] = "thread" }) });
+            Assert.Equal("thread", h.Type("stopped")["suspended"]!.GetValue<string>());
+            Assert.True(CountsWhileStopped(h) > 0, "the other thread goes on");
+            h.Command("continue");
+            h.Type("exited");
+        }
+    }
+
+    const string BoxProgram =
+        "class Box:\n" +                 // 1
+        "    def __init__(self):\n" +    // 2
+        "        self.size = 3\n" +      // 3
+        "def run():\n" +                 // 4
+        "    box = Box()\n" +            // 5
+        "    n = 1\n" +                  // 6
+        "    print(n)\n" +               // 7
+        "run()\n";                       // 8
+
+    [Fact]
+    public void ANameIsSetAndATypeIsFoundAndValuesLoadOnDemand()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("box.py", BoxProgram);
+        h.Session.Start(h.Root, "box.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["box.py"] = new() { 7 } });
+        h.Type("stopped");
+        // Set Value from the end of a line: a local of the frame
+        Assert.Equal("42", h.Request("setName", new JsonObject { ["frameId"] = 0, ["name"] = "n", ["expression"] = "41 + 1" })["value"]!.GetValue<string>());
+        Assert.Equal("42", h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "n" })["result"]!.GetValue<string>());
+        // Jump to Type Source
+        var type = h.Request("typeSource", new JsonObject { ["frameId"] = 0, ["expression"] = "box" });
+        Assert.True(type["file"]!.GetValue<string>().EndsWith("box.py"), type.ToJsonString());
+        Assert.Equal(1, type["line"]!.GetValue<int>());
+        Assert.Equal("Box", type["name"]!.GetValue<string>());
+        // on demand: objects come without their value until it is asked for; numbers come as they are
+        h.Session.Handle(new JsonObject { ["type"] = "setLoadPolicy", ["policy"] = "onDemand" });
+        var locals = h.Request("scopes", new JsonObject { ["frameId"] = 0 })["scopes"]![0]!;
+        int localsRef = locals["ref"]!.GetValue<int>();
+        var items = h.Request("variables", new JsonObject { ["ref"] = localsRef })["items"]!.AsArray();
+        int boxIndex = items.Select((v, i) => (v, i)).Single(t => t.v!["name"]!.GetValue<string>() == "box").i;
+        Assert.True(items[boxIndex]!["lazy"]?.GetValue<bool>() == true && items[boxIndex]!["value"] is null, items.ToJsonString());
+        Assert.Equal("42", items.Single(v => v!["name"]!.GetValue<string>() == "n")!["value"]!.GetValue<string>());
+        Assert.Contains("Box object", h.Request("reprOf", new JsonObject { ["ref"] = localsRef, ["index"] = boxIndex })["value"]!.GetValue<string>());
+        h.Command("continue");
+        h.Type("exited");
+        Assert.Contains("42", h.AllOutput());   // the program printed the value it was given
+    }
+
+    [Fact]
+    public void TheConsoleShowsWhatWasPrintedAndTheValueDialogGetsJson()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("box.py", BoxProgram);
+        h.Session.Start(h.Root, "box.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["box.py"] = new() { 7 } });
+        h.Type("stopped");
+        var printed = h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "for k in range(2):\n    print('line', k)" });
+        Assert.Equal("line 0\nline 1\n", printed["output"]!.GetValue<string>().Replace("\r\n", "\n"));
+        var call = h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "print('hi') or 5" });
+        Assert.Equal("5", call["result"]!.GetValue<string>());
+        Assert.Equal("hi\n", call["output"]!.GetValue<string>().Replace("\r\n", "\n"));
+        var json = h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "{'a': [1, 2], 'b': None}", ["evalOnly"] = true, ["detail"] = true });
+        Assert.Equal("{\"a\": [1, 2], \"b\": null}", json["json"]!.GetValue<string>());
+        var text = h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "'{\"k\": 1}'", ["evalOnly"] = true, ["detail"] = true });
+        Assert.Equal("{\"k\": 1}", text["text"]!.GetValue<string>());
+        h.Command("continue");
+        h.Type("exited");
+    }
+
+    /// <summary>A Python 3.14 or later on this computer (Attach to Process needs sys.remote_exec), or null.</summary>
+    static string? Python314()
+    {
+        foreach (var (file, args) in new[] { ("py", "-3.14 -c \"import sys; print(sys.executable)\""), ("python", "-c \"import sys; print(sys.executable if sys.version_info >= (3, 14) else '')\"") })
+        {
+            try
+            {
+                var p = Process.Start(new ProcessStartInfo(file, args) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true });
+                if (p == null) continue;
+                string path = p.StandardOutput.ReadToEnd().Trim();
+                p.WaitForExit(10000);
+                if (p.ExitCode == 0 && File.Exists(path)) return path;
+            }
+            catch (System.ComponentModel.Win32Exception) { }
+        }
+        return null;
+    }
+
+    [Fact]
+    public void TheDebuggerIsAttachedToARunningProgramAndDetachedWithoutEndingIt()
+    {
+        if (!HavePython || Python314() is not { } python) return;
+        using var h = new Harness();
+        h.Script("target.py", "import time\ndef tick(i):\n    x = i * 2\n    return x\nfor i in range(1200):\n    tick(i)\n    time.sleep(0.05)\n");
+        using var target = Process.Start(new ProcessStartInfo(python, Path.Combine(h.Root, "target.py")) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
+        try
+        {
+            Thread.Sleep(500);   // the program is running before the debugger comes
+            h.Session.Python = python;
+            h.Session.Attach(h.Root, target.Id, new Dictionary<string, JsonArray> { ["target.py"] = new JsonArray(3) });
+            Assert.True(h.Type("started")["attached"]!.GetValue<bool>());
+            var stopped = h.Type("stopped");
+            Assert.Equal("tick", stopped["frames"]![0]!["name"]!.GetValue<string>());
+            Assert.Equal(3, Line(stopped));
+            Assert.Equal("int", h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "i" })["valueType"]!.GetValue<string>());
+            h.Command("stop");   // detaches
+            Assert.True(h.Type("exited")["detached"]!.GetValue<bool>());
+            Thread.Sleep(500);
+            Assert.True(!target.HasExited, "the program goes on running after the debugger is taken out");
+        }
+        finally
+        {
+            try { target.Kill(); } catch (InvalidOperationException) { }
+        }
     }
 }

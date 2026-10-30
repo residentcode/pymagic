@@ -1,6 +1,6 @@
 // The dialog behind Shift+F9 and a right click on a breakpoint: a condition, a hit count, a message to log instead of
 // stopping, a description, and another breakpoint it waits for.
-export const isPlain = (m) => !m || (!m.condition && !m.hitCondition && !m.logMessage && !m.description && !m.after);
+export const isPlain = (m) => !m || (!m.condition && !m.hitCondition && !m.logMessage && !m.description && !m.after && !m.suspend);
 /** Resolves with the new settings, 'remove' for the Remove button, or null when cancelled. `others` are the project's
  * other breakpoints ({file, line}) this one can wait for. */
 export function editBreakpoint(line, meta, exists, others = [], functionName = null) {
@@ -48,6 +48,18 @@ export function editBreakpoint(line, meta, exists, others = [], functionName = n
         after.value = meta?.after ? `${meta.after.file}:${meta.after.line}` : '';
         afterRow.append(afterLabel, after);
         box.appendChild(afterRow);
+        const suspendRow = document.createElement('div');
+        suspendRow.className = 'namerow';
+        const suspendLabel = document.createElement('label');
+        suspendLabel.textContent = 'Suspend';
+        suspendLabel.style.width = '90px';
+        const suspend = document.createElement('select');
+        suspend.style.flex = '1';
+        suspend.title = 'All threads: the others wait at their next line while this one is stopped. This thread: they go on.';
+        suspend.append(new Option('all threads', ''), new Option('this thread only', 'thread'));
+        suspend.value = meta?.suspend ?? '';
+        suspendRow.append(suspendLabel, suspend);
+        box.appendChild(suspendRow);
         const note = document.createElement('div');
         note.className = 'dim';
         note.textContent = 'With a log message the program does not stop here.';
@@ -74,6 +86,7 @@ export function editBreakpoint(line, meta, exists, others = [], functionName = n
             hitCondition: hits.value.trim() || undefined,
             logMessage: log.value.trim() || undefined,
             description: description.value.trim() || undefined,
+            suspend: suspend.value || undefined,
             after: after.value ? { file: after.value.replace(/:\d+$/, ''), line: Number(after.value.match(/:(\d+)$/)[1]) } : undefined,
         });
         overlay.onkeydown = (e) => {

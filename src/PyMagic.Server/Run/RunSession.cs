@@ -17,7 +17,7 @@ public sealed class RunSession : IDisposable
     static readonly HashSet<string> DebugCommands = new()
     {
         "setBreakpoints", "setExceptionBreak", "mute", "continue", "next", "stepIn", "stepInto", "stepOut", "runTo", "jump", "scopes", "variables",
-        "values", "table", "evaluate", "setVariable",
+        "values", "table", "evaluate", "setVariable", "setName", "reprOf", "typeSource", "setLoadPolicy",
     };
 
     readonly Action<JsonNode> _emit;
@@ -127,6 +127,85 @@ public sealed class RunSession : IDisposable
             File.WriteAllText(file, data.ToJsonString());
         }
         catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidOperationException) { /* the profile keeps the paths it has */ }
+    }
+
+    bool _attached;
+
+    /// <summary>
+    /// Attach to Process: puts the debugger into a Python program that is already running, with Python 3.14's
+    /// <c>sys.remote_exec</c> (PEP 768). The interpreter that sends it must be 3.14 or later, and so must the program.
+    /// The program's own output is not seen here; Stop detaches and leaves it running.
+    /// </summary>
+    public void Attach(string root, int pid, IReadOnlyDictionary<string, JsonArray>? breakpoints)
+    {
+        _root = root;
+        IsDebug = true;
+        _attached = true;
+        string python = Python ?? Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python";
+        string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+        _listener = new TcpListener(IPAddress.Loopback, 0);
+        _listener.Start();
+        int port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        string helperPath = ExtractHelper("pm_debug.py");
+        string bootstrap = Path.Combine(Path.GetDirectoryName(helperPath)!, $"pm_attach_{token[..8]}.py");
+        File.WriteAllText(bootstrap,
+            "import sys\n" +
+            $"sys.path.insert(0, {PyString(Path.GetDirectoryName(helperPath)!)})\n" +
+            "import pm_debug\n" +
+            $"pm_debug.attach('127.0.0.1', {port}, '{token}', {PyString(root)})\n");
+        var channelTask = Task.Run(() => AcceptDebugger(token, root, breakpoints));
+        try
+        {
+            var psi = new ProcessStartInfo(python) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add($"import sys\nif not hasattr(sys, 'remote_exec'): sys.exit('Attaching needs Python 3.14 or later; the interpreter is ' + sys.version.split()[0])\nsys.remote_exec({pid}, {PyString(bootstrap)})");
+            using var sender = Process.Start(psi) ?? throw new InvalidOperationException("cannot start " + python);
+            string err = sender.StandardError.ReadToEnd();
+            sender.WaitForExit();
+            if (sender.ExitCode != 0)
+            {
+                Error(string.IsNullOrWhiteSpace(err) ? $"cannot attach to process {pid}" : err.Trim().Split('\n')[^1]);
+                Cleanup();
+                return;
+            }
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Error($"cannot start '{python}': {e.Message}");
+            Cleanup();
+            return;
+        }
+        _emit(new JsonObject { ["type"] = "started", ["pid"] = pid, ["debug"] = true, ["attached"] = true });
+        Task.Run(() =>
+        {
+            // the debugger connects when the program next runs Python code; a program that never does is not attached
+            if (!channelTask.Wait(TimeSpan.FromHours(12))) return;
+            _emit(new JsonObject { ["type"] = "exited", ["code"] = 0, ["detached"] = true });
+            Cleanup();
+        });
+    }
+
+    /// <summary>A Python string literal of a path or text.</summary>
+    static string PyString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
+
+    /// <summary>Lists the Python programs running on this computer that Attach can be offered for.</summary>
+    public static List<JsonObject> PythonProcesses()
+    {
+        var list = new List<JsonObject>();
+        int self = Environment.ProcessId;
+        foreach (var p in Process.GetProcesses())
+        {
+            try
+            {
+                if (p.Id == self || !p.ProcessName.StartsWith("python", StringComparison.OrdinalIgnoreCase)) continue;
+                string? path = null, started = null;
+                try { path = p.MainModule?.FileName; started = p.StartTime.ToString("HH:mm:ss"); } catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+                list.Add(new JsonObject { ["pid"] = p.Id, ["name"] = p.ProcessName, ["path"] = path, ["started"] = started, ["title"] = p.MainWindowTitle });
+            }
+            catch (InvalidOperationException) { }
+            finally { p.Dispose(); }
+        }
+        return list.OrderByDescending(o => o["pid"]!.GetValue<int>()).ToList();
     }
 
     /// <summary>Runs <c>python -m module args</c> (pip, ensurepip, venv...) and streams its output like a script run.</summary>
@@ -346,6 +425,12 @@ public sealed class RunSession : IDisposable
 
     void Kill()
     {
+        if (_attached)
+        {
+            // a program the debugger was put into goes on running: the debugger takes itself out
+            lock (_gate) { if (_channel != null) WriteRawLocked("{\"type\":\"detach\"}"); }
+            return;
+        }
         try { if (_process is { HasExited: false }) _process.Kill(entireProcessTree: true); }
         catch (InvalidOperationException) { }
         catch (System.ComponentModel.Win32Exception) { }

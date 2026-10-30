@@ -6,7 +6,7 @@ import { showTab } from './panel';
 import { editBreakpoint, isPlain } from './bpdialog';
 import { ansiReader } from './ansi';
 import { colouredSpans } from './terminal';
-import { inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem } from './debug-model.js';
+import { inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem, declarationLine, historyStep } from './debug-model.js';
 import { openMenu } from './menu';
 import { toast } from './toast';
 const $ = (id) => document.getElementById(id);
@@ -325,8 +325,8 @@ export function setupRun(deps) {
             if (!open)
                 return;
             child = document.createElement('ul');
-            for (const v of items)
-                child.appendChild(variableNode(v, scopeRef, parent));
+            for (const [index, v] of items.entries())
+                child.appendChild(variableNode(v, scopeRef, parent, { ref, index }));
             if (!items.length)
                 child.innerHTML = '<li><div class="type">(empty)</div></li>';
             li.appendChild(child);
@@ -336,7 +336,7 @@ export function setupRun(deps) {
         if (openNow)
             void toggle();
     }
-    function variableNode(v, scopeRef, parent) {
+    function variableNode(v, scopeRef, parent, source) {
         const li = document.createElement('li');
         const head = document.createElement('div');
         head.innerHTML = '<span class="caret"></span><span class="name"></span> = <span class="val"></span> <span class="type"></span>';
@@ -350,21 +350,87 @@ export function setupRun(deps) {
         if (v.ref > 0)
             attachChildren(head, li, v.ref, false, undefined, { expr, type: v.type });
         const val = head.querySelector('.val');
+        if (v.lazy) {
+            // loaded on demand: the value is asked for when clicked
+            val.textContent = '… show';
+            val.classList.add('lazy');
+            val.title = 'Click to load the value';
+            val.onclick = async () => {
+                const r = run && paused ? await run.ask({ type: 'reprOf', ref: source.ref, index: source.index }) : { error: 'not paused' };
+                val.textContent = r.error ?? r.value;
+                val.classList.remove('lazy');
+                val.onclick = null;
+                v.value = r.value ?? v.value;
+            };
+        }
         if (scopeRef !== undefined) {
             val.title = 'Double-click or F2 to change the value; right-click for more';
             val.ondblclick = () => editVariable(val, scopeRef, v);
         }
+        const isName = parent?.expr === null && expr !== null;
         head.onkeydown = (e) => {
             if (e.key === 'F2' && scopeRef !== undefined) {
                 e.preventDefault();
                 editVariable(val, scopeRef, v);
             }
+            else if (e.key === 'F4' && !e.shiftKey && isName) {
+                e.preventDefault();
+                void jumpToDeclaration(v.name);
+            }
+            else if (e.key === 'F4' && e.shiftKey && expr) {
+                e.preventDefault();
+                void jumpToTypeSource(expr);
+            }
         };
         head.oncontextmenu = (e) => {
             e.preventDefault();
-            openMenu({ x: e.clientX, y: e.clientY }, valueItems(expr, v.value, scopeRef !== undefined ? () => editVariable(val, scopeRef, v) : null));
+            openMenu({ x: e.clientX, y: e.clientY }, [
+                ...valueItems(expr, v.value, scopeRef !== undefined ? () => editVariable(val, scopeRef, v) : null),
+                '-',
+                { label: 'Jump to source', key: 'F4', run: () => void jumpToDeclaration(v.name), disabled: !isName },
+                { label: 'Jump to type source', key: 'Shift+F4', run: () => void jumpToTypeSource(expr), disabled: !expr },
+            ]);
         };
         return li;
+    }
+    /** Jump to Source (F4): the line of the selected frame where a variable is first bound. */
+    async function jumpToDeclaration(name) {
+        const f = frames[selectedFrame], rel = f && relOfAbsolute(f.file);
+        const model = rel ? await deps.modelFor(rel) : null;
+        const line = model ? declarationLine(lineTextOf(model), f.first ?? 1, f.line, name) : null;
+        if (!line) {
+            toast(`Where ${name} is set is not in this frame (a global, or a builtin).`);
+            return;
+        }
+        await deps.openFile(rel, new monaco.Range(line, 1, line, 1));
+    }
+    /** Jump to Type Source (Shift+F4): the class of a value, when it is written in the project. */
+    async function jumpToTypeSource(expr) {
+        if (!run || !paused || !expr)
+            return;
+        const r = await run.ask({ type: 'typeSource', frameId: selectedFrame, expression: expr });
+        if (r.error) {
+            toast(r.error);
+            return;
+        }
+        const rel = relOfAbsolute(r.file);
+        if (rel)
+            await deps.openFile(rel, new monaco.Range(r.line, 1, r.line, 1));
+        else
+            toast(`${r.name} is defined in ${r.file}, line ${r.line} (outside the project)`);
+    }
+    /** Set Value from the values at the end of a line: assigns an expression to a name of the frame. */
+    async function setName(name) {
+        if (!run || !paused)
+            return;
+        const current = await fullValue(name, '');
+        const text = await deps.askText(`Set ${name}`, current.length <= 200 ? current : '', 'A Python expression; its value is given to the name in this frame');
+        if (text === null || text === undefined || !text.trim())
+            return;
+        const r = await run.ask({ type: 'setName', frameId: selectedFrame, name, expression: text });
+        if (r.error)
+            toast(r.error);
+        await showFrame(selectedFrame);
     }
     /** What can be done with a value shown by the debugger (a variable, a member, a value at the end of a line). */
     function valueItems(expr, shown, setValue = null) {
@@ -380,10 +446,33 @@ export function setupRun(deps) {
     }
     /** The whole value of an expression (the panes cut it at 200 characters), or what is shown when it has no expression. */
     async function fullValue(expr, shown) {
+        return (await valueDetail(expr, shown)).result;
+    }
+    /** The whole value, with the text of a string and the JSON of a dict or list when the helper can give them. */
+    async function valueDetail(expr, shown) {
         if (!expr || !run || !paused)
-            return shown;
-        const r = await run.ask({ type: 'evaluate', frameId: selectedFrame, expression: expr, evalOnly: true, limit: 200000 });
-        return r.error ? shown : r.result;
+            return { result: shown };
+        const r = await run.ask({ type: 'evaluate', frameId: selectedFrame, expression: expr, evalOnly: true, limit: 200000, detail: true });
+        return r.error ? { result: shown } : r;
+    }
+    /** JSON as a tree of <details>, objects and arrays folded below the first two levels. */
+    function jsonTree(value, key = null, depth = 0) {
+        const label = (k) => (k === null ? '' : `${k}: `);
+        if (value === null || typeof value !== 'object') {
+            const leaf = document.createElement('div');
+            leaf.className = 'jt-leaf';
+            leaf.textContent = label(key) + JSON.stringify(value);
+            return leaf;
+        }
+        const entries = Array.isArray(value) ? value.map((v, i) => [String(i), v]) : Object.entries(value);
+        const node = document.createElement('details');
+        node.open = depth < 2;
+        const summary = document.createElement('summary');
+        summary.textContent = label(key) + (Array.isArray(value) ? `[${entries.length}]` : `{${entries.length}}`);
+        node.appendChild(summary);
+        for (const [k, v] of entries.slice(0, 2000))
+            node.appendChild(jsonTree(v, k, depth + 1));
+        return node;
     }
     async function compareValue(expr, shown) {
         let clip = '';
@@ -427,14 +516,34 @@ export function setupRun(deps) {
     }
     /** View Value: the whole value in a dialog, with a Copy button. */
     async function viewValue(expr, shown) {
-        const text = await fullValue(expr, shown);
+        const detail = await valueDetail(expr, shown);
+        const text = detail.text ?? detail.result;
         const pre = document.createElement('pre');
         pre.className = 'value-text';
         pre.textContent = text;
         const copy = document.createElement('button');
         copy.textContent = 'Copy';
         copy.onclick = () => void navigator.clipboard.writeText(text).then(() => toast('Value copied'), () => toast('Could not copy'));
-        dialog(expr ?? 'Value', pre, [copy]);
+        // a dict, a list or a string that holds JSON can also be read as a tree
+        let parsed;
+        try {
+            parsed = JSON.parse(detail.json ?? detail.text ?? '');
+        }
+        catch { /* not JSON */ }
+        if (parsed === undefined || parsed === null || typeof parsed !== 'object') {
+            dialog(expr ?? 'Value', pre, [copy]);
+            return;
+        }
+        const holder = document.createElement('div');
+        const tree = document.createElement('div');
+        tree.className = 'value-text json-tree';
+        tree.appendChild(jsonTree(parsed));
+        holder.append(tree, pre);
+        pre.hidden = true;
+        const toggle = document.createElement('button');
+        toggle.textContent = 'Text';
+        toggle.onclick = () => { pre.hidden = !pre.hidden; tree.hidden = !tree.hidden; toggle.textContent = pre.hidden ? 'Text' : 'Tree'; };
+        dialog(expr ?? 'Value', holder, [copy, toggle]);
     }
     /** Data View: a list, dict, array, DataFrame or Series as a table (the first 1000 rows). */
     async function viewTable(expr) {
@@ -632,7 +741,8 @@ export function setupRun(deps) {
     function handle(m) {
         switch (m.type) {
             case 'started':
-                append(`${debugging ? 'Debugging' : 'Running'} (pid ${m.pid})\n`, 'info');
+                append(m.attached ? `Attached to process ${m.pid}; the debugger starts with the program's next line of Python (its output is not shown here)\n`
+                    : `${debugging ? 'Debugging' : 'Running'} (pid ${m.pid})\n`, 'info');
                 break;
             case 'output':
                 append(m.text, m.stream === 'stderr' ? 'err' : '');
@@ -647,7 +757,7 @@ export function setupRun(deps) {
                 if (m.reason === 'exception')
                     append(`Paused on exception: ${m.message}\n`, 'err');
                 if (m.thread && m.thread !== 'MainThread')
-                    append(`Paused in thread ${m.thread}\n`, 'info');
+                    append(`Paused in thread ${m.thread}${m.suspended === 'thread' ? ' (the other threads go on)' : ''}\n`, 'info');
                 renderFrames();
                 showTab('debug');
                 setButtons();
@@ -661,7 +771,7 @@ export function setupRun(deps) {
                 void refreshWatches();
                 break;
             case 'exited':
-                append(`\nProcess finished with exit code ${m.code}\n`, 'info');
+                append(m.detached ? '\nDetached; the program goes on running.\n' : `\nProcess finished with exit code ${m.code}\n`, 'info');
                 if (profiling) {
                     profiling = false;
                     window.dispatchEvent(new CustomEvent('pymagic:profile'));
@@ -698,6 +808,59 @@ export function setupRun(deps) {
         await launch(rel, debug, profile, []);
     }
     // runs a file of the project with arguments (the Django tab runs manage.py this way); false when a run is going
+    /** Attach to Process: the Python programs running on this computer, and the debugger put into the one chosen
+     * (Python 3.14's sys.remote_exec: the program and the selected interpreter must both be 3.14 or later). */
+    async function attachToProcess() {
+        if (run)
+            return;
+        let list = [];
+        try {
+            list = await (await fetch('/api/processes')).json();
+        }
+        catch { /* the engine did not answer */ }
+        const holder = document.createElement('div');
+        holder.className = 'attach-list';
+        const note = document.createElement('div');
+        note.className = 'dim';
+        note.textContent = list.length ? 'The program and the selected interpreter must be Python 3.14 or later. Stop detaches and leaves the program running.'
+            : 'No Python program is running on this computer.';
+        holder.appendChild(note);
+        let close = () => { };
+        for (const p of list) {
+            const row = document.createElement('button');
+            row.className = 'attach-row';
+            row.textContent = `${p.pid}  ${p.name}${p.title ? ' — ' + p.title : ''}${p.started ? '  (started ' + p.started + ')' : ''}`;
+            row.title = p.path ?? '';
+            row.onclick = () => { close(); void startAttach(p.pid); };
+            holder.appendChild(row);
+        }
+        dialog('Attach to Process', holder);
+        const overlay = holder.closest('#sigdialog');
+        close = () => overlay?.remove();
+    }
+    async function startAttach(pid) {
+        await deps.saveAll();
+        const breakpoints = {};
+        for (const m of monaco.editor.getModels()) {
+            const r = deps.relOf(m);
+            const bps = r ? breakpointsOf(m) : [];
+            if (r && bps.length)
+                breakpoints[r] = wire(m, bps);
+        }
+        output.textContent = '';
+        colours = ansiReader();
+        debugging = true;
+        profiling = false;
+        paused = false;
+        showTab('output');
+        run = new RunClient({ type: 'attach', pid, breakpoints });
+        run.onMessage = handle;
+        run.onClose = () => { if (run) {
+            append('\nConnection to the host lost.\n', 'err');
+            finish();
+        } };
+        setButtons();
+    }
     async function launch(rel, debug, profile, args, extra = {}) {
         if (run)
             return false;
@@ -716,7 +879,7 @@ export function setupRun(deps) {
         paused = false;
         showTab('output');
         run = new RunClient({ type: 'start', file: rel, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
-            exceptionClasses: exceptionClasses(), muted: muteBox.checked });
+            exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value });
         run.onMessage = handle;
         run.onClose = () => { if (run) {
             append('\nConnection to the host lost.\n', 'err');
@@ -763,6 +926,21 @@ export function setupRun(deps) {
         run?.send({ type: 'mute', on });
     }
     muteBox.onchange = () => setMuted(muteBox.checked);
+    // Load values: "all" computes every value shown; "on demand" only those clicked (for objects whose repr is slow)
+    const policyBox = $('load-policy');
+    try {
+        policyBox.value = localStorage.getItem('pymagic.loadPolicy') ?? 'all';
+    }
+    catch { /* storage unavailable */ }
+    policyBox.onchange = () => {
+        try {
+            localStorage.setItem('pymagic.loadPolicy', policyBox.value);
+        }
+        catch { /* storage unavailable */ }
+        run?.send({ type: 'setLoadPolicy', policy: policyBox.value });
+        if (paused)
+            void showFrame(selectedFrame);
+    };
     document.documentElement.classList.toggle('bp-muted', muteBox.checked);
     $('frames-copy').onclick = () => {
         if (!frames.length)
@@ -845,7 +1023,16 @@ export function setupRun(deps) {
             const r = await run.ask({ type: 'evaluate', frameId: selectedFrame, expression, evalOnly: true });
             if (r.error)
                 return sel && !sel.isEmpty() ? { range, contents: [{ value: '`' + r.error + '`' }] } : null;
-            return { range, contents: [{ value: '```python\n' + expression + ' = ' + r.result + '\n```' }, { value: r.valueType }] };
+            const contents = [{ value: '```python\n' + expression + ' = ' + r.result + '\n```' }];
+            // the members of an object, a list or a dict, one level down (View value shows the whole of it)
+            if (r.ref > 0) {
+                const items = (await run.ask({ type: 'variables', ref: r.ref })).items ?? [];
+                if (items.length)
+                    contents.push({ value: '```python\n' + items.slice(0, 12).map((m) => `${m.name} = ${m.value ?? '…'}`).join('\n') + (items.length > 12 ? `\n… ${items.length - 12} more` : '') + '\n```' });
+            }
+            const arg = encodeURIComponent(JSON.stringify([expression]));
+            contents.push({ value: `${r.valueType} · [View value](command:pymagic.debug.view?${arg}) · [View as table](command:pymagic.debug.table?${arg}) · [Add to watches](command:pymagic.debug.watch?${arg})`, isTrusted: true });
+            return { range, contents };
         },
     });
     /** Evaluate Expression (Alt+F8): a window that stays open beside the editor, for an expression or several lines of
@@ -869,7 +1056,7 @@ export function setupRun(deps) {
             }
             const r = await run.ask({ type: 'evaluate', frameId: selectedFrame, expression: area.value, limit: 20000 });
             out.className = 'eval-out' + (r.error ? ' e' : '');
-            out.textContent = r.error ?? (r.result === '' ? '(done)' : r.result);
+            out.textContent = (r.output ?? '') + (r.error ?? (r.result === '' ? (r.output ? '' : '(done)') : r.result));
             type.textContent = r.valueType ?? '';
             if (!r.error) {
                 void loadVariables();
@@ -912,6 +1099,10 @@ export function setupRun(deps) {
         const pos = ed.getPosition();
         return pos ? expressionAt(model.getLineContent(pos.lineNumber), pos.column) ?? '' : '';
     }
+    // the links of the hover
+    monaco.editor.registerCommand('pymagic.debug.view', (_, expr) => void viewValue(expr, ''));
+    monaco.editor.registerCommand('pymagic.debug.table', (_, expr) => void viewTable(expr));
+    monaco.editor.registerCommand('pymagic.debug.watch', (_, expr) => addWatch(expr));
     /** Quick Evaluate (Ctrl+Alt+F8): the value of the selection, or of the expression at the cursor, in a popup. */
     function quickEvaluate(ed = focused) {
         if (run && paused)
@@ -958,7 +1149,7 @@ export function setupRun(deps) {
             const names = inline.byLine.get(pos.lineNumber);
             if (!afterEnd || !names?.length)
                 return;
-            openMenu({ x: e.event.posx, y: e.event.posy }, names.map((name) => ({ label: name, submenu: valueItems(name, '') })));
+            openMenu({ x: e.event.posx, y: e.event.posy }, names.map((name) => ({ label: name, submenu: valueItems(name, '', () => void setName(name)) })));
         });
     }
     /** Force Step Into (Alt+Shift+F7) may stop in library code; Force Step Over (Alt+Shift+F8) passes the breakpoints of the calls. */
@@ -979,11 +1170,31 @@ export function setupRun(deps) {
     // evaluate while paused
     const watchIn = $('watch-in');
     const log = $('watch-log');
+    const history = [];
+    let historyAt = 0;
     watchIn.onkeydown = async (e) => {
-        if (e.key !== 'Enter' || !watchIn.value.trim())
+        // Up and Down walk the history when the cursor is on the first or the last line; Shift+Enter starts a new line
+        const firstLine = !watchIn.value.slice(0, watchIn.selectionStart).includes('\n');
+        const lastLine = !watchIn.value.slice(watchIn.selectionEnd).includes('\n');
+        if ((e.key === 'ArrowUp' && firstLine) || (e.key === 'ArrowDown' && lastLine)) {
+            e.preventDefault();
+            const step = historyStep(history, historyAt, e.key === 'ArrowUp' ? -1 : 1);
+            historyAt = step.index;
+            watchIn.value = step.text;
+            fitConsole();
             return;
+        }
+        if (e.key !== 'Enter' || e.shiftKey || !watchIn.value.trim()) {
+            requestAnimationFrame(fitConsole);
+            return;
+        }
+        e.preventDefault();
         const expression = watchIn.value;
+        if (history[history.length - 1] !== expression)
+            history.push(expression);
+        historyAt = history.length;
         watchIn.value = '';
+        fitConsole();
         const q = document.createElement('div');
         q.className = 'q';
         q.textContent = '> ' + expression;
@@ -994,19 +1205,29 @@ export function setupRun(deps) {
             a.textContent = 'The program is not paused.';
         }
         else {
-            const r = await run.ask({ type: 'evaluate', frameId: selectedFrame, expression });
+            const r = await run.ask({ type: 'evaluate', frameId: selectedFrame, expression, limit: 20000 });
+            if (r.output) {
+                const printed = document.createElement('div');
+                printed.className = 'o';
+                printed.textContent = r.output.replace(/\n$/, '');
+                log.appendChild(printed);
+            }
             if (r.error) {
                 a.className = 'e';
                 a.textContent = r.error;
             }
             else
-                a.textContent = r.result + (r.valueType ? `   (${r.valueType})` : '');
+                a.textContent = r.result === '' ? '' : r.result + (r.valueType ? `   (${r.valueType})` : '');
             if (!r.error)
                 void loadVariables(); // an assignment may have changed what is shown
         }
         log.appendChild(a);
         log.scrollTop = log.scrollHeight;
     };
+    /** The console's box grows with its lines, up to six. */
+    function fitConsole() {
+        watchIn.rows = Math.min(6, Math.max(1, watchIn.value.split('\n').length));
+    }
     // which interpreter will be used
     setButtons();
     /** Another editor (the right side of a split) takes breakpoints with a click in its margin, F9 and Shift+F9, and the run and debug keys. */
@@ -1041,6 +1262,7 @@ export function setupRun(deps) {
             quickEvaluate: () => quickEvaluate(),
             evaluate: () => evaluateWindow(expressionOf(focused)),
             forceStepInto: () => forceStep('stepIn'), forceStepOver: () => forceStep('next'),
+            attach: () => void attachToProcess(), running: () => run !== null,
         },
     };
 }

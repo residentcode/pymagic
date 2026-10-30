@@ -6,8 +6,12 @@ starts this script, which connects back over a local TCP socket and speaks JSON 
   host -> helper   setBreakpoints, setExceptionBreak, mute, go, continue, next, stepIn, stepInto (smart step into one
                    call of the line), stepOut, runTo (run to a line, "force" ignoring the breakpoints on the way), jump
                    (go on from another line of the frame), scopes, variables, values (inline values), table (Data View), evaluate,
-                   setVariable, stop
-  helper -> host   hello, stopped, running, scopes, variables, values, table, evaluated, variableSet, jumped, output (log points)
+                   setVariable, setName (a name of a frame), reprOf (a value loaded on demand), typeSource, setLoadPolicy, stop
+  helper -> host   hello, stopped, running, scopes, variables, values, table, evaluated, variableSet, setName, reprOf,
+                   typeSource, jumped, output (log points)
+
+While one thread is stopped every other one waits at its next traced event, unless the breakpoint that stopped it says
+"suspend": "thread".
 
 A breakpoint is a line number or {"line", "condition", "hitCondition", "logMessage"}: it stops only when the condition
 holds and the hit count matches ("5", ">=5", "%3"...); with a log message it prints the message ({expr} is evaluated
@@ -24,6 +28,8 @@ The program's own stdin/stdout/stderr are ordinary pipes handled by the host, no
 import argparse
 import bdb
 import builtins
+import contextlib
+import io
 import json
 import os
 import queue
@@ -92,6 +98,11 @@ class Debugger(bdb.Bdb):
         self.force_into = False    # Force Step Into: this one step may stop in library code
         self.force_over = False    # Force Step Over: no breakpoint stops until the step ends
         self.hit_lines = set()     # (canonical path, line) of the breakpoints hit so far, for "disabled until hit"
+        self.hit_suspend = None    # "thread" when the breakpoint that stops lets the other threads run
+        self.resumed = threading.Event()   # cleared while a stop suspends every thread
+        self.resumed.set()
+        self.stopped_ident = None  # the thread that is stopped while the others wait
+        self.lazy = False          # the variables loading policy "on demand": values of objects are shown when asked
         self.run_to = None         # (canonical path, line, force) of Run to Cursor
         self.step_target = None    # (function name, origin frame, origin line) of Smart Step Into
         self.return_origin = None  # the frame whose callees' return values are kept while stepping
@@ -101,13 +112,39 @@ class Debugger(bdb.Bdb):
 
     # ---------------------------------------------------------------- channel
 
+    attached = False   # put into a running program (Attach to Process): never end it, take the debugger out instead
+    detached = False
+
     def send(self, message):
         data = (json.dumps(message) + "\n").encode("utf-8")
         with self.send_lock:
             try:
                 self.sock.sendall(data)
             except OSError:
-                os._exit(1)
+                if not self.attached:
+                    os._exit(1)
+                threading.Thread(target=self.detach, daemon=True).start()
+
+    def detach(self):
+        """Takes the debugger out of a program it was attached to; the program runs on as before."""
+        if self.detached:
+            return
+        self.detached = True
+        self.muted = True
+        self.break_on_raise = False
+        self.clear_all_breaks()
+        threading.settrace_all_threads(None)
+        for top in sys._current_frames().values():
+            frame = top
+            while frame is not None:
+                frame.f_trace = None
+                frame = frame.f_back
+        self.resumed.set()
+        self.commands.put({"type": "continue"})   # a stopped thread goes on
+        try:
+            self.sock.close()
+        except OSError:
+            pass
 
     def read_loop(self):
         stream = self.sock.makefile("r", encoding="utf-8", newline="\n")
@@ -124,12 +161,20 @@ class Debugger(bdb.Bdb):
                 self.exception_classes = [c.strip() for c in msg.get("classes") or [] if c.strip()]
             elif kind == "mute":
                 self.muted = bool(msg.get("on"))
+            elif kind == "setLoadPolicy":
+                self.lazy = msg.get("policy") == "onDemand"
             elif kind == "go":
                 self.go.set()
+            elif kind in ("stop", "detach") and self.attached:
+                self.detach()
+                return
             elif kind == "stop":
                 os._exit(137)
             else:
                 self.commands.put(msg)
+        if self.attached:
+            self.detach()   # the host went away: the program it was attached to goes on
+            return
         os._exit(0)  # the host went away
 
     HIT_CONDITION = re.compile(r"^\s*(==|>=|<=|>|<|%)?\s*(\d+)\s*$")
@@ -155,8 +200,9 @@ class Debugger(bdb.Bdb):
             log = spec.get("logMessage") or None
             after = spec.get("after")   # {"file", "line"}: disabled until that breakpoint is hit
             after = (self.canonic(os.path.join(self.root, after.get("file", ""))), int(after.get("line", 0))) if isinstance(after, dict) else None
-            if hit or log or after:
-                self.meta[(canonical, line)] = {"hit": hit, "log": log, "after": after}
+            suspend = "thread" if spec.get("suspend") == "thread" else None
+            if hit or log or after or suspend:
+                self.meta[(canonical, line)] = {"hit": hit, "log": log, "after": after, "suspend": suspend}
 
     def break_here(self, frame):
         # bdb asks this twice for one line event (once to decide, once in user_line), and asking counts a hit
@@ -177,6 +223,7 @@ class Debugger(bdb.Bdb):
             line = frame.f_lineno if (canonical, frame.f_lineno) in bdb.Breakpoint.bplist else frame.f_code.co_firstlineno
             self.hit_lines.add((canonical, line))
             info = self.meta.get((canonical, line))
+            self.hit_suspend = info.get("suspend") if info else None
             if info:
                 bp = (bdb.Breakpoint.bplist.get((canonical, line)) or [None])[0]
                 hits = bp.hits if bp is not None else 1
@@ -330,6 +377,16 @@ class Debugger(bdb.Bdb):
                  if not f.f_code.co_filename.startswith("<") else f.f_code.co_filename, "line": line,
                  "first": f.f_code.co_firstlineno} for i, (f, line) in enumerate(self.stack)]
 
+    reader_ident = None   # the thread that reads the host's messages: never traced, never held
+
+    def trace_dispatch(self, frame, event, arg):
+        if threading.get_ident() == self.reader_ident:
+            return None   # settrace_all_threads (Attach) reaches the debugger's own reader thread too
+        # "suspend all": while one thread is stopped, every other one waits at its next traced event (a call, a line)
+        if not self.resumed.is_set() and threading.get_ident() != self.stopped_ident:
+            self.resumed.wait()
+        return super().trace_dispatch(frame, event, arg)
+
     def stop(self, kind, reason, message=None):
         with self.stop_lock:
             self.refs.clear()
@@ -339,9 +396,18 @@ class Debugger(bdb.Bdb):
             self.return_origin = None
             self.force_into = self.force_over = False
             self.last_thread = threading.get_ident()
+            # a breakpoint set to "this thread only" lets the other threads run on; anything else suspends them all
+            suspend_all = not (reason == "breakpoint" and self.hit_suspend == "thread")
+            if suspend_all:
+                self.stopped_ident = threading.get_ident()
+                self.resumed.clear()
             self.send({"type": kind, "reason": reason, "frames": self.frames_payload(), "message": message,
-                       "thread": threading.current_thread().name})
-            self.wait_for_resume()
+                       "thread": threading.current_thread().name, "suspended": "all" if suspend_all else "thread"})
+            try:
+                self.wait_for_resume()
+            finally:
+                self.stopped_ident = None
+                self.resumed.set()
 
     def ref_for(self, value):
         members = children(value)
@@ -352,8 +418,62 @@ class Debugger(bdb.Bdb):
         self.refs[ref] = members
         return ref
 
+    SIMPLE = (int, float, complex, bool, type(None))
+
     def describe(self, name, value):
+        if self.lazy and not isinstance(value, self.SIMPLE) and not (isinstance(value, (str, bytes)) and len(value) <= 200):
+            # on demand: the value (whose repr may be slow) is computed only when the page asks for it ("reprOf")
+            return {"name": name, "value": None, "lazy": True, "type": type(value).__name__, "ref": self.ref_for(value)}
         return {"name": name, "value": short_repr(value), "type": type(value).__name__, "ref": self.ref_for(value)}
+
+    def repr_of(self, ref, index):
+        members = self.refs.get(ref) or []
+        if not 0 <= index < len(members):
+            return {"error": "That value is gone; the program has moved on."}
+        return {"value": short_repr(members[index][1])}
+
+    def set_name(self, frame_id, name, expression):
+        """Assigns to a name of a frame, as the values at the end of the lines show it: a local, else a global."""
+        frame = self.stack[frame_id][0]
+        try:
+            value = eval(compile(expression, "<value>", "eval"), frame.f_globals, frame.f_locals)
+            self.assign(frame, "locals" if name in frame.f_locals and frame.f_locals is not frame.f_globals else "globals", name, value)
+        except BaseException as e:
+            return {"error": "%s: %s" % (type(e).__name__, e)}
+        return {"name": name, "value": short_repr(value), "valueType": type(value).__name__}
+
+    @staticmethod
+    def assign(frame, kind, name, value):
+        if kind == "globals":
+            frame.f_globals[name] = value
+            return
+        frame.f_locals[name] = value
+        try:
+            import ctypes
+            ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(0))
+        except Exception:
+            pass   # newer Pythons write through f_locals themselves
+
+    def type_source(self, frame_id, expression):
+        """Where the class of a value (or the class itself) is written, for Jump to Type Source."""
+        import inspect
+        frame = self.stack[frame_id][0]
+        try:
+            value = eval(compile(expression, "<type>", "eval"), frame.f_globals, frame.f_locals)
+            cls = value if isinstance(value, type) else type(value)
+            # a class of the debugged script: its module "__main__" is this helper, so its methods tell the file
+            own = [f.__code__.co_filename for f in vars(cls).values() if isinstance(f, types.FunctionType)] if cls.__module__ == "__main__" else []
+            if own:
+                path = own[0]
+                with open(path, encoding="utf-8", errors="replace") as source:
+                    found = [n for n, text in enumerate(source, 1) if re.match(r"\s*class\s+%s\b" % re.escape(cls.__name__), text)]
+                line = found[0] if found else 1
+            else:
+                path = inspect.getsourcefile(cls)
+                line = inspect.getsourcelines(cls)[1]
+        except BaseException as e:
+            return {"error": "No source for this type (%s: %s)" % (type(e).__name__, e)}
+        return {"file": os.path.abspath(path), "line": line, "name": cls.__qualname__}
 
     def scopes(self, frame_id):
         frame = self.stack[frame_id][0]
@@ -375,20 +495,40 @@ class Debugger(bdb.Bdb):
             result.append({"name": title, "ref": ref})
         return result
 
-    def evaluate(self, frame_id, expression, eval_only=False, limit=1000):
+    def evaluate(self, frame_id, expression, eval_only=False, limit=1000, detail=False):
+        """The value of an expression in a frame. Not eval_only (the console, the Evaluate window): statements run too,
+        and what they print is caught and returned as "output". With detail: the text of a string and the JSON of a
+        dict or list, for the value dialog's tree."""
         frame = self.stack[frame_id][0]
+        out = io.StringIO()
         try:
             try:
                 code = compile(expression, "<watch>", "eval")
             except SyntaxError:
                 if eval_only:
                     raise
-                exec(compile(expression, "<console>", "exec"), frame.f_globals, frame.f_locals)
-                return {"result": "", "valueType": "", "ref": 0}
-            value = eval(code, frame.f_globals, frame.f_locals)
-            return {"result": short_repr(value, limit), "valueType": type(value).__name__, "ref": self.ref_for(value)}
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                    exec(compile(expression, "<console>", "exec"), frame.f_globals, frame.f_locals)
+                return {"result": "", "valueType": "", "ref": 0, "output": out.getvalue()}
+            if eval_only:
+                value = eval(code, frame.f_globals, frame.f_locals)
+            else:
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                    value = eval(code, frame.f_globals, frame.f_locals)
+            answer = {"result": short_repr(value, limit), "valueType": type(value).__name__, "ref": self.ref_for(value), "output": out.getvalue()}
+            if detail:
+                if isinstance(value, str):
+                    answer["text"] = value[:limit]
+                elif isinstance(value, (dict, list, tuple)):
+                    try:
+                        text = json.dumps(value, default=repr)
+                        if len(text) <= limit:
+                            answer["json"] = text
+                    except (TypeError, ValueError, RecursionError):
+                        pass
+            return answer
         except BaseException as e:
-            return {"error": "%s: %s" % (type(e).__name__, e)}
+            return {"error": "%s: %s" % (type(e).__name__, e), "output": out.getvalue()}
 
     def values(self, frame_id, names):
         """The short values of the names a frame can see, for the values shown at the end of the editor's lines."""
@@ -398,7 +538,9 @@ class Debugger(bdb.Bdb):
             for space in (frame.f_locals, frame.f_globals):
                 if name in space:
                     value = space[name]
-                    if not isinstance(value, (types.ModuleType, types.FunctionType, type)):
+                    if self.lazy and not isinstance(value, self.SIMPLE + (str, bytes)):
+                        pass   # on demand: no repr of objects until asked
+                    elif not isinstance(value, (types.ModuleType, types.FunctionType, type)):
                         found[name] = short_repr(value, 60)
                     break
         return found
@@ -488,6 +630,17 @@ class Debugger(bdb.Bdb):
         described["type_"] = described.pop("type")
         return {"name": name, "value": described["value"], "valueType": described["type_"], "ref": described["ref"]}
 
+    def answer_extra(self, kind, msg):
+        frame_id = int(msg.get("frameId", 0))
+        if kind == "reprOf":
+            answer = self.repr_of(int(msg.get("ref", 0)), int(msg.get("index", -1)))
+        elif kind == "setName":
+            answer = self.set_name(frame_id, msg.get("name", ""), msg.get("expression", ""))
+        else:
+            answer = self.type_source(frame_id, msg.get("expression", ""))
+        answer.update({"type": kind, "id": msg.get("id")})
+        return answer
+
     def wait_for_resume(self):
         while True:
             msg = self.commands.get()
@@ -524,6 +677,9 @@ class Debugger(bdb.Bdb):
                 answer.update({"type": "table", "id": rid})
                 self.send(answer)
                 continue
+            elif kind in ("reprOf", "setName", "typeSource"):
+                self.send(self.answer_extra(kind, msg))
+                continue
             elif kind == "jump":
                 answer = self.jump(int(msg.get("line", 0)))
                 answer.update({"type": "jumped", "id": rid})
@@ -538,7 +694,7 @@ class Debugger(bdb.Bdb):
                            "items": [self.describe(n, v) for n, v in members]})
                 continue
             elif kind == "evaluate":
-                answer = self.evaluate(int(msg.get("frameId", 0)), msg.get("expression", ""), bool(msg.get("evalOnly")), int(msg.get("limit") or 1000))
+                answer = self.evaluate(int(msg.get("frameId", 0)), msg.get("expression", ""), bool(msg.get("evalOnly")), int(msg.get("limit") or 1000), bool(msg.get("detail")))
                 answer.update({"type": "evaluated", "id": rid})
                 self.send(answer)
                 continue
@@ -616,6 +772,8 @@ class Debugger(bdb.Bdb):
                 answer = self.table(int(msg.get("frameId", 0)), msg.get("expression", ""))
                 answer.update({"type": "table", "id": rid})
                 self.send(answer)
+            elif kind in ("reprOf", "setName", "typeSource"):
+                self.send(self.answer_extra(kind, msg))
             elif kind == "jump":
                 self.send({"type": "jumped", "id": rid, "error": "The program has ended with this exception; it cannot go on."})
             elif kind == "variables":
@@ -623,13 +781,40 @@ class Debugger(bdb.Bdb):
                 self.send({"type": "variables", "id": rid, "ref": msg.get("ref"),
                            "items": [self.describe(n, v) for n, v in members]})
             elif kind == "evaluate":
-                answer = self.evaluate(int(msg.get("frameId", 0)), msg.get("expression", ""), bool(msg.get("evalOnly")), int(msg.get("limit") or 1000))
+                answer = self.evaluate(int(msg.get("frameId", 0)), msg.get("expression", ""), bool(msg.get("evalOnly")), int(msg.get("limit") or 1000), bool(msg.get("detail")))
                 answer.update({"type": "evaluated", "id": rid})
                 self.send(answer)
             elif kind == "setVariable":
                 answer = self.set_variable(int(msg.get("ref", 0)), msg.get("name", ""), msg.get("expression", ""))
                 answer.update({"type": "variableSet", "id": rid})
                 self.send(answer)
+
+
+def attach(host, port, token, root):
+    """Run by sys.remote_exec (Python 3.14, PEP 768) inside a program that is already running: connects to the host
+    and traces every thread from now on, also the frames already running, so breakpoints in them stop."""
+    sock = socket.create_connection((host, port))
+    dbg = Debugger(sock, root)
+    dbg.attached = True
+    dbg.send({"type": "hello", "token": token})
+    reader = threading.Thread(target=dbg.read_loop, daemon=True, name="pymagic-debugger")
+    reader.start()
+    dbg.reader_ident = reader.ident
+    dbg.go.wait(15)   # the host sends the breakpoints first
+    dbg.reset()
+    outermost = sys._getframe()
+    while outermost.f_back is not None:
+        outermost = outermost.f_back
+    dbg.botframe = outermost
+    dbg.set_continue()
+    threading.settrace_all_threads(dbg.trace_dispatch)
+    for ident, top in sys._current_frames().items():
+        if ident == reader.ident:
+            continue
+        frame = top
+        while frame is not None:
+            frame.f_trace = dbg.trace_dispatch
+            frame = frame.f_back
 
 
 def main():

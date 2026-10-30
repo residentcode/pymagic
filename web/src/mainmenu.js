@@ -178,6 +178,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 { label: 'Run with coverage', run: press('b-cov') },
                 { label: 'Profile', run: press('b-profile'), disabled: $('b-profile').disabled },
                 { label: 'Stop', key: 'Shift+F5', run: press('b-stop'), disabled: $('b-stop').disabled },
+                { label: 'Attach to process…', run: () => debug.attach(), disabled: debug.running() },
                 '-',
                 { label: 'Step over', key: 'F10', run: press('b-over'), disabled: $('b-over').disabled },
                 { label: 'Step into', key: 'F11', run: press('b-into'), disabled: $('b-into').disabled },

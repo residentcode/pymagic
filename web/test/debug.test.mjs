@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/debug-model.js', import.meta.url), 'utf8');
-const { codeOf, namesOf, inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { codeOf, namesOf, inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem,
+    declarationLine, historyStep } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 test('codeOf: comments and the text of strings are left out', () => {
     assert.equal(codeOf('x = "a # b"  # note'), 'x = "     "  ');
@@ -76,6 +77,23 @@ test('readWatches: old lists of strings and new lists of objects', () => {
     assert.deepEqual(readWatches(['a', 'b.c']), [{ expression: 'a', paused: false }, { expression: 'b.c', paused: false }]);
     assert.deepEqual(readWatches([{ expression: 'x', paused: true }, { expression: '' }]), [{ expression: 'x', paused: true }]);
     assert.deepEqual(readWatches(null), []);
+});
+
+test('declarationLine: where a name of the frame is first bound', () => {
+    const text = ['def scale(p, *, factor=2):', '    total: int = 0', '    for i, row in enumerate(rows):', '        x, big = 1, 2',
+        '    with open(f) as fh:', '    import os', '    total += 1', '    print(total == 3)'];
+    const at = (l) => text[l - 1] ?? null;
+    const where = (name) => declarationLine(at, 1, 8, name);
+    assert.deepEqual(['p', 'factor', 'total', 'i', 'row', 'big', 'fh', 'os'].map(where), [1, 1, 2, 3, 3, 4, 5, 6]);
+    assert.equal(where('rows'), null);   // only read here
+    assert.equal(declarationLine((l) => ['    if total == 3:'][l - 1] ?? null, 1, 1, 'total'), null);   // a comparison binds nothing
+});
+
+test('historyStep: Up from the empty line goes to the newest entry, Down past the newest empties the line', () => {
+    assert.deepEqual(historyStep(['a', 'b'], 2, -1), { index: 1, text: 'b' });
+    assert.deepEqual(historyStep(['a', 'b'], 0, -1), { index: 0, text: 'a' });
+    assert.deepEqual(historyStep(['a', 'b'], 1, 1), { index: 2, text: '' });
+    assert.deepEqual(historyStep([], 0, -1), { index: 0, text: '' });
 });
 
 test('moveItem: one place up or down, stopping at the ends', () => {

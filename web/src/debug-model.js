@@ -121,6 +121,29 @@ export function moveItem(list, index, by) {
     copy.splice(to, 0, item);
     return copy;
 }
+/** Where a name of a frame is first bound, from the frame's first line up to the stopped one: a parameter, an
+ * assignment (also `x: int =`, `a, b =`, `+=`), a `for` or `with ... as` target, an import, a `def` or `class`. */
+export function declarationLine(lineText, first, current, name) {
+    const n = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const binds = [
+        new RegExp(`^\\s*(async\\s+)?def\\s+\\w+\\s*\\((.*[(,\\s*])?\\**${n}\\b`),
+        new RegExp(`^\\s*(async\\s+)?def\\s+${n}\\b`), new RegExp(`^\\s*class\\s+${n}\\b`),
+        new RegExp(`^\\s*([\\w\\s,.*\\[\\]()]*[\\s,(*])?${n}\\s*(:[^=]+)?(=(?!=)|[-+*/%&|^@]=|//=|\\*\\*=)`),
+        new RegExp(`^\\s*(async\\s+)?for\\s+([\\w\\s,()]*[\\s,(])?${n}\\b.*\\bin\\b`),
+        new RegExp(`\\bas\\s+${n}\\b`), new RegExp(`^\\s*(from\\s+\\S+\\s+)?import\\s+(.*[\\s,])?${n}\\b`),
+    ];
+    for (let line = Math.max(1, first); line <= current; line++) {
+        const text = codeOf(lineText(line) ?? '');
+        if (binds.some((re) => re.test(text)))
+            return line;
+    }
+    return null;
+}
+/** The console's history: Up and Down walk it from the newest entry; past the newest is the empty line again. */
+export function historyStep(history, index, by) {
+    const next = Math.max(0, Math.min(history.length, index + by));
+    return { index: next, text: next === history.length ? '' : history[next] };
+}
 /** The call stack as text, innermost first, for the clipboard. */
 export function stackText(frames) {
     return frames.map((f) => `${f.name}, ${f.file}:${f.line}`).join('\n');

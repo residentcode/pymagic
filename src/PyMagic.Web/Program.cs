@@ -121,6 +121,9 @@ string ResolveInRoot(string rel)
     return full;
 }
 
+// Attach to Process: the Python programs running on this computer
+app.MapGet("/api/processes", () => Results.Json(RunSession.PythonProcesses()));
+
 app.MapGet("/api/info", () => new
 {
     root,
@@ -898,6 +901,18 @@ app.Map("/run", async (HttpContext ctx) =>
                     session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised", ["classes"] = msg["exceptionClasses"]?.DeepClone() });
                 if (msg["muted"]?.GetValue<bool>() == true)
                     session.Handle(new JsonObject { ["type"] = "mute", ["on"] = true });
+                if (msg["loadPolicy"]?.GetValue<string>() is "onDemand")
+                    session.Handle(new JsonObject { ["type"] = "setLoadPolicy", ["policy"] = "onDemand" });
+            }
+            else if (msg["type"]?.GetValue<string>() == "attach" && msg["pid"]?.GetValue<int>() is int attachPid)
+            {
+                var bps = new Dictionary<string, JsonArray>();
+                if (msg["breakpoints"] is JsonObject bo)
+                    foreach (var (file, lines) in bo)
+                        bps[file] = lines is JsonArray arr ? (JsonArray)JsonNode.Parse(arr.ToJsonString())! : new JsonArray();
+                // the program runs on this computer: the interpreter that sends the debugger is the selected one, run here
+                session.Python = interpreters.Current?.Target.IsLocal != false ? interpreters.Current?.Python ?? python : python;
+                session.Attach(root, attachPid, bps);
             }
             else if (msg["type"]?.GetValue<string>() == "startTests")
             {
