@@ -6,6 +6,7 @@ import { setupInterpreters } from './interpreters';
 import { setupPackages } from './packages';
 import { setupRefactor } from './refactor';
 import { setupSearch } from './search';
+import { setupCodeVision } from './codevision';
 import { setupHierarchy } from './hierarchy';
 import { setupRoutes } from './routes';
 import { setupDjango } from './django';
@@ -905,6 +906,7 @@ async function main() {
         openIn: (ed, rel, sel) => split.openIn(ed, rel, sel),
     });
     setupInspections(lsp);
+    const codeVision = setupCodeVision({ editor, lsp, uriOf: (model) => model && serverUri.get(model), relOf: (model) => model && relPathOf.get(normalise(serverUri.get(model) ?? '')), savedText: (rel) => savedText.get(rel) });
     setupRoutes({ editor, lsp, openFile, relOfUri });
     setupDjango({ openFile, run: runHooks });
     const problems = setupProblems({ editor, lsp, openFile, relOfUri });
@@ -1045,6 +1047,7 @@ async function main() {
             git.attach(e);
             coverage.attach(e);
             hierarchy.attach(e);
+            codeVision.attach(e);
             fileActions.attachEditor(e, monaco);
             return e;
         },

@@ -24,6 +24,10 @@ export const DEFAULTS = {
     terminalShell: 'auto',    // the id of the shell new terminals start (/api/shells), auto for PowerShell 7 or Windows PowerShell
     tabLimit: 0,              // the most editor tabs kept open, the ones used longest ago closing first; 0 for no limit
     tabClose: true,           // each tab has its ✕
+    codeVision: true,         // usages and inheritors above functions and classes
+    codeVisionAuthor: true,   // and who wrote most of each (Git blame)
+    hintParams: true,         // the names of parameters before arguments
+    hintTypes: true,          // inferred return and variable types, the types along a method chain
 };
 
 let current = { ...DEFAULTS };
@@ -91,6 +95,8 @@ export function editorOptions(s = current) {
         bracketPairColorization: { enabled: s.bracketColors },
         stickyScroll: { enabled: s.stickyScroll },
         rulers: s.ruler > 0 ? [s.ruler] : [],
+        codeLens: s.codeVision || s.codeVisionAuthor,
+        inlayHints: { enabled: s.hintParams || s.hintTypes ? 'on' : 'off' },
     };
 }
 

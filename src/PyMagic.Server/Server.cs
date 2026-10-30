@@ -256,6 +256,8 @@ public sealed class Server
                 return _service.PlanModuleMove(p!["from"]!.GetValue<string>(), p["to"]!.GetValue<string>());
             case "pymagic/generate":
                 return _service.Generate(UriOf(p), PositionOf(p));
+            case "pymagic/inlayHints":
+                return _service.InlayHints(UriOf(p), RangeOf(p));
             case "pymagic/fileUsages":
                 return _service.FileUsages(UriOf(p));
             case "pymagic/move":

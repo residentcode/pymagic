@@ -38,6 +38,12 @@ const PAGES = [
         { key: 'cursorStyle', label: 'Cursor', type: 'choice', options: [['line', 'Line'], ['block', 'Block'], ['underline', 'Underline']] },
         { key: 'cursorBlinking', label: 'Cursor blinking', type: 'choice', options: [['blink', 'Blink'], ['smooth', 'Smooth'], ['phase', 'Phase'], ['expand', 'Expand'], ['solid', 'None']] },
     ]],
+    ['hints', 'Code vision and hints', [
+        { key: 'codeVision', label: 'Usages and inheritors above functions and classes', type: 'bool', hint: 'A click lists them.' },
+        { key: 'codeVisionAuthor', label: 'Who wrote most of each function and class', type: 'bool', hint: 'From Git blame; only in a Git repository.' },
+        { key: 'hintParams', label: 'Parameter names before arguments', type: 'bool', hint: 'Also the names of @pytest.mark.parametrize values and of positional class patterns in match.' },
+        { key: 'hintTypes', label: 'Inferred types', type: 'bool', hint: 'The return type of a function without one, the type of a variable when its value does not show it, and each call of a method chain.' },
+    ]],
     ['tabs', 'Editor tabs', [
         { key: 'tabLimit', label: 'Tab limit', type: 'number', min: 0, max: 100, unit: '0 for none', hint: 'Past it, the tabs used longest ago close; pinned tabs and those with unsaved changes stay.' },
         { key: 'tabClose', label: 'A close button on each tab', type: 'bool', hint: 'Without it a tab closes with a middle click or its menu.' },
