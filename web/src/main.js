@@ -1043,6 +1043,7 @@ async function main() {
         splitDown: (rel) => split.open(rel, undefined, 'down'),
         renameFile: (rel) => explorer.rename(rel),
         items: (rel) => fileActions.tabItems(rel),
+        detach: (rel) => editorNav.commands.detach(rel),
     });
     split = setupSplit({
         createEditor: (el) => {

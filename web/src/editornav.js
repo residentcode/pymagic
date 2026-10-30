@@ -369,8 +369,7 @@ export function setupEditorNav(deps) {
         requestAnimationFrame(() => lensEditor?.revealLineInCenter(line));
     }
     // ---------------------------------------------------------------- Open in a new window (Shift+F4): the tab moves to its own window
-    async function detach() {
-        const rel = deps.currentFile();
+    async function detach(rel = deps.currentFile()) {
         if (!rel)
             return;
         await deps.saveAll();
@@ -416,7 +415,7 @@ export function setupEditorNav(deps) {
             blockStart: () => blockEdge(editor, false), blockEnd: () => blockEdge(editor, true),
             lastEdit: () => void lastEdit(), recentLocations: () => void recentLocations(),
             contextInfo: () => void contextInfo(editor), expressionType: () => void expressionType(editor),
-            externalDoc: () => void externalDoc(editor), detach: () => void detach(),
+            externalDoc: () => void externalDoc(editor), detach: (rel) => void detach(rel),
             checkRegex: () => {
                 const model = editor.getModel(), pos = editor.getPosition();
                 const found = model && pos ? regexAt(model.getLineContent(pos.lineNumber), pos.column) : null;

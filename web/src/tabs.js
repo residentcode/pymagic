@@ -127,7 +127,11 @@ export function setupTabs(deps) {
                 // faded only after the browser has taken its picture of the tab for the drag image
                 requestAnimationFrame(() => { if (dragged?.rel === rel) tab.classList.add('dragging'); });
             };
-            tab.ondragend = () => {
+            tab.ondragend = (e) => {
+                // dropped outside the window: the file moves to a new window of its own, as PyCharm does with a tab dragged out
+                // (the drop position against the page; the window's own screen position is not reliable in every shell)
+                const outside = e.dataTransfer?.dropEffect === 'none' && (e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight);
+                if (outside && deps.detach) void deps.detach(rel);
                 dragged = null;
                 tab.classList.remove('dragging');
                 markDrop(-1);
