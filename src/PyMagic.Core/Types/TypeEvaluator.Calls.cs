@@ -388,7 +388,51 @@ public sealed partial class TypeEvaluator
     /// The literal an argument is: a written constant, a name every assignment of which is a literal (`mode = "r"`, then `mode = "rb"`:
     /// Literal['r', 'rb']), or arithmetic of literals (`1 << 3`, `"r" + "b"`). Null when any part is not known as a literal.
     /// </summary>
-    PyType? ArgumentLiteral(ModuleInfo m, Expr e) => LiteralOf(m, e, new HashSet<Declaration>());
+    PyType? ArgumentLiteral(ModuleInfo m, Expr e)
+    {
+        // ("r", 1), ["a", "b"]: the display with its constants as literals (and its other items as they are)
+        var items = e switch { TupleExpr t => t.Items, ListExpr l => l.Items, _ => null };
+        if (items == null) return LiteralOf(m, e, new HashSet<Declaration>());
+        if (items.Count == 0 || items.Any(i => i is StarExpr)) return null;
+        var literals = items.Select(i => ArgumentLiteral(m, i)).ToList();
+        if (literals.All(l => l == null)) return null;
+        var types = literals.Select((l, i) => l ?? TypeOf(m, items[i])).ToList();
+        return e is TupleExpr ? TupleOf(types) : Inst("list", PyType.Union(types));
+    }
+
+    /// <summary>A Literal[...] wanted directly, or as an item of a tuple or list that is wanted.</summary>
+    static bool WantsLiteral(PyType t) => t.Members.Any(x => x is ClassType { IsInstance: true } c
+        && (c.LiteralValue != null || IsBuiltinSequence(c, "tuple", "list") && (c.TupleItems ?? c.Args).Any(WantsLiteral)));
+
+    static bool IsBuiltinSequence(ClassType c, params string[] names) => c.Info.Module.Name == "builtins" && names.Contains(c.Info.Name);
+
+    /// <summary>
+    /// The type of a tuple or list display with the literals of its constants kept where the wanted type wants them
+    /// (`("r", 1)` for `tuple[Literal["r", "w"], int]` is `tuple[Literal['r'], int]`); null when nothing wanted fits its shape.
+    /// </summary>
+    PyType? WithWantedLiterals(PyType expected, PyType literal, PyType plain)
+    {
+        foreach (var e in expected.Members)
+        {
+            if (e is not ClassType { IsInstance: true } ec || !WantsLiteral(ec)) continue;
+            if (literal is ClassType { TupleItems: { } lits } && plain is ClassType { TupleItems: { } plains } && lits.Count == plains.Count && IsBuiltinSequence(ec, "tuple"))
+            {
+                bool Wanted(int i) => ec.TupleItems is { } want ? want.Count == lits.Count && WantsLiteral(want[i]) : ec.Args.Count == 1 && WantsLiteral(ec.Args[0]);
+                return TupleOf(lits.Select((l, i) => Wanted(i) ? l : plains[i]).ToList());
+            }
+            if (literal is ClassType { TupleItems: null } && IsBuiltinSequence(ec, "list") && ec.Args.Count == 1 && WantsLiteral(ec.Args[0])) return literal;
+        }
+        return null;
+    }
+
+    /// <summary>A tuple of literals is checked item by item against a wanted tuple of its length (the elements' union alone lets `("x", "a")` pass for `tuple[Literal["r"], str]`).</summary>
+    bool TupleItemsFit(PyType expected, PyType at)
+    {
+        if (at is not ClassType { TupleItems: { } items }) return true;
+        return expected.Members.Any(e => e is ClassType { IsInstance: true, TupleItems: { } want } && want.Count == items.Count && want.All(w => w is not (TypeVarTupleType or UnboundedItemsType))
+            ? want.Zip(items).All(p => IsAssignable(p.First, p.Second))
+            : IsAssignable(e, at));
+    }
 
     PyType? LiteralOf(ModuleInfo m, Expr e, HashSet<Declaration> path)
     {
@@ -546,9 +590,14 @@ public sealed partial class TypeEvaluator
                 continue;
             }
             var expected = Substitute(param.Type, solved);
-            // a constant written in the call is the literal it spells where a Literal[...] is wanted
-            if (expected.Members.Any(x => x is ClassType { IsInstance: true, LiteralValue: not null }) && arg.Literal?.Invoke() is { } literal) at = literal;
-            if (!IsAssignable(expected, at) && !(arg.Fresh?.Invoke() == true && IsAssignable(expected, at, fresh: true)))
+            // a constant written in the call is the literal it spells where a Literal[...] is wanted, in a tuple or list display too
+            bool itemwise = false;
+            if (WantsLiteral(expected) && arg.Literal?.Invoke() is { } literal)
+            {
+                if (expected.Members.Any(x => x is ClassType { IsInstance: true, LiteralValue: not null })) at = literal;
+                else if (WithWantedLiterals(expected, literal, at) is { } withLiterals) { at = withLiterals; itemwise = true; }
+            }
+            if (!IsAssignable(expected, at) && !(arg.Fresh?.Invoke() == true && IsAssignable(expected, at, fresh: true)) || itemwise && !TupleItemsFit(expected, at))
                 problems.Add(new CallProblem(CallProblemKind.Type, (Node?)arg.Node ?? callNode,
                     $"Expected type '{expected}', got '{at}' instead"));
             else if (loose != null && IsLooseLiteral(expected, at))
@@ -923,6 +972,14 @@ public sealed partial class TypeEvaluator
                     if (s.Index is SliceExpr) return TupleHomogeneous(tupleLike.Args.Count > 0 ? tupleLike.Args[0] : PyType.Union(items));
                     break;
                 }
+
+                // tuple[int, str, *tuple[bytes, ...]]: the items before the star by their index, those after it from the end;
+                // past them, the star's item or one of the items on its other side
+                case ClassType { IsInstance: true } atLeast when ConstIndex(s.Index) is int i && AtLeastParts(atLeast) is { } parts:
+                    if (i >= 0 && i < parts.Before.Count) return parts.Before[i];
+                    if (i < 0 && -i <= parts.After.Count) return parts.After[parts.After.Count + i];
+                    if (i >= 0) return PyType.Union(parts.After.Take(i - parts.Before.Count + 1).Prepend(parts.Item));
+                    return PyType.Union(parts.Before.Skip(Math.Max(0, parts.Before.Count - (-i - parts.After.Count))).Prepend(parts.Item));
             }
             if (r is ClassType { IsInstance: true } inst)
                 return CallMethod(inst, "__getitem__", new[] { TypeOf(m, s.Index) }, out _) ?? PyType.Unknown;

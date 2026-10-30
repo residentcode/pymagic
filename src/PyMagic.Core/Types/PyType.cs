@@ -170,6 +170,15 @@ public sealed record TypeVarTupleType(string Name) : PyType
     public override string Display(int depth = 0) => Name;
 }
 
+/// <summary>
+/// `*tuple[X, ...]` among a tuple's items: any number of X there, so the tuple has at least as many items as the others
+/// (`len(t) >= 2` makes `tuple[int, int, *tuple[int, ...]]` of a `tuple[int, ...]`).
+/// </summary>
+public sealed record UnboundedItemsType(PyType Item) : PyType
+{
+    public override string Display(int depth = 0) => $"*tuple[{Item.Display(depth + 1)}, ...]";
+}
+
 public sealed record ModuleType(ModuleInfo Module) : PyType
 {
     public bool Equals(ModuleType? o) => o != null && ReferenceEquals(Module, o.Module);

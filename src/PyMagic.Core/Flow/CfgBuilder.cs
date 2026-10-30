@@ -167,6 +167,13 @@ internal sealed class CfgBuilder
                     reference = Referent(tc.Args[0].Value);
                     return true;
                 }
+                // x[0] == "a", "a" != x[-1]: a union of tuples narrowed by one item
+                if ((left is ConstExpr ? right : left) is SubscriptExpr { Index: ConstExpr { Kind: ConstKind.Int } or UnaryExpr { Op: "-", Operand: ConstExpr { Kind: ConstKind.Int } } } item
+                    && IsChain(item.Value))
+                {
+                    reference = Referent(item.Value);
+                    return true;
+                }
                 // x is None, x == C.MEMBER, (m := f()) is not None
                 if (IsChain(left)) { reference = Referent(left); return true; }
                 // None is not x, "a" == x

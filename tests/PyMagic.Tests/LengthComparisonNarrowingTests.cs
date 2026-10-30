@@ -104,10 +104,11 @@ public class LengthComparisonNarrowingTests
     }
 
     [Fact]
-    public void AHomogeneousTupleStaysWhenTheLengthHasNoUpperBound()
+    public void AHomogeneousTupleHasAtLeastSoManyItemsWhenTheLengthHasNoUpperBound()
     {
-        Same("tuple[int, ...]", T(Homogeneous + "    if len(x) > 2:\n        x\n"));
-        Same("tuple[int, ...]", T(Homogeneous + "    if len(x) < 3:\n        pass\n    else:\n        x\n"));
+        Same("tuple[int, int, int, *tuple[int, ...]]", T(Homogeneous + "    if len(x) > 2:\n        x\n"));
+        Same("tuple[int, int, int, *tuple[int, ...]]", T(Homogeneous + "    if len(x) < 3:\n        pass\n    else:\n        x\n"));
+        Same("tuple[int, ...]", T(Homogeneous + "    if len(x) > 9:\n        x\n"));
     }
 
     [Fact]
