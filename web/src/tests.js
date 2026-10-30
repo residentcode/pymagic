@@ -388,4 +388,17 @@ export function setupTests(deps) {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.F10, runAtCursor);
     void load().catch(() => { });
     setButtons();
+    /** Runs the tests of a file, or of every test file under a folder (the menus of the project tree and the tabs). */
+    async function runPath(path) {
+        await load();
+        const ids = roots.filter((r) => !path || r.file === path || r.file.startsWith(path + '/')).map((r) => r.id);
+        if (ids.length === 0) {
+            showTab('tests');
+            appendConsole(`No tests were found in ${path || 'the project'}.
+`, 'info');
+            return;
+        }
+        await run(ids);
+    }
+    return { runPath };
 }

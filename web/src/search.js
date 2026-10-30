@@ -155,8 +155,10 @@ export function setupSearch(deps) {
     $('fs-go').onclick = () => void search();
     replaceAll.onclick = () => void replaceEverywhere();
     $('t-search').onclick = () => { showTab('search'); query.focus(); };
-    function open(prefill) {
+    /** Shows Find in Files; `scope` comes from the menus of the project tree: { include: 'folder/**', replace: true } searches that folder and goes to Replace. */
+    function open(prefill, scope) {
         showTab('search');
+        if (scope) include.value = scope.include ?? '';
         const sel = editor.getModel() && editor.getSelection() && !editor.getSelection().isEmpty()
             ? editor.getModel().getValueInRange(editor.getSelection()) : '';
         const text = prefill ?? (sel && !sel.includes('\n') ? sel : '');
@@ -164,6 +166,7 @@ export function setupSearch(deps) {
             query.value = text;
             void search();
         }
+        if (scope?.replace && query.value) { replace.focus(); replace.select(); return; }
         query.focus();
         query.select();
     }

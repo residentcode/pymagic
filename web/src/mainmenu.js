@@ -8,15 +8,10 @@ const $ = (id) => document.getElementById(id);
 const press = (id) => () => $(id).click();
 let findActionOpen = () => {};
 
-export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, split, currentFile, search, refactor, breakpoints, recent, chrome, bookmarks, runConfigs }) {
-    // the desktop app lets the page open another folder (preload.js); in a browser the engine is started with its folder and these stay dim
-    const desktop = window.pymagicDesktop;
-    let recentProjects = [];
-    desktop?.recentProjects().then((list) => { recentProjects = list; }).catch(() => { /* none shown */ });
+/** The Refactor submenu: of the main menu, and of the editor's own menu (Refactor…). */
+export function refactorMenu(editor, refactor) {
     const act = (id) => () => { editor.focus(); editor.trigger('menu', id, null); };
-    const dock = (id) => () => $(`t-${id}`).click();
-
-    const refactorings = () => [
+    return [
         { label: 'Rename…', key: 'F2', run: act('editor.action.rename') },
         '-',
         { label: 'Extract variable', key: 'Ctrl+Alt+V', run: () => { editor.focus(); void refactor.trigger('extractVariable'); } },
@@ -29,6 +24,17 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
         { label: 'Change signature…', key: 'Ctrl+F6', run: () => { editor.focus(); void refactor.trigger('changeSignature'); } },
         { label: 'Move to another file…', key: 'F6', run: () => { editor.focus(); void refactor.trigger('moveSymbol'); } },
     ];
+}
+
+export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, split, currentFile, search, refactor, breakpoints, recent, chrome, bookmarks, runConfigs }) {
+    // the desktop app lets the page open another folder (preload.js); in a browser the engine is started with its folder and these stay dim
+    const desktop = window.pymagicDesktop;
+    let recentProjects = [];
+    desktop?.recentProjects().then((list) => { recentProjects = list; }).catch(() => { /* none shown */ });
+    const act = (id) => () => { editor.focus(); editor.trigger('menu', id, null); };
+    const dock = (id) => () => $(`t-${id}`).click();
+
+    const refactorings = () => refactorMenu(editor, refactor);
 
     function items() {
         const s = settings();

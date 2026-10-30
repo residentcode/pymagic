@@ -166,6 +166,15 @@ app.whenReady().then(async () => {
   ipcMain.handle('pymagic:open-project', async (_e, folder) => { if (typeof folder === 'string' && fs.existsSync(folder) && fs.statSync(folder).isDirectory()) await openProject(path.resolve(folder)); });
   ipcMain.handle('pymagic:open-demo', () => openProject(demo));
   ipcMain.handle('pymagic:recent', () => existing(readSettings().recent, fs.existsSync, project));
+  // Open In > Explorer: a file or folder of the open project, selected in a window of Explorer
+  ipcMain.handle('pymagic:reveal', (_e, rel) => {
+    if (!project || typeof rel !== 'string') return false;
+    const base = path.resolve(project), full = path.resolve(base, rel);
+    if (full !== base && !full.startsWith(base + path.sep)) return false;
+    if (!fs.existsSync(full)) return false;
+    shell.showItemInFolder(full);
+    return true;
+  });
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
   menu();
   const report = t => win.webContents.executeJavaScript(`document.getElementById('t') && (document.getElementById('t').textContent = ${JSON.stringify(t)})`).catch(() => {});

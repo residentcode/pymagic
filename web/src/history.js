@@ -119,5 +119,6 @@ export function setupHistory({ monaco, editor, currentFile }) {
     $('hist-refresh').onclick = () => void refresh();
     editor.onDidChangeModel(() => { if (active()) void refresh(); });
     window.addEventListener('pymagic:saved', () => { if (active()) void refresh(); });
-    return { refresh };
+    // Local History of the tree's and the tabs' menus: the file is opened first, so the panel is about it
+    return { refresh, show: () => { showTab('history'); void refresh(); } };
 }

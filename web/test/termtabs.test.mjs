@@ -81,3 +81,8 @@ test('cleanName: spaces folded and trimmed, at most 40 characters, nothing typed
     assert.equal(cleanName(''), null);
     assert.equal(cleanName(undefined), null);
 });
+
+test('restoredTabs: the folder a terminal started in is kept when it is under the project', () => {
+    const raw = { root: '', tabs: [{ name: 'app', panes: [{ shell: 'cmd', cwd: 'app/api', lines: [] }, { shell: 'cmd', cwd: '../x', lines: [] }, { shell: 'cmd', cwd: 'C:/Windows', lines: [] }] }] };
+    assert.deepEqual(restoredTabs(raw, ''), [{ name: 'app', panes: [{ shell: 'cmd', cwd: 'app/api', lines: [] }, { shell: 'cmd', lines: [] }, { shell: 'cmd', lines: [] }] }]);
+});

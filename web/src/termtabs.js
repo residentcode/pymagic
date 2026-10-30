@@ -42,6 +42,8 @@ export function restoredTabs(raw, root) {
         const panes = (Array.isArray(t?.panes) ? t.panes : []).filter((p) => p && typeof p === 'object').slice(0, MAX_PANES).map((p) => ({
             shell: typeof p.shell === 'string' && /^[\w-]{1,40}$/.test(p.shell) ? p.shell : null,
             lines: Array.isArray(p.lines) ? keptLines(p.lines.filter((l) => typeof l === 'string')) : [],
+            // the folder it started in, under the project (Open In > Terminal)
+            ...(typeof p.cwd === 'string' && p.cwd && p.cwd.length < 400 && !/(^|[\\/])\.\.([\\/]|$)|^[\\/]|:/.test(p.cwd) ? { cwd: p.cwd } : {}),
         }));
         if (panes.length) tabs.push({ name: cleanName(t.name) ?? 'Terminal', panes });
     }

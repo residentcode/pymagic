@@ -26,12 +26,13 @@ import { setupGit } from './git';
 import { toast } from './toast';
 import { setupChrome } from './rail';
 import { setupToolbar } from './toolbar';
-import { setupMainMenu } from './mainmenu';
+import { setupMainMenu, refactorMenu } from './mainmenu';
 import { setupStructure } from './structure';
 import { setupBookmarks } from './bookmarks';
 import { setupRecent } from './recent';
 import { setupRunConfigurations } from './runconfig';
 import { setupHistory } from './history';
+import { setupFileActions, fileTypes } from './fileactions';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
 import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings } from './settings';
@@ -69,8 +70,10 @@ const relOfUri = (uri) => relPathOf.get(normalise(uri)) ?? relUnderRoot(uri, roo
 function ensureModel(rel) {
     const key = normalise(uriFor(rel));
     let p = loading.get(key);
-    if (!p)
-        loading.set(key, (p = loadModel(rel, key)));
+    if (!p) {
+        // a type chosen with Override File Type colours the file as that language
+        loading.set(key, (p = loadModel(rel, key).then((model) => { const chosen = fileTypes()[rel]; if (model && chosen) monaco.editor.setModelLanguage(model, chosen); return model; })));
+    }
     return p;
 }
 // Django and Jinja templates: HTML with {{ variables }}, {% tags %} and {# comments #} (Jinja's may span lines). Monaco's own HTML mode needs a language worker this page does not ship.
@@ -242,6 +245,30 @@ async function formatCurrent(quiet = false) {
     }
     catch (e) {
         toast(e.message ?? 'The file cannot be formatted.', true);
+        return false;
+    }
+}
+/** Reformat Code or Optimize Imports of a file from the project tree, open or not; a file that had no unsaved changes is saved after it. */
+async function tidyFile(rel, kind) {
+    const model = await ensureModel(rel);
+    const uri = model && serverUri.get(model);
+    if (!model || !uri)
+        return false;
+    const wasSaved = model.getValue() === savedText.get(rel);
+    lsp.notify('textDocument/didChange', { textDocument: { uri, version: model.getVersionId() }, contentChanges: [{ text: model.getValue() }] });
+    try {
+        const before = model.getValue();
+        const edits = kind === 'format'
+            ? await lsp.request('textDocument/formatting', { textDocument: { uri }, options: formatOptions() })
+            : await lsp.request('pymagic/organizeImports', { textDocument: { uri } });
+        applyTextEdits(model, edits ?? []);
+        if (model.getValue() === before)
+            return false;
+        if (wasSaved)
+            await saveFile(rel);
+        return true;
+    }
+    catch {
         return false;
     }
 }
@@ -829,7 +856,7 @@ async function main() {
     };
     runConfigs = setupRunConfigurations({ currentFile: () => currentRel });
     runHooks = setupRun({ ...common, root: info.root, runConfig: () => runConfigs.current() });
-    setupTests(common);
+    const tests = setupTests(common);
     setupInterpreters();
     setupPackages();
     const refactor = setupRefactor({ editor, lsp, modelForUri, uriOf: (model) => serverUri.get(model) });
@@ -852,7 +879,7 @@ async function main() {
     const structure = setupStructure({ editor, lsp, uriOf: (model) => serverUri.get(model), visible: () => chrome.shown() && chrome.view() === 'structure' });
     window.addEventListener('pymagic:sidebar', (e) => { if (e.detail === 'structure') structure.show(); });
     const bookmarks = setupBookmarks({ monaco, editor, openFile, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
-    setupHistory({ monaco, editor, currentFile: () => currentRel });
+    const history = setupHistory({ monaco, editor, currentFile: () => currentRel });
     recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
     setupMainMenu({
         editor, save, saveAll: common.saveAll, reload: reloadFromDisk, openFile, tabs: () => tabs, split: () => split, currentFile: () => currentRel, search, refactor,
@@ -879,9 +906,28 @@ async function main() {
     setupInspections(lsp);
     setupRoutes({ editor, lsp, openFile, relOfUri });
     setupDjango({ openFile, run: runHooks });
-    setupProblems({ editor, lsp, openFile, relOfUri });
+    const problems = setupProblems({ editor, lsp, openFile, relOfUri });
     setupTodo({ editor, lsp, openFile, relOfUri });
-    setupTerminal();
+    const terminal = setupTerminal();
+    // the menus of the project tree, the tabs and the editor (fileactions.js)
+    const fileActions = setupFileActions({
+        openFile, run: runHooks, tests, history, search, problems, terminal, reload: reloadFromDisk,
+        pythonFiles: () => [...knownFiles], tidyFile,
+        showDiff: git.showDiff, refreshGit: git.refresh,
+        refreshTree: async () => { await explorer?.refresh(); },
+        askText: (...a) => explorer.askText(...a),
+        relOfModel: (model) => model ? relPathOf.get(normalise(serverUri.get(model) ?? '')) : undefined,
+        textOf: async (rel) => {
+            const open = models.get(normalise(uriFor(rel)));
+            if (open)
+                return open.getValue();
+            const res = await fetch('/api/file?path=' + encodeURIComponent(rel));
+            return res.ok ? await res.text() : null;
+        },
+        setLanguage: (rel, id) => { const m = models.get(normalise(uriFor(rel))); if (m) monaco.editor.setModelLanguage(m, id); },
+        defaultLanguage: (rel) => (rel.endsWith('.py') ? 'python' : languageFor(rel)),
+    });
+    fileActions.attachEditor(editor, monaco, () => refactorMenu(editor, refactor));
     const coverage = setupCoverage(common);
     setupProfiler(common);
     // code actions that need the page (not just a text edit) arrive as commands
@@ -938,6 +984,7 @@ async function main() {
     const files = await (await fetch('/api/files')).json();
     knownFiles = new Set(files);
     explorer = setupExplorer({
+        items: (path, isDir) => fileActions.treeItems(path, isDir),
         openFile, refreshDirty, saveAll: common.saveAll, forget: forgetPath, synced: syncPyModels,
         current: () => currentRel, openAnother,
         // the tabs of a moved or renamed file keep their places under the new path
@@ -974,6 +1021,8 @@ async function main() {
         isActive: () => split?.focused() !== 'side',
         split: (rel) => split.open(rel, undefined, 'right'),
         splitDown: (rel) => split.open(rel, undefined, 'down'),
+        renameFile: (rel) => explorer.rename(rel),
+        items: (rel) => fileActions.tabItems(rel),
     });
     split = setupSplit({
         createEditor: (el) => {
@@ -985,6 +1034,7 @@ async function main() {
             git.attach(e);
             coverage.attach(e);
             hierarchy.attach(e);
+            fileActions.attachEditor(e, monaco);
             return e;
         },
         mainEditor: editor,

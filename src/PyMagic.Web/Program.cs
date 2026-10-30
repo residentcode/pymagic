@@ -312,6 +312,27 @@ app.MapPost("/api/fs", async (HttpRequest req) =>
                 else return Results.NotFound();
                 return Results.NoContent();
             }
+            case "clean":
+            {
+                // Clean Python Compiled Files of a folder, or of the whole project when the path is empty
+                string rel = body?["path"]?.GetValue<string>() ?? "";
+                string full = rel.Length == 0 ? root : ResolveInRoot(rel);
+                if (!Directory.Exists(full)) return Results.NotFound();
+                return Results.Json(new { removed = ProjectFiles.CleanCompiled(full) });
+            }
+            case "gitignore":
+            {
+                string rel = body!["path"]!.GetValue<string>();
+                string full = ResolveInRoot(rel);
+                if (IsInsideGit(full)) return Results.BadRequest(new { error = "not inside .git" });
+                string file = Path.Combine(root, ".gitignore");
+                string text = File.Exists(file) ? await File.ReadAllTextAsync(file) : "";
+                string line = ProjectFiles.IgnoreLine(rel.Replace('\\', '/'), Directory.Exists(full));
+                string? next = ProjectFiles.WithIgnoreLine(text, line);
+                if (next is null) return Results.Json(new { line, added = false });
+                await File.WriteAllTextAsync(file, next, new UTF8Encoding(false));
+                return Results.Json(new { line, added = true });
+            }
             case "delete":
             {
                 string full = ResolveInRoot(body!["path"]!.GetValue<string>());
@@ -641,7 +662,11 @@ app.Map("/console", async (HttpContext ctx) =>
     Send(new JsonObject { ["type"] = "shell", ["id"] = shell.Id, ["name"] = shell.Name });
     try
     {
-        console.Start(shell.CommandLine, root, env, Query("cols", 100), Query("rows", 30),
+        // Open In > Terminal starts it in a folder of the project (?cwd=)
+        string cwd = root;
+        if (ctx.Request.Query["cwd"].ToString() is { Length: > 0 } wanted)
+            try { if (Directory.Exists(ResolveInRoot(wanted))) cwd = ResolveInRoot(wanted); } catch (UnauthorizedAccessException) { }
+        console.Start(shell.CommandLine, cwd, env, Query("cols", 100), Query("rows", 30),
             data => Send(new JsonObject { ["type"] = "output", ["data"] = data }),
             code => { Send(new JsonObject { ["type"] = "exit", ["code"] = code }); outbox.CompleteAdding(); });
     }

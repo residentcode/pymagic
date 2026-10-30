@@ -86,7 +86,7 @@ export function setupTerminal() {
         // the pseudo console clears the screen when it starts: what was restored goes up into the scrollback first, so it stays
         if (p.restored) { p.xterm.write('\r\n'.repeat(p.xterm.rows)); p.restored = false; }
         const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-        const ws = new WebSocket(`${scheme}://${location.host}/console?cols=${p.xterm.cols}&rows=${p.xterm.rows}&shell=${encodeURIComponent(p.shellId)}`);
+        const ws = new WebSocket(`${scheme}://${location.host}/console?cols=${p.xterm.cols}&rows=${p.xterm.rows}&shell=${encodeURIComponent(p.shellId)}${p.cwd ? `&cwd=${encodeURIComponent(p.cwd)}` : ''}`);
         p.ws = ws;
         p.alive = true;
         p.shellName = 'Terminal';
@@ -121,7 +121,7 @@ export function setupTerminal() {
     }
 
     /** A terminal in `group`; `lines` is what its screen showed before PyMagic was closed, written dimmed above the new prompt. */
-    function addPane(group, shellId, lines = []) {
+    function addPane(group, shellId, lines = [], cwd = '') {
         const view = document.createElement('div');
         view.className = 'term-pane';
         const x = document.createElement('span');
@@ -136,7 +136,7 @@ export function setupTerminal() {
         });
         const fit = new FitAddon();
         xterm.loadAddon(fit);
-        const p = { id: ++lastId, group, view, xterm, fit, ws: null, alive: false, closed: false, shellId: shellId || settings().terminalShell || 'auto', shellName: null };
+        const p = { id: ++lastId, group, view, xterm, fit, ws: null, alive: false, closed: false, shellId: shellId || settings().terminalShell || 'auto', shellName: null, cwd };
         group.panes.push(p);
         group.focused = p;
         xterm.open(view);
@@ -175,14 +175,14 @@ export function setupTerminal() {
         views.append(el);
         const group = { id: ++lastId, name: name ?? nextName(groups.map((g) => g.name)), el, panes: [], focused: null };
         groups.push(group);
-        for (const p of panes) addPane(group, p.shell, p.lines);
+        for (const p of panes) addPane(group, p.shell, p.lines, p.cwd);
         group.focused = group.panes[0];
         markFocus(group);
         return group;
     }
 
-    function create(shellId) {
-        const group = addGroup(null, [{ shell: shellId }]);
+    function create(shellId, cwd = '') {
+        const group = addGroup(cwd ? cwd.slice(cwd.lastIndexOf('/') + 1) : null, [{ shell: shellId, cwd }]);
         select(group);
         keep();
         return group;
@@ -191,7 +191,7 @@ export function setupTerminal() {
     function split(shellId) {
         if (!active || active.panes.length >= MAX_PANES) return;
         const from = focusedPane();
-        const p = addPane(active, shellId ?? from?.shellId);
+        const p = addPane(active, shellId ?? from?.shellId, [], from?.cwd);
         renderTabs();
         soon(() => { for (const x of active.panes) fitNow(x); connect(p); p.xterm.focus(); });
         keep();
@@ -314,7 +314,7 @@ export function setupTerminal() {
         if (root === null) return;
         window.clearTimeout(keeping);
         keeping = 0;
-        const tabs = groups.map((g) => ({ name: g.name, panes: g.panes.map((p) => ({ shell: p.shellId, lines: screenLines(p.xterm) })) }));
+        const tabs = groups.map((g) => ({ name: g.name, panes: g.panes.map((p) => ({ shell: p.shellId, cwd: p.cwd, lines: screenLines(p.xterm) })) }));
         try { localStorage.setItem(KEEP_KEY, JSON.stringify({ root, tabs })); } catch { /* storage full or unavailable: not kept */ }
     }
     /** What came out is kept a few seconds later, so a crash loses little and typing does not write the storage each key. */
@@ -357,4 +357,7 @@ export function setupTerminal() {
         renderTabs();
         if ($('terminal-tab')?.classList.contains('active') && $('panel')?.classList.contains('open')) select(active);
     }).catch(() => { root = ''; });
+
+    // a new terminal that starts in a folder of the project (Open In > Terminal of the tree and the tabs)
+    return { openAt: (folder) => { showTab('terminal'); create(undefined, folder); } };
 }

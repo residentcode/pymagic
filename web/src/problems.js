@@ -86,6 +86,8 @@ export function setupProblems(deps) {
     level.onchange = () => void refresh();
     filter.oninput = paint;
     window.addEventListener('pymagic:saved', () => { if ($('problems-tab').classList.contains('active')) void refresh(); });
+    // Inspect Code of a folder or file: the project's problems, filtered to its path
+    return { inspect: (path, isDir) => { showTab('problems'); filter.value = path && isDir ? path + '/' : path; void refresh(); } };
 }
 
 export function setupTodo(deps) {

@@ -1,5 +1,6 @@
 // The project tree in the sidebar: folders that open and close, every text file, and new / rename / delete.
 import { toast } from './toast';
+import { openMenu } from './menu';
 import { copyName, join, moveProblem, movedPath } from './explorer-model';
 
 const FILE_TYPE = 'application/x-pymagic-file';   // a row of the tree being dragged; the editor and the tab bars take nothing from it
@@ -370,38 +371,23 @@ export function setupExplorer(deps) {
 
     // ------------------------------------------------------------ the menu
 
-    let menuEl = null;
-    function closeMenu() { menuEl?.remove(); menuEl = null; }
     function menu(x, y, path, isDir) {
-        closeMenu();
         const dir = path === '' ? '' : isDir ? path : parentOf(path);
-        const entries = [
-            ['New file…', () => create(dir, false)],
-            ['New folder…', () => create(dir, true)],
+        const items = [
+            { label: 'New file…', run: () => create(dir, false) },
+            { label: 'New folder…', run: () => create(dir, true) },
         ];
-        if (path) entries.push(['—'], ['Cut  Ctrl+X', () => take(path, true)], ['Copy  Ctrl+C', () => take(path, false)]);
-        if (clip) entries.push([`Paste ${baseName(clip.path)}  Ctrl+V`, () => paste(dir)]);
+        if (path) items.push('-', { label: 'Cut', key: 'Ctrl+X', run: () => take(path, true) }, { label: 'Copy', key: 'Ctrl+C', run: () => take(path, false) });
+        if (clip) items.push({ label: `Paste ${baseName(clip.path)}`, key: 'Ctrl+V', run: () => paste(dir) });
         if (path) {
-            entries.push(['—'], ['Rename…  F2', () => rename(path, isDir)], ['Delete…  Del', () => remove(path, isDir)], ['—'],
-                ['Copy path', () => navigator.clipboard?.writeText(path)]);
+            items.push('-', { label: 'Rename…', key: 'F2', run: () => rename(path, isDir) }, { label: 'Delete…', key: 'Del', run: () => remove(path, isDir) },
+                { label: 'Copy path', run: () => navigator.clipboard?.writeText(path) });
         }
-        entries.push(['—'], ['Refresh', () => refresh()]);
-        menuEl = document.createElement('div');
-        menuEl.className = 'ctx-menu';
-        for (const [label, action] of entries) {
-            if (label === '—') { const hr = document.createElement('div'); hr.className = 'ctx-sep'; menuEl.append(hr); continue; }
-            const item = document.createElement('div');
-            item.className = 'ctx-item';
-            item.textContent = label;
-            item.onclick = () => { closeMenu(); void action(); };
-            menuEl.append(item);
-        }
-        document.body.append(menuEl);
-        menuEl.style.left = `${Math.min(x, window.innerWidth - menuEl.offsetWidth - 4)}px`;
-        menuEl.style.top = `${Math.min(y, window.innerHeight - menuEl.offsetHeight - 4)}px`;
+        // find, inspect, format, tests, history, Open In, .gitignore: the same as the tabs' (fileactions.js)
+        if (deps.items) items.push('-', ...deps.items(path, isDir));
+        items.push('-', { label: 'Refresh', run: () => refresh() });
+        openMenu({ x, y }, items);
     }
-    document.addEventListener('mousedown', (e) => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
     $('sidebar').oncontextmenu = (e) => { e.preventDefault(); menu(e.clientX, e.clientY, '', true); };
 
     list.onkeydown = (e) => {
@@ -422,7 +408,12 @@ export function setupExplorer(deps) {
     $('ex-collapse').onclick = () => { open.clear(); remember(); paint(); };
     window.addEventListener('focus', () => void refresh());
 
-    return { refresh, reveal, has: (path) => files.some((f) => f.path === path), select: (path) => { selected = path; reveal(path); paint(); } };
+    return {
+        refresh, reveal, has: (path) => files.some((f) => f.path === path), select: (path) => { selected = path; reveal(path); paint(); },
+        // Rename File… of a tab
+        rename: (path) => rename(path, dirs.includes(path)),
+        askText,
+    };
 }
 
 export { BINARY };

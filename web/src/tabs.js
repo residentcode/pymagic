@@ -3,6 +3,7 @@
 // for a bar too narrow to show them. The editor split in two has one bar for each side; a tab dragged onto the other bar moves there.
 import { clampToGroup, dropIndex, moveBy, moveTo, pinFirst, staysPut } from './taborder';
 import { movedPath } from './explorer-model';
+import { openMenu } from './menu';
 
 const $ = (id) => document.getElementById(id);
 export const TAB_TYPE = 'application/x-pymagic-tab';   // not text/plain, so a tab dropped on the editor inserts nothing
@@ -330,17 +331,29 @@ export function setupTabs(deps) {
         menuEl.style.top = `${Math.min(y, window.innerHeight - menuEl.offsetHeight - 4)}px`;
     }
     function menu(x, y, rel) {
-        const entries = [
-            ['Close', () => closeTab(rel)],
-            ['Close others', () => closeMany([rel])],
-            ['Close all', () => closeMany([])],
+        closeMenu();
+        const at = tabs.indexOf(rel);
+        const left = tabs.slice(0, at), right = tabs.slice(at + 1);
+        const items = [
+            { label: 'Close', run: () => closeTab(rel) },
+            { label: 'Close others', run: () => closeMany([rel]) },
+            { label: 'Close tabs to the left', disabled: left.length === 0, run: () => closeMany([rel, ...right]) },
+            { label: 'Close tabs to the right', disabled: right.length === 0, run: () => closeMany([...left, rel]) },
+            { label: 'Close all', run: () => closeMany([]) },
         ];
-        if (pinned.size > 0) entries.push(['Close all, even pinned', () => closeMany([], true)]);
-        entries.push(['—'], pinned.has(rel) ? ['Unpin tab', () => pin(rel, false)] : ['Pin tab', () => pin(rel, true)]);
-        if (deps.split) entries.push([deps.splitLabel ?? 'Split right', () => deps.split(rel)]);
-        if (deps.splitDown) entries.push(['Split down', () => deps.splitDown(rel)]);
-        entries.push(['—'], ['Copy path', () => navigator.clipboard?.writeText(rel)]);
-        showMenu(x, y, entries);
+        if (pinned.size > 0) items.push({ label: 'Close all, even pinned', run: () => closeMany([], true) });
+        items.push('-', pinned.has(rel) ? { label: 'Unpin tab', run: () => pin(rel, false) } : { label: 'Pin tab', run: () => pin(rel, true) });
+        if (deps.split || deps.splitDown) items.push('-');
+        if (deps.split) items.push({ label: deps.splitLabel ?? 'Split right', run: () => deps.split(rel) });
+        if (deps.splitDown) items.push({ label: 'Split down', run: () => deps.splitDown(rel) });
+        // the file moves to the new side: this tab closes without asking, the other side has its changes (the first editor is never left empty)
+        const alone = tabs.length < 2;
+        if (deps.split) items.push({ label: 'Split and move right', disabled: alone, run: async () => { await deps.split(rel); await closeTab(rel); } });
+        if (deps.splitDown) items.push({ label: 'Split and move down', disabled: alone, run: async () => { await deps.splitDown(rel); await closeTab(rel); } });
+        if (deps.renameFile) items.push('-', { label: 'Rename file…', run: () => deps.renameFile(rel) });
+        if (deps.items) items.push('-', ...deps.items(rel));
+        items.push('-', { label: 'Copy path', run: () => navigator.clipboard?.writeText(rel) });
+        openMenu({ x, y }, items);
     }
     document.addEventListener('mousedown', (e) => { if (menuEl && !menuEl.contains(e.target) && e.target !== listButton && !listButton?.contains(e.target)) closeMenu(); });
 
