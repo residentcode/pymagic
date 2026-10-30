@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 
 // web/package.json does not say "type": "module", so Node would read src/*.js as CommonJS; load the file as a module instead
 const source = readFileSync(new URL('../src/uripath.js', import.meta.url), 'utf8');
-const { relUnderRoot } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { relUnderRoot, filePathOf } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 test('relUnderRoot: a file of the project gives its path from the project folder', () => {
     assert.equal(relUnderRoot('file:///C:/proj/shop/views.py', 'file:///C:/proj/'), 'shop/views.py');
@@ -24,4 +24,11 @@ test('relUnderRoot: an address outside the project, the folder itself, or one th
     assert.equal(relUnderRoot('file:///C:/proj/../x.py', 'file:///C:/proj/'), null);
     assert.equal(relUnderRoot('file:///C:/proj/%E0%A4%A', 'file:///C:/proj/'), null);
     assert.equal(relUnderRoot(undefined, 'file:///C:/proj/'), null);
+});
+
+test('filePathOf: a library file is shown as the system writes its path', () => {
+    assert.equal(filePathOf('file:///C:/Program%20Files/typeshed/stdlib/threading.pyi'), 'C:/Program Files/typeshed/stdlib/threading.pyi');
+    assert.equal(filePathOf('file:///usr/lib/python3/threading.py'), '/usr/lib/python3/threading.py');
+    assert.equal(filePathOf('untitled:x'), 'untitled:x');
+    assert.equal(filePathOf(undefined), '');
 });

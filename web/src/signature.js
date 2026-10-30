@@ -32,7 +32,8 @@ export function editSignature(info) {
         const summary = document.createElement('div');
         summary.className = 'dim';
         summary.textContent = `${info.calls} call${info.calls === 1 ? '' : 's'} in ${info.files} file${info.files === 1 ? '' : 's'}` +
-            (info.otherReferences ? `, ${info.otherReferences} other reference${info.otherReferences === 1 ? '' : 's'} (not rewritten)` : '');
+            (info.otherReferences ? `, ${info.otherReferences} other reference${info.otherReferences === 1 ? '' : 's'} (not rewritten)` : '') +
+            (info.overriding ? `; ${info.overriding} overriding method${info.overriding === 1 ? '' : 's'} change${info.overriding === 1 ? 's' : ''} too` : '');
         const buttons = document.createElement('div');
         buttons.className = 'buttons';
         const add = document.createElement('button');

@@ -79,7 +79,6 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - A checkbox for the desktop shortcut and a safe folder page (they need NSIS script), PyMagic's own pictures in the wizard (66).
 
 **Type engine** (ibnbolbna's area; the order is in [issue #3](https://github.com/residentcode/pymagic/issues/3))
-- Overrides: a rename that follows overriding methods, a change of signature passed on to them, a call hierarchy that includes them, marks and hierarchy for library classes (8, 17, 30).
 - Narrowing: the types of the names that `match` patterns bind (`case int() as n`, captures, `*rest`; item 157 narrows the tuple items by their sub-patterns), the "at least n" tuple form for `len(t) >= n` (152); `Literal` through tuples (40).
 - Small gaps: `pop` of a required TypedDict key (87), a constant index past the end of a tuple subclass (88).
 - The PyCharm inspections that need full types and are not done yet, and those for other tools (pandas, Spark, mock, notebooks) (47, 77).
@@ -145,4 +144,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 184 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 185 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

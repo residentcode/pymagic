@@ -4,6 +4,7 @@ import * as monaco from 'monaco-editor';
 import { editSignature, fetchSignature } from './signature';
 import { pickTarget } from './movepicker';
 import { previewAlways, previewChanges } from './preview';
+import { askChoice } from './ask';
 const toRange = (r) => ({
     startLineNumber: r.start.line + 1, startColumn: r.start.character + 1,
     endLineNumber: r.end.line + 1, endColumn: r.end.character + 1,
@@ -189,6 +190,20 @@ export function setupRefactor(deps) {
         let info;
         try {
             info = await fetchSignature(lsp, uri, position);
+            // a method that overrides one of the project's: as PyCharm, offer to change the base method (and with it every override) instead
+            if (info.base) {
+                const answer = await askChoice('Change signature', `${info.name} overrides the method of ${info.base.class}. Change the base method instead, with every method that overrides it?`,
+                    [['Change the base method', 'base'], ['This one only', 'this'], ['Cancel', 'cancel']]);
+                if (answer === 'cancel') {
+                    editor.focus();
+                    return;
+                }
+                if (answer === 'base') {
+                    uri = info.base.uri;
+                    position = info.base.position;
+                    info = await fetchSignature(lsp, uri, position);
+                }
+            }
         }
         catch (e) {
             toast(e.message ?? 'The signature cannot be changed.', true);

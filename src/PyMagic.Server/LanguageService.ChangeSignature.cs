@@ -41,6 +41,25 @@ public sealed partial class LanguageService
         return string.Join(", ", parts);
     }
 
+    /// <summary>An override takes the change parameter by parameter: the same number of them, of the same kinds (the names may differ).</summary>
+    static bool SameParameterKinds(FunctionTarget a, FunctionTarget b) =>
+        a.Params.Count == b.Params.Count && a.Params.Zip(b.Params).All(p => p.First.Category == p.Second.Category) && (a.Implicit == null) == (b.Implicit == null);
+
+    /// <summary>
+    /// The new signature as an override takes it: what the dialog changed (a name, a type, a default) is changed in the override too, and what it left
+    /// as it was keeps the override's own (its parameter names, annotations and defaults).
+    /// </summary>
+    static List<SignatureParam> ForOverride(FunctionTarget fn, FunctionTarget o, IReadOnlyList<SignatureParam> requested)
+    {
+        static bool Same(string? a, string? b) => (a?.Trim() ?? "") == (b?.Trim() ?? "");
+        return requested.Select(p => p.Origin is not { } i ? p : p with
+        {
+            Name = p.Name == fn.Params[i].Name ? o.Params[i].Name : p.Name,
+            Annotation = Same(p.Annotation, fn.Params[i].Annotation) ? o.Params[i].Annotation : p.Annotation,
+            Default = Same(p.Default, fn.Params[i].Default) ? o.Params[i].Default : p.Default,
+        }).ToList();
+    }
+
     /// <exception cref="ServiceException">The new signature is not valid, or something in the way cannot be changed safely.</exception>
     public RefactorResult ChangeSignature(string uri, Position pos, string? newName, IReadOnlyList<SignatureParam> requested)
     {
@@ -89,7 +108,6 @@ public sealed partial class LanguageService
             if (!Regex.IsMatch(newName, @"^[\p{L}_][\p{L}\p{N}_]*$") || Lexer.Keywords.Contains(newName)) throw new ServiceException($"'{newName}' is not a valid function name.");
         }
 
-        // ---- the body: removed parameters must be unused, renamed ones are updated, new names must be free
         var edits = new Dictionary<ModuleInfo, List<Edit>>(ReferenceEqualityComparer.Instance);
         void Add(ModuleInfo module, Edit e)
         {
@@ -97,76 +115,128 @@ public sealed partial class LanguageService
             list.Add(e);
         }
 
-        var scope = defModule.Semantics.ScopeOf(def) ?? throw new ServiceException("Cannot analyse this function.");
-        var bodyNodes = def.Body.Cast<Node>().ToList();
-        bool Mentioned(string name) => FStrings(bodyNodes).Any(c => Regex.IsMatch(c.Text, @"(?<![\w.])" + Regex.Escape(name) + @"(?!\w)"));
+        // ---- the methods that override it get the same change (as in PyCharm, constructors do not), when their parameters line up with its own
+        var family = new List<(FunctionTarget Target, IReadOnlyList<SignatureParam> Params)> { (fn, requested) };
+        if (fn.Class != null && !fn.IsConstructor && Overridable(def.Name))
+            foreach (var (om, oc, od) in OverridingMethods(snap, fn.Class, def.Name))
+            {
+                FunctionTarget o;
+                try { o = Describe(om, od); }
+                catch (ServiceException e) { throw new ServiceException($"{oc.Name}.{od.Name} overrides it: {e.Message}"); }
+                if (!SameParameterKinds(fn, o))
+                {
+                    warnings.Add($"{oc.Name}.{od.Name} overrides it with other parameters; it and its calls were not changed.");
+                    continue;
+                }
+                family.Add((o, ForOverride(fn, o, requested)));
+            }
 
-        foreach (var old in fn.Params)
+        foreach (var (t, ps) in family)
         {
-            var kept = requested.FirstOrDefault(p => p.Origin == old.Index);
-            scope.Symbols.TryGetValue(old.Name, out var sym);
-            var refs = sym?.References.Where(r => !ReferenceEquals(r.Node, old.Node)).ToList() ?? new();
-            if (kept == null)
+            string who = ReferenceEquals(t, fn) ? "the function body" : $"the body of {t.Class!.Name}.{t.Def.Name}";
+            if (!ReferenceEquals(t, fn) && ps.Select(p => p.Name).Distinct().Count() != ps.Count)
+                throw new ServiceException($"The new parameters clash with the names {t.Class!.Name}.{t.Def.Name} gives its own.");
+
+            // ---- the body: removed parameters must be unused, renamed ones are updated, new names must be free
+            var scope = t.Module.Semantics.ScopeOf(t.Def) ?? throw new ServiceException("Cannot analyse this function.");
+            var bodyNodes = t.Def.Body.Cast<Node>().ToList();
+            bool Mentioned(string name) => FStrings(bodyNodes).Any(c => Regex.IsMatch(c.Text, @"(?<![\w.])" + Regex.Escape(name) + @"(?!\w)"));
+
+            foreach (var old in t.Params)
             {
-                if (refs.Count > 0 || Mentioned(old.Name)) throw new ServiceException($"The parameter '{old.Name}' is used in the function body, so it cannot be removed.");
+                var kept = ps.FirstOrDefault(p => p.Origin == old.Index);
+                scope.Symbols.TryGetValue(old.Name, out var sym);
+                var refs = sym?.References.Where(r => !ReferenceEquals(r.Node, old.Node)).ToList() ?? new();
+                if (kept == null)
+                {
+                    if (refs.Count > 0 || Mentioned(old.Name)) throw new ServiceException($"The parameter '{old.Name}' is used in {who}, so it cannot be removed.");
+                }
+                else if (kept.Name != old.Name)
+                {
+                    if (Mentioned(old.Name)) throw new ServiceException($"'{old.Name}' appears inside an f-string in {(ReferenceEquals(t, fn) ? "the body" : who)}, which cannot be updated yet.");
+                    foreach (var r in refs) Add(t.Module, new Edit(r.Node.Start, r.Node.End, kept.Name));
+                }
             }
-            else if (kept.Name != old.Name)
+            // a name the body already uses for something else would be captured by a parameter of that name
+            var bodyNames = bodyNodes.SelectMany(AstChildren.Descendants).OfType<NameExpr>().Select(n => n.Name).ToHashSet();
+            foreach (var p in ps)
             {
-                if (Mentioned(old.Name)) throw new ServiceException($"'{old.Name}' appears inside an f-string in the body, which cannot be updated yet.");
-                foreach (var r in refs) Add(defModule, new Edit(r.Node.Start, r.Node.End, kept.Name));
+                bool unchanged = p.Origin is { } o && t.Params[o].Name == p.Name;
+                if (unchanged) continue;
+                var currentOwner = t.Params.FirstOrDefault(o => o.Name == p.Name);
+                if (currentOwner != null)
+                {
+                    // taking the name of another parameter is fine when that parameter is renamed or removed
+                    bool freed = !ps.Any(r => r.Origin == currentOwner.Index && r.Name == p.Name);
+                    if (freed) continue;
+                    throw new ServiceException($"The name '{p.Name}' is already used by another parameter{(ReferenceEquals(t, fn) ? "" : $" of {t.Class!.Name}.{t.Def.Name}")}.");
+                }
+                if (bodyNames.Contains(p.Name) || scope.Symbols.TryGetValue(p.Name, out var local) && local.Declarations.Count > 0)
+                    throw new ServiceException(ReferenceEquals(t, fn) ? $"The body already uses the name '{p.Name}'." : $"The body of {t.Class!.Name}.{t.Def.Name} already uses the name '{p.Name}'.");
             }
-        }
-        // a name the body already uses for something else would be captured by a parameter of that name
-        var bodyNames = bodyNodes.SelectMany(AstChildren.Descendants).OfType<NameExpr>().Select(n => n.Name).ToHashSet();
-        foreach (var p in requested)
-        {
-            bool unchanged = p.Origin is { } o && fn.Params[o].Name == p.Name;
-            if (unchanged) continue;
-            var currentOwner = fn.Params.FirstOrDefault(o => o.Name == p.Name);
-            if (currentOwner != null)
+
+            // ---- the header
+            var (regionStart, regionEnd) = ParameterRegion(t.Module, t.Def);
+            string text = t.Module.Source;
+            string region = text[regionStart..regionEnd];
+            string? implicitText = t.Implicit != null ? text[t.Implicit.Start..t.Implicit.End] : null;
+            string rendered = RenderParameters(implicitText, ps);
+            if (region.Contains('\n') && ps.Count + (implicitText != null ? 1 : 0) > 1)
             {
-                // taking the name of another parameter is fine when that parameter is renamed or removed
-                bool freed = !requested.Any(r => r.Origin == currentOwner.Index && r.Name == p.Name);
-                if (freed) continue;
-                throw new ServiceException($"The name '{p.Name}' is already used by another parameter.");
+                string defIndent = LineIndent(text, t.Def.Start);
+                string indent = t.Def.Params.Count > 0 ? LineIndent(text, t.Def.Params[0].Start) : defIndent + "    ";
+                string nl = NewLine(t.Module);
+                rendered = nl + indent + string.Join("," + nl + indent, SplitTopLevel(rendered)) + "," + nl + defIndent;
             }
-            if (bodyNames.Contains(p.Name) || scope.Symbols.TryGetValue(p.Name, out var local) && local.Declarations.Count > 0)
-                throw new ServiceException($"The body already uses the name '{p.Name}'.");
+            if (region.Contains('#') && !warnings.Contains("Comments inside the old parameter list were removed.")) warnings.Add("Comments inside the old parameter list were removed.");
+            Add(t.Module, new Edit(regionStart, regionEnd, rendered));
         }
 
-        // ---- the header
-        var (regionStart, regionEnd) = ParameterRegion(defModule, def);
-        string text = defModule.Source;
-        string region = text[regionStart..regionEnd];
-        string? implicitText = fn.Implicit != null ? text[fn.Implicit.Start..fn.Implicit.End] : null;
-        string rendered = RenderParameters(implicitText, requested);
-        if (region.Contains('\n') && requested.Count + (implicitText != null ? 1 : 0) > 1)
-        {
-            string defIndent = LineIndent(text, def.Start);
-            string indent = def.Params.Count > 0 ? LineIndent(text, def.Params[0].Start) : defIndent + "    ";
-            string nl = NewLine(defModule);
-            rendered = nl + indent + string.Join("," + nl + indent, SplitTopLevel(rendered)) + "," + nl + defIndent;
-        }
-        if (region.Contains('#')) warnings.Add("Comments inside the old parameter list were removed.");
-        Add(defModule, new Edit(regionStart, regionEnd, rendered));
+        // ---- the new name, for the method and every method that overrides it
         if (newName != null && newName != def.Name)
         {
-            var target = FindTarget(snap, defModule, def.NameStart)!;
-            EnsureRenameable(snap, target);
-            foreach (var s in target.Symbols)
-                if (s.Scope.Symbols.TryGetValue(newName, out var clash) && (clash.Redirect ?? clash).Declarations.Count > 0)
-                    throw new ServiceException($"'{newName}' is already defined in this scope.");
-            foreach (var site in Usages(snap, target, forRename: true)) Add(site.Module, new Edit(site.Start, site.End, newName));
+            var renamed = new HashSet<(ModuleInfo, int)>();
+            foreach (var (t, _) in family)
+            {
+                var target = FindTarget(snap, t.Module, t.Def.NameStart)!;
+                EnsureRenameable(snap, target);
+                foreach (var s in target.Symbols)
+                    if (s.Scope.Symbols.TryGetValue(newName, out var clash) && (clash.Redirect ?? clash).Declarations.Count > 0)
+                        throw new ServiceException(ReferenceEquals(t, fn) ? $"'{newName}' is already defined in this scope." : $"'{newName}' is already defined in class {t.Class!.Name}.");
+                foreach (var site in Usages(snap, target, forRename: true))
+                    if (renamed.Add((site.Module, site.Start))) Add(site.Module, new Edit(site.Start, site.End, newName));
+            }
         }
 
-        // ---- the calls
-        var (calls, other) = FindCalls(snap, fn);
+        // ---- the calls (a call reaches the method it names; through a base class's method it is that one's call)
         var unsupported = new List<string>();
-        foreach (var site in calls)
+        var rewritten = new HashSet<(ModuleInfo, int)>();
+        int other = 0;
+        var sites = new List<(FunctionTarget Target, IReadOnlyList<SignatureParam> Params, CallSite Site)>();
+        foreach (var (t, ps) in family)
         {
-            var map = MapArguments(fn, site);
+            var (calls, others) = FindCalls(snap, t);
+            other += others;
+            foreach (var site in calls)
+                if (rewritten.Add((site.Module, site.Call.Start))) sites.Add((t, ps, site));
+        }
+
+        // an argument keeps the edits already made inside it (a renamed parameter in `super().save(force)`, a call in `f(f(n))`),
+        // and they become part of the call's one edit: inner calls go first, being shorter
+        string Edited(ModuleInfo module, Node n)
+        {
+            string s = module.Source[n.Start..n.End];
+            if (!edits.TryGetValue(module, out var list)) return s;
+            foreach (var e in list.Where(e => e.Start >= n.Start && e.End <= n.End).OrderByDescending(e => e.Start))
+                s = s[..(e.Start - n.Start)] + e.Text + s[(e.End - n.Start)..];
+            return s;
+        }
+
+        foreach (var (t, ps, site) in sites.OrderBy(s => s.Site.Call.End - s.Site.Call.Start))
+        {
+            var map = MapArguments(t, site, n => Edited(site.Module, n));
             string? why = map.Unsupported;
-            string? replacement = why == null ? RewriteCall(fn, map, requested, out why) : null;
+            string? replacement = why == null ? RewriteCall(t, map, ps, out why) : null;
             if (replacement == null)
             {
                 int line = Lines(site.Module).PositionOf(site.Call.Start).Line + 1;
@@ -184,6 +254,7 @@ public sealed partial class LanguageService
                     while (e < site.Module.Source.Length && char.IsWhiteSpace(site.Module.Source[e])) e++;
                     if (e < site.Module.Source.Length && site.Module.Source[e] == ',') end = e + 1;
                 }
+                if (edits.TryGetValue(site.Module, out var inside)) inside.RemoveAll(x => x.Start >= start && x.End <= end);
                 Add(site.Module, new Edit(start, end, replacement));
             }
             else if (replacement.Length > 0)
@@ -197,9 +268,13 @@ public sealed partial class LanguageService
         if (other > 0) warnings.Add($"{other} reference{(other == 1 ? "" : "s")} that {(other == 1 ? "is" : "are")} not a call (callbacks, decorators) {(other == 1 ? "was" : "were")} not changed.");
         if (fn.Class != null && !fn.IsConstructor)
         {
+            // what is left: the methods it overrides (when only this one changes) and same-named methods of unrelated classes
+            var changedClasses = new HashSet<ClassDef>(family.Select(f => f.Target.Class!), ReferenceEqualityComparer.Instance);
             int overriding = snap.Project.SelectMany(p => AstChildren.Descendants(p.Ast).OfType<ClassDef>())
-                .Count(c => !ReferenceEquals(c, fn.Class) && c.Body.OfType<FunctionDef>().Any(f => f.Name == def.Name));
+                .Count(c => !changedClasses.Contains(c) && c.Body.OfType<FunctionDef>().Any(f => f.Name == def.Name));
             if (overriding > 0) warnings.Add($"{overriding} other class{(overriding == 1 ? "" : "es")} define a method with this name; {(overriding == 1 ? "it was" : "they were")} not changed.");
+            if (Overridable(def.Name) && LibrarySuper(snap, defModule, fn.Class, def.Name) is { } library)
+                warnings.Add($"It overrides a method of {library}, a library class, which was not changed.");
         }
 
         var changes = new Dictionary<string, List<TextEdit>>();

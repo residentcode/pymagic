@@ -3,6 +3,7 @@
 import * as monaco from 'monaco-editor';
 import { showTab } from './panel';
 import { toast } from './toast';
+import { filePathOf } from './uripath';
 const $ = (id) => document.getElementById(id);
 const toRange = (r) => ({
     startLineNumber: r.start.line + 1, startColumn: r.start.character + 1, endLineNumber: r.end.line + 1, endColumn: r.end.character + 1,
@@ -22,7 +23,8 @@ export function setupHierarchy(deps) {
     async function goTo(uri, range, from) {
         const rel = deps.relOfUri(uri);
         if (!rel) {
-            toast('That place is outside the project.', true);
+            // a library's file (typeshed, site-packages): the editor does not open those, so say where it is
+            toast(`That is in a library, which the editor does not open: ${filePathOf(uri)}:${range.start.line + 1}`, true);
             return;
         }
         if (from && from !== editor && deps.openIn) {
@@ -44,7 +46,7 @@ export function setupHierarchy(deps) {
         }
     }
     function emptyText() {
-        return { callers: 'Nothing calls this.', callees: 'This calls nothing that can be followed.', subtypes: 'No subclasses.', supertypes: 'No base classes in the project.' }[mode];
+        return { callers: 'Nothing calls this.', callees: 'This calls nothing that can be followed.', subtypes: 'No subclasses.', supertypes: 'No base classes.' }[mode];
     }
     function row(edge, depth, parent) {
         const holder = document.createElement('div');
@@ -73,12 +75,10 @@ export function setupHierarchy(deps) {
             line.append(c);
         }
         const rel = deps.relOfUri(edge.item.uri);
-        if (rel) {
-            const f = document.createElement('span');
-            f.className = 'detail';
-            f.textContent = rel;
-            line.append(f);
-        }
+        const f = document.createElement('span');
+        f.className = 'detail';
+        f.textContent = rel ?? 'library'; // a library's class: its detail is its module
+        line.append(f);
         const kids = document.createElement('div');
         kids.style.display = 'none';
         holder.append(line, kids);
@@ -197,7 +197,7 @@ export function setupHierarchy(deps) {
             return;
         }
         const box = editor.getDomNode()?.getBoundingClientRect(), at = editor.getScrolledVisiblePosition(pos);
-        pick(editor, up.targets.map((loc) => ({ label: up.label, loc })), (box?.left ?? 0) + (at?.left ?? 0), (box?.top ?? 0) + (at?.top ?? 0) + (at?.height ?? 0));
+        pick(editor, up.targets.map((loc) => ({ label: up.label, loc })), (box?.left ?? 0) + (at?.left ?? 0), (box?.top ?? 0) + (at?.top ?? 0) + (at?.height ?? 0), [up.label]);
     }
     // ---------------------------------------------------------------- go to implementations
     monaco.languages.registerImplementationProvider('python', {
@@ -273,13 +273,19 @@ export function setupHierarchy(deps) {
             const marks = byLine.get(e.target.position.lineNumber - 1);
             if (!marks)
                 return;
-            pick(editor, marks.flatMap((m) => m.targets.map((loc) => ({ label: m.targets.length > 1 ? `${m.label} · ${m.kind}` : m.label, loc }))), e.event.browserEvent.clientX, e.event.browserEvent.clientY);
+            pick(editor, marks.flatMap((m) => m.targets.map((loc) => ({ label: m.targets.length > 1 ? `${m.label} · ${m.kind}` : m.label, loc }))), e.event.browserEvent.clientX, e.event.browserEvent.clientY, marks.map((m) => m.label));
         });
         return schedule;
     }
     function closeMenu() { menu?.remove(); menu = null; }
-    function pick(editor, entries, x, y) {
+    /** Marks and Go to Super Method: one place goes there, several make a menu; a library method without a file (the bundled stubs) only says what it is. */
+    function pick(editor, entries, x, y, labels = []) {
         closeMenu();
+        if (entries.length === 0) {
+            if (labels.length)
+                toast(`${labels.join('; ')}: a library class without a file to open.`, true);
+            return;
+        }
         if (entries.length === 1) {
             void goTo(entries[0].loc.uri, entries[0].loc.range, editor);
             return;
@@ -288,7 +294,7 @@ export function setupHierarchy(deps) {
         menu.className = 'inh-menu';
         for (const e of entries) {
             const item = document.createElement('div');
-            const rel = deps.relOfUri(e.loc.uri) ?? e.loc.uri;
+            const rel = deps.relOfUri(e.loc.uri) ?? filePathOf(e.loc.uri);
             item.textContent = e.label;
             const where = document.createElement('span');
             where.className = 'where';

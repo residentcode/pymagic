@@ -61,22 +61,31 @@ public sealed partial class LanguageService
         var target = FindTarget(snap, m, Lines(m).OffsetOf(pos));
         if (target == null) return null;
         EnsureRenameable(snap, target);
-        return new PrepareRenameResult(Lines(m).RangeOf(target.Token.Start, target.Token.End), target.Name);
+        // a method that overrides others: the page asks whether the base method goes with it, or warns that a library's cannot
+        var range = Lines(m).RangeOf(target.Token.Start, target.Token.End);
+        if (MethodOf(snap, target) is { } method)
+        {
+            string? baseClass = DeepestProjectSuper(snap, method.Module, method.Class, method.Def.Name)?.Class.Name;
+            string? library = LibrarySuper(snap, method.Module, method.Class, method.Def.Name);
+            if (baseClass != null || library != null) return new PrepareRenameResult(range, target.Name, method.Class.Name, baseClass, library);
+        }
+        return new PrepareRenameResult(range, target.Name);
     }
 
     /// <exception cref="ServiceException">The thing cannot be renamed, or the new name is not valid.</exception>
-    public WorkspaceEdit Rename(string uri, Position pos, string newName)
+    /// <param name="renameBase">For a method that overrides one of the project's: rename the method at the top of the chain (and all that override it) instead.</param>
+    public WorkspaceEdit Rename(string uri, Position pos, string newName, bool renameBase = false)
     {
         using var searching = Searching(uri, pos);
         if (DjangoRename(uri, pos, newName) is { } urlRename) return urlRename;
         var snap = Full();
         if (snap.ByUri.TryGetValue(uri, out var fm) && FixtureTargetAt(snap, fm, Lines(fm).OffsetOf(pos)) is { } fixture)
             return RenameFixture(snap, fixture, newName);
-        return RenameSymbol(uri, pos, newName);
+        return RenameSymbol(uri, pos, newName, renameBase);
     }
 
     /// <summary>Rename of the thing under the cursor as a name in the program (a fixture is handled by <see cref="RenameFixture"/>).</summary>
-    WorkspaceEdit RenameSymbol(string uri, Position pos, string newName)
+    WorkspaceEdit RenameSymbol(string uri, Position pos, string newName, bool renameBase = false)
     {
         var snap = Full();
         if (!snap.ByUri.TryGetValue(uri, out var m)) throw new ServiceException("unknown document");
@@ -89,14 +98,43 @@ public sealed partial class LanguageService
             if (newName != target.Name && s.Scope.Symbols.TryGetValue(newName, out var clash) && (clash.Redirect ?? clash).Declarations.Count > 0)
                 throw new ServiceException($"'{newName}' is already defined in this scope");
 
-        var changes = new Dictionary<string, List<TextEdit>>();
-        foreach (var site in Usages(snap, target, forRename: true))
+        // a method takes the methods that override it along (all levels down), and with renameBase the method at the top of its chain
+        var targets = new List<Target> { target };
+        if (MethodOf(snap, target) is { } method)
         {
-            var loc = ToLocation(site) ?? throw new ServiceException("a usage lies in a file that cannot be edited");
-            if (!changes.TryGetValue(loc.Uri, out var list)) changes[loc.Uri] = list = new List<TextEdit>();
-            list.Add(new TextEdit(loc.Range, newName));
+            var root = (method.Module, method.Class, Method: method.Def);
+            if (renameBase && DeepestProjectSuper(snap, method.Module, method.Class, method.Def.Name) is { } top) root = top;
+            var family = new List<(ModuleInfo Module, ClassDef Class, FunctionDef Method)> { root };
+            family.AddRange(OverridingMethods(snap, root.Class, root.Method.Name));
+            foreach (var (module, cls, def) in family)
+            {
+                if (newName != def.Name && module.Semantics.ScopeOf(cls) is { } scope && scope.Symbols.TryGetValue(newName, out var clash) && clash.Declarations.Count > 0)
+                    throw new ServiceException($"'{newName}' is already defined in class {cls.Name}");
+                if (ReferenceEquals(def, method.Def) || FindTarget(snap, module, def.NameStart) is not { } t) continue;
+                EnsureRenameable(snap, t);
+                targets.Add(t);
+            }
         }
+
+        var changes = new Dictionary<string, List<TextEdit>>();
+        var done = new HashSet<(string, int, int)>();
+        foreach (var t in targets)
+            foreach (var site in Usages(snap, t, forRename: true))
+            {
+                var loc = ToLocation(site) ?? throw new ServiceException("a usage lies in a file that cannot be edited");
+                if (!done.Add((loc.Uri, loc.Range.Start.Line, loc.Range.Start.Character))) continue;
+                if (!changes.TryGetValue(loc.Uri, out var list)) changes[loc.Uri] = list = new List<TextEdit>();
+                list.Add(new TextEdit(loc.Range, newName));
+            }
         return new WorkspaceEdit(changes);
+    }
+
+    /// <summary>The project method a rename target stands for (its def or a use of it), when it is one that overrides or can be overridden.</summary>
+    static (ModuleInfo Module, ClassDef Class, FunctionDef Def)? MethodOf(Snapshot snap, Target target)
+    {
+        var def = target.Nodes.OfType<FunctionDef>().LastOrDefault();
+        if (def == null || !Overridable(def.Name) || OwnerModule(def, snap.Project) is not { } module || ClassOfMethod(module, def) is not { } cls) return null;
+        return MethodIn(module, cls, def.Name) is { } bound && ReferenceEquals(bound, def) ? (module, cls, def) : null;
     }
 
     void EnsureRenameable(Snapshot snap, Target target)

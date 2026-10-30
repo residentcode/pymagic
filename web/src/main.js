@@ -35,6 +35,7 @@ import { setupDiskWatch } from './diskwatch';
 import { setupInspections } from './inspections';
 import { setupGit } from './git';
 import { toast } from './toast';
+import { askChoice } from './ask';
 import { setupChrome } from './rail';
 import { setupToolbar } from './toolbar';
 import { setupMainMenu, refactorMenu } from './mainmenu';
@@ -489,6 +490,7 @@ function registerProviders() {
             return result;
         },
     });
+    let renameBase = false; // the answer to "rename the base method?" for the rename being prepared
     monaco.languages.registerRenameProvider(CODE_LANGUAGES, {
         async resolveRenameLocation(model, position) {
             const cell = notebook?.targetOf(model, position);
@@ -499,6 +501,14 @@ function registerProviders() {
                 const r = await lsp.request('textDocument/prepareRename', { textDocument: { uri }, position: cell ? cell.position : toPos(position) });
                 if (!r)
                     return { range: new monaco.Range(1, 1, 1, 1), text: '', rejectReason: 'Nothing to rename here.' };
+                // a method that overrides another: as PyCharm, ask whether the base method goes with it; a library's cannot
+                renameBase = false;
+                if (r.baseClass || r.libraryBase) {
+                    const answer = await askRenameScope(r);
+                    if (answer === 'cancel')
+                        return { range: new monaco.Range(1, 1, 1, 1), text: '', rejectReason: 'Rename cancelled.' };
+                    renameBase = answer === 'base';
+                }
                 return { range: toRange(cell ? cell.fromServer(r.range) : r.range), text: r.placeholder };
             }
             catch (e) {
@@ -511,7 +521,7 @@ function registerProviders() {
             if (!uri)
                 return { edits: [] };
             try {
-                const edit = await lsp.request('textDocument/rename', { textDocument: { uri }, position: cell ? cell.position : toPos(position), newName });
+                const edit = await lsp.request('textDocument/rename', { textDocument: { uri }, position: cell ? cell.position : toPos(position), newName, renameBase });
                 const edits = [];
                 for (const [target, list] of Object.entries(edit.changes)) {
                     for (const e of list) {
@@ -802,6 +812,14 @@ function askDiskOrMine(rel) {
         document.body.append(shade);
         row.firstChild.focus();
     });
+}
+/** Renaming a method that overrides another: the base method with its family, this one only, or nothing. Resolves to 'base', 'this' or 'cancel'. */
+function askRenameScope(r) {
+    const library = r.libraryBase ? `It overrides a method of ${r.libraryBase}, a library class that is not renamed: after the rename it no longer overrides it.` : '';
+    return r.baseClass
+        ? askChoice(`Rename ${r.placeholder}`, `${r.placeholder} of ${r.methodClass} overrides the method of ${r.baseClass}. Rename the base method too, with every method that overrides it? ${library}`.trim(),
+            [['Rename the base method', 'base'], ['This one only', 'this'], ['Cancel', 'cancel']])
+        : askChoice(`Rename ${r.placeholder}`, `${r.placeholder} of ${r.methodClass}: ${library}`, [['Rename anyway', 'this'], ['Cancel', 'cancel']]);
 }
 async function openAnother() {
     const next = tabs?.mruFirst();
