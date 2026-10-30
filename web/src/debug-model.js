@@ -83,6 +83,44 @@ export function expressionAt(line, column) {
         return null;
     return text;
 }
+/** A breakpoint on a `def` line is a function breakpoint: {function, codeLine} where codeLine is the first decorator's line. */
+export function functionBreakpoint(lineText, line) {
+    const m = /^(\s*)(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(lineText(line) ?? '');
+    if (!m)
+        return null;
+    let codeLine = line;
+    for (let l = line - 1; l >= 1; l--) {
+        const text = lineText(l) ?? '';
+        if (text.startsWith(m[1] + '@'))
+            codeLine = l;
+        else if (text.trim() !== '' && !text.trim().startsWith('#'))
+            break;
+    }
+    return { function: m[2], codeLine };
+}
+/** The expression of a member shown under a value in the Variables pane, or null when it has none (a set item, a return value). */
+export function childExpression(parent, parentType, name) {
+    if (!parent || /\(\)$/.test(parent))
+        return null;
+    if (['dict', 'OrderedDict', 'defaultdict', 'Counter', 'list', 'tuple', 'deque'].includes(parentType))
+        return `${parent}[${name}]`;
+    if (['set', 'frozenset'].includes(parentType))
+        return null;
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? `${parent}.${name}` : null;
+}
+/** The saved watches as [{expression, paused}]; older versions saved plain strings. */
+export function readWatches(saved) {
+    return (Array.isArray(saved) ? saved : []).map((w) => (typeof w === 'string' ? { expression: w, paused: false } : { expression: String(w.expression ?? ''), paused: !!w.paused }))
+        .filter((w) => w.expression);
+}
+/** A copy of a list with one item moved by `by` places, kept inside the list. */
+export function moveItem(list, index, by) {
+    const to = Math.max(0, Math.min(list.length - 1, index + by));
+    const copy = [...list];
+    const [item] = copy.splice(index, 1);
+    copy.splice(to, 0, item);
+    return copy;
+}
 /** The call stack as text, innermost first, for the clipboard. */
 export function stackText(frames) {
     return frames.map((f) => `${f.name}, ${f.file}:${f.line}`).join('\n');

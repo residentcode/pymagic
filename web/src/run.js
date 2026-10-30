@@ -6,7 +6,7 @@ import { showTab } from './panel';
 import { editBreakpoint, isPlain } from './bpdialog';
 import { ansiReader } from './ansi';
 import { colouredSpans } from './terminal';
-import { inlineLines, inlineText, callsOn, expressionAt, stackText } from './debug-model.js';
+import { inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem } from './debug-model.js';
 import { openMenu } from './menu';
 import { toast } from './toast';
 const $ = (id) => document.getElementById(id);
@@ -20,11 +20,13 @@ export function setupRun(deps) {
     const isBp = (d) => !!d.options.glyphMarginClassName?.startsWith('bp-glyph');
     function optionsFor(meta) {
         const kind = meta?.logMessage ? ' bp-log' : meta?.condition || meta?.hitCondition ? ' bp-cond' : '';
-        const text = [meta?.condition && `when ${meta.condition}`, meta?.hitCondition && `hit count ${meta.hitCondition}`, meta?.logMessage && `logs "${meta.logMessage}"`]
+        const text = [meta?.condition && `when ${meta.condition}`, meta?.hitCondition && `hit count ${meta.hitCondition}`, meta?.logMessage && `logs "${meta.logMessage}"`,
+            meta?.after && `disabled until ${meta.after.file}:${meta.after.line} is hit`]
             .filter(Boolean).join(', ');
+        const head = meta?.description ? `**${meta.description}**\n\n` : '';
         return {
-            glyphMarginClassName: 'bp-glyph' + kind,
-            glyphMarginHoverMessage: { value: text ? `Breakpoint: ${text}` : 'Breakpoint' },
+            glyphMarginClassName: 'bp-glyph' + kind + (meta?.after ? ' bp-after' : ''),
+            glyphMarginHoverMessage: { value: head + (text ? `Breakpoint: ${text}` : 'Breakpoint') + '\n\nDrag it to another line to move it; on a `def` line it stops when the function is called.' },
             stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
         };
     }
@@ -45,15 +47,28 @@ export function setupRun(deps) {
         }
         return [...byLine.values()].sort((a, b) => a.line - b.line);
     };
-    /** What the debugger is sent: a plain number, or an object when the breakpoint has settings. */
-    const wire = (bps) => bps.map((b) => (isPlain(b) ? b.line : b));
+    const lineTextOf = (model) => (l) => (l >= 1 && l <= model.getLineCount() ? model.getLineContent(l) : null);
+    /** What the debugger is sent: a plain number, or an object when the breakpoint has settings or is on a `def` line
+     * (a function breakpoint, stopping when the function is called). */
+    const wire = (model, bps) => {
+        const rel = deps.relOf(model);
+        return bps.map((b) => {
+            const fn = functionBreakpoint(lineTextOf(model), b.line);
+            const out = { ...b, function: fn?.function, codeLine: fn?.codeLine };
+            // waiting for a function breakpoint of the same file: the helper knows it by the line its code starts on
+            const target = b.after && b.after.file === rel ? functionBreakpoint(lineTextOf(model), b.after.line) : null;
+            if (target)
+                out.after = { ...b.after, line: target.codeLine };
+            return isPlain(b) && !fn ? b.line : out;
+        });
+    };
     function persist() {
         const all = {};
         for (const m of monaco.editor.getModels()) {
             const rel = deps.relOf(m);
             const bps = rel ? breakpointsOf(m) : [];
             if (rel && bps.length)
-                all[rel] = wire(bps);
+                all[rel] = bps.map((b) => (isPlain(b) ? b.line : b));
         }
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
@@ -63,7 +78,7 @@ export function setupRun(deps) {
     function sendBreakpoints(model) {
         const rel = deps.relOf(model);
         if (rel && run)
-            run.send({ type: 'setBreakpoints', file: rel, lines: wire(breakpointsOf(model)) });
+            run.send({ type: 'setBreakpoints', file: rel, lines: wire(model, breakpointsOf(model)) });
     }
     function placeBreakpoint(model, line, meta) {
         const [id] = model.deltaDecorations([], [{ range: new monaco.Range(line, 1, line, 1), options: optionsFor(meta) }]);
@@ -86,7 +101,13 @@ export function setupRun(deps) {
     }
     async function editBreakpointAt(model, line) {
         const current = breakpointsOf(model).find((b) => b.line === line);
-        const result = await editBreakpoint(line, current, !!current);
+        const others = [];
+        for (const m of monaco.editor.getModels()) {
+            const r = deps.relOf(m);
+            if (r)
+                others.push(...breakpointsOf(m).filter((b) => !(m === model && b.line === line)).map((b) => ({ file: r, line: b.line })));
+        }
+        const result = await editBreakpoint(line, current, !!current, others, functionBreakpoint(lineTextOf(model), line)?.function ?? null);
         if (result === null) {
             editor.focus();
             return;
@@ -98,20 +119,47 @@ export function setupRun(deps) {
         sendBreakpoints(model);
         editor.focus();
     }
-    editor.onMouseDown((e) => {
-        if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) {
-            // the right lane holds the override marks (hierarchy.ts)
-            if (e.target.detail?.glyphMarginLane === monaco.editor.GlyphMarginLane.Right)
+    /** A breakpoint dragged to another line of the margin moves there with its settings. */
+    function moveBreakpoint(model, from, to) {
+        const meta = breakpointsOf(model).find((b) => b.line === from);
+        if (!meta || from === to || model.getLineDecorations(to).some(isBp))
+            return;
+        removeBreakpoint(model, from);
+        const { line: _, ...settings } = meta;
+        placeBreakpoint(model, to, settings);
+        persist();
+        sendBreakpoints(model);
+    }
+    /** Clicks in the margin of an editor: a click toggles, a right click edits, a drag moves a breakpoint. */
+    function glyphMouse(ed) {
+        const glyphLine = (e) => (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position
+            // the right lane holds the override marks (hierarchy.js)
+            && e.target.detail?.glyphMarginLane !== monaco.editor.GlyphMarginLane.Right ? e.target.position.lineNumber : null);
+        ed.onMouseDown((e) => {
+            const line = glyphLine(e), model = ed.getModel();
+            if (line === null || !model)
                 return;
-            const model = editor.getModel();
-            if (!model)
+            if (e.event.rightButton) {
+                void editBreakpointAt(model, line);
                 return;
-            if (e.event.rightButton)
-                void editBreakpointAt(model, e.target.position.lineNumber);
-            else
-                toggleBreakpoint(model, e.target.position.lineNumber);
-        }
-    });
+            }
+            if (!model.getLineDecorations(line).some(isBp)) {
+                toggleBreakpoint(model, line);
+                return;
+            }
+            // on a breakpoint: where the button comes up decides (Monaco sends no mouse-up after a press in the margin)
+            window.addEventListener('mouseup', (up) => {
+                const to = ed.getTargetAtClientPoint(up.clientX, up.clientY)?.position?.lineNumber ?? line;
+                if (ed.getModel() !== model)
+                    return;
+                if (to === line)
+                    toggleBreakpoint(model, line);
+                else
+                    moveBreakpoint(model, line, to);
+            }, { once: true, capture: true });
+        });
+    }
+    glyphMouse(editor);
     editor.addCommand(monaco.KeyCode.F9, () => {
         const model = editor.getModel(), pos = editor.getPosition();
         if (model && pos)
@@ -212,7 +260,8 @@ export function setupRun(deps) {
         clearInline();
         inlineStyle.textContent = rules.join('\n');
         const shows = [editor, focused].filter((e, i, all) => all.indexOf(e) === i && e.getModel() === model);
-        inline = { collections: shows.map((e) => e.createDecorationsCollection(decorations)) };
+        const byLine = new Map(lines.map(({ line, names: onLine }) => [line, onLine.filter((n) => Object.prototype.hasOwnProperty.call(values, n))]));
+        inline = { model, byLine, collections: shows.map((e) => e.createDecorationsCollection(decorations)) };
     }
     async function showFrame(index) {
         selectedFrame = index;
@@ -254,11 +303,11 @@ export function setupRun(deps) {
             head.querySelector('.scope').textContent = s.name;
             li.appendChild(head);
             list.appendChild(li);
-            attachChildren(head, li, s.ref, i === 0 || s.name === 'Locals', s.ref);
+            attachChildren(head, li, s.ref, i === 0 || s.name === 'Locals', s.name === 'Return values' ? undefined : s.ref, { expr: null, type: s.name });
         }
     }
     /** Makes a node expandable: children are fetched from the debugger the first time it opens. */
-    function attachChildren(head, li, ref, openNow, scopeRef) {
+    function attachChildren(head, li, ref, openNow, scopeRef, parent) {
         const caret = head.querySelector('.caret');
         let child = null;
         let open = false;
@@ -277,7 +326,7 @@ export function setupRun(deps) {
                 return;
             child = document.createElement('ul');
             for (const v of items)
-                child.appendChild(variableNode(v, scopeRef));
+                child.appendChild(variableNode(v, scopeRef, parent));
             if (!items.length)
                 child.innerHTML = '<li><div class="type">(empty)</div></li>';
             li.appendChild(child);
@@ -287,22 +336,139 @@ export function setupRun(deps) {
         if (openNow)
             void toggle();
     }
-    function variableNode(v, scopeRef) {
+    function variableNode(v, scopeRef, parent) {
         const li = document.createElement('li');
         const head = document.createElement('div');
         head.innerHTML = '<span class="caret"></span><span class="name"></span> = <span class="val"></span> <span class="type"></span>';
         head.querySelector('.name').textContent = v.name;
         head.querySelector('.val').textContent = v.value;
         head.querySelector('.type').textContent = v.type;
+        head.tabIndex = 0;
         li.appendChild(head);
+        // the expression that gives this value: a name of the frame, or a member of the value above it
+        const expr = parent?.type === 'Return values' ? null : parent?.expr === null ? v.name : childExpression(parent?.expr, parent?.type, v.name);
         if (v.ref > 0)
-            attachChildren(head, li, v.ref, false);
+            attachChildren(head, li, v.ref, false, undefined, { expr, type: v.type });
+        const val = head.querySelector('.val');
         if (scopeRef !== undefined) {
-            const val = head.querySelector('.val');
-            val.title = 'Double-click to change the value';
+            val.title = 'Double-click or F2 to change the value; right-click for more';
             val.ondblclick = () => editVariable(val, scopeRef, v);
         }
+        head.onkeydown = (e) => {
+            if (e.key === 'F2' && scopeRef !== undefined) {
+                e.preventDefault();
+                editVariable(val, scopeRef, v);
+            }
+        };
+        head.oncontextmenu = (e) => {
+            e.preventDefault();
+            openMenu({ x: e.clientX, y: e.clientY }, valueItems(expr, v.value, scopeRef !== undefined ? () => editVariable(val, scopeRef, v) : null));
+        };
         return li;
+    }
+    /** What can be done with a value shown by the debugger (a variable, a member, a value at the end of a line). */
+    function valueItems(expr, shown, setValue = null) {
+        return [
+            { label: 'View value…', run: () => void viewValue(expr, shown) },
+            { label: 'View as table…', run: () => void viewTable(expr), disabled: !expr },
+            '-',
+            { label: 'Copy value', run: () => void fullValue(expr, shown).then((t) => navigator.clipboard.writeText(t)).then(() => toast('Value copied'), () => toast('Could not copy')) },
+            { label: 'Compare with clipboard', run: () => void compareValue(expr, shown) },
+            { label: 'Add to watches', run: () => addWatch(expr), disabled: !expr },
+            ...(setValue ? ['-', { label: 'Set value…', key: 'F2', run: setValue }] : []),
+        ];
+    }
+    /** The whole value of an expression (the panes cut it at 200 characters), or what is shown when it has no expression. */
+    async function fullValue(expr, shown) {
+        if (!expr || !run || !paused)
+            return shown;
+        const r = await run.ask({ type: 'evaluate', frameId: selectedFrame, expression: expr, evalOnly: true, limit: 200000 });
+        return r.error ? shown : r.result;
+    }
+    async function compareValue(expr, shown) {
+        let clip = '';
+        try {
+            clip = await navigator.clipboard.readText();
+        }
+        catch {
+            toast('The clipboard cannot be read here.');
+            return;
+        }
+        deps.showDiff(`${expr ?? 'The value'} (right) and the clipboard (left)`, clip, await fullValue(expr, shown), null);
+    }
+    /** A dialog over the page with a title, some content and a Close button; Escape or a click outside closes it. */
+    function dialog(title, content, extraButtons = []) {
+        const overlay = document.createElement('div');
+        overlay.id = 'sigdialog';
+        const box = document.createElement('div');
+        box.className = 'box value-box';
+        const h = document.createElement('h2');
+        h.textContent = title;
+        const buttons = document.createElement('div');
+        buttons.className = 'buttons';
+        const spacer = document.createElement('span');
+        spacer.style.flex = '1';
+        const close = document.createElement('button');
+        close.textContent = 'Close';
+        close.className = 'primary';
+        buttons.append(...extraButtons, spacer, close);
+        box.append(h, content, buttons);
+        overlay.appendChild(box);
+        const done = () => { overlay.remove(); editor.focus(); };
+        close.onclick = done;
+        overlay.onmousedown = (e) => { if (e.target === overlay)
+            done(); };
+        overlay.onkeydown = (e) => { if (e.key === 'Escape') {
+            e.preventDefault();
+            done();
+        } };
+        document.body.appendChild(overlay);
+        close.focus();
+    }
+    /** View Value: the whole value in a dialog, with a Copy button. */
+    async function viewValue(expr, shown) {
+        const text = await fullValue(expr, shown);
+        const pre = document.createElement('pre');
+        pre.className = 'value-text';
+        pre.textContent = text;
+        const copy = document.createElement('button');
+        copy.textContent = 'Copy';
+        copy.onclick = () => void navigator.clipboard.writeText(text).then(() => toast('Value copied'), () => toast('Could not copy'));
+        dialog(expr ?? 'Value', pre, [copy]);
+    }
+    /** Data View: a list, dict, array, DataFrame or Series as a table (the first 1000 rows). */
+    async function viewTable(expr) {
+        if (!expr || !run || !paused)
+            return;
+        const t = await run.ask({ type: 'table', frameId: selectedFrame, expression: expr });
+        if (t.error) {
+            toast(t.error);
+            return;
+        }
+        const wrap = document.createElement('div');
+        wrap.className = 'data-view';
+        const table = document.createElement('table');
+        const headRow = table.createTHead().insertRow();
+        for (const c of ['', ...t.columns]) {
+            const th = document.createElement('th');
+            th.textContent = c;
+            headRow.appendChild(th);
+        }
+        const body = table.createTBody();
+        t.rows.forEach((row, i) => {
+            const tr = body.insertRow();
+            const th = document.createElement('th');
+            th.textContent = t.index[i] ?? String(i);
+            tr.appendChild(th);
+            for (const cell of row)
+                tr.insertCell().textContent = cell;
+        });
+        wrap.appendChild(table);
+        const note = document.createElement('div');
+        note.className = 'dim';
+        note.textContent = `${t.kind}: ${t.total} rows${t.total > t.rows.length ? `, the first ${t.rows.length} shown` : ''}, ${t.columns.length} columns`;
+        wrap.appendChild(note);
+        dialog(`${expr} — Data View`, wrap);
     }
     /** Replaces the shown value by an input; Enter assigns the expression typed there to the variable. */
     function editVariable(valueEl, scopeRef, v) {
@@ -350,23 +516,35 @@ export function setupRun(deps) {
         $('watch-log').scrollTop = $('watch-log').scrollHeight;
     }
     // ------------------------------------------------------------ watches
-    const WATCH_KEY = 'pymagic.watches';
+    // kept per project, like PyCharm's (the first version kept one list for every project)
+    const WATCH_KEY = 'pymagic.watches:' + rootNorm;
     let watches = [];
     try {
-        watches = JSON.parse(localStorage.getItem(WATCH_KEY) ?? '[]');
+        watches = readWatches(JSON.parse(localStorage.getItem(WATCH_KEY) ?? localStorage.getItem('pymagic.watches') ?? '[]'));
     }
     catch { /* storage unavailable */ }
     const saveWatches = () => { try {
         localStorage.setItem(WATCH_KEY, JSON.stringify(watches));
     }
     catch { /* storage unavailable */ } };
-    /** Evaluates every watch in the selected frame (expressions only: a watch never assigns). */
+    const changeWatches = (next) => { watches = next; saveWatches(); void refreshWatches(); };
+    function addWatch(expression) {
+        if (expression?.trim())
+            changeWatches([...watches, { expression: expression.trim(), paused: false }]);
+    }
+    async function editWatch(index) {
+        const text = await deps.askText('Watch', watches[index].expression, 'The expression to watch');
+        if (text?.trim())
+            changeWatches(watches.map((w, i) => (i === index ? { ...w, expression: text.trim() } : w)));
+    }
+    /** Evaluates every watch in the selected frame (expressions only: a watch never assigns); paused ones are not evaluated. */
     async function refreshWatches() {
         const holder = $('watches');
         holder.textContent = '';
-        for (const [index, expression] of watches.entries()) {
+        for (const [index, watch] of watches.entries()) {
+            const { expression } = watch;
             const row = document.createElement('div');
-            row.className = 'w';
+            row.className = 'w' + (watch.paused ? ' paused' : '');
             const name = document.createElement('span');
             name.className = 'wx';
             name.textContent = expression;
@@ -376,9 +554,31 @@ export function setupRun(deps) {
             del.className = 'wd';
             del.textContent = '✕';
             del.title = 'Remove the watch';
-            del.onclick = () => { watches.splice(index, 1); saveWatches(); void refreshWatches(); };
+            del.onclick = () => changeWatches(watches.filter((_, i) => i !== index));
             row.append(name, value, del);
+            row.title = 'Right-click to edit, duplicate, move, pause or remove';
+            row.ondblclick = () => void editWatch(index);
+            row.oncontextmenu = (e) => {
+                e.preventDefault();
+                openMenu({ x: e.clientX, y: e.clientY }, [
+                    { label: 'Edit…', run: () => void editWatch(index) },
+                    { label: 'Duplicate', run: () => changeWatches([...watches.slice(0, index + 1), { ...watch }, ...watches.slice(index + 1)]) },
+                    { label: 'Move up', run: () => changeWatches(moveItem(watches, index, -1)), disabled: index === 0 },
+                    { label: 'Move down', run: () => changeWatches(moveItem(watches, index, 1)), disabled: index === watches.length - 1 },
+                    { label: watch.paused ? 'Resume' : 'Pause', run: () => changeWatches(watches.map((w, i) => (i === index ? { ...w, paused: !w.paused } : w))) },
+                    '-',
+                    { label: 'View value…', run: () => void viewValue(expression, value.textContent), disabled: !paused },
+                    { label: 'View as table…', run: () => void viewTable(expression), disabled: !paused },
+                    '-',
+                    { label: 'Remove', run: () => changeWatches(watches.filter((_, i) => i !== index)) },
+                ]);
+            };
             holder.appendChild(row);
+            if (watch.paused) {
+                value.className = 'wv wn';
+                value.textContent = 'paused';
+                continue;
+            }
             if (!run || !paused) {
                 value.className = 'wv wn';
                 value.textContent = 'not paused';
@@ -399,10 +599,20 @@ export function setupRun(deps) {
     watchAdd.onkeydown = (e) => {
         if (e.key !== 'Enter' || !watchAdd.value.trim())
             return;
-        watches.push(watchAdd.value.trim());
+        addWatch(watchAdd.value);
         watchAdd.value = '';
-        saveWatches();
-        void refreshWatches();
+    };
+    // text dragged from the editor (or anywhere) onto the watches becomes a watch
+    const watchesCol = $('watches-col');
+    watchesCol.ondragover = (e) => { if (e.dataTransfer?.types.includes('text/plain')) {
+        e.preventDefault();
+        watchesCol.classList.add('drop');
+    } };
+    watchesCol.ondragleave = () => watchesCol.classList.remove('drop');
+    watchesCol.ondrop = (e) => {
+        e.preventDefault();
+        watchesCol.classList.remove('drop');
+        addWatch(e.dataTransfer?.getData('text/plain').split('\n')[0] ?? '');
     };
     void refreshWatches();
     // ------------------------------------------------------------ frames and messages
@@ -497,7 +707,7 @@ export function setupRun(deps) {
             const r = deps.relOf(m);
             const bps = r ? breakpointsOf(m) : [];
             if (r && bps.length)
-                breakpoints[r] = wire(bps);
+                breakpoints[r] = wire(m, bps);
         }
         output.textContent = '';
         colours = ansiReader();
@@ -638,6 +848,70 @@ export function setupRun(deps) {
             return { range, contents: [{ value: '```python\n' + expression + ' = ' + r.result + '\n```' }, { value: r.valueType }] };
         },
     });
+    /** Evaluate Expression (Alt+F8): a window that stays open beside the editor, for an expression or several lines of
+     * code run in the selected frame (Ctrl+Enter). Each Alt+F8 opens another one. */
+    function evaluateWindow(initial = '') {
+        const win = document.createElement('div');
+        win.className = 'eval-win';
+        win.innerHTML = '<div class="eval-title"><span>Evaluate</span><button class="eval-close" title="Close">✕</button></div>'
+            + '<textarea spellcheck="false" placeholder="An expression, or lines of code; Ctrl+Enter runs them in the selected frame"></textarea>'
+            + '<div class="eval-row"><button class="primary eval-go">Evaluate</button><span class="eval-type dim"></span></div><pre class="eval-out"></pre>';
+        const area = win.querySelector('textarea'), out = win.querySelector('.eval-out'), type = win.querySelector('.eval-type');
+        area.value = initial;
+        const n = document.querySelectorAll('.eval-win').length;
+        win.style.right = `${24 + n * 24}px`;
+        win.style.top = `${90 + n * 24}px`;
+        const go = async () => {
+            if (!run || !paused) {
+                out.className = 'eval-out e';
+                out.textContent = 'The program is not paused.';
+                return;
+            }
+            const r = await run.ask({ type: 'evaluate', frameId: selectedFrame, expression: area.value, limit: 20000 });
+            out.className = 'eval-out' + (r.error ? ' e' : '');
+            out.textContent = r.error ?? (r.result === '' ? '(done)' : r.result);
+            type.textContent = r.valueType ?? '';
+            if (!r.error) {
+                void loadVariables();
+                void refreshWatches();
+            }
+        };
+        win.querySelector('.eval-go').onclick = () => void go();
+        win.querySelector('.eval-close').onclick = () => win.remove();
+        area.onkeydown = (e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                void go();
+            }
+            else if (e.key === 'Escape')
+                win.remove();
+        };
+        // the title bar moves the window
+        const title = win.querySelector('.eval-title');
+        title.onmousedown = (e) => {
+            if (e.target.closest('button'))
+                return;
+            const r = win.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
+            const move = (m) => { win.style.left = `${m.clientX - dx}px`; win.style.top = `${m.clientY - dy}px`; win.style.right = 'auto'; };
+            const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+            document.addEventListener('mousemove', move);
+            document.addEventListener('mouseup', up);
+        };
+        document.body.appendChild(win);
+        area.focus();
+        if (initial)
+            void go();
+    }
+    /** The selection of an editor, or the expression at its cursor. */
+    function expressionOf(ed) {
+        const model = ed.getModel(), sel = ed.getSelection();
+        if (!model || !sel)
+            return '';
+        if (!sel.isEmpty())
+            return model.getValueInRange(sel);
+        const pos = ed.getPosition();
+        return pos ? expressionAt(model.getLineContent(pos.lineNumber), pos.column) ?? '' : '';
+    }
     /** Quick Evaluate (Ctrl+Alt+F8): the value of the selection, or of the expression at the cursor, in a popup. */
     function quickEvaluate(ed = focused) {
         if (run && paused)
@@ -667,6 +941,30 @@ export function setupRun(deps) {
         ed.addCommand(M.Shift | K.F7, () => void smartStepInto());
         ed.addCommand(M.Alt | K.F10, showExecutionPoint);
         ed.addCommand(M.CtrlCmd | M.Alt | K.F8, () => { focused = ed; quickEvaluate(ed); });
+        ed.addCommand(M.Alt | K.F8, () => { focused = ed; evaluateWindow(expressionOf(ed)); });
+        ed.addCommand(M.Alt | M.Shift | K.F7, () => forceStep('stepIn'));
+        ed.addCommand(M.Alt | M.Shift | K.F8, () => forceStep('next'));
+        ed.addAction({
+            id: 'pymagic.addWatch', label: 'Add to Watches', contextMenuGroupId: 'z_debug', contextMenuOrder: 1,
+            precondition: undefined, run: () => addWatch(expressionOf(ed)),
+        });
+        // a click on the values at the end of a line: what can be done with each of them
+        ed.onMouseDown((e) => {
+            const pos = e.target.position, model = ed.getModel();
+            if (!inline || !pos || !model || inline.model !== model || e.event.rightButton)
+                return;
+            const T = monaco.editor.MouseTargetType;
+            const afterEnd = e.target.type === T.CONTENT_EMPTY || (e.target.type === T.CONTENT_TEXT && pos.column === model.getLineMaxColumn(pos.lineNumber));
+            const names = inline.byLine.get(pos.lineNumber);
+            if (!afterEnd || !names?.length)
+                return;
+            openMenu({ x: e.event.posx, y: e.event.posy }, names.map((name) => ({ label: name, submenu: valueItems(name, '') })));
+        });
+    }
+    /** Force Step Into (Alt+Shift+F7) may stop in library code; Force Step Over (Alt+Shift+F8) passes the breakpoints of the calls. */
+    function forceStep(type) {
+        if (run && paused)
+            run.send({ type, force: true });
     }
     placeKeys(editor);
     // program input
@@ -713,19 +1011,7 @@ export function setupRun(deps) {
     setButtons();
     /** Another editor (the right side of a split) takes breakpoints with a click in its margin, F9 and Shift+F9, and the run and debug keys. */
     function attach(other) {
-        other.onMouseDown((e) => {
-            if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN || !e.target.position)
-                return;
-            if (e.target.detail?.glyphMarginLane === monaco.editor.GlyphMarginLane.Right)
-                return;
-            const model = other.getModel();
-            if (!model)
-                return;
-            if (e.event.rightButton)
-                void editBreakpointAt(model, e.target.position.lineNumber);
-            else
-                toggleBreakpoint(model, e.target.position.lineNumber);
-        });
+        glyphMouse(other);
         const at = (fn) => () => { const model = other.getModel(), pos = other.getPosition(); if (model && pos)
             fn(model, pos.lineNumber); };
         other.addCommand(monaco.KeyCode.F9, at(toggleBreakpoint));
@@ -753,6 +1039,8 @@ export function setupRun(deps) {
             paused: () => run !== null && paused,
             runToCursor, jumpToCursor: () => void jumpToCursor(), smartStepInto: () => void smartStepInto(), showExecutionPoint,
             quickEvaluate: () => quickEvaluate(),
+            evaluate: () => evaluateWindow(expressionOf(focused)),
+            forceStepInto: () => forceStep('stepIn'), forceStepOver: () => forceStep('next'),
         },
     };
 }

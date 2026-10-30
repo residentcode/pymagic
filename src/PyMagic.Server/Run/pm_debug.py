@@ -5,13 +5,16 @@ starts this script, which connects back over a local TCP socket and speaks JSON 
 
   host -> helper   setBreakpoints, setExceptionBreak, mute, go, continue, next, stepIn, stepInto (smart step into one
                    call of the line), stepOut, runTo (run to a line, "force" ignoring the breakpoints on the way), jump
-                   (go on from another line of the frame), scopes, variables, values (inline values), evaluate,
+                   (go on from another line of the frame), scopes, variables, values (inline values), table (Data View), evaluate,
                    setVariable, stop
-  helper -> host   hello, stopped, running, scopes, variables, values, evaluated, variableSet, jumped, output (log points)
+  helper -> host   hello, stopped, running, scopes, variables, values, table, evaluated, variableSet, jumped, output (log points)
 
 A breakpoint is a line number or {"line", "condition", "hitCondition", "logMessage"}: it stops only when the condition
 holds and the hit count matches ("5", ">=5", "%3"...); with a log message it prints the message ({expr} is evaluated
-in the frame) and does not stop. Muted breakpoints neither stop nor log.
+in the frame) and does not stop. Muted breakpoints neither stop nor log. With "function" (on a `def` line) it stops
+when that function is called ("codeLine": where its code starts, the first decorator); with "after" ({"file", "line"})
+it does nothing until that other breakpoint has been hit. "next" and "stepIn" take "force": Force Step Over passes the
+breakpoints of the calls, Force Step Into may stop in library code.
 
 The functions that returned into the stopped frame since the last step (step over, step out) are kept with their
 values and shown as the "Return values" scope of the top frame.
@@ -86,6 +89,9 @@ class Debugger(bdb.Bdb):
         self.exception_classes = []   # "break on raised" only for these class names (and their subclasses); empty: all
         self.raised = None         # the exception the program was last stopped on while it was being raised
         self.muted = False
+        self.force_into = False    # Force Step Into: this one step may stop in library code
+        self.force_over = False    # Force Step Over: no breakpoint stops until the step ends
+        self.hit_lines = set()     # (canonical path, line) of the breakpoints hit so far, for "disabled until hit"
         self.run_to = None         # (canonical path, line, force) of Run to Cursor
         self.step_target = None    # (function name, origin frame, origin line) of Smart Step Into
         self.return_origin = None  # the frame whose callees' return values are kept while stepping
@@ -138,16 +144,19 @@ class Debugger(bdb.Bdb):
         self.meta = {k: v for k, v in self.meta.items() if k[0] != canonical}
         for item in lines:
             spec = item if isinstance(item, dict) else {"line": item}
-            line = int(spec.get("line", 0))
+            line = int(spec.get("codeLine") or spec.get("line", 0))   # a decorated function's code starts at its first decorator
             condition = (spec.get("condition") or "").strip() or None
-            self.set_break(path, line, cond=condition)
+            # on a `def` line the breakpoint stops when the function is called, not when it is defined
+            self.set_break(path, line, cond=condition, funcname=spec.get("function") or None)
             hit = None
             match = self.HIT_CONDITION.match(spec.get("hitCondition") or "")
             if match:
                 hit = (match.group(1) or "==", int(match.group(2)))
             log = spec.get("logMessage") or None
-            if hit or log:
-                self.meta[(canonical, line)] = {"hit": hit, "log": log}
+            after = spec.get("after")   # {"file", "line"}: disabled until that breakpoint is hit
+            after = (self.canonic(os.path.join(self.root, after.get("file", ""))), int(after.get("line", 0))) if isinstance(after, dict) else None
+            if hit or log or after:
+                self.meta[(canonical, line)] = {"hit": hit, "log": log, "after": after}
 
     def break_here(self, frame):
         # bdb asks this twice for one line event (once to decide, once in user_line), and asking counts a hit
@@ -158,17 +167,22 @@ class Debugger(bdb.Bdb):
             self.run_to = None
             self._hit_key, self._hit_value = key, True
             return True
-        if self.muted or (self.run_to is not None and self.run_to[2]):
+        if self.muted or self.force_over or (self.run_to is not None and self.run_to[2]):
             result = False
         else:
             result = super().break_here(frame)
         if result:
             canonical = self.canonic(frame.f_code.co_filename)
-            info = self.meta.get((canonical, frame.f_lineno))
+            # a function breakpoint sits on the `def` line, which is not the line being run
+            line = frame.f_lineno if (canonical, frame.f_lineno) in bdb.Breakpoint.bplist else frame.f_code.co_firstlineno
+            self.hit_lines.add((canonical, line))
+            info = self.meta.get((canonical, line))
             if info:
-                bp = (bdb.Breakpoint.bplist.get((canonical, frame.f_lineno)) or [None])[0]
+                bp = (bdb.Breakpoint.bplist.get((canonical, line)) or [None])[0]
                 hits = bp.hits if bp is not None else 1
-                if info["hit"] and not self.hit_matches(info["hit"], hits):
+                if info.get("after") and info["after"] not in self.hit_lines:
+                    result = False
+                elif info["hit"] and not self.hit_matches(info["hit"], hits):
                     result = False
                 elif info["log"]:
                     self.log(frame, info["log"])
@@ -208,7 +222,7 @@ class Debugger(bdb.Bdb):
         return "/site-packages/" not in lowered and "/.venv/" not in lowered and "/venv/" not in lowered
 
     def stop_here(self, frame):
-        if self.just_my_code and not self.is_user_file(frame.f_code.co_filename):
+        if self.just_my_code and not self.force_into and not self.is_user_file(frame.f_code.co_filename):
             return False
         if self.step_target is not None:
             name, origin, line = self.step_target
@@ -323,6 +337,7 @@ class Debugger(bdb.Bdb):
             self.run_to = None
             self.step_target = None
             self.return_origin = None
+            self.force_into = self.force_over = False
             self.last_thread = threading.get_ident()
             self.send({"type": kind, "reason": reason, "frames": self.frames_payload(), "message": message,
                        "thread": threading.current_thread().name})
@@ -360,7 +375,7 @@ class Debugger(bdb.Bdb):
             result.append({"name": title, "ref": ref})
         return result
 
-    def evaluate(self, frame_id, expression, eval_only=False):
+    def evaluate(self, frame_id, expression, eval_only=False, limit=1000):
         frame = self.stack[frame_id][0]
         try:
             try:
@@ -371,7 +386,7 @@ class Debugger(bdb.Bdb):
                 exec(compile(expression, "<console>", "exec"), frame.f_globals, frame.f_locals)
                 return {"result": "", "valueType": "", "ref": 0}
             value = eval(code, frame.f_globals, frame.f_locals)
-            return {"result": short_repr(value, 1000), "valueType": type(value).__name__, "ref": self.ref_for(value)}
+            return {"result": short_repr(value, limit), "valueType": type(value).__name__, "ref": self.ref_for(value)}
         except BaseException as e:
             return {"error": "%s: %s" % (type(e).__name__, e)}
 
@@ -387,6 +402,53 @@ class Debugger(bdb.Bdb):
                         found[name] = short_repr(value, 60)
                     break
         return found
+
+    TABLE_ROWS = 1000
+
+    def table(self, frame_id, expression):
+        """A value as rows and columns for the Data View: a pandas DataFrame or Series, a NumPy array, a list of rows
+        (lists, tuples or dicts), a dict, or any other sequence as one column."""
+        frame = self.stack[frame_id][0]
+        try:
+            value = eval(compile(expression, "<table>", "eval"), frame.f_globals, frame.f_locals)
+        except BaseException as e:
+            return {"error": "%s: %s" % (type(e).__name__, e)}
+        cell = lambda v: short_repr(v, 120)
+        kind = type(value).__name__
+        try:
+            if hasattr(value, "iloc") and hasattr(value, "columns"):          # pandas DataFrame
+                part = value.iloc[:self.TABLE_ROWS]
+                return {"kind": kind, "total": len(value), "columns": [str(c) for c in value.columns],
+                        "index": [cell(i) for i in part.index], "rows": [[cell(v) for v in row] for row in part.itertuples(index=False)]}
+            if hasattr(value, "iloc") and hasattr(value, "index"):            # pandas Series
+                part = value.iloc[:self.TABLE_ROWS]
+                return {"kind": kind, "total": len(value), "columns": [str(value.name) if value.name is not None else "value"],
+                        "index": [cell(i) for i in part.index], "rows": [[cell(v)] for v in part]}
+            if hasattr(value, "ndim") and hasattr(value, "tolist"):          # NumPy array
+                items = value.tolist() if value.ndim else [value.tolist()]
+                value = items if value.ndim <= 2 else [[cell(x) for x in row] for row in items]
+            if isinstance(value, dict):
+                items = list(value.items())[:self.TABLE_ROWS]
+                return {"kind": kind, "total": len(value), "columns": ["key", "value"], "index": [str(i) for i in range(len(items))],
+                        "rows": [[cell(k), cell(v)] for k, v in items]}
+            items = list(value)[:self.TABLE_ROWS] if hasattr(value, "__iter__") and not isinstance(value, (str, bytes)) else None
+        except BaseException as e:
+            return {"error": "%s: %s" % (type(e).__name__, e)}
+        if items is None:
+            return {"error": "A %s is not shown as a table." % kind}
+        total = len(value) if hasattr(value, "__len__") else len(items)
+        index = [str(i) for i in range(len(items))]
+        if items and all(isinstance(r, dict) for r in items):
+            columns = []
+            for r in items:
+                columns += [k for k in r if k not in columns]
+            return {"kind": kind, "total": total, "columns": [str(c) for c in columns], "index": index,
+                    "rows": [[cell(r[c]) if c in r else "" for c in columns] for r in items]}
+        if items and all(isinstance(r, (list, tuple)) for r in items):
+            width = max(len(r) for r in items)
+            return {"kind": kind, "total": total, "columns": [str(i) for i in range(width)], "index": index,
+                    "rows": [[cell(r[i]) if i < len(r) else "" for i in range(width)] for r in items]}
+        return {"kind": kind, "total": total, "columns": ["value"], "index": index, "rows": [[cell(v)] for v in items]}
 
     def jump(self, line):
         """Goes on from another line of the top frame; Python allows it only from the frame's own trace event."""
@@ -439,8 +501,10 @@ class Debugger(bdb.Bdb):
                 self.set_continue()
             elif kind == "next" and frame is not None:
                 self.return_origin = frame
+                self.force_over = bool(msg.get("force"))
                 self.set_next(frame)
             elif kind == "stepIn":
+                self.force_into = bool(msg.get("force"))
                 self.set_step()
             elif kind == "stepInto" and frame is not None:
                 self.step_target = (msg.get("target", ""), frame, frame.f_lineno)
@@ -454,6 +518,11 @@ class Debugger(bdb.Bdb):
                 self.set_continue()
             elif kind == "values":
                 self.send({"type": "values", "id": rid, "values": self.values(int(msg.get("frameId", 0)), msg.get("names") or [])})
+                continue
+            elif kind == "table":
+                answer = self.table(int(msg.get("frameId", 0)), msg.get("expression", ""))
+                answer.update({"type": "table", "id": rid})
+                self.send(answer)
                 continue
             elif kind == "jump":
                 answer = self.jump(int(msg.get("line", 0)))
@@ -469,7 +538,7 @@ class Debugger(bdb.Bdb):
                            "items": [self.describe(n, v) for n, v in members]})
                 continue
             elif kind == "evaluate":
-                answer = self.evaluate(int(msg.get("frameId", 0)), msg.get("expression", ""), bool(msg.get("evalOnly")))
+                answer = self.evaluate(int(msg.get("frameId", 0)), msg.get("expression", ""), bool(msg.get("evalOnly")), int(msg.get("limit") or 1000))
                 answer.update({"type": "evaluated", "id": rid})
                 self.send(answer)
                 continue
@@ -543,6 +612,10 @@ class Debugger(bdb.Bdb):
                 self.send({"type": "scopes", "id": rid, "scopes": self.scopes(int(msg.get("frameId", 0)))})
             elif kind == "values":
                 self.send({"type": "values", "id": rid, "values": self.values(int(msg.get("frameId", 0)), msg.get("names") or [])})
+            elif kind == "table":
+                answer = self.table(int(msg.get("frameId", 0)), msg.get("expression", ""))
+                answer.update({"type": "table", "id": rid})
+                self.send(answer)
             elif kind == "jump":
                 self.send({"type": "jumped", "id": rid, "error": "The program has ended with this exception; it cannot go on."})
             elif kind == "variables":
@@ -550,7 +623,7 @@ class Debugger(bdb.Bdb):
                 self.send({"type": "variables", "id": rid, "ref": msg.get("ref"),
                            "items": [self.describe(n, v) for n, v in members]})
             elif kind == "evaluate":
-                answer = self.evaluate(int(msg.get("frameId", 0)), msg.get("expression", ""), bool(msg.get("evalOnly")))
+                answer = self.evaluate(int(msg.get("frameId", 0)), msg.get("expression", ""), bool(msg.get("evalOnly")), int(msg.get("limit") or 1000))
                 answer.update({"type": "evaluated", "id": rid})
                 self.send(answer)
             elif kind == "setVariable":

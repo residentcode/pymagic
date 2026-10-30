@@ -1,7 +1,9 @@
-// The dialog behind Shift+F9 and a right click on a breakpoint: a condition, a hit count, a message to log instead of stopping.
-export const isPlain = (m) => !m || (!m.condition && !m.hitCondition && !m.logMessage);
-/** Resolves with the new settings, 'remove' for the Remove button, or null when cancelled. */
-export function editBreakpoint(line, meta, exists) {
+// The dialog behind Shift+F9 and a right click on a breakpoint: a condition, a hit count, a message to log instead of
+// stopping, a description, and another breakpoint it waits for.
+export const isPlain = (m) => !m || (!m.condition && !m.hitCondition && !m.logMessage && !m.description && !m.after);
+/** Resolves with the new settings, 'remove' for the Remove button, or null when cancelled. `others` are the project's
+ * other breakpoints ({file, line}) this one can wait for. */
+export function editBreakpoint(line, meta, exists, others = [], functionName = null) {
     return new Promise((resolve) => {
         const overlay = document.createElement('div');
         overlay.id = 'sigdialog';
@@ -9,7 +11,7 @@ export function editBreakpoint(line, meta, exists) {
         box.className = 'box';
         overlay.appendChild(box);
         const title = document.createElement('h2');
-        title.textContent = `Breakpoint at line ${line}`;
+        title.textContent = functionName ? `Breakpoint on calls of ${functionName}() (line ${line})` : `Breakpoint at line ${line}`;
         box.appendChild(title);
         const field = (label, value, placeholder, hint) => {
             const row = document.createElement('div');
@@ -31,6 +33,21 @@ export function editBreakpoint(line, meta, exists) {
         const condition = field('Condition', meta?.condition, 'e.g. i == 3 and name != ""', 'Stops only when this Python expression is true.');
         const hits = field('Hit count', meta?.hitCondition, '3   >=3   %2', 'Stops on the 3rd hit, from the 3rd on, or on every 2nd hit.');
         const log = field('Log message', meta?.logMessage, 'i={i} total={total}', 'Prints the message instead of stopping; {expression} is evaluated in the frame.');
+        const description = field('Description', meta?.description, 'what this breakpoint is for', 'Shown when the mouse is over the breakpoint.');
+        const afterRow = document.createElement('div');
+        afterRow.className = 'namerow';
+        const afterLabel = document.createElement('label');
+        afterLabel.textContent = 'Disabled until';
+        afterLabel.style.width = '90px';
+        const after = document.createElement('select');
+        after.style.flex = '1';
+        after.title = 'Does nothing until the chosen breakpoint has been hit in this run.';
+        after.append(new Option('(always enabled)', ''));
+        for (const o of others)
+            after.append(new Option(`${o.file}:${o.line} is hit`, `${o.file}:${o.line}`));
+        after.value = meta?.after ? `${meta.after.file}:${meta.after.line}` : '';
+        afterRow.append(afterLabel, after);
+        box.appendChild(afterRow);
         const note = document.createElement('div');
         note.className = 'dim';
         note.textContent = 'With a log message the program does not stop here.';
@@ -56,6 +73,8 @@ export function editBreakpoint(line, meta, exists) {
             condition: condition.value.trim() || undefined,
             hitCondition: hits.value.trim() || undefined,
             logMessage: log.value.trim() || undefined,
+            description: description.value.trim() || undefined,
+            after: after.value ? { file: after.value.replace(/:\d+$/, ''), line: Number(after.value.match(/:(\d+)$/)[1]) } : undefined,
         });
         overlay.onkeydown = (e) => {
             if (e.key === 'Escape') {

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/debug-model.js', import.meta.url), 'utf8');
-const { codeOf, namesOf, inlineLines, inlineText, callsOn, expressionAt, stackText } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { codeOf, namesOf, inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 test('codeOf: comments and the text of strings are left out', () => {
     assert.equal(codeOf('x = "a # b"  # note'), 'x = "     "  ');
@@ -53,4 +53,33 @@ test('expressionAt: the dotted expression up to the word under the column', () =
 test('stackText: one frame per line, innermost first', () => {
     assert.equal(stackText([{ name: 'add', file: 'C:/p/a.py', line: 2 }, { name: '<module>', file: 'C:/p/a.py', line: 7 }]),
         'add, C:/p/a.py:2\n<module>, C:/p/a.py:7');
+});
+
+test('functionBreakpoint: a def line names its function, and its code starts at the first decorator', () => {
+    const text = ['class A:', '    @property', '    # a note', '    @cached', '    def size(self):', '        return 1', 'x = 1'];
+    const at = (l) => text[l - 1] ?? null;
+    assert.deepEqual(functionBreakpoint(at, 5), { function: 'size', codeLine: 2 });
+    assert.equal(functionBreakpoint(at, 6), null);
+    assert.deepEqual(functionBreakpoint((l) => ['async def go():'][l - 1] ?? null, 1), { function: 'go', codeLine: 1 });
+});
+
+test('childExpression: items of dicts and lists by index, attributes by name, none for sets and return values', () => {
+    assert.equal(childExpression('data', 'dict', "'k'"), "data['k']");
+    assert.equal(childExpression('items', 'list', '2'), 'items[2]');
+    assert.equal(childExpression('self', 'Point', 'x'), 'self.x');
+    assert.equal(childExpression('tags', 'set', '0'), null);
+    assert.equal(childExpression('scale()', 'Point', 'x'), null);
+    assert.equal(childExpression('obj', 'Thing', 'not a name'), null);
+});
+
+test('readWatches: old lists of strings and new lists of objects', () => {
+    assert.deepEqual(readWatches(['a', 'b.c']), [{ expression: 'a', paused: false }, { expression: 'b.c', paused: false }]);
+    assert.deepEqual(readWatches([{ expression: 'x', paused: true }, { expression: '' }]), [{ expression: 'x', paused: true }]);
+    assert.deepEqual(readWatches(null), []);
+});
+
+test('moveItem: one place up or down, stopping at the ends', () => {
+    assert.deepEqual(moveItem(['a', 'b', 'c'], 2, -1), ['a', 'c', 'b']);
+    assert.deepEqual(moveItem(['a', 'b', 'c'], 0, -1), ['a', 'b', 'c']);
+    assert.deepEqual(moveItem(['a', 'b', 'c'], 0, 1), ['b', 'a', 'c']);
 });

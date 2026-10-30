@@ -58,7 +58,7 @@ public class RunTests
             int id = ++_id;
             body["type"] = type; body["id"] = id;
             Session.Handle(body);
-            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", "values" => "values", "jump" => "jumped", _ => "evaluated" };
+            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", "values" => "values", "jump" => "jumped", "table" => "table", _ => "evaluated" };
             return Next(e => e["type"]?.GetValue<string>() == reply && e["id"]?.GetValue<int>() == id);
         }
 
@@ -611,5 +611,125 @@ public class RunTests
         Assert.Contains("Mine: x", stopped["message"]!.GetValue<string>());
         h.Command("continue");
         Assert.Equal(0, h.Type("exited")["code"]!.GetValue<int>());
+    }
+
+    // ---------------------------------------------------------------- item 159: more of the debugger
+
+    const string Calls =
+        "import textwrap\n" +                 // 1
+        "\n" +                                // 2
+        "def deco(f):\n" +                    // 3
+        "    return f\n" +                    // 4
+        "\n" +                                // 5
+        "@deco\n" +                           // 6
+        "def work(n):\n" +                    // 7
+        "    inner = n * 2\n" +               // 8
+        "    return inner\n" +                // 9
+        "\n" +                                // 10
+        "a = work(1)\n" +                     // 11
+        "b = textwrap.dedent('  x')\n" +      // 12
+        "c = work(2)\n" +                     // 13
+        "print(a, b, c)\n";                   // 14
+
+    static JsonNode Bp(int line, JsonObject? extra = null)
+    {
+        var o = extra ?? new JsonObject();
+        o["line"] = line;
+        return o;
+    }
+
+    void SetBreakpoints(Harness h, params JsonNode[] lines) =>
+        h.Session.Handle(new JsonObject { ["type"] = "setBreakpoints", ["file"] = Path.Combine(h.Root, "calls.py"), ["lines"] = new JsonArray(lines) });
+
+    [Fact]
+    public void ABreakpointOnADefLineStopsWhenTheFunctionIsCalled()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("calls.py", Calls);
+        h.Session.Start(h.Root, "calls.py", true, Array.Empty<string>());
+        // decorated: its code starts on the decorator's line, which the page sends as codeLine
+        SetBreakpoints(h, Bp(7, new JsonObject { ["function"] = "work", ["codeLine"] = 6 }));
+        var first = h.Type("stopped");
+        Assert.Equal("work", first["frames"]![0]!["name"]!.GetValue<string>());   // not when the def statement runs
+        Assert.Equal(8, Line(first));
+        h.Command("continue");
+        Assert.Equal(8, Line(h.Type("stopped")));   // the second call
+        h.Command("continue");
+        h.Type("exited");
+    }
+
+    [Fact]
+    public void ABreakpointCanWaitUntilAnotherOneIsHit()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("calls.py", Calls);
+        h.Session.Start(h.Root, "calls.py", true, Array.Empty<string>());
+        // line 8 does nothing until line 12 is hit: the first call of work() passes, the second stops
+        SetBreakpoints(h, Bp(8, new JsonObject { ["after"] = new JsonObject { ["file"] = "calls.py", ["line"] = 12 } }), Bp(12));
+        Assert.Equal(12, Line(h.Type("stopped")));
+        h.Command("continue");
+        Assert.Equal(8, Line(h.Type("stopped")));
+        Assert.Equal("2", h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "n" })["result"]!.GetValue<string>());
+        h.Command("continue");
+        h.Type("exited");
+    }
+
+    [Fact]
+    public void ForceStepOverPassesTheBreakpointsOfTheCalls()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("calls.py", Calls);
+        h.Session.Start(h.Root, "calls.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["calls.py"] = new() { 8, 11 } });
+        Assert.Equal(11, Line(h.Type("stopped")));
+        h.Session.Handle(new JsonObject { ["type"] = "next", ["force"] = true });
+        Assert.Equal(12, Line(h.Type("stopped")));   // the breakpoint in work() was passed
+        h.Command("next");
+        Assert.Equal(13, Line(h.Type("stopped")));
+        h.Command("next");
+        Assert.Equal(8, Line(h.Type("stopped")));    // a plain step over still stops at the breakpoint of the call
+        h.Command("continue");
+        h.Type("exited");
+    }
+
+    [Fact]
+    public void ForceStepIntoStopsInLibraryCode()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("calls.py", Calls);
+        h.Session.Start(h.Root, "calls.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["calls.py"] = new() { 12 } });
+        Assert.Equal(12, Line(h.Type("stopped")));
+        h.Session.Handle(new JsonObject { ["type"] = "stepIn", ["force"] = true });
+        var inside = h.Type("stopped");
+        Assert.Equal("dedent", inside["frames"]![0]!["name"]!.GetValue<string>());
+        Assert.True(inside["frames"]![0]!["file"]!.GetValue<string>().EndsWith("textwrap.py"));
+        h.Command("continue");
+        h.Type("exited");
+    }
+
+    [Fact]
+    public void ValuesAreGivenAsTablesForTheDataView()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("data.py", "rows = [{'a': 1, 'b': 'x'}, {'a': 2, 'c': None}]\npairs = [(1, 2), (3, 4, 5)]\nd = {'k': [1]}\nn = 3\nprint(n)\n");
+        h.Session.Start(h.Root, "data.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["data.py"] = new() { 5 } });
+        h.Type("stopped");
+        var rows = h.Request("table", new JsonObject { ["frameId"] = 0, ["expression"] = "rows" });
+        Assert.Equal("a,b,c", string.Join(",", rows["columns"]!.AsArray().Select(c => c!.GetValue<string>())));
+        Assert.Equal("2,,None", string.Join(",", rows["rows"]![1]!.AsArray().Select(c => c!.GetValue<string>())));
+        var pairs = h.Request("table", new JsonObject { ["frameId"] = 0, ["expression"] = "pairs" });
+        Assert.Equal(3, pairs["columns"]!.AsArray().Count);
+        var d = h.Request("table", new JsonObject { ["frameId"] = 0, ["expression"] = "d" });
+        Assert.Equal("'k',[1]", string.Join(",", d["rows"]![0]!.AsArray().Select(c => c!.GetValue<string>())));
+        Assert.Contains("not shown as a table", h.Request("table", new JsonObject { ["frameId"] = 0, ["expression"] = "n" })["error"]!.GetValue<string>());
+        // the whole value, past the panes' 200 characters
+        var full = h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "'x' * 5000", ["evalOnly"] = true, ["limit"] = 100000 });
+        Assert.Equal(5002, full["result"]!.GetValue<string>().Length);
+        h.Command("continue");
+        h.Type("exited");
     }
 }

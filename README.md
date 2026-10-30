@@ -118,12 +118,12 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 **Compared with PyCharm's help, area by area** (from its help contents of about 1,000 pages and its 103 Python inspections, checked against the code on 30 October 2026; areas not compared yet are at the end)
 - Debugger:
-  - inline values: ~~each variable's value shown at the end of its line while stopped, updated on each step~~ (done, item 158); still open: clicking a value to open the object, change it or add an inline watch;
-  - stepping: ~~Step Into My Code (library code is skipped unless asked), Smart Step Into, Run to Cursor, Force Run to Cursor, Jump to Cursor, Show Execution Point~~ (done, item 158); still open: Force Step Into / Over;
-  - breakpoints: ~~mute all; exception breakpoints per exception class, on raise, on termination (uncaught), only in the project's files~~ (done, item 158); still open: disable until another breakpoint is hit, suspend one thread or all, a description, method breakpoints, dragging a breakpoint to another line;
-  - variables: ~~return values of the functions just left, set a value (double-click), Quick Evaluate (Ctrl+Alt+F8), hover values~~ (done, item 158); still open: F2 for set value, go to a variable's declaration or its type, compare a value with the clipboard, a dialog for one value, Evaluate (Alt+F8) as a non-modal window for several lines, hover values that open into their children, JSON shown as a tree;
-  - watches that are kept with the project, dragged in from the editor, paused, duplicated and reordered;
-  - Data View: lists, arrays, DataFrames and Series as tables;
+  - inline values: ~~each variable's value shown at the end of its line while stopped, updated on each step~~ (done, item 158); ~~a click on them to view a value, see it as a table or add a watch~~ (done, item 159); still open: changing a value from there;
+  - stepping: ~~Step Into My Code (library code is skipped unless asked), Smart Step Into, Run to Cursor, Force Run to Cursor, Jump to Cursor, Show Execution Point~~ (done, item 158); ~~Force Step Into / Over~~ (done, item 159);
+  - breakpoints: ~~mute all; exception breakpoints per exception class, on raise, on termination (uncaught), only in the project's files~~ (done, item 158); ~~disabled until another breakpoint is hit, a description, method (function) breakpoints on a `def` line, dragging a breakpoint to another line~~ (done, item 159); still open: suspend one thread or all;
+  - variables: ~~return values of the functions just left, set a value (double-click), Quick Evaluate (Ctrl+Alt+F8), hover values~~ (done, item 158); ~~F2 for set value, compare a value with the clipboard, a dialog for one value, Evaluate (Alt+F8) as a non-modal window for several lines~~ (done, item 159); still open: go to a variable's declaration or its type, hover values that open into their children, JSON shown as a tree;
+  - ~~watches kept with the project, paused, duplicated, edited and reordered, added from the editor's menu, the Variables pane or by dropping text~~ (done, item 159);
+  - ~~Data View: lists, dicts, NumPy arrays, DataFrames and Series as tables~~ (done, item 159);
   - a debug console with IPython; attach to a running process; the variables loading policy (on demand for slow objects); ~~copying the call stack~~ (done, item 158).
   - found while checking item 158: this Monaco build does not draw text injected after a line (`after` decorations), so the Git blame shown at the end of the current line (`git.js`) is probably not drawn either; item 158 draws its values with a CSS `::after` instead.
 - Code vision and inlay hints: the number of usages above each function and class and the number of inheritors above each class (a click lists them); the author of most lines; parameter names in calls, the names of `pytest.mark.parametrize` arguments, return types, inferred types of variables, the attribute names of positional class patterns in `match`, and the type of each call in a method chain.
@@ -147,4 +147,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 158 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 159 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

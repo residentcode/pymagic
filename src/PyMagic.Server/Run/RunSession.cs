@@ -17,7 +17,7 @@ public sealed class RunSession : IDisposable
     static readonly HashSet<string> DebugCommands = new()
     {
         "setBreakpoints", "setExceptionBreak", "mute", "continue", "next", "stepIn", "stepInto", "stepOut", "runTo", "jump", "scopes", "variables",
-        "values", "evaluate", "setVariable",
+        "values", "table", "evaluate", "setVariable",
     };
 
     readonly Action<JsonNode> _emit;
