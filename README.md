@@ -97,6 +97,25 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Terminal: the prompt does not show the virtual environment (`(.venv) PS ...`): the environment is active (its folder first on the PATH, `VIRTUAL_ENV` set) but its activation script is not run.
 - Diagrams: of classes, modules and Django models.
 
+**Django compared with PyCharm** (from PyCharm's Django help pages and its 17 Django inspections, checked against the code on 30 October 2026)
+- Run configurations: a *Django server* configuration (host, port, extra options, working folder, environment variables, `.env` files, open the browser, test server, no reload, debug only my code, log files in the console, tasks before launch); a *Django tests* configuration (a target: an app, a test case or one test; a custom settings file; options such as `--failfast`; variables; results in the test tree). Today the Django tab has Run server, Debug server and `test` buttons without settings, and the test output is plain text.
+- manage.py: a console for it (Ctrl+Alt+R) with command history, completion of commands and their options, and quick documentation; a *Django console*, a Python console with Django set up. Today there are buttons and one line for other arguments, and `shell` runs as a plain command.
+- Settings: a Django settings page (Django support on or off, project root, settings file, manage.py script, environment variables, not using Django's test runner); *Mark Directory As → Template folder* and resources, folders in `TEMPLATES['DIRS']` marked by themselves, template languages per file type.
+- New Django project: location, Git, environment, template language, templates folder, first app's name, admin on or off.
+- Django Structure window: models, admin classes and views, grouped by type or by app; create an app, a model or a view; makemigrations and migrate per app; register a model in the admin; from an admin class to its model.
+- Logical structure of a file: models with fields and relations, serializers (nested too), views with their endpoints, admins, forms and signal hooks (`pre_save`, `post_delete`); create a missing ModelAdmin or serializer.
+- Model dependency diagram: of the project or one model, with notes, layout, zoom, going to the source, find usages and refactoring.
+- Endpoints tab: a generated HTTP request that can be sent while the server runs, the OpenAPI specification, the view's documentation, client code examples, filters, and endpoints from libraries and tests. Today it is a list.
+- Templates:
+  - breakpoints in `.html` templates, with their variables in the debugger;
+  - a live preview beside the editor through the template's URL (URL parameters, back and forward, Refresh);
+  - margin icons from a view to its template and from a template to every view that renders it;
+  - creating a missing template from its name (Alt+Enter), in a chosen templates folder;
+  - live templates you can see and edit (today block tags complete as fixed snippets);
+  - completion and checks of the HTML, CSS and JavaScript inside a template.
+- Inspections: Django ORM error (an ORM method that cannot be called there); `{% endblock name %}` whose name is not its block's; a broken `#}` comment in Django templates (checked only in Jinja today); a comparison without spaces in `{% if %}`; unresolved Django 6 partial names (`{% partialdef %}`); django-constance keys unresolved or missing from the fieldsets.
+- Code insight: an intention that turns a function-based generic view into a class-based one; dotted paths in settings (`INSTALLED_APPS`, `MIDDLEWARE`, `AUTH_USER_MODEL`, `ROOT_URLCONF`) checked and followed.
+
 **To check** (old notes that later work may have covered; each needs a look before it is counted as open or done)
 - Parser: store-context validation and finer error messages (2). Scopes: `__all__`, `try/except ImportError` fallbacks, definitions under conditions (3).
 - Typeshed: `__init__.pyi` re-exports of `import a as a`, `__all__ +=`, overloads with an explicit `self`, a cache of parsed stubs on disk (7).
