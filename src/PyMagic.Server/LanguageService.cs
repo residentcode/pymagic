@@ -372,7 +372,7 @@ public sealed partial class LanguageService
         var r = new List<Diag>();
         foreach (var d in m.SyntaxErrors) r.Add(new Diag(d, Severity.Error, null, "syntax-error"));
         foreach (var d in m.Semantics.Diagnostics) r.Add(new Diag(d, Severity.Warning, null, Classify(d.Message)));
-        foreach (var d in m.Flow.Analyse())
+        foreach (var d in ev.FlowDiagnostics(m))
             r.Add(d.Message == "Unreachable code"
                 ? new Diag(d, Severity.Hint, new[] { DiagnosticTag.Unnecessary }, "unreachable")
                 : new Diag(d, Severity.Warning, null, Classify(d.Message)));

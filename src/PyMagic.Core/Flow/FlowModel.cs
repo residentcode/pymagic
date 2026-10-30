@@ -45,12 +45,13 @@ public sealed class FlowModel
     }
 
     /// <summary>Warnings for locals read before assignment in functions, and for unreachable statements.</summary>
-    public IReadOnlyList<Diagnostic> Analyse()
+    /// <param name="flowOf">The flow to report on for a scope, when types say more about it (see TypeEvaluator.FlowDiagnostics).</param>
+    public IReadOnlyList<Diagnostic> Analyse(Func<Scope, ScopeFlow?>? flowOf = null)
     {
         var diags = new List<Diagnostic>();
         void Walk(Scope s)
         {
-            var flow = For(s);
+            var flow = flowOf?.Invoke(s) ?? For(s);
             if (flow != null)
             {
                 foreach (var st in flow.UnreachableStatements())

@@ -17,8 +17,17 @@ internal sealed class CfgBuilder
     readonly List<Instruction> _instrs = new();
     readonly List<ReturnStmt> _returns = new();
     readonly List<Instruction> _returnInstrs = new();
-    readonly Stack<(Instruction Head, List<Instruction> Breaks)> _loops = new();
+    /// <summary>The loops around the code being built, with how many try/finally blocks were open where each starts.</summary>
+    readonly Stack<(Instruction Head, List<Instruction> Breaks, int Finallies)> _loops = new();
+    /// <summary>The try statements with a finally block that the code being built is in: the exits that leave them run it first.</summary>
+    readonly List<PendingExits> _finallies = new();
     List<Instruction> _cur = new();
+
+    /// <summary>Where control was going when it left a try body (or its handlers or else block) that has a finally block.</summary>
+    sealed class PendingExits
+    {
+        public readonly List<Instruction> Returns = new(), Breaks = new(), Continues = new();
+    }
 
     public CfgBuilder(SemanticModel model, Scope scope, IReadOnlyDictionary<Node, (Symbol, Declaration)> decls)
     {
@@ -48,10 +57,10 @@ internal sealed class CfgBuilder
                 VisitStmts(m.Body);
                 break;
         }
-        bool endReachable = _cur.Count > 0;
+        var end = _cur;
         var exit = Emit(InstrKind.Exit);
         foreach (var r in _returnInstrs) Link(r, exit);
-        return new ControlFlowGraph(entry, exit, _instrs, _returns, endReachable);
+        return new ControlFlowGraph(entry, exit, _instrs, _returns, end);
     }
 
     // ------------------------------------------------------------ emission helpers
@@ -189,7 +198,10 @@ internal sealed class CfgBuilder
         Mark(st);
         switch (st)
         {
-            case ExprStmt x: VisitExpr(x.Value); break;
+            case ExprStmt x:
+                VisitExpr(x.Value);
+                if (x.Value is CallExpr call) Emit(InstrKind.Call, call);   // the evaluator knows whether it returns
+                break;
 
             case AssignStmt x:
                 VisitExpr(x.Value);
@@ -214,7 +226,7 @@ internal sealed class CfgBuilder
                 VisitExpr(x.Value);
                 var r = Emit(InstrKind.Return, x);
                 _returns.Add(x);
-                _returnInstrs.Add(r);
+                LeaveByReturn(new List<Instruction> { r });
                 _cur = new();
                 break;
             }
@@ -242,11 +254,11 @@ internal sealed class CfgBuilder
             case ImportFromStmt x: foreach (var a in x.Names) WriteBound(a); break;
 
             case BreakStmt:
-                if (_loops.Count > 0) _loops.Peek().Breaks.AddRange(_cur);
+                LeaveByBreak(_cur);
                 _cur = new();
                 break;
             case ContinueStmt:
-                if (_loops.Count > 0) foreach (var p in _cur) Link(p, _loops.Peek().Head);
+                LeaveByContinue(_cur);
                 _cur = new();
                 break;
 
@@ -256,13 +268,28 @@ internal sealed class CfgBuilder
             case TryStmt x: VisitTry(x); break;
 
             case WithStmt x:
+            {
                 foreach (var i in x.Items)
                 {
                     VisitExpr(i.Context);
                     if (i.Target != null) VisitTarget(i.Target);
                 }
+                int start = _instrs.Count;
                 VisitStmts(x.Body);
+                // An exception raised anywhere in the body ends the block here; whether the code after it runs then
+                // depends on the context managers (WithExit lets nothing through until the evaluator says one swallows it).
+                var raisePoints = new List<Instruction>();
+                for (int i = start; i < _instrs.Count; i++)
+                    if (_instrs[i].Kind != InstrKind.Return) raisePoints.Add(_instrs[i]);
+                if (raisePoints.Count > 0)
+                {
+                    var bodyEnd = _cur;
+                    _cur = raisePoints;
+                    var swallowed = Emit(InstrKind.WithExit, x);
+                    _cur = Union(bodyEnd, new List<Instruction> { swallowed });
+                }
                 break;
+            }
 
             case FunctionDef x:
                 foreach (var d in x.Decorators) VisitExpr(d);
@@ -353,7 +380,7 @@ internal sealed class CfgBuilder
         var (t, f) = VisitCond(x.Test);
 
         var breaks = new List<Instruction>();
-        _loops.Push((head, breaks));
+        _loops.Push((head, breaks, _finallies.Count));
         _cur = t;
         VisitStmts(x.Body);
         foreach (var p in _cur) Link(p, head);
@@ -370,7 +397,7 @@ internal sealed class CfgBuilder
         var head = Emit(InstrKind.Join, x);
 
         var breaks = new List<Instruction>();
-        _loops.Push((head, breaks));
+        _loops.Push((head, breaks, _finallies.Count));
         VisitTarget(x.Target);
         VisitStmts(x.Body);
         foreach (var p in _cur) Link(p, head);
@@ -381,10 +408,35 @@ internal sealed class CfgBuilder
         _cur = Union(_cur, breaks);
     }
 
+    /// <summary>A return leaves the function, through the finally blocks of the try statements it is in.</summary>
+    void LeaveByReturn(List<Instruction> from)
+    {
+        if (_finallies.Count > 0) _finallies[^1].Returns.AddRange(from);
+        else _returnInstrs.AddRange(from);
+    }
+
+    void LeaveByBreak(List<Instruction> from)
+    {
+        if (_loops.Count == 0) return;
+        var loop = _loops.Peek();
+        if (_finallies.Count > loop.Finallies) _finallies[^1].Breaks.AddRange(from);
+        else loop.Breaks.AddRange(from);
+    }
+
+    void LeaveByContinue(List<Instruction> from)
+    {
+        if (_loops.Count == 0) return;
+        var loop = _loops.Peek();
+        if (_finallies.Count > loop.Finallies) _finallies[^1].Continues.AddRange(from);
+        else foreach (var p in from) Link(p, loop.Head);
+    }
+
     void VisitTry(TryStmt x)
     {
         var pre = _cur;
         int start = _instrs.Count;
+        PendingExits? exits = null;
+        if (x.Finally.Count > 0) _finallies.Add(exits = new PendingExits());
         VisitStmts(x.Body);
         var bodyEnd = _cur;
 
@@ -413,7 +465,8 @@ internal sealed class CfgBuilder
         VisitStmts(x.Orelse);
         var normalEnd = Union(_cur, handlerEnds);
 
-        if (x.Finally.Count == 0) { _cur = normalEnd; return; }
+        if (exits == null) { _cur = normalEnd; return; }
+        _finallies.RemoveAt(_finallies.Count - 1);
 
         // The finally block runs on the normal path and again on the path where an exception propagates.
         // Building it twice keeps the exceptional path from "falling through" to the code after the try.
@@ -426,6 +479,12 @@ internal sealed class CfgBuilder
 
         _cur = excSources;
         VisitStmts(x.Finally);
+
+        // A return, break or continue that left the try runs the finally block on its way out too (one more copy
+        // for each), then goes on where it was going, unless the finally block itself returns, breaks or raises.
+        if (exits.Returns.Count > 0) { _cur = exits.Returns; VisitStmts(x.Finally); LeaveByReturn(_cur); }
+        if (exits.Breaks.Count > 0) { _cur = exits.Breaks; VisitStmts(x.Finally); LeaveByBreak(_cur); }
+        if (exits.Continues.Count > 0) { _cur = exits.Continues; VisitStmts(x.Finally); LeaveByContinue(_cur); }
 
         _cur = afterNormal;
     }

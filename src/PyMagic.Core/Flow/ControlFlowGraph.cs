@@ -16,6 +16,13 @@ public enum InstrKind
     Raise,
     /// <summary>A condition is known to be true or false from here on (narrowing of Symbol/Path).</summary>
     Assert,
+    /// <summary>A call made as a statement (Element: the CallExpr); nothing flows on from it when its callee never returns (NoReturn).</summary>
+    Call,
+    /// <summary>
+    /// Where an exception raised in a with block's body (Element: the WithStmt) would leave it; flow goes on from here
+    /// only when a context manager swallows exceptions (contextlib.suppress).
+    /// </summary>
+    WithExit,
 }
 
 /// <summary>One step of evaluation. Instructions are linked in the order Python would execute them.</summary>
@@ -57,18 +64,40 @@ public sealed class ControlFlowGraph
     public IReadOnlyList<ReturnStmt> Returns { get; }
     /// <summary>True when execution can reach the end of the body without an explicit return.</summary>
     public bool EndReachable { get; }
-    /// <summary>Per instruction id: reachable from Entry.</summary>
+    /// <summary>Per instruction id: reachable from Entry (as far as the graph knows without types, see <see cref="BlocksWithoutTypes"/>).</summary>
     public bool[] Reachable { get; }
+    /// <summary>The instructions that run off the end of the body (dead code after a return among them).</summary>
+    internal IReadOnlyList<Instruction> EndPoints { get; }
+    /// <summary>The Call and WithExit instructions: what flows on from them depends on types.</summary>
+    public IReadOnlyList<Instruction> Gates { get; }
 
-    internal ControlFlowGraph(Instruction entry, Instruction exit, List<Instruction> instrs, List<ReturnStmt> returns, bool endReachable)
+    internal ControlFlowGraph(Instruction entry, Instruction exit, List<Instruction> instrs, List<ReturnStmt> returns, List<Instruction> endPoints)
     {
-        Entry = entry; Exit = exit; Instructions = instrs; Returns = returns; EndReachable = endReachable;
-        Reachable = new bool[instrs.Count];
-        var stack = new Stack<Instruction>();
-        Reachable[entry.Id] = true;
-        stack.Push(entry);
-        while (stack.Count > 0)
-            foreach (var s in stack.Pop().Successors)
-                if (!Reachable[s.Id]) { Reachable[s.Id] = true; stack.Push(s); }
+        Entry = entry; Exit = exit; Instructions = instrs; Returns = returns; EndPoints = endPoints;
+        Gates = instrs.Where(i => i.Kind is InstrKind.Call or InstrKind.WithExit).ToList();
+        Reachable = ReachableWith(BlocksWithoutTypes);
+        EndReachable = EndReachableWith(Reachable, BlocksWithoutTypes);
     }
+
+    /// <summary>Without types every call returns and no with block swallows an exception.</summary>
+    public static bool BlocksWithoutTypes(Instruction i) => i.Kind == InstrKind.WithExit;
+
+    /// <summary>Per instruction id: reachable from Entry when nothing flows on from the instructions <paramref name="blocks"/> picks.</summary>
+    internal bool[] ReachableWith(Func<Instruction, bool> blocks)
+    {
+        var reachable = new bool[Instructions.Count];
+        var stack = new Stack<Instruction>();
+        reachable[Entry.Id] = true;
+        stack.Push(Entry);
+        while (stack.Count > 0)
+        {
+            var i = stack.Pop();
+            if (Gates.Count > 0 && blocks(i)) continue;
+            foreach (var s in i.Successors)
+                if (!reachable[s.Id]) { reachable[s.Id] = true; stack.Push(s); }
+        }
+        return reachable;
+    }
+
+    internal bool EndReachableWith(bool[] reachable, Func<Instruction, bool> blocks) => EndPoints.Any(p => reachable[p.Id] && !blocks(p));
 }

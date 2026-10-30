@@ -465,6 +465,8 @@ public sealed partial class TypeEvaluator
     /// <summary>The type a parameter has inside its function body.</summary>
     PyType ParameterType(ModuleInfo m, Parameter p)
     {
+        // an evaluator made for one call site: the argument's type (see ReturnAtCallSite)
+        if (_callSiteParams != null && _callSiteParams.TryGetValue(p, out var given)) return given;
         var owner = m.ParentOf(p);
         FunctionInfo? fn = owner switch
         {

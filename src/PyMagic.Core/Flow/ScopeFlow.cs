@@ -41,6 +41,12 @@ public sealed class ScopeFlow
 {
     public Scope Scope { get; }
     public ControlFlowGraph Graph { get; }
+    /// <summary>Per instruction id: reachable from the entry, past what <see cref="Blocks"/> stops.</summary>
+    public bool[] Reachable { get; }
+    /// <summary>True when execution can reach the end of the body without an explicit return.</summary>
+    public bool EndReachable { get; }
+    /// <summary>The gates (calls that never return, with blocks that let exceptions through) nothing flows on from.</summary>
+    public Func<Instruction, bool> Blocks { get; }
 
     readonly Dictionary<NameExpr, List<Instruction>> _reads = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<NameExpr, List<Instruction>> _allReads = new(ReferenceEqualityComparer.Instance);
@@ -57,8 +63,24 @@ public sealed class ScopeFlow
     {
         Scope = scope;
         Graph = new CfgBuilder(model, scope, decls).Build();
+        Blocks = ControlFlowGraph.BlocksWithoutTypes;
+        Reachable = Graph.Reachable;
+        EndReachable = Graph.EndReachable;
         Analyse();
     }
+
+    ScopeFlow(ScopeFlow plain, Func<Instruction, bool> blocks)
+    {
+        Scope = plain.Scope;
+        Graph = plain.Graph;
+        Blocks = blocks;
+        Reachable = Graph.ReachableWith(blocks);
+        EndReachable = Graph.EndReachableWith(Reachable, blocks);
+        Analyse();
+    }
+
+    /// <summary>The same graph with what types say about its gates: <paramref name="blocks"/> picks those nothing flows on from.</summary>
+    public ScopeFlow WithGates(Func<Instruction, bool> blocks) => new(this, blocks);
 
     bool Owned(Symbol? s) => s != null && ReferenceEquals(s.Scope, Scope);
 
@@ -127,7 +149,8 @@ public sealed class ScopeFlow
             _in[ins.Id] = inSet;
 
             var outSet = inSet;
-            if (Owned(ins.Symbol) && ins.Kind is InstrKind.Write or InstrKind.Delete && ins.Path.Length == 0)
+            if (Graph.Gates.Count > 0 && Blocks(ins)) outSet = new Bits(total);
+            else if (Owned(ins.Symbol) && ins.Kind is InstrKind.Write or InstrKind.Delete && ins.Path.Length == 0)
             {
                 var sym = ins.Symbol!;
                 outSet = inSet.Clone();
@@ -159,7 +182,7 @@ public sealed class ScopeFlow
         bool maybeUnbound = false, reachable = false;
         foreach (var ins in instrs)
         {
-            if (!Graph.Reachable[ins.Id]) continue;
+            if (!Reachable[ins.Id]) continue;
             reachable = true;
             var sym = ins.Symbol!;
             var inSet = _in[ins.Id];
@@ -185,12 +208,12 @@ public sealed class ScopeFlow
         // A finally block exists twice in the graph (normal and exceptional path); the statement is live if either copy is.
         var live = new HashSet<Node>(ReferenceEqualityComparer.Instance);
         foreach (var ins in Graph.Instructions)
-            if (ins.Kind == InstrKind.Statement && Graph.Reachable[ins.Id]) live.Add(ins.Element!);
+            if (ins.Kind == InstrKind.Statement && Reachable[ins.Id]) live.Add(ins.Element!);
 
         bool inRun = false;
         foreach (var ins in Graph.Instructions)
         {
-            if (Graph.Reachable[ins.Id]) { inRun = false; continue; }
+            if (Reachable[ins.Id]) { inRun = false; continue; }
             if (ins.Kind != InstrKind.Statement || inRun || live.Contains(ins.Element!)) continue;
             inRun = true;
             yield return (Stmt)ins.Element!;

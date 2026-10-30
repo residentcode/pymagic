@@ -126,14 +126,15 @@ public sealed partial class TypeEvaluator
         if (info.Node is LambdaExpr l) return TypeOf(m, l.Body);
         if (info.Node is not FunctionDef fd || m.IsStub) return PyType.Unknown;
 
-        var flow = m.Flow.For(info.Scope);
+        // a call that never returns ends a path like raise; a with block that swallows exceptions can end one at the with
+        var flow = TypedFlow(m, info.Scope);
         if (flow == null) return PyType.Unknown;
 
         var returns = new List<PyType>();
         foreach (var ins in flow.Graph.Instructions)
-            if (ins.Kind == Flow.InstrKind.Return && flow.Graph.Reachable[ins.Id] && ins.Element is ReturnStmt r)
+            if (ins.Kind == Flow.InstrKind.Return && flow.Reachable[ins.Id] && ins.Element is ReturnStmt r)
                 returns.Add(r.Value == null ? NoneInstance : TypeOf(m, r.Value));
-        if (flow.Graph.EndReachable) returns.Add(NoneInstance);
+        if (flow.EndReachable) returns.Add(NoneInstance);
 
         PyType ret;
         if (returns.Count == 0)
@@ -341,7 +342,8 @@ public sealed partial class TypeEvaluator
     CallTarget CallFunction(FunctionType f, IReadOnlyList<ArgInfo> args, Node? callNode, List<CallProblem>? loose = null)
     {
         f = NewSelfFromCls(f, args);
-        return CallParams(f, CallableParameters(f), () => ReturnTypeOf(f), args, callNode, loose);
+        var ps = CallableParameters(f);
+        return CallParams(f, ps, () => ReturnAtCallSite(f, ps, args, callNode), args, callNode, loose);
     }
 
     /// <summary>

@@ -68,6 +68,8 @@ public sealed partial class TypeEvaluator
 
         PyType After(Instruction p)
         {
+            // nothing comes out of a call that never returns, or out of a with block that lets the exception through
+            if (p.Kind is InstrKind.Call or InstrKind.WithExit && !GateNeedsThisWalk(p) && _ev.GateBlocks(_m, p)) return PyType.Never;
             if (!Relevant(p)) return Before(p);
             switch (p.Kind)
             {
@@ -91,6 +93,24 @@ public sealed partial class TypeEvaluator
                     return _ev.Narrow(_m, p, Before(p));
                 default: return Before(p);
             }
+        }
+
+        /// <summary>
+        /// A gate whose callee or context manager names the reference (`body.append(x)` in a walk of body): deciding it
+        /// would need this walk's own answer, so it is taken as the graph takes it without types.
+        /// </summary>
+        bool GateNeedsThisWalk(Instruction gate)
+        {
+            var exprs = gate.Element switch
+            {
+                CallExpr call => new[] { call.Func },
+                WithStmt w => w.Items.Select(i => i.Context).ToArray(),
+                _ => Array.Empty<Expr>(),
+            };
+            foreach (var e in exprs)
+                foreach (var n in AstChildren.Descendants(e).Prepend(e).OfType<NameExpr>())
+                    if (ReferenceEquals(_m.Semantics.ReferenceOf(n)?.Symbol, _sym)) return true;
+            return false;
         }
 
         /// <summary>The type of the reference immediately before executing <paramref name="at"/>.</summary>
@@ -121,7 +141,7 @@ public sealed partial class TypeEvaluator
 
         /// <summary>
         /// Walks up straight-line code that cannot affect the reference, to the first instruction that has to be
-        /// looked at (the entry, a join, or something right after a relevant instruction). Independent of types, so cached.
+        /// looked at (the entry, a join, or something right after a relevant instruction or a gate). Independent of types, so cached.
         /// </summary>
         Instruction Skip(Instruction at)
         {
@@ -132,7 +152,8 @@ public sealed partial class TypeEvaluator
             {
                 if (_skip.TryGetValue(cur, out var known)) { cur = known; break; }
                 chain.Add(cur);
-                if (cur.Kind != InstrKind.Entry && cur.Predecessors.Count == 1 && !Relevant(cur.Predecessors[0]))
+                if (cur.Kind != InstrKind.Entry && cur.Predecessors.Count == 1 && !Relevant(cur.Predecessors[0])
+                    && cur.Predecessors[0].Kind is not (InstrKind.Call or InstrKind.WithExit))
                 {
                     cur = cur.Predecessors[0];
                     continue;
