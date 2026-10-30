@@ -92,12 +92,11 @@ public sealed partial class TypeEvaluator
     static bool IsBuiltinInstance(PyType x, HashSet<string> names) =>
         x is ClassType { IsInstance: true } c && (IsNone(c) ? names.Contains("NoneType") : c.Info.Module.Name == "builtins" && names.Contains(c.Info.Name));
 
-    /// <summary>`case [a, b]:`, `case (x, *rest):`: only sequences match, a tuple only when its length fits.</summary>
-    PyType NarrowSequence(MatchSequence p, PyType t, bool matched)
+    /// <summary>`case [a, b]:`, `case (x, *rest):`: only sequences match, a tuple only when its length fits; the items of a fixed tuple are narrowed by their sub-patterns.</summary>
+    PyType NarrowSequence(ModuleInfo m, MatchSequence p, PyType t, bool matched)
     {
         bool star = p.Items.Any(i => i is MatchStar);
         int count = p.Items.Count(i => i is not MatchStar);
-        bool irrefutable = p.Items.All(i => i is MatchStar or MatchCapture);
         var result = new List<PyType>();
         foreach (var x in t.Members)
         {
@@ -105,19 +104,51 @@ public sealed partial class TypeEvaluator
             if (matched)
             {
                 if (IsBuiltinInstance(x, NotSequences) || !fits) continue;
+                var y = x;
                 if (x is ClassType { IsInstance: true, Info.Name: "tuple", TupleItems: null, Args.Count: 1 } homogeneous && !star && homogeneous.Info.Module.Name == "builtins")
-                { result.Add(TupleOf(Enumerable.Repeat(homogeneous.Args[0], count).ToList())); continue; }
-                result.Add(x);
+                    y = TupleOf(Enumerable.Repeat(homogeneous.Args[0], count).ToList());
+                if (y is ClassType { TupleItems: { } fixedItems } && fixedItems.All(i => i is not TypeVarTupleType))
+                {
+                    // a tuple in which some item cannot match is left out
+                    var narrowed = fixedItems.ToList();
+                    foreach (var (sub, index) in ItemPatterns(p, narrowed.Count)) narrowed[index] = NarrowPattern(m, sub, narrowed[index], true);
+                    if (narrowed.Any(i => i is NeverType)) continue;
+                    if (!narrowed.SequenceEqual(fixedItems)) y = TupleOf(narrowed);
+                }
+                result.Add(y);
             }
-            else
+            else if (fits && x is ClassType { IsInstance: true, Info.Name: "tuple", TupleItems: { } fixedItems })
             {
-                // only a pattern that cannot fail once the length fits leaves a fitting tuple out
-                if (irrefutable && x is ClassType { IsInstance: true, Info.Name: "tuple", TupleItems: not null } && fits) continue;
+                // a fitting tuple goes when every item surely matches; when only one can fail, that item is narrowed the other way
+                bool variadic = fixedItems.Any(i => i is TypeVarTupleType);
+                var failing = ItemPatterns(p, fixedItems.Count)
+                    .Where(ip => !Irrefutable(ip.Sub) && (variadic || NarrowPattern(m, ip.Sub, fixedItems[ip.Index], false) is not NeverType)).ToList();
+                if (failing.Count == 0) continue;
+                if (failing.Count == 1 && !variadic)
+                {
+                    var (sub, index) = failing[0];
+                    var narrowed = fixedItems.ToList();
+                    narrowed[index] = NarrowPattern(m, sub, narrowed[index], false);
+                    result.Add(narrowed.SequenceEqual(fixedItems) ? x : TupleOf(narrowed));
+                    continue;
+                }
                 result.Add(x);
             }
+            else result.Add(x);
         }
         return result.Count == 0 ? PyType.Never : PyType.Union(result);
     }
+
+    /// <summary>The tuple item each sub-pattern stands for: those before the star count from the start, those after it from the end.</summary>
+    static IEnumerable<(Pattern Sub, int Index)> ItemPatterns(MatchSequence p, int length)
+    {
+        int starAt = p.Items.ToList().FindIndex(i => i is MatchStar);
+        for (int i = 0; i < p.Items.Count; i++)
+            if (i != starAt) yield return (p.Items[i], starAt < 0 || i < starAt ? i : length - (p.Items.Count - i));
+    }
+
+    /// <summary>A pattern that matches anything: a capture, `_`, a star, or one of those with `as` or `|`.</summary>
+    static bool Irrefutable(Pattern p) => p is MatchCapture or MatchStar || p is MatchAs a && Irrefutable(a.Pattern) || p is MatchOr o && o.Alternatives.Any(Irrefutable);
 
     /// <summary>`case {"k": v}:`: only mappings match.</summary>
     PyType NarrowMapping(PyType t, bool matched)
@@ -357,7 +388,7 @@ public sealed partial class TypeEvaluator
             }
 
             case MatchSequence sq:
-                return NarrowSequence(sq, t, matched);
+                return NarrowSequence(m, sq, t, matched);
 
             case MatchMapping:
                 return NarrowMapping(t, matched);
