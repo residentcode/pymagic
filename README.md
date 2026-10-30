@@ -79,7 +79,6 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - A checkbox for the desktop shortcut and a safe folder page (they need NSIS script), PyMagic's own pictures in the wizard (66).
 
 **Type engine** (ibnbolbna's area; the order is in [issue #3](https://github.com/residentcode/pymagic/issues/3))
-- Small gaps: `pop` of a required TypedDict key (87), a constant index past the end of a tuple subclass (88).
 - The PyCharm inspections that need full types and are not done yet, and those for other tools (pandas, Spark, mock, notebooks) (47, 77).
 - Speed on large projects: find usages and rename on one thread, the Problems of unchanged files not remembered, parsing only the edited region, about 1 to 1.5 GB while the problems are computed (78). Keeping the types of unchanged files across edits was measured and left out: the files they depend on are only about a fifth of an edit's time.
 
@@ -143,4 +142,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 186 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 187 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

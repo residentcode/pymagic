@@ -353,6 +353,8 @@ public sealed partial class LanguageService
         : message.StartsWith("Local variable") ? "unbound-local"
         : message.StartsWith("Access to a protected member") ? "protected-member"
         : message.EndsWith("does not support item assignment") ? "tuple-item-assignment"
+        : message == "Tuple index out of range" ? "tuple-index"
+        : message.StartsWith("Key '") && message.EndsWith("cannot be deleted") ? "typeddict-keys"
         : message.EndsWith("doesn't return anything") ? "none-function-assignment"
         : message.Contains("is already handled by an earlier clause") ? "except-clauses-order"
         : message.StartsWith("Cannot assign to attribute") && message.EndsWith("is frozen") ? "dataclass-frozen"
