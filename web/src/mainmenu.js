@@ -26,7 +26,7 @@ export function refactorMenu(editor, refactor) {
     ];
 }
 
-export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, split, currentFile, search, refactor, breakpoints, debug, recent, chrome, bookmarks, runConfigs }) {
+export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, split, currentFile, search, refactor, breakpoints, debug, nav, recent, chrome, bookmarks, runConfigs }) {
     // the desktop app lets the page open another folder (preload.js); in a browser the engine is started with its folder and these stay dim
     const desktop = window.pymagicDesktop;
     let recentProjects = [];
@@ -128,6 +128,18 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
             { label: 'Navigate', submenu: [
                 { label: 'Back', key: 'Ctrl+Alt+Left', run: press('b-back'), disabled: $('b-back').disabled },
                 { label: 'Forward', key: 'Ctrl+Alt+Right', run: press('b-forward'), disabled: $('b-forward').disabled },
+                { label: 'Last edit location', key: 'Ctrl+Shift+Backspace', run: () => nav.lastEdit() },
+                { label: 'Recent locations…', key: 'Ctrl+Shift+E', run: () => nav.recentLocations() },
+                '-',
+                { label: 'Next method', key: 'Ctrl+Shift+Down', run: () => nav.nextMethod() },
+                { label: 'Previous method', key: 'Ctrl+Shift+Up', run: () => nav.previousMethod() },
+                { label: 'Matching brace', key: 'Ctrl+Shift+M', run: () => nav.matchingBrace() },
+                { label: 'Start of the block', key: 'Alt+[', run: () => nav.blockStart() },
+                { label: 'End of the block', key: 'Alt+]', run: () => nav.blockEnd() },
+                { label: 'Context info', key: 'Alt+Q', run: () => nav.contextInfo() },
+                { label: 'Type of the expression', key: 'Ctrl+Shift+P', run: () => nav.expressionType() },
+                { label: 'Documentation on the web', key: 'Shift+F1', run: () => nav.externalDoc() },
+                { label: 'Check a regular expression…', run: () => nav.checkRegex() },
                 '-',
                 { label: 'Search everywhere…', key: 'Ctrl+P', run: () => void search.anythingPicker() },
                 { label: 'Find action…', key: 'Ctrl+Shift+A', run: () => setTimeout(() => findActionOpen()) },

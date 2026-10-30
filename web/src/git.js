@@ -619,6 +619,7 @@ export function setupGit(deps) {
     let blameFor = '';
     let blameText = '';
     const inlineDecoration = editor.createDecorationsCollection();
+    const blameStyle = document.head.appendChild(document.createElement('style'));
     async function loadBlame() {
         const model = editor.getModel();
         const rel = model && deps.relOf(model);
@@ -675,9 +676,12 @@ export function setupGit(deps) {
             return;
         }
         const text = b.hash === zeros ? 'Not committed yet' : `${b.author}, ${ago(b.time)} • ${b.summary}`;
+        // Monaco as built here draws no `after` text of a decoration: the text is the ::after of an empty one at the line's end
+        blameStyle.textContent = `.git-blame-inline::after { content: ${JSON.stringify(text)}; }`;
+        const end = editor.getModel().getLineMaxColumn(pos.lineNumber);
         inlineDecoration.set([{
-                range: new monaco.Range(pos.lineNumber, 1, pos.lineNumber, 1),
-                options: { after: { content: text, inlineClassName: 'git-blame-inline' }, isWholeLine: true },
+                range: new monaco.Range(pos.lineNumber, end, pos.lineNumber, end),
+                options: { afterContentClassName: 'git-blame-inline', showIfCollapsed: true },
             }]);
     }
     editor.onDidChangeCursorPosition(() => { if (inline)

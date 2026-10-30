@@ -32,6 +32,9 @@ const PAGES = [
         { key: 'minimap', label: 'Minimap', type: 'bool', hint: 'A small picture of the whole file beside the scroll bar.' },
         { key: 'stickyScroll', label: 'Keep the enclosing class and function in view', type: 'bool' },
         { key: 'bracketColors', label: 'Colour matching brackets', type: 'bool' },
+        { key: 'breadcrumbs', label: 'Breadcrumbs', type: 'bool', hint: 'The file, class and function of the cursor above the editor; a right click on one lists those beside it.' },
+        { key: 'methodSeparators', label: 'Method separators', type: 'bool', hint: 'A thin line above each function and method.' },
+        { key: 'lensMode', label: 'Lens mode', type: 'bool', hint: 'Hovering the scroll bar shows that part of the file.' },
         { key: 'whitespace', label: 'Show spaces and tabs', type: 'choice', options: [['none', 'Never'], ['selection', 'In the selection'], ['boundary', 'Not between words'], ['all', 'Always']] },
         { key: 'ruler', label: 'Vertical guide at column', type: 'number', min: 0, max: 400, unit: '0 for none' },
         { key: 'smoothScrolling', label: 'Smooth scrolling', type: 'bool' },
@@ -47,6 +50,7 @@ const PAGES = [
     ['tabs', 'Editor tabs', [
         { key: 'tabLimit', label: 'Tab limit', type: 'number', min: 0, max: 100, unit: '0 for none', hint: 'Past it, the tabs used longest ago close; pinned tabs and those with unsaved changes stay.' },
         { key: 'tabClose', label: 'A close button on each tab', type: 'bool', hint: 'Without it a tab closes with a middle click or its menu.' },
+        { key: 'previewTab', label: 'Preview tab', type: 'bool', hint: 'A file opened with one click in the project tree replaces the one opened so before (its name in italics) until it is edited or double-clicked.' },
     ]],
     ['files', 'Files', [
         { key: 'autoSave', label: 'Save files automatically', type: 'choice', options: [['off', 'Never'], ['blur', 'When the window is left'], ['delay', 'A second after the last change']], hint: 'Saving also formats the file when "format on save" is on.' },

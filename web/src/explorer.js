@@ -179,9 +179,11 @@ export function setupExplorer(deps) {
                 paint();
             } else {
                 paint();
-                deps.openFile(path);
+                deps.openFile(path, undefined, { preview: true });
             }
         };
+        // a double click keeps the file's tab (out of the preview tab)
+        if (!isDir) li.ondblclick = () => deps.openFile(path);
         li.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); selected = path; paint(); menu(e.clientX, e.clientY, path, isDir); };
         return li;
     }

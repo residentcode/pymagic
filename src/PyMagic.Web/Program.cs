@@ -364,6 +364,42 @@ app.MapPost("/api/fs", async (HttpRequest req) =>
 });
 
 // Find in files: the page sends the texts of its unsaved editors so that results match what is on screen.
+// the RegExp checker: a pattern tried on a text by Python's own re (the rules of JavaScript's are not the same)
+app.MapPost("/api/regex", async (HttpRequest req) =>
+{
+    string body = await new StreamReader(req.Body).ReadToEndAsync();
+    string py = interpreters.Current is { Target.IsLocal: true } local ? local.Python : python ?? "python";
+    const string script =
+        "import json, re, sys\n" +
+        "d = json.load(sys.stdin)\n" +
+        "try:\n" +
+        "    r = re.compile(d['pattern'], sum(getattr(re, f) for f in d.get('flags', []) if f in ('IGNORECASE', 'MULTILINE', 'DOTALL', 'VERBOSE', 'ASCII')))\n" +
+        "except re.error as e:\n" +
+        "    print(json.dumps({'error': str(e), 'pos': e.pos})); sys.exit()\n" +
+        "found = []\n" +
+        "for m in r.finditer(d['text']):\n" +
+        "    found.append({'start': m.start(), 'end': m.end(), 'groups': [[m.start(i), m.end(i)] for i in range(1, r.groups + 1)]})\n" +
+        "    if len(found) >= 500: break\n" +
+        "print(json.dumps({'matches': found, 'groups': r.groups, 'names': {v: k for k, v in r.groupindex.items()}}))\n";
+    var psi = new System.Diagnostics.ProcessStartInfo(py) { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+    psi.ArgumentList.Add("-c");
+    psi.ArgumentList.Add(script);
+    psi.Environment["PYTHONIOENCODING"] = "utf-8";
+    psi.StandardInputEncoding = new System.Text.UTF8Encoding(false);
+    psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
+    try
+    {
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        await p.StandardInput.WriteAsync(body);
+        p.StandardInput.Close();
+        var output = p.StandardOutput.ReadToEndAsync();
+        if (!p.WaitForExit(5000)) { try { p.Kill(); } catch (InvalidOperationException) { } return Results.Json(new { error = "the pattern took more than 5 seconds on this text" }); }
+        string text = await output;
+        return Results.Text(string.IsNullOrWhiteSpace(text) ? "{\"error\": \"Python gave no answer\"}" : text, "application/json");
+    }
+    catch (System.ComponentModel.Win32Exception e) { return Results.Json(new { error = $"cannot start {py}: {e.Message}" }); }
+});
+
 app.MapPost("/api/search", async (HttpRequest req) =>
 {
     try

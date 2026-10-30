@@ -6,6 +6,7 @@ import { setupInterpreters } from './interpreters';
 import { setupPackages } from './packages';
 import { setupRefactor } from './refactor';
 import { setupSearch } from './search';
+import { setupEditorNav } from './editornav';
 import { setupCodeVision } from './codevision';
 import { setupHierarchy } from './hierarchy';
 import { setupRoutes } from './routes';
@@ -750,7 +751,8 @@ async function openAnother() {
     else
         showNothing();
 }
-async function openFile(rel, reveal) {
+/** `opts.preview`: opened with one click in the project tree, into the preview tab (Settings > Editor tabs). */
+async function openFile(rel, reveal, opts = {}) {
     const model = await ensureModel(rel);
     if (!model) {
         toast(`${rel} cannot be shown here (binary or very large).`, true);
@@ -764,7 +766,7 @@ async function openFile(rel, reveal) {
     else
         notebook?.hide();
     explorer?.reveal(rel);
-    tabs?.opened(rel);
+    tabs?.opened(rel, !!opts.preview);
     recents?.opened(rel);
     if (reveal) {
         editor.setSelection(reveal);
@@ -883,9 +885,14 @@ async function main() {
     const bookmarks = setupBookmarks({ monaco, editor, openFile, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')), revealInTree: (rel) => explorer?.select(rel) });
     const history = setupHistory({ monaco, editor, currentFile: () => currentRel });
     recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
+    const editorNav = setupEditorNav({
+        editor, lsp, openFile, modelFor: ensureModel, currentFile: () => currentRel, saveAll: common.saveAll,
+        uriOf: (model) => model && serverUri.get(model), relOf: (model) => model && relPathOf.get(normalise(serverUri.get(model) ?? '')),
+        closeTab: (rel) => tabs?.close(rel), reveal: (rel) => explorer?.select(rel),
+    });
     setupMainMenu({
         editor, save, saveAll: common.saveAll, reload: reloadFromDisk, openFile, tabs: () => tabs, split: () => split, currentFile: () => currentRel, search, refactor,
-        breakpoints: runHooks.breakpoints, debug: runHooks.debug, recent: (current) => recents.list(current), chrome, bookmarks, runConfigs,
+        breakpoints: runHooks.breakpoints, debug: runHooks.debug, nav: editorNav.commands, recent: (current) => recents.list(current), chrome, bookmarks, runConfigs,
     });
     const git = setupGit({
         editor,
@@ -1048,6 +1055,7 @@ async function main() {
             coverage.attach(e);
             hierarchy.attach(e);
             codeVision.attach(e);
+            editorNav.attach(e);
             fileActions.attachEditor(e, monaco);
             return e;
         },

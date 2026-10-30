@@ -73,6 +73,8 @@ export function setupTabs(deps) {
     let pinned = new Set();
     let active = '';
     let cycling = -1;         // while Ctrl is held and Tab pressed: where in mru we are
+    let preview = null;       // the preview tab's file (Settings > Editor tabs), replaced by the next file opened with one click
+    let switcher = null;      // the Ctrl+Tab popup while Ctrl is held
     let menuEl = null;
     let api = null;
     bar.dataset.tabDrop = '1';
@@ -105,6 +107,8 @@ export function setupTabs(deps) {
                 close.onclick = (e) => { e.stopPropagation(); void closeTab(rel); };
             }
             tab.append(name, close);
+            if (rel === preview) tab.classList.add('preview');
+            tab.ondblclick = () => { if (preview === rel) { preview = null; refresh(); } };
             tab.onmousedown = (e) => {
                 if (e.button === 1) e.preventDefault();
                 // a tab opens when it is pressed, as in PyCharm, so a click that slips into a short drag still opens it;
@@ -208,10 +212,12 @@ export function setupTabs(deps) {
 
     /** Only the marks: which tab is the open one and which have unsaved changes; and whether the list button is needed. */
     function refresh() {
+        if (preview && deps.isDirty(preview)) preview = null;   // an edited preview is kept
         for (const tab of Array.from(bar.children)) {
             const rel = tab.dataset.path;
             tab.classList.toggle('active', rel === active);
             tab.classList.toggle('dirty', deps.isDirty(rel));
+            tab.classList.toggle('preview', rel === preview);
         }
         const current = bar.querySelector('.etab.active');
         current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -220,9 +226,22 @@ export function setupTabs(deps) {
     if (listButton && 'ResizeObserver' in window) new ResizeObserver(() => refresh()).observe(bar);
 
     /** Called when a file is shown in the editor. */
-    function opened(rel) {
-        const known = tabs.includes(rel);
-        if (!known) tabs.push(rel);
+    function opened(rel, asPreview = false) {
+        let known = tabs.includes(rel);
+        if (asPreview && !known && settings().previewTab) {
+            // the preview tab: a file opened with one click takes the place of the last one opened so, unless that one was kept
+            if (preview && tabs.includes(preview) && !deps.isDirty(preview) && !pinned.has(preview)) {
+                tabs[tabs.indexOf(preview)] = rel;
+                mru = mru.filter((r) => r !== preview);
+            }
+            else tabs.push(rel);
+            preview = rel;
+            known = false;
+        }
+        else {
+            if (!known) tabs.push(rel);
+            if (!asPreview && rel === preview) preview = null;   // opened on purpose: kept
+        }
         active = rel;
         if (cycling < 0) mru = [rel, ...mru.filter((r) => r !== rel)];
         if (!known) keepToLimit();
@@ -392,10 +411,10 @@ export function setupTabs(deps) {
         if (e.target?.closest?.('.xterm') && !(e.ctrlKey && e.key === 'Tab')) return;
         if (e.ctrlKey && e.key === 'Tab') {
             e.preventDefault();
-            if (mru.length < 2) return;
+            if (mru.length < 1) return;
             if (cycling < 0) cycling = 0;
             cycling = e.shiftKey ? (cycling - 1 + mru.length) % mru.length : (cycling + 1) % mru.length;
-            void deps.openFile(mru[cycling]);
+            showSwitcher();
         } else if (e.ctrlKey && !e.altKey && !e.shiftKey && (e.key === 'w' || e.key === 'W') && active) {
             e.preventDefault();
             void closeTab(active);
@@ -408,11 +427,48 @@ export function setupTabs(deps) {
     }, true);
     window.addEventListener('keyup', (e) => {
         if (e.key === 'Control' && cycling >= 0) {
-            // Ctrl released: the file we stopped on becomes the most recently used
+            // Ctrl released: the file chosen in the switcher opens and becomes the most recently used
+            const chosen = mru[cycling];
             cycling = -1;
-            if (active) mru = [active, ...mru.filter((r) => r !== active)];
+            closeSwitcher();
+            if (chosen && chosen !== active) void deps.openFile(chosen);
+            else if (active) mru = [active, ...mru.filter((r) => r !== active)];
         }
     });
+
+    /** The switcher (Ctrl+Tab, held): the recent files, the chosen one lit, and the tool windows; releasing Ctrl opens the file. */
+    function showSwitcher() {
+        if (!switcher) {
+            switcher = document.createElement('div');
+            switcher.className = 'switcher';
+            document.body.appendChild(switcher);
+        }
+        switcher.textContent = '';
+        const files = document.createElement('div');
+        files.className = 'switcher-col';
+        files.innerHTML = '<div class="switcher-head">Recent files</div>';
+        mru.slice(0, 20).forEach((rel, i) => {
+            const row = document.createElement('div');
+            row.className = 'switcher-row' + (i === cycling ? ' sel' : '') + (deps.isDirty(rel) ? ' dirty' : '');
+            row.textContent = baseName(rel);
+            row.title = rel;
+            row.onmousedown = (ev) => { ev.preventDefault(); cycling = -1; closeSwitcher(); void deps.openFile(rel); };
+            files.appendChild(row);
+        });
+        const tools = document.createElement('div');
+        tools.className = 'switcher-col tools';
+        tools.innerHTML = '<div class="switcher-head">Tool windows</div>';
+        for (const button of document.querySelectorAll('#tabs > button[id^="t-"]')) {
+            if (button.id === 't-close') continue;
+            const row = document.createElement('div');
+            row.className = 'switcher-row';
+            row.textContent = button.title || button.textContent;
+            row.onmousedown = (ev) => { ev.preventDefault(); cycling = -1; closeSwitcher(); button.click(); };
+            tools.appendChild(row);
+        }
+        switcher.append(files, tools);
+    }
+    function closeSwitcher() { switcher?.remove(); switcher = null; }
 
     api = {
         opened, refresh, drop, release, rename,
