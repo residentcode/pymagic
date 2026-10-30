@@ -6,6 +6,9 @@ import { showTab } from './panel';
 import { editBreakpoint, isPlain } from './bpdialog';
 import { ansiReader } from './ansi';
 import { colouredSpans } from './terminal';
+import { inlineLines, inlineText, callsOn, expressionAt, stackText } from './debug-model.js';
+import { openMenu } from './menu';
+import { toast } from './toast';
 const $ = (id) => document.getElementById(id);
 const STORAGE_KEY = 'pymagic.breakpoints';
 const norm = (p) => p.replace(/\\/g, '/').toLowerCase();
@@ -170,6 +173,46 @@ export function setupRun(deps) {
             currentLine.model.deltaDecorations(currentLine.ids, []);
             currentLine = null;
         }
+        clearInline();
+    }
+    // ------------------------------------------------------------ values at the end of the lines
+    let inline = null;   // { collections }: one per editor that shows the frame's file
+    const inlineStyle = document.head.appendChild(document.createElement('style'));
+    const cssString = (text) => '"' + text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ') + '"';
+    function clearInline() {
+        if (inline) {
+            for (const c of inline.collections)
+                c.clear();
+            inline = null;
+        }
+        inlineStyle.textContent = '';
+    }
+    /** Shows, at the end of each line of the frame's function up to the stopped one, the values of the names on it. */
+    async function showInline(f, model) {
+        clearInline();
+        const lines = inlineLines((l) => (l <= model.getLineCount() ? model.getLineContent(l) : null), Math.max(f.first ?? f.line, f.line - 200), f.line);
+        const names = [...new Set(lines.flatMap((l) => l.names))];
+        if (!names.length || !run || !paused)
+            return;
+        const asked = run;
+        const values = (await run.ask({ type: 'values', frameId: selectedFrame, names })).values ?? {};
+        if (run !== asked || !paused)
+            return;
+        // this Monaco does not draw injected text (`after`), so each value is the ::after of an empty decoration at the line's end
+        const decorations = [], rules = [];
+        for (const { line, names: onLine } of lines) {
+            const text = inlineText(onLine, values);
+            if (!text)
+                continue;
+            const cls = `debug-inline-${decorations.length}`;
+            rules.push(`.${cls}::after { content: ${cssString('   ' + text)}; }`);
+            const end = model.getLineMaxColumn(line);
+            decorations.push({ range: new monaco.Range(line, end, line, end), options: { afterContentClassName: `debug-inline ${cls}`, showIfCollapsed: true } });
+        }
+        clearInline();
+        inlineStyle.textContent = rules.join('\n');
+        const shows = [editor, focused].filter((e, i, all) => all.indexOf(e) === i && e.getModel() === model);
+        inline = { collections: shows.map((e) => e.createDecorationsCollection(decorations)) };
     }
     async function showFrame(index) {
         selectedFrame = index;
@@ -189,6 +232,7 @@ export function setupRun(deps) {
                     }]);
                 currentLine = { model, ids };
                 editor.revealLineInCenterIfOutsideViewport(f.line);
+                void showInline(f, model);
             }
         }
         await loadVariables();
@@ -210,7 +254,7 @@ export function setupRun(deps) {
             head.querySelector('.scope').textContent = s.name;
             li.appendChild(head);
             list.appendChild(li);
-            attachChildren(head, li, s.ref, i === 0, s.ref);
+            attachChildren(head, li, s.ref, i === 0 || s.name === 'Locals', s.ref);
         }
     }
     /** Makes a node expandable: children are fetched from the debugger the first time it opens. */
@@ -461,7 +505,8 @@ export function setupRun(deps) {
         profiling = profile;
         paused = false;
         showTab('output');
-        run = new RunClient({ type: 'start', file: rel, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught' });
+        run = new RunClient({ type: 'start', file: rel, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
+            exceptionClasses: exceptionClasses(), muted: muteBox.checked });
         run.onMessage = handle;
         run.onClose = () => { if (run) {
             append('\nConnection to the host lost.\n', 'err');
@@ -475,13 +520,129 @@ export function setupRun(deps) {
         raisedBox.checked = localStorage.getItem('pymagic.breakOnRaised') === '1';
     }
     catch { /* storage unavailable */ }
+    const classesBox = $('exc-classes');
+    const muteBox = $('bp-mute');
+    const exceptionClasses = () => classesBox.value.split(/[\s,]+/).filter(Boolean);
+    try {
+        classesBox.value = localStorage.getItem('pymagic.breakOnRaisedClasses') ?? '';
+        muteBox.checked = localStorage.getItem('pymagic.mutedBreakpoints') === '1';
+    }
+    catch { /* storage unavailable */ }
+    const sendExceptionBreak = () => run?.send({ type: 'setExceptionBreak', mode: raisedBox.checked ? 'raised' : 'uncaught', classes: exceptionClasses() });
     raisedBox.onchange = () => {
         try {
             localStorage.setItem('pymagic.breakOnRaised', raisedBox.checked ? '1' : '0');
         }
         catch { /* storage unavailable */ }
-        run?.send({ type: 'setExceptionBreak', mode: raisedBox.checked ? 'raised' : 'uncaught' });
+        sendExceptionBreak();
     };
+    classesBox.onchange = () => {
+        try {
+            localStorage.setItem('pymagic.breakOnRaisedClasses', classesBox.value);
+        }
+        catch { /* storage unavailable */ }
+        sendExceptionBreak();
+    };
+    function setMuted(on) {
+        muteBox.checked = on;
+        document.documentElement.classList.toggle('bp-muted', on);
+        try {
+            localStorage.setItem('pymagic.mutedBreakpoints', on ? '1' : '0');
+        }
+        catch { /* storage unavailable */ }
+        run?.send({ type: 'mute', on });
+    }
+    muteBox.onchange = () => setMuted(muteBox.checked);
+    document.documentElement.classList.toggle('bp-muted', muteBox.checked);
+    $('frames-copy').onclick = () => {
+        if (!frames.length)
+            return;
+        void navigator.clipboard.writeText(stackText(frames)).then(() => toast('Call stack copied'), () => toast('Could not copy'));
+    };
+    // ------------------------------------------------------------ stepping to a place
+    /** The editor the cursor is in: the main one, or a side of a split. */
+    let focused = editor;
+    const cursorOf = (ed = focused) => {
+        const model = ed.getModel(), pos = ed.getPosition();
+        const rel = model && deps.relOf(model);
+        return rel && pos ? { ed, model, rel, line: pos.lineNumber } : null;
+    };
+    /** Run to Cursor (Alt+F9), and with `force` Force Run to Cursor (Ctrl+Alt+F9), which passes the breakpoints on the way. */
+    function runToCursor(force = false) {
+        const at = cursorOf();
+        if (run && paused && at)
+            run.send({ type: 'runTo', file: at.rel, line: at.line, force });
+    }
+    /** Jump to Cursor: goes on from the cursor's line of the stopped function, without running the lines in between. */
+    async function jumpToCursor() {
+        const at = cursorOf();
+        if (!run || !paused || !at)
+            return;
+        const r = await run.ask({ type: 'jump', line: at.line });
+        if (r.error) {
+            toast(r.error);
+            return;
+        }
+        frames = r.frames;
+        renderFrames();
+        await showFrame(0);
+    }
+    /** Smart Step Into (Shift+F7): enters the call of the stopped line chosen from a list, when it has more than one. */
+    async function smartStepInto() {
+        if (!run || !paused || !frames.length)
+            return;
+        const rel = relOfAbsolute(frames[0].file);
+        const model = rel ? await deps.modelFor(rel) : null;
+        const calls = model ? callsOn(model.getLineContent(frames[0].line)) : [];
+        if (calls.length < 2) {
+            if (calls.length === 1)
+                run.send({ type: 'stepInto', target: calls[0] });
+            else
+                resume('stepIn');
+            return;
+        }
+        const ed = focused.getModel() === model ? focused : editor;
+        const pos = ed.getScrolledVisiblePosition({ lineNumber: frames[0].line, column: 1 });
+        const box = ed.getContainerDomNode().getBoundingClientRect();
+        openMenu({ x: box.left + (pos?.left ?? 40) + 40, y: box.top + (pos?.top ?? 0) + (pos?.height ?? 18) },
+            calls.map((name) => ({ label: name + '()', run: () => run?.send({ type: 'stepInto', target: name }) })));
+    }
+    /** Show Execution Point (Alt+F10): back to the stopped line of the innermost frame. */
+    function showExecutionPoint() {
+        if (paused && frames.length)
+            void showFrame(0).then(() => editor.focus());
+    }
+    // ------------------------------------------------------------ values under the mouse
+    monaco.languages.registerHoverProvider('python', {
+        async provideHover(model, position) {
+            if (!run || !paused || !deps.relOf(model))
+                return null;
+            const ed = [focused, editor].find((e) => e.getModel() === model);
+            const sel = ed?.getSelection();
+            let expression = null, range = null;
+            if (sel && !sel.isEmpty() && sel.startLineNumber === sel.endLineNumber && sel.containsPosition(position)) {
+                expression = model.getValueInRange(sel).trim();
+                range = sel;
+            }
+            else {
+                expression = expressionAt(model.getLineContent(position.lineNumber), position.column);
+                const word = model.getWordAtPosition(position);
+                if (word)
+                    range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
+            }
+            if (!expression)
+                return null;
+            const r = await run.ask({ type: 'evaluate', frameId: selectedFrame, expression, evalOnly: true });
+            if (r.error)
+                return sel && !sel.isEmpty() ? { range, contents: [{ value: '`' + r.error + '`' }] } : null;
+            return { range, contents: [{ value: '```python\n' + expression + ' = ' + r.result + '\n```' }, { value: r.valueType }] };
+        },
+    });
+    /** Quick Evaluate (Ctrl+Alt+F8): the value of the selection, or of the expression at the cursor, in a popup. */
+    function quickEvaluate(ed = focused) {
+        if (run && paused)
+            ed.trigger('debug', 'editor.action.showHover', { focus: false });
+    }
     const resume = (type) => { if (run && paused)
         run.send({ type }); };
     $('b-run').onclick = () => void start(false);
@@ -498,6 +659,16 @@ export function setupRun(deps) {
     editor.addCommand(K.F10, () => resume('next'));
     editor.addCommand(K.F11, () => resume('stepIn'));
     editor.addCommand(M.Shift | K.F11, () => resume('stepOut'));
+    /** The keys of stepping to a place and of looking at values, in the main editor and the sides of a split. */
+    function placeKeys(ed) {
+        ed.onDidFocusEditorText(() => { focused = ed; });
+        ed.addCommand(M.Alt | K.F9, () => { focused = ed; runToCursor(false); });
+        ed.addCommand(M.CtrlCmd | M.Alt | K.F9, () => { focused = ed; runToCursor(true); });
+        ed.addCommand(M.Shift | K.F7, () => void smartStepInto());
+        ed.addCommand(M.Alt | K.F10, showExecutionPoint);
+        ed.addCommand(M.CtrlCmd | M.Alt | K.F8, () => { focused = ed; quickEvaluate(ed); });
+    }
+    placeKeys(editor);
     // program input
     const stdin = $('stdin');
     stdin.onkeydown = (e) => {
@@ -565,6 +736,7 @@ export function setupRun(deps) {
         other.addCommand(K.F10, () => resume('next'));
         other.addCommand(K.F11, () => resume('stepIn'));
         other.addCommand(M.Shift | K.F11, () => resume('stepOut'));
+        placeKeys(other);
     }
     return {
         onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null,
@@ -573,6 +745,14 @@ export function setupRun(deps) {
         breakpoints: {
             toggle() { const model = editor.getModel(), pos = editor.getPosition(); if (model && pos) toggleBreakpoint(model, pos.lineNumber); },
             edit() { const model = editor.getModel(), pos = editor.getPosition(); if (model && pos) void editBreakpointAt(model, pos.lineNumber); },
+            muted: () => muteBox.checked,
+            mute: () => setMuted(!muteBox.checked),
+        },
+        /** The debugger commands of the Run menu; `paused()` tells whether they can be used now. */
+        debug: {
+            paused: () => run !== null && paused,
+            runToCursor, jumpToCursor: () => void jumpToCursor(), smartStepInto: () => void smartStepInto(), showExecutionPoint,
+            quickEvaluate: () => quickEvaluate(),
         },
     };
 }

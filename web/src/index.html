@@ -191,7 +191,9 @@
         <input id="stdin" placeholder="Input for the running program (Enter sends a line)" autocomplete="off" spellcheck="false">
       </div>
       <div id="debug-tab" class="tab">
-        <div class="col" id="frames-col"><h2>Frames</h2><label id="exc-label" title="Stop at every exception raised in your code, also the ones that are caught"><input type="checkbox" id="exc-raised"> Break on raised exceptions</label><div class="body" id="frames"></div></div>
+        <div class="col" id="frames-col"><h2>Frames <button id="frames-copy" class="mini" title="Copy the call stack">Copy</button></h2><label id="exc-label" title="Stop at every exception raised in your code, also the ones that are caught"><input type="checkbox" id="exc-raised"> Break on raised exceptions</label>
+          <input id="exc-classes" placeholder="Only these, e.g. ValueError, KeyError" title="Break on raised exceptions only for these classes and their subclasses (empty: every exception)" autocomplete="off" spellcheck="false">
+          <label id="mute-label" title="Breakpoints neither stop nor log while muted"><input type="checkbox" id="bp-mute"> Mute breakpoints</label><div class="body" id="frames"></div></div>
         <div class="col" id="vars-col"><h2>Variables</h2><div class="body" id="vars"></div></div>
         <div class="col" id="watches-col"><h2>Watches</h2><div class="body" id="watches"></div>
           <input id="watch-add" placeholder="Add a watch expression, Enter" autocomplete="off" spellcheck="false"></div>

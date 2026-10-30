@@ -284,3 +284,9 @@
 #sigdialog .pname { color: var(--dim); padding: 2px 0; font-weight: 600; } #sigdialog pre { margin: 0; font: 12.5px Consolas, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 0; overflow-x: auto; }
 #sigdialog pre div { padding: 0 8px; white-space: pre; } #sigdialog .hunk { color: var(--dim); background: var(--hover); } #sigdialog .add { background: var(--good)26; } #sigdialog .del { background: var(--bad)26; } #sigdialog .ctx { color: var(--dim); }
 #sigdialog .warnings { color: var(--warn); font-size: 12.5px; } #sigdialog .buttons label { display: flex; align-items: center; gap: 4px; color: var(--dim); }
+/* the debugger's values at the end of the lines, muted breakpoints, and the controls under the frames */
+.debug-inline::after { color: var(--violet); font-style: italic; opacity: .85; white-space: pre; }
+.bp-muted .bp-glyph { opacity: .35; }
+#mute-label { display: block; padding: 2px 10px; color: var(--dim); font-size: 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+#exc-classes { display: block; width: calc(100% - 20px); margin: 2px 10px 4px; font-size: 12px; }
+#frames-col h2 .mini { float: right; font-size: 11px; padding: 0 6px; }

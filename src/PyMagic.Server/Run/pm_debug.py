@@ -3,13 +3,18 @@
 A small debugger built on the standard bdb module (no third-party packages). The host (PyMagic.Server.RunSession)
 starts this script, which connects back over a local TCP socket and speaks JSON lines:
 
-  host -> helper   setBreakpoints, setExceptionBreak, go, continue, next, stepIn, stepOut, scopes, variables, evaluate,
+  host -> helper   setBreakpoints, setExceptionBreak, mute, go, continue, next, stepIn, stepInto (smart step into one
+                   call of the line), stepOut, runTo (run to a line, "force" ignoring the breakpoints on the way), jump
+                   (go on from another line of the frame), scopes, variables, values (inline values), evaluate,
                    setVariable, stop
-  helper -> host   hello, stopped, running, scopes, variables, evaluated, variableSet, output (log points)
+  helper -> host   hello, stopped, running, scopes, variables, values, evaluated, variableSet, jumped, output (log points)
 
 A breakpoint is a line number or {"line", "condition", "hitCondition", "logMessage"}: it stops only when the condition
 holds and the hit count matches ("5", ">=5", "%3"...); with a log message it prints the message ({expr} is evaluated
-in the frame) and does not stop.
+in the frame) and does not stop. Muted breakpoints neither stop nor log.
+
+The functions that returned into the stopped frame since the last step (step over, step out) are kept with their
+values and shown as the "Return values" scope of the top frame.
 
 The program's own stdin/stdout/stderr are ordinary pipes handled by the host, not this channel.
 """
@@ -78,7 +83,13 @@ class Debugger(bdb.Bdb):
         self.meta = {}             # (path, line) -> {"hit": (operator, number) or None, "log": message or None}
         self.scope_refs = {}       # scope variable reference -> ("locals" | "globals", frame id)
         self.break_on_raise = False
+        self.exception_classes = []   # "break on raised" only for these class names (and their subclasses); empty: all
         self.raised = None         # the exception the program was last stopped on while it was being raised
+        self.muted = False
+        self.run_to = None         # (canonical path, line, force) of Run to Cursor
+        self.step_target = None    # (function name, origin frame, origin line) of Smart Step Into
+        self.return_origin = None  # the frame whose callees' return values are kept while stepping
+        self.returns = []          # [(name, value)] returned into return_origin since the last resume
         self._hit_key = None
         self._hit_value = False
 
@@ -104,6 +115,9 @@ class Debugger(bdb.Bdb):
                 self.apply_breakpoints(msg.get("file", ""), msg.get("lines", []))
             elif kind == "setExceptionBreak":
                 self.break_on_raise = msg.get("mode") == "raised"
+                self.exception_classes = [c.strip() for c in msg.get("classes") or [] if c.strip()]
+            elif kind == "mute":
+                self.muted = bool(msg.get("on"))
             elif kind == "go":
                 self.go.set()
             elif kind == "stop":
@@ -140,7 +154,14 @@ class Debugger(bdb.Bdb):
         key = (id(frame), frame.f_lineno, self._line_event)
         if key == self._hit_key:
             return self._hit_value
-        result = super().break_here(frame)
+        if self.run_to is not None and (self.canonic(frame.f_code.co_filename), frame.f_lineno) == self.run_to[:2]:
+            self.run_to = None
+            self._hit_key, self._hit_value = key, True
+            return True
+        if self.muted or (self.run_to is not None and self.run_to[2]):
+            result = False
+        else:
+            result = super().break_here(frame)
         if result:
             canonical = self.canonic(frame.f_code.co_filename)
             info = self.meta.get((canonical, frame.f_lineno))
@@ -189,7 +210,41 @@ class Debugger(bdb.Bdb):
     def stop_here(self, frame):
         if self.just_my_code and not self.is_user_file(frame.f_code.co_filename):
             return False
+        if self.step_target is not None:
+            name, origin, line = self.step_target
+            if frame is origin:
+                if frame.f_lineno == line:
+                    return False   # still on the line, between its calls
+            elif frame.f_back is origin:
+                if not self.is_target(frame, name):
+                    return False   # another call of the line: run through it
+            elif frame is not origin.f_back:
+                return False       # deeper inside a call of the line
+            self.step_target = None   # the call (or, when it was not made, the next line) is reached
         return super().stop_here(frame)
+
+    @staticmethod
+    def is_target(frame, name):
+        code = frame.f_code.co_name
+        if code == name:
+            return True
+        if code in ("__init__", "__new__", "__call__"):   # Point(...) enters Point.__init__
+            owner = frame.f_locals.get("self", frame.f_locals.get("cls"))
+            owner = owner if isinstance(owner, type) else type(owner)
+            return any(c.__name__ == name for c in getattr(owner, "__mro__", ()))
+        return False
+
+    def dispatch_call(self, frame, arg):
+        traced = super().dispatch_call(frame, arg)
+        if traced is None and self.return_origin is not None and frame.f_back is self.return_origin:
+            return self.trace_dispatch   # traced only so that its return value is seen
+        return traced
+
+    def dispatch_return(self, frame, arg):
+        if self.return_origin is not None and frame.f_back is self.return_origin and frame.f_code.co_name not in ("<genexpr>", "<listcomp>", "<dictcomp>", "<setcomp>"):
+            self.returns.append((frame.f_code.co_name + "()", arg))
+            del self.returns[:-20]
+        return super().dispatch_return(frame, arg)
 
     def set_continue(self):
         # unlike bdb.set_continue this keeps tracing on, so breakpoints added while running still work for new calls
@@ -223,6 +278,8 @@ class Debugger(bdb.Bdb):
         # a frame is only traced when something could stop in it; raising can stop anywhere in user code
         if self.break_on_raise and self.is_user_file(frame.f_code.co_filename):
             return True
+        if self.run_to is not None and self.canonic(frame.f_code.co_filename) == self.run_to[0]:
+            return True
         return super().break_anywhere(frame)
 
     def dispatch_exception(self, frame, arg):
@@ -235,6 +292,8 @@ class Debugger(bdb.Bdb):
         # by default only uncaught exceptions stop the program (see run_script); "raised" stops at every raise in user code
         etype, value, _ = exc_info
         if not self.break_on_raise or issubclass(etype, self.QUIET_EXCEPTIONS) or not self.is_user_file(frame.f_code.co_filename):
+            return
+        if self.exception_classes and not any(c.__name__ in self.exception_classes for c in etype.__mro__):
             return
         if value is self.raised:
             return   # the same exception passing through the callers
@@ -254,13 +313,16 @@ class Debugger(bdb.Bdb):
 
     def frames_payload(self):
         return [{"id": i, "name": f.f_code.co_name, "file": os.path.abspath(f.f_code.co_filename)
-                 if not f.f_code.co_filename.startswith("<") else f.f_code.co_filename, "line": line}
-                for i, (f, line) in enumerate(self.stack)]
+                 if not f.f_code.co_filename.startswith("<") else f.f_code.co_filename, "line": line,
+                 "first": f.f_code.co_firstlineno} for i, (f, line) in enumerate(self.stack)]
 
     def stop(self, kind, reason, message=None):
         with self.stop_lock:
             self.refs.clear()
             self.scope_refs.clear()
+            self.run_to = None
+            self.step_target = None
+            self.return_origin = None
             self.last_thread = threading.get_ident()
             self.send({"type": kind, "reason": reason, "frames": self.frames_payload(), "message": message,
                        "thread": threading.current_thread().name})
@@ -283,6 +345,11 @@ class Debugger(bdb.Bdb):
         local_items = [(k, v) for k, v in frame.f_locals.items()]
         global_items = [(k, v) for k, v in frame.f_globals.items() if not (k.startswith("__") and k.endswith("__"))]
         result = []
+        if frame_id == 0 and self.returns:
+            ref = self.next_ref
+            self.next_ref += 1
+            self.refs[ref] = list(self.returns)
+            result.append({"name": "Return values", "ref": ref})
         for title, items in (("Locals", local_items), ("Globals", global_items)):
             if frame.f_locals is frame.f_globals and title == "Locals":
                 continue  # module level: locals are the globals
@@ -307,6 +374,31 @@ class Debugger(bdb.Bdb):
             return {"result": short_repr(value, 1000), "valueType": type(value).__name__, "ref": self.ref_for(value)}
         except BaseException as e:
             return {"error": "%s: %s" % (type(e).__name__, e)}
+
+    def values(self, frame_id, names):
+        """The short values of the names a frame can see, for the values shown at the end of the editor's lines."""
+        frame = self.stack[frame_id][0]
+        found = {}
+        for name in names[:MAX_ITEMS]:
+            for space in (frame.f_locals, frame.f_globals):
+                if name in space:
+                    value = space[name]
+                    if not isinstance(value, (types.ModuleType, types.FunctionType, type)):
+                        found[name] = short_repr(value, 60)
+                    break
+        return found
+
+    def jump(self, line):
+        """Goes on from another line of the top frame; Python allows it only from the frame's own trace event."""
+        frame = self.stack[0][0] if self.stack else None
+        if frame is None:
+            return {"error": "Not stopped."}
+        try:
+            frame.f_lineno = line
+        except (ValueError, AttributeError) as e:
+            return {"error": "Cannot jump to line %d: %s" % (line, e)}
+        self.stack[0] = (frame, frame.f_lineno)
+        return {"frames": self.frames_payload()}
 
     def set_variable(self, ref, name, expression):
         """Assigns the value of an expression to a local or global variable of the scope that `ref` belongs to."""
@@ -340,17 +432,34 @@ class Debugger(bdb.Bdb):
             kind = msg.get("type")
             rid = msg.get("id")
             frame = self.stack[0][0] if self.stack else None
-            if kind in ("continue", "next", "stepIn"):
+            if kind in ("continue", "next", "stepIn", "stepInto", "stepOut", "runTo"):
                 self.stepping_out = False
+                self.returns = []
             if kind == "continue":
                 self.set_continue()
             elif kind == "next" and frame is not None:
+                self.return_origin = frame
                 self.set_next(frame)
             elif kind == "stepIn":
                 self.set_step()
+            elif kind == "stepInto" and frame is not None:
+                self.step_target = (msg.get("target", ""), frame, frame.f_lineno)
+                self.set_step()
             elif kind == "stepOut" and frame is not None:
                 self.stepping_out = True
+                self.return_origin = frame.f_back
                 self.set_return(frame)
+            elif kind == "runTo":
+                self.run_to = (self.canonic(os.path.abspath(msg.get("file", ""))), int(msg.get("line", 0)), bool(msg.get("force")))
+                self.set_continue()
+            elif kind == "values":
+                self.send({"type": "values", "id": rid, "values": self.values(int(msg.get("frameId", 0)), msg.get("names") or [])})
+                continue
+            elif kind == "jump":
+                answer = self.jump(int(msg.get("line", 0)))
+                answer.update({"type": "jumped", "id": rid})
+                self.send(answer)
+                continue
             elif kind == "scopes":
                 self.send({"type": "scopes", "id": rid, "scopes": self.scopes(int(msg.get("frameId", 0)))})
                 continue
@@ -428,10 +537,14 @@ class Debugger(bdb.Bdb):
             msg = self.commands.get()
             kind = msg.get("type")
             rid = msg.get("id")
-            if kind in ("continue", "next", "stepIn", "stepOut"):
+            if kind in ("continue", "next", "stepIn", "stepOut", "stepInto", "runTo"):
                 return
             if kind == "scopes":
                 self.send({"type": "scopes", "id": rid, "scopes": self.scopes(int(msg.get("frameId", 0)))})
+            elif kind == "values":
+                self.send({"type": "values", "id": rid, "values": self.values(int(msg.get("frameId", 0)), msg.get("names") or [])})
+            elif kind == "jump":
+                self.send({"type": "jumped", "id": rid, "error": "The program has ended with this exception; it cannot go on."})
             elif kind == "variables":
                 members = self.refs.get(int(msg.get("ref", 0)), [])
                 self.send({"type": "variables", "id": rid, "ref": msg.get("ref"),

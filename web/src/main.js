@@ -884,7 +884,7 @@ async function main() {
     recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
     setupMainMenu({
         editor, save, saveAll: common.saveAll, reload: reloadFromDisk, openFile, tabs: () => tabs, split: () => split, currentFile: () => currentRel, search, refactor,
-        breakpoints: runHooks.breakpoints, recent: (current) => recents.list(current), chrome, bookmarks, runConfigs,
+        breakpoints: runHooks.breakpoints, debug: runHooks.debug, recent: (current) => recents.list(current), chrome, bookmarks, runConfigs,
     });
     const git = setupGit({
         editor,

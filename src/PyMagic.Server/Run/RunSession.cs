@@ -16,7 +16,8 @@ public sealed class RunSession : IDisposable
 {
     static readonly HashSet<string> DebugCommands = new()
     {
-        "setBreakpoints", "setExceptionBreak", "continue", "next", "stepIn", "stepOut", "scopes", "variables", "evaluate", "setVariable",
+        "setBreakpoints", "setExceptionBreak", "mute", "continue", "next", "stepIn", "stepInto", "stepOut", "runTo", "jump", "scopes", "variables",
+        "values", "evaluate", "setVariable",
     };
 
     readonly Action<JsonNode> _emit;
@@ -332,6 +333,9 @@ public sealed class RunSession : IDisposable
                     {
                         if (!Target.IsLocal && type == "setBreakpoints" && msg["file"]?.GetValue<string>() is { } bpFile)
                             msg["file"] = Target.ToTarget(Path.GetFullPath(Path.Combine(_root ?? "", bpFile)));
+                        // Run to Cursor names the file as the page does, relative to the project
+                        if (type == "runTo" && msg["file"]?.GetValue<string>() is { } toFile)
+                            msg["file"] = Target.ToTarget(Path.GetFullPath(Path.Combine(_root ?? "", toFile)));
                         string json = msg.ToJsonString();
                         if (_channel == null) _pending.Add(json); else WriteRawLocked(json);
                     }

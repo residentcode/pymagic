@@ -26,7 +26,7 @@ export function refactorMenu(editor, refactor) {
     ];
 }
 
-export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, split, currentFile, search, refactor, breakpoints, recent, chrome, bookmarks, runConfigs }) {
+export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, split, currentFile, search, refactor, breakpoints, debug, recent, chrome, bookmarks, runConfigs }) {
     // the desktop app lets the page open another folder (preload.js); in a browser the engine is started with its folder and these stay dim
     const desktop = window.pymagicDesktop;
     let recentProjects = [];
@@ -182,9 +182,16 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 { label: 'Step over', key: 'F10', run: press('b-over'), disabled: $('b-over').disabled },
                 { label: 'Step into', key: 'F11', run: press('b-into'), disabled: $('b-into').disabled },
                 { label: 'Step out', key: 'Shift+F11', run: press('b-out'), disabled: $('b-out').disabled },
+                { label: 'Smart step into', key: 'Shift+F7', run: () => debug.smartStepInto(), disabled: !debug.paused() },
+                { label: 'Run to cursor', key: 'Alt+F9', run: () => debug.runToCursor(false), disabled: !debug.paused() },
+                { label: 'Force run to cursor', key: 'Ctrl+Alt+F9', run: () => debug.runToCursor(true), disabled: !debug.paused() },
+                { label: 'Jump to cursor', run: () => debug.jumpToCursor(), disabled: !debug.paused() },
+                { label: 'Show execution point', key: 'Alt+F10', run: () => debug.showExecutionPoint(), disabled: !debug.paused() },
+                { label: 'Quick evaluate', key: 'Ctrl+Alt+F8', run: () => { editor.focus(); debug.quickEvaluate(); }, disabled: !debug.paused() },
                 '-',
                 { label: 'Toggle a breakpoint', key: 'F9', run: () => { editor.focus(); breakpoints.toggle(); } },
                 { label: 'Edit the breakpoint…', key: 'Shift+F9', run: () => { editor.focus(); breakpoints.edit(); } },
+                { label: 'Mute breakpoints', checked: breakpoints.muted(), run: () => breakpoints.mute() },
                 { label: 'Break on raised exceptions', checked: $('exc-raised').checked, run: () => $('exc-raised').click() },
                 '-',
                 { label: 'Run all the tests', run: () => { $('t-tests').click(); $('tests-all').click(); } },

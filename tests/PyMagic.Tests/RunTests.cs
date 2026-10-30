@@ -58,7 +58,7 @@ public class RunTests
             int id = ++_id;
             body["type"] = type; body["id"] = id;
             Session.Handle(body);
-            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", _ => "evaluated" };
+            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", "values" => "values", "jump" => "jumped", _ => "evaluated" };
             return Next(e => e["type"]?.GetValue<string>() == reply && e["id"]?.GetValue<int>() == id);
         }
 
@@ -473,5 +473,143 @@ public class RunTests
         h.Command("continue");
         Assert.Equal(0, h.Type("exited")["code"]!.GetValue<int>());
         Assert.Contains("handled", h.AllOutput());
+    }
+
+    // ---------------------------------------------------------------- item 158: the debugger's places and values
+
+    [Fact]
+    public void ValuesOfTheNamesOfALineAreGivenForTheEditor()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("prog.py", Program);
+        h.Session.Start(h.Root, "prog.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["prog.py"] = new() { 2 } });
+        var stopped = h.Type("stopped");
+        Assert.Equal(1, stopped["frames"]![0]!["first"]!.GetValue<int>());   // where the function starts: the lines that get values
+        var values = h.Request("values", new JsonObject { ["frameId"] = 0, ["names"] = new JsonArray("a", "b", "x", "add", "nope") })["values"]!.AsObject();
+        Assert.Equal("10", values["a"]!.GetValue<string>());
+        Assert.Equal("5", values["b"]!.GetValue<string>());
+        Assert.Equal("10", values["x"]!.GetValue<string>());   // a global the function sees
+        Assert.True(!values.ContainsKey("add") && !values.ContainsKey("nope"), values.ToJsonString());   // functions and unknown names are left out
+        h.Command("continue");
+        h.Type("exited");
+    }
+
+    [Fact]
+    public void StepOverKeepsTheReturnValuesOfTheCalls()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("prog.py", Program);
+        h.Session.Start(h.Root, "prog.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["prog.py"] = new() { 7 } });
+        h.Type("stopped");
+        h.Command("next");
+        Assert.Equal(8, Line(h.Type("stopped")));
+        var scopes = h.Request("scopes", new JsonObject { ["frameId"] = 0 })["scopes"]!.AsArray();
+        Assert.Equal("Return values", scopes[0]!["name"]!.GetValue<string>());
+        var returned = h.Request("variables", new JsonObject { ["ref"] = scopes[0]!["ref"]!.GetValue<int>() })["items"]!.AsArray();
+        Assert.Equal("add()", returned[0]!["name"]!.GetValue<string>());
+        Assert.Equal("15", returned[0]!["value"]!.GetValue<string>());
+        // the next step starts afresh: line 8 calls nothing of the project
+        h.Command("next");
+        h.Type("exited");
+    }
+
+    const string CountLoop =
+        "total = 0\n" +               // 1
+        "for i in range(3):\n" +      // 2
+        "    total += i\n" +          // 3
+        "done = total\n" +            // 4
+        "print('done', done)\n";      // 5
+
+    [Fact]
+    public void RunToCursorStopsAtABreakpointOnTheWayAndForceRunsPastIt()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("loop.py", CountLoop);
+        h.Session.Start(h.Root, "loop.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["loop.py"] = new() { 1, 3 } });
+        Assert.Equal(1, Line(h.Type("stopped")));
+        h.Session.Handle(new JsonObject { ["type"] = "runTo", ["file"] = "loop.py", ["line"] = 4 });
+        Assert.Equal(3, Line(h.Type("stopped")));   // the breakpoint on the way stops first
+        h.Session.Handle(new JsonObject { ["type"] = "runTo", ["file"] = "loop.py", ["line"] = 4, ["force"] = true });
+        var at = h.Type("stopped");
+        Assert.Equal(4, Line(at));                  // the two other rounds of the loop are passed
+        var total = h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "total" });
+        Assert.Equal("3", total["result"]!.GetValue<string>());
+        h.Command("continue");
+        h.Type("exited");
+    }
+
+    [Fact]
+    public void SmartStepIntoEntersTheChosenCallOnly()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("calls.py", "def inner():\n    return 2\n\ndef outer(x):\n    return x * 3\n\nr = outer(inner())\nprint(r)\n");
+        h.Session.Start(h.Root, "calls.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["calls.py"] = new() { 7 } });
+        h.Type("stopped");
+        h.Session.Handle(new JsonObject { ["type"] = "stepInto", ["target"] = "outer" });
+        var inside = h.Type("stopped");
+        Assert.Equal("outer", inside["frames"]![0]!["name"]!.GetValue<string>());   // inner() ran first without stopping
+        Assert.Equal(5, Line(inside));
+        h.Command("continue");
+        h.Type("exited");
+
+        // a call the line does not make: the step ends on the next line
+        using var h2 = new Harness();
+        h2.Script("calls.py", "def inner():\n    return 2\n\ndef outer(x):\n    return x * 3\n\nr = outer(inner())\nprint(r)\n");
+        h2.Session.Start(h2.Root, "calls.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["calls.py"] = new() { 7 } });
+        h2.Type("stopped");
+        h2.Session.Handle(new JsonObject { ["type"] = "stepInto", ["target"] = "missing" });
+        var next = h2.Type("stopped");
+        Assert.Equal(8, Line(next));
+        Assert.Equal("<module>", next["frames"]![0]!["name"]!.GetValue<string>());
+        h2.Command("continue");
+        h2.Type("exited");
+    }
+
+    [Fact]
+    public void JumpToCursorSkipsTheLinesInBetween()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("jump.py", "a = 1\na = a + 10\na = a + 100\nprint('a is', a)\n");
+        h.Session.Start(h.Root, "jump.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["jump.py"] = new() { 2 } });
+        h.Type("stopped");
+        var jumped = h.Request("jump", new JsonObject { ["line"] = 4 });
+        Assert.True(jumped["error"] is null, jumped.ToJsonString());
+        Assert.Equal(4, jumped["frames"]![0]!["line"]!.GetValue<int>());
+        h.Command("continue");
+        h.Type("exited");
+        Assert.Contains("a is 1", h.AllOutput());
+    }
+
+    [Fact]
+    public void MutedBreakpointsNeitherStopNorLog()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("loop.py", CountLoop);
+        h.Session.Start(h.Root, "loop.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["loop.py"] = new() { 3 } });
+        h.Session.Handle(new JsonObject { ["type"] = "mute", ["on"] = true });
+        Assert.Equal(0, h.Type("exited")["code"]!.GetValue<int>());
+        Assert.True(!h.Seen.Any(e => e["type"]?.GetValue<string>() == "stopped"));
+        Assert.Contains("done 3", h.AllOutput());
+    }
+
+    [Fact]
+    public void BreakingOnRaisedExceptionsCanBeLimitedToSomeClasses()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("raised.py", "class Mine(ValueError):\n    pass\n\ntry:\n    {}['k']\nexcept KeyError:\n    pass\ntry:\n    raise Mine('x')\nexcept ValueError:\n    pass\nprint('end')\n");
+        h.Session.Start(h.Root, "raised.py", true, Array.Empty<string>());
+        h.Session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised", ["classes"] = new JsonArray("ValueError") });
+        var stopped = h.Type("stopped");
+        Assert.Equal(9, Line(stopped));   // the KeyError is passed; Mine is a ValueError
+        Assert.Contains("Mine: x", stopped["message"]!.GetValue<string>());
+        h.Command("continue");
+        Assert.Equal(0, h.Type("exited")["code"]!.GetValue<int>());
     }
 }

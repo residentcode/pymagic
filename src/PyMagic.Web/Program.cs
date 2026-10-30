@@ -895,7 +895,9 @@ app.Map("/run", async (HttpContext ctx) =>
                 if (msg["profile"]?.GetValue<bool>() == true) session.StartProfile(root, file0, args);
                 else session.StartWithBreakpoints(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
                 if (msg["exceptionBreak"]?.GetValue<string>() == "raised")
-                    session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised" });
+                    session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised", ["classes"] = msg["exceptionClasses"]?.DeepClone() });
+                if (msg["muted"]?.GetValue<bool>() == true)
+                    session.Handle(new JsonObject { ["type"] = "mute", ["on"] = true });
             }
             else if (msg["type"]?.GetValue<string>() == "startTests")
             {

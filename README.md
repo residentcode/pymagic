@@ -118,13 +118,14 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 **Compared with PyCharm's help, area by area** (from its help contents of about 1,000 pages and its 103 Python inspections, checked against the code on 30 October 2026; areas not compared yet are at the end)
 - Debugger:
-  - inline values: each variable's value shown at the end of its line while stopped, updated on each step, clickable to open the object, change it or add an inline watch;
-  - stepping: Step Into My Code, Smart Step Into (choose which call on the line), Force Step Into / Over, Run to Cursor, Force Run to Cursor, Jump to Cursor (skip lines), Show Execution Point;
-  - breakpoints: mute all, disable until another breakpoint is hit, suspend one thread or all, a description, method breakpoints, dragging a breakpoint to another line, exception breakpoints per exception class with "on raise" / "on termination" and "ignore library files";
-  - variables: return values of the functions just left, set a value (F2), go to a variable's declaration or its type, compare a value with the clipboard, a dialog for one value, Evaluate (Alt+F8) as a non-modal window for several lines, Quick Evaluate (Ctrl+Alt+F8), hover values that open into their children, JSON shown as a tree;
+  - inline values: ~~each variable's value shown at the end of its line while stopped, updated on each step~~ (done, item 158); still open: clicking a value to open the object, change it or add an inline watch;
+  - stepping: ~~Step Into My Code (library code is skipped unless asked), Smart Step Into, Run to Cursor, Force Run to Cursor, Jump to Cursor, Show Execution Point~~ (done, item 158); still open: Force Step Into / Over;
+  - breakpoints: ~~mute all; exception breakpoints per exception class, on raise, on termination (uncaught), only in the project's files~~ (done, item 158); still open: disable until another breakpoint is hit, suspend one thread or all, a description, method breakpoints, dragging a breakpoint to another line;
+  - variables: ~~return values of the functions just left, set a value (double-click), Quick Evaluate (Ctrl+Alt+F8), hover values~~ (done, item 158); still open: F2 for set value, go to a variable's declaration or its type, compare a value with the clipboard, a dialog for one value, Evaluate (Alt+F8) as a non-modal window for several lines, hover values that open into their children, JSON shown as a tree;
   - watches that are kept with the project, dragged in from the editor, paused, duplicated and reordered;
   - Data View: lists, arrays, DataFrames and Series as tables;
-  - a debug console with IPython; attach to a running process; the variables loading policy (on demand for slow objects); copying the call stack.
+  - a debug console with IPython; attach to a running process; the variables loading policy (on demand for slow objects); ~~copying the call stack~~ (done, item 158).
+  - found while checking item 158: this Monaco build does not draw text injected after a line (`after` decorations), so the Git blame shown at the end of the current line (`git.js`) is probably not drawn either; item 158 draws its values with a CSS `::after` instead.
 - Code vision and inlay hints: the number of usages above each function and class and the number of inheritors above each class (a click lists them); the author of most lines; parameter names in calls, the names of `pytest.mark.parametrize` arguments, return types, inferred types of variables, the attribute names of positional class patterns in `match`, and the type of each call in a method chain.
 - Editor: breadcrumbs; method separators; the next / previous method (Alt+Down / Alt+Up); the matching brace (Ctrl+Shift+M) and the start / end of a block (Ctrl+[ / Ctrl+]); the last edit location (Ctrl+Shift+Backspace) and recent locations; the switcher (Ctrl+Tab over files and tool windows); a preview tab; tabs taken out into their own window; lens mode (hovering the scrollbar shows that part of the file); context info (Alt+Q); expression type (Ctrl+Shift+P); external documentation in the browser (Shift+F1); a RegExp checker on a regular expression (Alt+Enter); zoom with Ctrl+wheel.
 - Code generation: create a class, function or method from its first use (Alt+Enter on an unresolved name); Surround With (`if`, `try`, `for`, `with`); Unwrap / Remove (Ctrl+Shift+Delete); postfix completion (`.if`, `.not`, `.for`, `.return`, `.par`); live templates you see and edit; file templates for new files; Emmet in HTML.
@@ -146,4 +147,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 157 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 158 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
