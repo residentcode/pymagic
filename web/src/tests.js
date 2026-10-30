@@ -2,6 +2,11 @@
 import * as monaco from 'monaco-editor';
 import { RunClient } from './runclient';
 import { showTab } from './panel';
+import { openMenu } from './menu';
+import { toast } from './toast';
+import { summarizeRun, statistics, junitXml, htmlReport, addRun, missingRunner } from './tests-model.js';
+
+const HISTORY = '.pymagic/test-history.json';
 const $ = (id) => document.getElementById(id);
 const ICONS = {
     idle: ['○', 'var(--dim)'], queued: ['◔', 'var(--dim)'], running: ['◐', 'var(--amber)'],
@@ -296,9 +301,125 @@ export function setupTests(deps) {
                 break;
         }
     }
+    // ------------------------------------------------------------ the runs: history, statistics, export
+    let lastIds = null;        // what the last run ran ([] for all), for Auto
+    let shownRun = null;       // the run whose results the tree shows (the last one, or one picked from History)
+    let history = [];
+    fetch('/api/file?path=' + encodeURIComponent(HISTORY)).then((r) => (r.ok ? r.json() : [])).then((h) => { history = Array.isArray(h) ? h : []; }).catch(() => { /* none yet */ });
+    function recordRun() {
+        const results = [...byId.values()].filter((n) => n.children.length === 0 && n.result)
+            .map((n) => ({ id: n.id, outcome: n.result.outcome, duration: n.result.duration ?? 0, message: n.result.message ?? '', traceback: n.result.traceback ?? '' }));
+        if (results.length === 0)
+            return;
+        shownRun = { when: new Date().toISOString(), framework: $('tests-fw').value, results };
+        // the history keeps the outcome of each test; the tracebacks stay with the run in this window only
+        history = addRun(history, { ...shownRun, results: results.map(({ traceback, ...r }) => r) });
+        fetch('/api/file?path=' + encodeURIComponent(HISTORY), { method: 'PUT', body: JSON.stringify(history) }).catch(() => { /* kept for this session */ });
+    }
+    const label = (run) => {
+        const s = summarizeRun(run.results);
+        const when = new Date(run.when);
+        return `${when.toLocaleDateString()} ${when.toLocaleTimeString()} · ${s.passed} passed${s.failed + s.errors ? `, ${s.failed + s.errors} failed` : ''}${s.skipped ? `, ${s.skipped} skipped` : ''} · ${s.duration.toFixed(2)}s`;
+    };
+    function showRun(run) {
+        shownRun = run;
+        for (const n of byId.values())
+            if (n.children.length === 0) {
+                n.result = undefined;
+                setStatus(n, 'idle');
+            }
+        for (const r of run.results) {
+            const n = ensureNode(r.id);
+            n.result = { outcome: r.outcome, duration: r.duration, message: r.message, traceback: r.traceback ?? '', output: '', file: null, line: null };
+            setStatus(n, r.outcome);
+        }
+        summarize();
+        $('tests-summary').textContent += ` · the run of ${new Date(run.when).toLocaleString()}`;
+    }
+    $('tests-history').onclick = (e) => openMenu(e.currentTarget, history.length
+        ? history.map((run, i) => ({ label: label(run), run: () => showRun(run), checked: i === 0 && shownRun?.when === run.when }))
+        : [{ label: 'No runs yet', disabled: true }]);
+    $('tests-stats').onclick = () => {
+        if (!shownRun) {
+            toast('Run the tests first.', true);
+            return;
+        }
+        const s = statistics(shownRun.results), sum = summarizeRun(shownRun.results);
+        $('detail-title').textContent = 'Statistics';
+        const table = (head, rows) => {
+            const t = document.createElement('table');
+            t.className = 'test-stats';
+            const tr = document.createElement('tr');
+            for (const h of head) {
+                const th = document.createElement('th');
+                th.textContent = h;
+                tr.append(th);
+            }
+            t.append(tr);
+            for (const row of rows) {
+                const r = document.createElement('tr');
+                for (const cell of row) {
+                    const td = document.createElement('td');
+                    td.textContent = cell;
+                    r.append(td);
+                }
+                t.append(r);
+            }
+            return t;
+        };
+        const intro = document.createElement('p');
+        intro.textContent = `${sum.total} tests in ${s.files.length} files, ${sum.duration.toFixed(2)} s: ${sum.passed} passed, ${sum.failed} failed, ${sum.errors} errors, ${sum.skipped} skipped.`;
+        detail.replaceChildren(intro,
+            table(['File', 'Tests', 'Failed', 'Time'], s.files.map((f) => [f.file, String(f.tests), String(f.failed), `${f.duration.toFixed(3)} s`])),
+            table(['Test', 'Result', 'Time'], s.tests.slice(0, 200).map((t) => [t.id, t.outcome, `${(t.duration ?? 0).toFixed(3)} s`])));
+    };
+    function download(name, type, text) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([text], { type }));
+        a.download = name;
+        document.body.append(a);
+        a.click();
+        a.remove();
+        window.setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }
+    $('tests-export').onclick = (e) => {
+        if (!shownRun) {
+            toast('Run the tests first.', true);
+            return;
+        }
+        const stamp = shownRun.when.slice(0, 19).replace(/[:T]/g, '-');
+        openMenu(e.currentTarget, [
+            { label: 'As an HTML page…', run: () => download(`test-results-${stamp}.html`, 'text/html', htmlReport(shownRun)) },
+            { label: 'As JUnit XML…', run: () => download(`test-results-${stamp}.xml`, 'application/xml', junitXml(shownRun)) },
+        ]);
+    };
+    // Auto: the last run again a moment after a file is saved, when nothing is running
+    let autoTimer = 0, ownSave = false;
+    window.addEventListener('pymagic:saved', () => {
+        if (!$('tests-auto').checked || lastIds === null || ownSave || client)
+            return;
+        clearTimeout(autoTimer);
+        autoTimer = window.setTimeout(() => { if (!client) void run(lastIds); }, 800);
+    });
+    /** A run that could not start for want of its package: a button in the console installs it. */
+    function offerInstall() {
+        const pkg = missingRunner(consoleOut.textContent);
+        if (!pkg)
+            return;
+        const b = document.createElement('button');
+        b.className = 'tests-install';
+        b.textContent = `Install ${pkg}`;
+        b.onclick = () => window.dispatchEvent(new CustomEvent('pymagic:install', { detail: pkg }));
+        consoleOut.append(b, document.createTextNode('\n'));
+    }
     function finish() {
+        const wasRunning = client !== null;
         client?.close();
         client = null;
+        if (wasRunning) {
+            recordRun();
+            offerInstall();
+        }
         if (coverageRun) {
             coverageRun = false;
             window.dispatchEvent(new CustomEvent('pymagic:coverage'));
@@ -323,7 +444,14 @@ export function setupTests(deps) {
             return;
         coverageRun = coverage;
         showTab('tests');
-        await deps.saveAll();
+        // the save a run starts with is not a change for Auto to run again on
+        ownSave = true;
+        try {
+            await deps.saveAll();
+        }
+        finally {
+            ownSave = false;
+        }
         await load();
         consoleOut.textContent = '';
         const wanted = ids.length ? ids : roots.map((r) => r.id);
@@ -337,6 +465,7 @@ export function setupTests(deps) {
             }
         }
         started = performance.now();
+        lastIds = ids;
         const framework = $('tests-fw').value;
         client = new RunClient({ type: 'startTests', ids, framework, coverage });
         client.onMessage = handle;

@@ -280,4 +280,37 @@ public class TestRunnerTests
         var events = p.Run("pytest");
         Assert.True(events.Any(e => e["type"]!.GetValue<string>() == "collectError"), "syntax error in a test file");
     }
+
+    [Fact]
+    public void RunsTheDoctestsOfTheModules()
+    {
+        if (!HavePython) return;
+        using var p = new Project();
+        p.File("shapes.py", "def area(r):\n    \"\"\"\n    >>> area(1)\n    3\n    \"\"\"\n    return 3 * r * r\n\n\ndef twice(x):\n    \"\"\"\n    >>> twice(2)\n    5\n    \"\"\"\n    return 2 * x\n\n\ndef plain():\n    return 1\n");
+        p.File("notes.py", "x = 1\n");
+        var r = Results(p.Run("doctest"));
+        Assert.Equal("shapes.py::area,shapes.py::twice", string.Join(",", r.Keys.OrderBy(k => k)));
+        Assert.Equal("passed", Outcome(r, "shapes.py::area"));
+        Assert.Equal("failed", Outcome(r, "shapes.py::twice"));
+        Assert.Equal("1 of 1 examples failed", r["shapes.py::twice"]["message"]!.GetValue<string>());
+        Assert.Equal(11, r["shapes.py::twice"]["line"]!.GetValue<int>());
+        // one docstring asked for
+        Assert.Equal("shapes.py::area", string.Join(",", Results(p.Run("doctest", "shapes.py::area")).Keys));
+    }
+
+    [Fact]
+    public void NoseRunsPlainTestFunctionsBesideTestCases()
+    {
+        if (!HavePython) return;
+        using var p = new Project();
+        p.File("test_nose.py", "import unittest\n\n\ndef test_plain():\n    assert 1 + 1 == 2\n\n\ndef test_wrong():\n    assert 1 == 2\n\n\ndef helper():\n    pass\n\n\nclass Box(unittest.TestCase):\n    def test_in_class(self):\n        pass\n");
+        var r = Results(p.Run("nose"));
+        Assert.Equal("test_nose.py::Box::test_in_class,test_nose.py::test_plain,test_nose.py::test_wrong", string.Join(",", r.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        Assert.Equal("failed", Outcome(r, "test_nose.py::test_wrong"));
+        Assert.Equal("test_nose.py::test_plain", string.Join(",", Results(p.Run("nose", "test_nose.py::test_plain")).Keys));
+        // Trial needs Twisted; without it the run says so
+        var trial = p.Run("trial");
+        Assert.True(trial.Any(e => e["type"]!.GetValue<string>() == "testResult") || trial.Any(e => e.ToJsonString().Contains("twisted")),
+            "trial without Twisted says why: " + string.Join(" ", trial.Select(e => e.ToJsonString())));
+    }
 }

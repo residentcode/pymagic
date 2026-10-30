@@ -1,7 +1,8 @@
 """PyMagic test runner.
 
-Runs pytest when it is installed (it also runs unittest tests), otherwise the standard unittest runner, and reports to the
-host over a local TCP socket as JSON lines:
+Runs pytest when it is installed (it also runs unittest tests), otherwise the standard unittest runner; or, when asked, the
+doctests of the project's modules, nose-style tests (unittest classes and plain test functions) or Twisted Trial test cases.
+It reports to the host over a local TCP socket as JSON lines:
 
   collected     {tests: [{id, file, line}]}           what is about to run (pytest also lists parametrized cases)
   testStarted   {id}
@@ -144,8 +145,10 @@ def run_pytest(channel, root, ids):
 
 # ------------------------------------------------------------------------------------------------ unittest
 
-def run_unittest(channel, root, ids):
+def run_unittest(channel, root, ids, flavor="unittest"):
     import unittest
+    if flavor == "trial":
+        import twisted.trial.unittest  # noqa: F401  (Trial's test cases run under unittest's runner through Twisted's adapter)
 
     def module_name(file_part):
         name = file_part[:-3] if file_part.endswith(".py") else file_part
@@ -153,6 +156,11 @@ def run_unittest(channel, root, ids):
         return name[:-9] if name.endswith(".__init__") else name
 
     def test_id(test):
+        if isinstance(test, unittest.FunctionTestCase):
+            func = test._testFunc
+            module = sys.modules.get(func.__module__)
+            file_part = rel_path(root, getattr(module, "__file__", "") or "") or func.__module__.replace(".", "/") + ".py"
+            return "%s::%s" % (file_part, func.__name__)
         cls = type(test)
         module = sys.modules.get(cls.__module__)
         file_part = rel_path(root, getattr(module, "__file__", "") or "") or cls.__module__.replace(".", "/") + ".py"
@@ -175,6 +183,24 @@ def run_unittest(channel, root, ids):
     for item in ids:
         parts = item.split("::")
         dotted = ".".join([module_name(parts[0])] + parts[1:])
+        if flavor == "nose":
+            # nose also runs the module's plain functions named test...
+            try:
+                import importlib
+                import types
+                module = importlib.import_module(module_name(parts[0]))
+                functions = [f for name, f in sorted(vars(module).items())
+                             if isinstance(f, types.FunctionType) and f.__module__ == module.__name__ and name.lower().startswith("test")]
+                if len(parts) == 2 and any(f.__name__ == parts[1] for f in functions):
+                    suite.addTest(unittest.FunctionTestCase(getattr(module, parts[1]),
+                                                            setUp=getattr(module, "setup_function", None) and (lambda f=getattr(module, parts[1]): module.setup_function(f)),
+                                                            tearDown=getattr(module, "teardown_function", None) and (lambda f=getattr(module, parts[1]): module.teardown_function(f))))
+                    continue
+                if len(parts) == 1:
+                    for f in functions:
+                        suite.addTest(unittest.FunctionTestCase(f))
+            except Exception:
+                pass   # the load below reports the import error
         suite.addTests(loader.loadTestsFromName(dotted))
 
     flat = []
@@ -264,6 +290,74 @@ def run_unittest(channel, root, ids):
     print("Ran %d tests" % result.testsRun)
     sys.stdout.flush()
     return 0 if result.wasSuccessful() and not failed_loads else 1
+
+
+# ------------------------------------------------------------------------------------------------ doctest
+
+def run_doctest(channel, root, ids):
+    """The examples in the docstrings of the project's modules: each docstring with examples is one test."""
+    import doctest
+    import importlib
+    import io
+
+    files = sorted({i.split("::")[0] for i in ids}) if ids else []
+    if not ids:
+        for folder, dirs, names in os.walk(root):
+            dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
+            for name in sorted(names):
+                if name.endswith(".py") and name != "setup.py" and name != "conftest.py":
+                    rel = rel_path(root, os.path.join(folder, name))
+                    if rel:
+                        files.append(rel)
+    wanted = {i for i in ids if "::" in i}
+    finder = doctest.DocTestFinder()
+    found = []
+    for rel in files:
+        name = rel[:-3].replace("/", ".")
+        if name.endswith(".__init__"):
+            name = name[:-9]
+        try:
+            with open(os.path.join(root, rel), encoding="utf-8") as f:
+                if ">>>" not in f.read():
+                    continue
+            module = importlib.import_module(name)
+            tests = finder.find(module)
+        except BaseException:
+            channel.send({"type": "collectError", "file": rel, "message": traceback.format_exc()})
+            continue
+        for t in tests:
+            if not t.examples:
+                continue
+            short = t.name[len(module.__name__) + 1:] if t.name.startswith(module.__name__ + ".") else t.name
+            test_id = "%s::%s" % (rel, short or "module")
+            if wanted and test_id not in wanted and not any(test_id.startswith(w + ".") for w in wanted):
+                continue
+            found.append((test_id, rel, (t.lineno or 0) + 1, t))
+    channel.send({"type": "collected", "tests": [{"id": i, "file": f, "line": line} for i, f, line, _ in found]})
+    failures = 0
+    for test_id, rel, line, t in found:
+        channel.send({"type": "testStarted", "id": test_id})
+        out = io.StringIO()
+        runner = doctest.DocTestRunner(optionflags=doctest.ELLIPSIS | doctest.NORMALIZE_WHITESPACE)
+        began = time.perf_counter()
+        result = runner.run(t, out=out.write, clear_globs=True)
+        report = out.getvalue()
+        failed_line = None
+        for text in report.splitlines():
+            if text.startswith("File ") and ", line " in text:
+                try:
+                    failed_line = int(text.split(", line ")[1].split(",")[0])
+                except ValueError:
+                    pass
+                break
+        outcome = "failed" if result.failed else "passed"
+        failures += 1 if result.failed else 0
+        channel.send({"type": "testResult", "id": test_id, "outcome": outcome, "duration": time.perf_counter() - began,
+                      "message": "%d of %d examples failed" % (result.failed, result.attempted) if result.failed else "",
+                      "traceback": report, "output": "", "file": rel if result.failed else None, "line": failed_line})
+    print("Ran %d doctests" % len(found))
+    sys.stdout.flush()
+    return 1 if failures else 0
 
 
 # ---------------------------------------------------------------- line coverage (no dependency: sys.monitoring, else sys.settrace)
@@ -385,7 +479,7 @@ def main():
     parser.add_argument("--host", default="127.0.0.1", help="where the host listens (WSL and Docker reach it by another address)")
     parser.add_argument("--token", required=True)
     parser.add_argument("--root", required=True)
-    parser.add_argument("--framework", default="auto", choices=["auto", "pytest", "unittest"])
+    parser.add_argument("--framework", default="auto", choices=["auto", "pytest", "unittest", "doctest", "nose", "trial"])
     parser.add_argument("--coverage", default=None, help="write the lines that ran to this JSON file")
     parser.add_argument("ids", nargs="*")
     options = parser.parse_args()
@@ -411,7 +505,12 @@ def main():
         coverage = Coverage(root)
         coverage.start()
     try:
-        code = run_pytest(channel, root, options.ids) if framework == "pytest" else run_unittest(channel, root, options.ids)
+        if framework == "pytest":
+            code = run_pytest(channel, root, options.ids)
+        elif framework == "doctest":
+            code = run_doctest(channel, root, options.ids)
+        else:
+            code = run_unittest(channel, root, options.ids, framework)
     except ImportError as e:
         print("cannot run tests with %s: %s" % (framework, e), file=sys.stderr)
         code = 2
