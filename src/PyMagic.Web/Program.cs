@@ -548,6 +548,18 @@ app.MapPost("/api/interpreter/remote", async (HttpRequest req) =>
 
 app.MapDelete("/api/interpreter/remote", (string spec) => { interpreters.ForgetRemote(spec); return Results.NoContent(); });
 
+// New Project: a folder anywhere the person chose, with the starting files of its kind, Git and its environment
+app.MapPost("/api/newproject", async (HttpRequest req) =>
+{
+    var b = await JsonNode.ParseAsync(req.Body);
+    string? Str(string k) => b?[k]?.GetValue<string>();
+    var request = new NewProjectRequest(Str("location") ?? "", Str("kind") ?? "python", b?["git"]?.GetValue<bool>() == true, b?["welcome"]?.GetValue<bool>() == true,
+        Str("environment") ?? "none", Str("python"), Str("uvPath"), Str("pythonVersion"));
+    try { return Results.Json(await Task.Run(() => NewProject.Create(request))); }
+    catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.BadRequest(new { error = e.Message }); }
+});
+
 app.MapPost("/api/venv", async (HttpRequest req) =>
 {
     var body = await JsonNode.ParseAsync(req.Body);

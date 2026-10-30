@@ -88,7 +88,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Speed on large projects: find usages and rename on one thread, the Problems of unchanged files not remembered, parsing only the edited region, about 1 to 1.5 GB while the problems are computed (78). Keeping the types of unchanged files across edits was measured and left out: the files they depend on are only about a fifth of an edit's time.
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
-- New project: a *New Project* dialog with a location and project types (pure Python, FastAPI, Flask, Django, Jupyter, each with its starting files), *Create Git repository*, *Create a welcome script*, and the interpreter made with it: a project venv, uv (with the path to uv), base conda or a custom environment, and a Python version. PyMagic only opens a folder and makes a `.venv` from the Python panel.
+- New project: ~~a *New Project* dialog with a location and project types (pure Python, FastAPI, Flask, Django, Jupyter, each with its starting files), *Create Git repository*, *Create a welcome script*, and the interpreter made with it: a project venv, uv (with the path to uv), base conda or a custom environment, and a Python version~~ (done, item 169). Unlike PyCharm, the packages a kind needs are listed in requirements.txt, not installed while the project is made.
 - Run configurations: only "a script" exists (name, script, parameters, folder, variables). Missing: kinds of configuration (Django server with host and port, pytest, a module with `-m`, FastAPI/uvicorn and Flask servers), `.env` files, running with `uv run`, the PYTHONPATH switches (content and source roots), *Store as project file*, *Open the Run panel when started*, and *Edit Configurations...* from the run selector.
 - Project tree menu: still missing *Debug* the tests of a folder (debugging a test is not done at all) and *Local History* of a folder; a sources root unmarked, or a folder marked, takes effect by starting the page again (it does so by itself) (155, 156).
 - Tab menu: *Override File Type* colours the file but the language server still reads it by its name; a second window (*Open in a new window*) does not share unsaved text with the first, so the file is saved before it opens (155, 156).
@@ -147,4 +147,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 168 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 169 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

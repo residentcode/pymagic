@@ -377,3 +377,16 @@
 .test-stats th, .test-stats td { text-align: left; padding: 2px 10px 2px 0; border-bottom: 1px solid var(--line); }
 .test-stats td:last-child, .test-stats th:last-child { text-align: right; }
 .tests-install { margin: 6px 0; }
+
+/* File > New project */
+.np-box { position: fixed; top: 8%; left: 50%; transform: translateX(-50%); width: min(680px, 94vw); max-height: 86vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 16px 18px; background: var(--panel); border: 1px solid var(--line-strong, #555); border-radius: 8px; box-shadow: 0 10px 30px #0009; z-index: 70; }
+.np-box h3, .np-box h4 { margin: 0; }
+.np-box h4 { margin-top: 6px; }
+.np-row { display: flex; flex-direction: column; gap: 4px; }
+.np-loc { display: flex; gap: 6px; }
+.np-loc input { flex: 1; }
+.np-box input:not([type]), .np-box select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
+.np-box select { max-width: 330px; }
+.np-kinds { display: flex; gap: 6px; flex-wrap: wrap; }
+.np-kinds button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.np-check { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

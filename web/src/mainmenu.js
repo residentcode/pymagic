@@ -3,6 +3,7 @@
 import { openMenu } from './menu';
 import { change, settings } from './settings';
 import { openSettings } from './settings-ui';
+import { openNewProject } from './newproject';
 
 const $ = (id) => document.getElementById(id);
 const press = (id) => () => $(id).click();
@@ -51,6 +52,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
         const files = recent(currentFile());
         return [
             { label: 'File', submenu: [
+                { label: 'New project…', run: () => void openNewProject() },
                 { label: 'New file…', run: press('ex-new-file') },
                 { label: 'New folder…', run: press('ex-new-folder') },
                 { label: 'Open folder…', key: 'Ctrl+Shift+O', run: () => void desktop.openFolder(), disabled: !desktop },

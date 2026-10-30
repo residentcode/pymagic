@@ -165,6 +165,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('pymagic:open-folder', () => chooseFolder());
   ipcMain.handle('pymagic:open-project', async (_e, folder) => { if (typeof folder === 'string' && fs.existsSync(folder) && fs.statSync(folder).isDirectory()) await openProject(path.resolve(folder)); });
   ipcMain.handle('pymagic:open-demo', () => openProject(demo));
+  // the New Project dialog's Browse: a folder's path, which the page sends back to the engine to make the project in
+  ipcMain.handle('pymagic:pick-folder', async (_e, start) => {
+    const r = await dialog.showOpenDialog(win, { title: 'Where the new project goes', properties: ['openDirectory', 'createDirectory', 'promptToCreate'], defaultPath: typeof start === 'string' && start ? start : undefined });
+    return r.canceled ? null : r.filePaths[0] ?? null;
+  });
   ipcMain.handle('pymagic:recent', () => existing(readSettings().recent, fs.existsSync, project));
   // Open In > Explorer: a file or folder of the open project, selected in a window of Explorer
   ipcMain.handle('pymagic:reveal', (_e, rel) => {
