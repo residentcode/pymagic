@@ -891,4 +891,32 @@ public class RunTests
             try { target.Kill(); } catch (InvalidOperationException) { }
         }
     }
+
+    // ---------------------------------------------------------------- item 164: IPython in the debug console
+
+    [Fact]
+    public void TheConsoleTakesIPythonSyntaxWhenTheProgramsPythonHasIPython()
+    {
+        // a Python with IPython installed, named by PYMAGIC_TEST_IPYTHON (none on a plain machine: the test then passes without running)
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_IPYTHON") is not { Length: > 0 } python || !File.Exists(python)) return;
+        using var h = new Harness();
+        h.Script("box.py", BoxProgram);
+        h.Session.Python = python;
+        h.Session.Start(h.Root, "box.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["box.py"] = new() { 7 } });
+        h.Type("stopped");
+        // a line magic, run with the names of the frame
+        var timed = h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "%timeit -n 3 -r 1 n + 1" });
+        Assert.True(timed["error"] is null, timed.ToJsonString());
+        Assert.Contains("per loop", timed["output"]!.GetValue<string>());
+        Assert.True(timed["ipython"]!.GetValue<bool>());
+        // results are shown by IPython's pretty printer, and the frame's names still work as Python
+        var pretty = h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "{'name': 'x' * 30, 'items': list(range(30))}" });
+        Assert.Contains("\n", pretty["result"]!.GetValue<string>());   // pretty() breaks a long dict over lines
+        Assert.Equal("1", h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "n" })["result"]!.GetValue<string>());
+        // the watches (eval only) are plain Python: no IPython there
+        Assert.True(h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "n", ["evalOnly"] = true })["ipython"] is null);
+        h.Command("continue");
+        h.Type("exited");
+        Assert.Contains("1", h.AllOutput());
+    }
 }

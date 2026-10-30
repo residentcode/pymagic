@@ -501,7 +501,18 @@ class Debugger(bdb.Bdb):
         dict or list, for the value dialog's tree."""
         frame = self.stack[frame_id][0]
         out = io.StringIO()
+        ipython = None if eval_only else self.ipython()
+        injected = False
         try:
+            if ipython is not None:
+                # IPython's syntax (%magics, !commands, name?) becomes Python that calls the shell; the names of the frame are its namespace
+                shell, transformer = ipython
+                expression = transformer.transform_cell(expression).rstrip("\n")
+                shell.user_ns.update(frame.f_globals)   # added to IPython's own names (In, Out, _ih), which its magics use
+                shell.user_ns.update(frame.f_locals)
+                if "get_ipython" not in frame.f_globals:
+                    frame.f_globals["get_ipython"] = lambda: shell
+                    injected = True
             try:
                 code = compile(expression, "<watch>", "eval")
             except SyntaxError:
@@ -515,7 +526,19 @@ class Debugger(bdb.Bdb):
             else:
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
                     value = eval(code, frame.f_globals, frame.f_locals)
-            answer = {"result": short_repr(value, limit), "valueType": type(value).__name__, "ref": self.ref_for(value), "output": out.getvalue()}
+            shown = short_repr(value, limit)
+            if ipython is not None and value is not None:
+                try:
+                    from IPython.lib.pretty import pretty
+                    shown = pretty(value, max_width=100)
+                    shown = shown if len(shown) <= limit else shown[:limit - 1] + "…"
+                except Exception:
+                    pass
+            elif ipython is not None:
+                shown = ""   # IPython shows nothing for None, as its prompt does
+            answer = {"result": shown, "valueType": type(value).__name__, "ref": self.ref_for(value), "output": out.getvalue()}
+            if ipython is not None:
+                answer["ipython"] = True
             if detail:
                 if isinstance(value, str):
                     answer["text"] = value[:limit]
@@ -529,6 +552,34 @@ class Debugger(bdb.Bdb):
             return answer
         except BaseException as e:
             return {"error": "%s: %s" % (type(e).__name__, e), "output": out.getvalue()}
+        finally:
+            if injected:
+                frame.f_globals.pop("get_ipython", None)
+
+    _ipython = None   # (shell, transformer) once made; False when the program's Python has no IPython
+
+    def ipython(self):
+        """IPython's shell and input transformer for the console, when the debugged program's Python has IPython; made
+        without history file, and without taking the program's __main__, display hook or exception hook."""
+        if self._ipython is None:
+            saved = (sys.modules.get("__main__"), sys.displayhook, sys.excepthook)
+            try:
+                from traitlets.config import Config
+                from IPython.core.interactiveshell import InteractiveShell
+                from IPython.core.inputtransformer2 import TransformerManager
+                config = Config()
+                config.HistoryManager.hist_file = ":memory:"
+                config.InteractiveShell.colors = "nocolor"
+                shell = InteractiveShell.instance(config=config, user_ns={})
+                self._ipython = (shell, TransformerManager())
+            except Exception:
+                self._ipython = False
+            finally:
+                main, displayhook, excepthook = saved
+                if main is not None:
+                    sys.modules["__main__"] = main
+                sys.displayhook, sys.excepthook = displayhook, excepthook
+        return self._ipython or None
 
     def values(self, frame_id, names):
         """The short values of the names a frame can see, for the values shown at the end of the editor's lines."""
