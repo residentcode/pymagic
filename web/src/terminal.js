@@ -14,6 +14,8 @@ import { openMenu } from './menu';
 
 const $ = (id) => document.getElementById(id);
 const KEEP_KEY = 'pymagic.terminals';
+// a window opened with Open Tab in New Window (?open=) neither keeps its terminals nor takes those of the first window
+const SECOND_WINDOW = new URLSearchParams(location.search).has('open');
 
 /** The pieces of coloured output as spans (`cls` marks what PyMagic itself prints): the Run output uses it. */
 export function colouredSpans(reader, text, cls = '') {
@@ -311,7 +313,7 @@ export function setupTerminal() {
     // ---- kept for the next start
     let keeping = 0;
     function keep() {
-        if (root === null) return;
+        if (root === null || SECOND_WINDOW) return;
         window.clearTimeout(keeping);
         keeping = 0;
         const tabs = groups.map((g) => ({ name: g.name, panes: g.panes.map((p) => ({ shell: p.shellId, cwd: p.cwd, lines: screenLines(p.xterm) })) }));
@@ -348,7 +350,7 @@ export function setupTerminal() {
     fetch('/api/info').then((r) => r.json()).then((info) => {
         root = info.root ?? '';
         let raw = null;
-        try { raw = JSON.parse(localStorage.getItem(KEEP_KEY) ?? 'null'); } catch { /* nothing kept */ }
+        try { raw = SECOND_WINDOW ? null : JSON.parse(localStorage.getItem(KEEP_KEY) ?? 'null'); } catch { /* nothing kept */ }
         const tabs = restoredTabs(raw, root);
         if (!tabs.length || groups.length) return;
         for (const t of tabs) addGroup(t.name, t.panes);

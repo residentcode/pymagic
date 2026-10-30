@@ -22,6 +22,8 @@ export const DEFAULTS = {
     autoSave: 'off',          // off | blur (when the window is left) | delay (a second after the last change)
     confirmGit: true,         // the bar's update and push ask first
     terminalShell: 'auto',    // the id of the shell new terminals start (/api/shells), auto for PowerShell 7 or Windows PowerShell
+    tabLimit: 0,              // the most editor tabs kept open, the ones used longest ago closing first; 0 for no limit
+    tabClose: true,           // each tab has its ✕
 };
 
 let current = { ...DEFAULTS };
@@ -40,6 +42,7 @@ export function merged(stored) {
     out.fontSize = Math.min(40, Math.max(8, Math.round(out.fontSize)));
     out.lineHeight = Math.min(80, Math.max(12, Math.round(out.lineHeight)));
     out.ruler = Math.min(400, Math.max(0, Math.round(out.ruler)));
+    out.tabLimit = Math.min(100, Math.max(0, Math.round(out.tabLimit)));
     return out;
 }
 
@@ -107,6 +110,7 @@ export function applySettings(monaco, themes, main) {
     const apply = (s) => {
         const theme = themeNow(s);
         document.documentElement.dataset.theme = theme;
+        document.documentElement.classList.toggle('no-tab-close', !s.tabClose);
         monaco.editor.setTheme(themes[theme]);
         const opts = editorOptions(s);
         // the cells of a notebook share the type, not the rest of the editor's choices

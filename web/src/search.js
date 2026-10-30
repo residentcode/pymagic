@@ -133,6 +133,15 @@ export function setupSearch(deps) {
             replaceAll.disabled = true;
         }
     }
+    /** Results that are not a text search (Find Usages of a file): shown as a search's are, under their own summary; they cannot be replaced. */
+    function showFound(title, files) {
+        showTab('search');
+        last = { total: files.reduce((n, f) => n + f.matches.length, 0), files, filesSearched: 0, truncated: false };
+        render();
+        summary.className = '';
+        summary.textContent = title;
+        replaceAll.disabled = true;
+    }
     let timer;
     const later = () => { clearTimeout(timer); timer = window.setTimeout(() => void search(), 300); };
     query.oninput = later;
@@ -397,5 +406,5 @@ export function setupSearch(deps) {
             });
         });
     }
-    return { open, symbolPicker, anythingPicker };
+    return { open, symbolPicker, anythingPicker, showFound };
 }

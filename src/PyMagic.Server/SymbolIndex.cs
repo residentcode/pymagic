@@ -153,7 +153,7 @@ public sealed class SymbolIndex : IDisposable
     void Touched(string path)
     {
         if (_disposed) return;
-        if (path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(Ignored.Contains)) return;
+        if (path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(Ignored.Contains) || ProjectFolders.IsExcluded(Path.GetDirectoryName(path) ?? path)) return;
         string ext = Path.GetExtension(path);
         if (ext.Equals(".py", StringComparison.OrdinalIgnoreCase)) _dirty[Path.GetFullPath(path)] = 0;
         else if (ext.Length == 0) _reconcileAll = true;   // a folder moved or deleted: every file under it

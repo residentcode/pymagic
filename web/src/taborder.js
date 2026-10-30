@@ -46,3 +46,13 @@ export function moveBy(tabs, rel, offset) {
     rest.splice(to, 0, rel);
     return rest;
 }
+
+/** The tabs that go when there are more than `limit` (Settings > Editor tabs): the ones used longest ago (`mru` is the newest first), never a pinned one,
+ *  the active one or one with unsaved changes; a tab never shown keeps its place in the order of the bar. */
+export function tabLimitVictims(tabs, mru, pinned, active, limit, isDirty = () => false) {
+    const spare = tabs.length - limit;
+    if (!(limit > 0) || spare <= 0) return [];
+    const age = (r) => { const i = mru.indexOf(r); return i < 0 ? mru.length + tabs.indexOf(r) : i; };
+    const candidates = tabs.filter((r) => r !== active && !pinned.has(r) && !isDirty(r)).sort((a, b) => age(b) - age(a));
+    return candidates.slice(0, spare);
+}

@@ -112,7 +112,7 @@ public static class WorkspaceSearch
                     if (seen.Add(rel)) list.Add(rel);
                 }
             foreach (var d in dirs)
-                if (!SkipDirectories.Contains(Path.GetFileName(d))) Walk(d);
+                if (!SkipDirectories.Contains(Path.GetFileName(d)) && !ProjectFolders.IsExcluded(d)) Walk(d);
         }
         if (Directory.Exists(root)) Walk(root);
         if (unsaved != null) foreach (var rel in unsaved.Keys) if (seen.Add(rel)) list.Add(rel);   // a new file that was not saved yet

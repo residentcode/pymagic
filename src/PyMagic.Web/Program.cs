@@ -110,6 +110,9 @@ if (Directory.Exists(www))
 
 // ---- workspace files -------------------------------------------------------------------------------------------
 
+// the folders marked as sources, tests or excluded (Mark Directory As)
+ProjectFolders.Load(root);
+
 string ResolveInRoot(string rel)
 {
     string full = Path.GetFullPath(Path.Combine(root, rel));
@@ -146,7 +149,7 @@ app.MapGet("/api/files", () =>
     {
         foreach (var f in Directory.EnumerateFiles(dir, "*.py")) list.Add(Path.GetRelativePath(root, f).Replace('\\', '/'));
         foreach (var d in Directory.EnumerateDirectories(dir))
-            if (!skip.Contains(Path.GetFileName(d))) Walk(d);
+            if (!skip.Contains(Path.GetFileName(d)) && !ProjectFolders.IsExcluded(d)) Walk(d);
     }
     Walk(root);
     list.Sort(StringComparer.Ordinal);
@@ -181,7 +184,8 @@ app.MapGet("/api/tree", () =>
         }
     }
     Walk(root);
-    return Results.Json(new { dirs = dirs.OrderBy(x => x, StringComparer.Ordinal), files = files.OrderBy(f => f.Path, StringComparer.Ordinal).Select(f => new { path = f.Path, size = f.Size }) });
+    var marks = ProjectFolders.Marks;
+    return Results.Json(new { marks = new { sources = marks.Sources, tests = marks.Tests, excluded = marks.Excluded }, dirs = dirs.OrderBy(x => x, StringComparer.Ordinal), files = files.OrderBy(f => f.Path, StringComparer.Ordinal).Select(f => new { path = f.Path, size = f.Size }) });
 });
 
 app.MapGet("/api/file", (string path) =>
@@ -312,6 +316,14 @@ app.MapPost("/api/fs", async (HttpRequest req) =>
                 else return Results.NotFound();
                 return Results.NoContent();
             }
+            case "mark":
+            {
+                // Mark Directory As: sources, tests, excluded, or none; the page starts again to use it
+                string rel = body!["path"]!.GetValue<string>();
+                if (!Directory.Exists(ResolveInRoot(rel))) return Results.NotFound();
+                var marks = ProjectFolders.Mark(root, rel, body["kind"]?.GetValue<string>() ?? "none");
+                return Results.Json(new { sources = marks.Sources, tests = marks.Tests, excluded = marks.Excluded });
+            }
             case "clean":
             {
                 // Clean Python Compiled Files of a folder, or of the whole project when the path is empty
@@ -376,6 +388,9 @@ app.Map("/lsp", async (HttpContext ctx) =>
 
     var service = new LanguageService { TypeshedPath = typeshed };
     service.AddSourceRoot(root);
+    // the folders marked as sources roots (Mark Directory As), read again for each page
+    ProjectFolders.Load(root);
+    foreach (var src in ProjectFolders.SourceRoots) if (Directory.Exists(src)) service.AddSourceRoot(src);
     service.LibraryRoots.AddRange(libs);
     _ = service.StartIndexing();
     var outbox = new BlockingCollection<string>();

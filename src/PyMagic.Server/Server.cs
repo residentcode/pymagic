@@ -254,6 +254,10 @@ public sealed class Server
                 return _service.MoveTargets(UriOf(p));
             case "pymagic/moveModule":
                 return _service.PlanModuleMove(p!["from"]!.GetValue<string>(), p["to"]!.GetValue<string>());
+            case "pymagic/generate":
+                return _service.Generate(UriOf(p), PositionOf(p));
+            case "pymagic/fileUsages":
+                return _service.FileUsages(UriOf(p));
             case "pymagic/move":
                 return _service.MoveSymbol(UriOf(p), PositionOf(p), p!["target"]!.GetValue<string>());
             case "pymagic/refactor":

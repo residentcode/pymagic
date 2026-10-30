@@ -253,7 +253,7 @@ public sealed partial class LanguageService
                 catch (IOException) { continue; }
                 catch (UnauthorizedAccessException) { continue; }
                 foreach (var f in files) if (seen.Add(System.IO.Path.GetFullPath(f))) yield return f;
-                foreach (var d in subdirs) if (!SkippedDirectories.Contains(System.IO.Path.GetFileName(d))) stack.Push(d);
+                foreach (var d in subdirs) if (!SkippedDirectories.Contains(System.IO.Path.GetFileName(d)) && !ProjectFolders.IsExcluded(d)) stack.Push(d);
             }
         }
     }

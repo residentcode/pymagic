@@ -38,7 +38,7 @@ public static class TestDiscovery
             {
                 files.AddRange(Directory.EnumerateFiles(dir, "*.py").Where(f => IsTestFile(Path.GetFileName(f))));
                 foreach (var d in Directory.EnumerateDirectories(dir))
-                    if (!SkippedDirectories.Contains(Path.GetFileName(d)) && !Path.GetFileName(d).StartsWith('.')) stack.Push(d);
+                    if (!SkippedDirectories.Contains(Path.GetFileName(d)) && !Path.GetFileName(d).StartsWith('.') && !ProjectFolders.IsExcluded(d)) stack.Push(d);
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }

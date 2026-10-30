@@ -206,6 +206,13 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 .etab.pinned .etab-name { font-weight: 600; }
 .ctx-item.current { font-weight: 600; color: var(--fg); }
 li.cut { opacity: .5; }
+/* Settings > Editor tabs: no close button on the tabs */
+.no-tab-close .etab-close { display: none; }
+/* Mark Directory As: sources roots blue, test sources green, excluded amber; what is inside an excluded folder is dim */
+li.mark-sources .fname, li.mark-sources .folder { color: var(--accent-2); }
+li.mark-tests .fname, li.mark-tests .folder { color: var(--green); }
+li.mark-excluded .fname, li.mark-excluded .folder { color: var(--amber); }
+li.in-excluded { opacity: .55; }
 #files li.drop-target { background: color-mix(in srgb, var(--accent) 18%, transparent); outline: 1px dashed var(--accent); outline-offset: -1px; }
 #files.drop-root { box-shadow: 0 0 0 2px var(--accent) inset; }
 .etab { position: relative; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px 0 14px; border-radius: 8px 8px 0 0; cursor: pointer; white-space: nowrap; color: var(--dim); user-select: none; }

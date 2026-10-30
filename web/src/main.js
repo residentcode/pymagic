@@ -613,6 +613,7 @@ function updateProblems() {
     $('problems').textContent = `${errors} errors, ${all.length - errors} warnings`;
 }
 let explorer = null;
+const secondWindow = new URLSearchParams(location.search).get('open');   // Open Tab in New Window: the file this window was opened for
 let tabs = null;
 let split = null;
 let recents = null;
@@ -878,7 +879,7 @@ async function main() {
     setupAutoSave({ editor, saveAll: common.saveAll });
     const structure = setupStructure({ editor, lsp, uriOf: (model) => serverUri.get(model), visible: () => chrome.shown() && chrome.view() === 'structure' });
     window.addEventListener('pymagic:sidebar', (e) => { if (e.detail === 'structure') structure.show(); });
-    const bookmarks = setupBookmarks({ monaco, editor, openFile, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+    const bookmarks = setupBookmarks({ monaco, editor, openFile, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')), revealInTree: (rel) => explorer?.select(rel) });
     const history = setupHistory({ monaco, editor, currentFile: () => currentRel });
     recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
     setupMainMenu({
@@ -911,7 +912,7 @@ async function main() {
     const terminal = setupTerminal();
     // the menus of the project tree, the tabs and the editor (fileactions.js)
     const fileActions = setupFileActions({
-        openFile, run: runHooks, tests, history, search, problems, terminal, reload: reloadFromDisk,
+        openFile, run: runHooks, tests, history, search, problems, terminal, reload: reloadFromDisk, lsp, uriFor, relOfUri, bookmarks, editor, saveFile, applyEdits: refactor.applyEdits,
         pythonFiles: () => [...knownFiles], tidyFile,
         showDiff: git.showDiff, refreshGit: git.refresh,
         refreshTree: async () => { await explorer?.refresh(); },
@@ -985,6 +986,14 @@ async function main() {
     knownFiles = new Set(files);
     explorer = setupExplorer({
         items: (path, isDir) => fileActions.treeItems(path, isDir),
+        findUsages: (path) => fileActions.findUsages(path),
+        // Safe Delete: how many places import what is deleted, listed in the Search panel
+        usages: async (path) => {
+            const files = await fileActions.usagesOf(path);
+            const n = (files ?? []).reduce((k, f) => k + f.matches.length, 0);
+            if (n) search.showFound(`${n} usage${n === 1 ? '' : 's'} of ${path}: deleting it breaks them`, files);
+            return n;
+        },
         openFile, refreshDirty, saveAll: common.saveAll, forget: forgetPath, synced: syncPyModels,
         current: () => currentRel, openAnother,
         // the tabs of a moved or renamed file keep their places under the new path
@@ -1015,6 +1024,8 @@ async function main() {
     });
     await explorer.refresh();
     tabs = setupTabs({
+        // a window of Open Tab in New Window keeps its tabs apart from the first window's
+        ...(secondWindow ? { storageKey: 'pymagic.tabs.window' } : {}),
         openFile, isDirty: isDirtyRel, save: saveFile, revert: reloadFromDisk, empty: showNothing,
         // closing a tab asks about unsaved changes only when the other side of a split does not show the file too
         askOnClose: (rel) => isDirtyRel(rel) && !split?.has(rel),
@@ -1038,6 +1049,8 @@ async function main() {
             return e;
         },
         mainEditor: editor,
+        renameFile: (rel) => explorer.rename(rel),
+        tabItems: (rel) => fileActions.tabItems(rel),
         modelFor: ensureModel,
         openMain: openFile,
         isDirty: isDirtyRel,
@@ -1047,12 +1060,19 @@ async function main() {
         onCursor: (p) => { $('cursor').textContent = `Ln ${p.lineNumber}, Col ${p.column}`; },
     });
     // only the tabs that were open last time are loaded: the server finds the other files of the project on disk
-    const restored = tabs.restore((rel) => explorer.has(rel));
-    if (restored)
-        await openFile(restored);
-    else if (files.length)
-        await openFile(files[0]);
-    split.restore((rel) => explorer.has(rel));
+    if (secondWindow) {
+        // Open Tab in New Window: this window shows the one file it was opened for
+        tabs.clear();
+        if (explorer.has(secondWindow)) await openFile(secondWindow);
+    }
+    else {
+        const restored = tabs.restore((rel) => explorer.has(rel));
+        if (restored)
+            await openFile(restored);
+        else if (files.length)
+            await openFile(files[0]);
+        split.restore((rel) => explorer.has(rel));
+    }
     updateWelcome();
     // files changed outside the page: the tree follows, open files without unsaved changes take the new text, the others ask
     setupDiskWatch({

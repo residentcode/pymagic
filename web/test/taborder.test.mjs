@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 
 // web/package.json does not say "type": "module", so Node would read src/*.js as CommonJS; load the file as a module instead
 const source = readFileSync(new URL('../src/taborder.js', import.meta.url), 'utf8');
-const { dropIndex, staysPut, moveTo, moveBy, pinFirst, clampToGroup } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { dropIndex, staysPut, moveTo, moveBy, pinFirst, clampToGroup, tabLimitVictims } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const abc = ['a.py', 'b.py', 'c.py'];
 
@@ -71,4 +71,14 @@ test('paths that share a prefix are kept apart', () => {
     const tabs = ['pkg/a.py', 'pkg/a.pyi', 'pkg'];
     assert.deepEqual(moveTo(tabs, 'pkg', 0), ['pkg', 'pkg/a.py', 'pkg/a.pyi']);
     assert.deepEqual(moveBy(tabs, 'pkg/a.pyi', -1), ['pkg/a.pyi', 'pkg/a.py', 'pkg']);
+});
+
+test('tabLimitVictims: past the limit the tabs used longest ago go, not a pinned, active or changed one', () => {
+    const tabs = ['a', 'b', 'c', 'd', 'e'];
+    const mru = ['e', 'd', 'c', 'b', 'a'];
+    assert.deepEqual(tabLimitVictims(tabs, mru, new Set(), 'e', 3), ['a', 'b']);
+    assert.deepEqual(tabLimitVictims(tabs, mru, new Set(['a']), 'e', 3), ['b', 'c']);
+    assert.deepEqual(tabLimitVictims(tabs, mru, new Set(), 'e', 3, (r) => r === 'b'), ['a', 'c']);
+    assert.deepEqual(tabLimitVictims(tabs, mru, new Set(), 'e', 0), []);
+    assert.deepEqual(tabLimitVictims(tabs, mru, new Set(), 'e', 5), []);
 });

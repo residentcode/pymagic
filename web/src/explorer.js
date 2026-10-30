@@ -33,6 +33,8 @@ function iconOf(name) {
     return ICONS[ext] ?? ['file', 'doc'];
 }
 
+const MARK_LABELS = { sources: 'sources root', tests: 'test sources root', excluded: 'excluded' };
+
 function baseName(path) { return path.slice(path.lastIndexOf('/') + 1); }
 function parentOf(path) { const i = path.lastIndexOf('/'); return i < 0 ? '' : path.slice(0, i); }
 
@@ -117,6 +119,7 @@ export function setupExplorer(deps) {
     let selected = '';
     let clip = null;          // { path, cut }: what Ctrl+X / Ctrl+C took, for Ctrl+V
     let dragging = null;      // the row being dragged onto a folder
+    let marks = { sources: [], tests: [], excluded: [] };   // Mark Directory As (.pymagic/folders.json)
     try { open = new Set(JSON.parse(localStorage.getItem('pymagic.explorer.open') ?? '[]')); } catch { /* storage unavailable */ }
     list.tabIndex = 0;
 
@@ -126,6 +129,16 @@ export function setupExplorer(deps) {
         const subdirs = dirs.filter((d) => parentOf(d) === dir).sort((a, b) => baseName(a).toLowerCase().localeCompare(baseName(b).toLowerCase()));
         const names = files.filter((f) => parentOf(f.path) === dir).sort((a, b) => baseName(a.path).toLowerCase().localeCompare(baseName(b.path).toLowerCase()));
         return { subdirs, names };
+    }
+
+    const markOf = (path) => (marks.sources.includes(path) ? 'sources' : marks.tests.includes(path) ? 'tests' : marks.excluded.includes(path) ? 'excluded' : null);
+
+    /** Mark Directory As: the folder becomes a sources root, test sources or excluded (or loses its mark); the page starts again so the analysis follows. */
+    async function markAs(path, kind) {
+        await deps.saveAll();
+        if (!(await post({ op: 'mark', path, kind }))) return;
+        toast(kind === 'none' ? `${path} is not marked any more` : `${path} is marked as ${MARK_LABELS[kind]}: starting the analysis again`);
+        window.setTimeout(() => location.reload(), 700);
     }
 
     function row(path, name, isDir, depth, isOpen) {
@@ -146,6 +159,10 @@ export function setupExplorer(deps) {
         label.textContent = name;
         li.append(twisty, icon, label);
         if (path === selected) li.classList.add('sel');
+        // a marked folder has its colour: sources blue, test sources green, excluded orange (and what is inside an excluded folder is dim)
+        const mark = isDir ? markOf(path) : null;
+        if (mark) { li.classList.add(`mark-${mark}`); li.title = `${path} (${MARK_LABELS[mark]})`; }
+        if (marks.excluded.some((e) => path.startsWith(e + '/'))) li.classList.add('in-excluded');
         if (clip?.cut && clip.path === path) li.classList.add('cut');
         li.draggable = true;
         li.ondragstart = (e) => {
@@ -193,6 +210,7 @@ export function setupExplorer(deps) {
             const tree = await res.json();
             dirs = tree.dirs;
             files = tree.files;
+            marks = tree.marks ?? marks;
             // folders that hold files the user works with are open the first time
             if (!localStorage.getItem('pymagic.explorer.open')) {
                 for (const d of dirs) if (!d.includes('/')) open.add(d);
@@ -287,6 +305,15 @@ export function setupExplorer(deps) {
         return true;
     }
 
+    /** Move… (F6): the folder is typed, the imports follow as with a drag. */
+    async function moveTo(path) {
+        const dir = await askText(`Move ${baseName(path)} to`, parentOf(path), 'The folder, from the project folder (empty: the project folder itself); a folder that is not there is made');
+        if (dir === null) return;
+        const target = dir.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        if (target === parentOf(path)) return;
+        await move(path, target);
+    }
+
     // ------------------------------------------------------------ cut, copy and paste
 
     /** The folder a paste or a drop goes into: a folder itself, the folder of a file, or the project folder. */
@@ -358,7 +385,10 @@ export function setupExplorer(deps) {
 
     async function remove(path, isDir) {
         const what = isDir ? `the folder "${path}" and everything in it` : `the file "${path}"`;
-        if (!(await askYes('Delete', `Delete ${what}? This cannot be undone.`))) return;
+        // Safe Delete: a module or package that is imported says where first (the places are listed in the Search panel)
+        const used = (isDir || /\.pyi?$/.test(path)) && deps.usages ? await deps.usages(path) : 0;
+        const warning = used ? ` It is imported or named in ${used} place${used === 1 ? '' : 's'} (listed in the Search panel), which will break.` : '';
+        if (!(await askYes(used ? 'Safe delete' : 'Delete', `Delete ${what}?${warning} This cannot be undone.`, used ? 'Delete anyway' : 'Delete'))) return;
         await deps.saveAll();
         if (!(await post({ op: 'delete', path }))) return;
         await deps.forget(path);
@@ -380,8 +410,17 @@ export function setupExplorer(deps) {
         if (path) items.push('-', { label: 'Cut', key: 'Ctrl+X', run: () => take(path, true) }, { label: 'Copy', key: 'Ctrl+C', run: () => take(path, false) });
         if (clip) items.push({ label: `Paste ${baseName(clip.path)}`, key: 'Ctrl+V', run: () => paste(dir) });
         if (path) {
-            items.push('-', { label: 'Rename…', key: 'F2', run: () => rename(path, isDir) }, { label: 'Delete…', key: 'Del', run: () => remove(path, isDir) },
+            items.push('-', { label: 'Rename…', key: 'F2', run: () => rename(path, isDir) }, { label: 'Move…', key: 'F6', run: () => moveTo(path) },
+                { label: 'Delete…', key: 'Del', run: () => remove(path, isDir) },
                 { label: 'Copy path', run: () => navigator.clipboard?.writeText(path) });
+        }
+        if (isDir && path) {
+            const mark = markOf(path);
+            items.push('-', { label: 'Mark directory as', submenu: [
+                ...Object.entries(MARK_LABELS).map(([kind, label]) => ({ label: label[0].toUpperCase() + label.slice(1), checked: mark === kind, run: () => markAs(path, mark === kind ? 'none' : kind) })),
+                '-',
+                { label: 'Unmark', disabled: !mark, run: () => markAs(path, 'none') },
+            ] });
         }
         // find, inspect, format, tests, history, Open In, .gitignore: the same as the tabs' (fileactions.js)
         if (deps.items) items.push('-', ...deps.items(path, isDir));
@@ -397,6 +436,8 @@ export function setupExplorer(deps) {
         if (e.key === 'Escape' && clip) { clip = null; paint(); return; }
         if (!selected) return;
         if (e.key === 'F2') { e.preventDefault(); void rename(selected, isDir); }
+        else if (e.key === 'F6') { e.preventDefault(); void moveTo(selected); }
+        else if (e.altKey && e.key === 'F7') { e.preventDefault(); void deps.findUsages?.(selected); }
         else if (e.key === 'Delete') { e.preventDefault(); void remove(selected, isDir); }
         else if (ctrl && (e.key === 'x' || e.key === 'X')) { e.preventDefault(); take(selected, true); }
         else if (ctrl && (e.key === 'c' || e.key === 'C')) { e.preventDefault(); take(selected, false); }

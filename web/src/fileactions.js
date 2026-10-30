@@ -3,7 +3,7 @@
 // clean the compiled files of a folder and choose the type a file is shown as.
 import { toast } from './toast';
 import { openMenu } from './menu';
-import { includeFor, isTestFile, pythonFilesUnder, FILE_TYPES } from './fileactions-model';
+import { copyLabel, includeFor, isTestFile, pythonFilesUnder, rememberCopy, testPartners, usageFiles, FILE_TYPES } from './fileactions-model';
 
 const TYPES_KEY = 'pymagic.fileTypes';
 
@@ -37,6 +37,24 @@ export function setupFileActions(deps) {
         for (const rel of list) if (await deps.tidyFile(rel, kind)) changed++;
         const what = kind === 'format' ? 'Reformatted' : 'Optimized the imports of';
         toast(changed ? `${what} ${changed} of ${list.length} file${list.length === 1 ? '' : 's'}` : `Nothing to change in ${list.length} file${list.length === 1 ? '' : 's'}`);
+    }
+
+    /** The places that import a file or folder (as a rename would change them), or null when the engine cannot say. */
+    async function usagesOf(path) {
+        let found;
+        try { found = await deps.lsp.request('pymagic/fileUsages', { textDocument: { uri: deps.uriFor(path) } }); } catch { return null; }
+        const rels = [...new Set((found ?? []).map((l) => deps.relOfUri(l.uri)).filter(Boolean))];
+        const texts = {};
+        for (const rel of rels) texts[rel] = (await deps.textOf(rel)) ?? '';
+        return usageFiles(found ?? [], deps.relOfUri, texts);
+    }
+
+    /** Find Usages of a file or folder, shown in the Search panel. */
+    async function findUsages(path) {
+        const files = await usagesOf(path);
+        if (!files) { toast('The usages cannot be found now.', true); return; }
+        const n = files.reduce((k, f) => k + f.matches.length, 0);
+        deps.search.showFound(n ? `${n} usage${n === 1 ? '' : 's'} of ${path} in ${files.length} file${files.length === 1 ? '' : 's'}` : `No usages of ${path}`, files);
     }
 
     async function history(rel) {
@@ -101,6 +119,10 @@ export function setupFileActions(deps) {
         ];
     }
 
+    const bookmarkItem = (rel, isDir) => deps.bookmarks.hasFile(rel)
+        ? { label: 'Remove the bookmark', run: () => deps.bookmarks.toggleFile(rel, isDir) }
+        : { label: 'Add a bookmark', run: () => deps.bookmarks.toggleFile(rel, isDir) };
+
     /** The items for a file, shared by the tree and the tabs. */
     function fileItems(rel) {
         const items = [];
@@ -120,24 +142,27 @@ export function setupFileActions(deps) {
             '-',
             openIn(rel, false),
             { label: 'Add to .gitignore', run: () => gitignore(rel) },
+            bookmarkItem(rel, false),
         );
         return items;
     }
 
     /** The items the tree adds for a file or folder ('' and isDir: the project folder). */
     function treeItems(path, isDir) {
-        const items = [
+        const items = [];
+        if ((isDir && path) || isPy(path)) items.push({ label: 'Find usages', key: 'Alt+F7', run: () => findUsages(path) });
+        items.push(
             { label: 'Find in files…', run: () => deps.search.open(undefined, { include: isDir ? includeFor(path) : path }) },
             { label: 'Replace in files…', run: () => deps.search.open(undefined, { include: isDir ? includeFor(path) : path, replace: true }) },
             { label: 'Inspect code', run: () => deps.problems.inspect(path, isDir) },
             '-',
             { label: 'Reformat code', run: () => tidy(path, 'format') },
             { label: 'Optimize imports', run: () => tidy(path, 'imports') },
-        ];
+        );
         if (isDir) {
             items.push({ label: `Run the tests in ${path ? `'${path.slice(path.lastIndexOf('/') + 1)}'` : 'the project'}`, run: () => deps.tests.runPath(path) },
                 '-', openIn(path, true));
-            if (path) items.push({ label: 'Add to .gitignore', run: () => gitignore(path) });
+            if (path) items.push({ label: 'Add to .gitignore', run: () => gitignore(path) }, bookmarkItem(path, true));
             items.push({ label: 'Clean Python compiled files', run: () => clean(path) });
         } else {
             items.push('-', ...fileItems(path));
@@ -145,13 +170,61 @@ export function setupFileActions(deps) {
         return items;
     }
 
-    /** The items the tabs add: the file's own, and Override File Type. */
+    /** Open Tab in New Window: the page again, in a window of its own (of PyMagic in the desktop app, a browser tab otherwise), showing this file. */
+    async function newWindow(rel) {
+        await deps.saveFile(rel);   // the other window reads the file from disk
+        window.open(`${location.origin}/?open=${encodeURIComponent(rel)}`, '_blank');
+    }
+
+    /** The items the tabs add: the file's own, Open Tab in New Window and Override File Type. */
     function tabItems(rel) {
-        return [...fileItems(rel), '-', { label: 'Override file type', submenu: typeItems(rel) }];
+        return [{ label: 'Open in a new window', run: () => newWindow(rel) }, '-', ...fileItems(rel), '-', { label: 'Override file type', submenu: typeItems(rel) }];
     }
 
     /** The entries PyCharm's editor menu has and Monaco's lacks, on an editor (the main one, and each side of a split). `refactorItems` is the
      *  Refactor submenu, given for the main editor only (the refactorings work on it). */
+    /** Generate… (Alt+Insert): what the engine offers where the cursor is, in a menu there; a test goes into its own file, which opens. */
+    async function generate(rel, atCursor) {
+        const ed = deps.editor, model = ed.getModel(), pos = ed.getPosition();
+        if (!model || !pos) return;
+        const uri = deps.uriFor(rel);
+        deps.lsp.notify('textDocument/didChange', { textDocument: { uri, version: model.getVersionId() }, contentChanges: [{ text: model.getValue() }] });
+        let options = [];
+        try { options = (await deps.lsp.request('pymagic/generate', { textDocument: { uri }, position: { line: pos.lineNumber - 1, character: pos.column - 1 } })) ?? []; } catch { /* none */ }
+        if (options.length === 0) { toast('Nothing to generate here: put the cursor in a class, or in a function for its test.', true); return; }
+        const item = (o) => ({ label: o.title, run: () => void use(o) });
+        const overrides = options.filter((o) => o.kind === 'override');
+        atCursor([
+            ...options.filter((o) => o.kind !== 'override' && o.kind !== 'test').map(item),
+            ...(overrides.length ? [{ label: 'Override methods', submenu: overrides.map(item) }] : []),
+            ...options.filter((o) => o.kind === 'test').map(item),
+        ]);
+    }
+    async function use(o) {
+        if (o.changes) { await deps.applyEdits(o.title, o.changes); return; }
+        const rel = deps.relOfUri(o.newFile);
+        if (!rel) { toast('The test file would be outside the project.', true); return; }
+        const there = (await deps.textOf(rel)) !== null;
+        if (!there) {
+            const res = await fetch('/api/fs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'create', path: rel }) });
+            if (!res.ok) { toast(`${rel} cannot be made.`, true); return; }
+            await deps.refreshTree?.();
+        }
+        // the whole text as it becomes (the import with the others, the test at the end), as one edit that undo takes back
+        await deps.openFile(rel);
+        const model = deps.editor.getModel();
+        if (!model) return;
+        deps.editor.pushUndoStop();
+        deps.editor.executeEdits('generate', [{ range: model.getFullModelRange(), text: o.newText }]);
+        deps.editor.pushUndoStop();
+        const last = model.getLineCount();
+        deps.editor.revealLineInCenter(last);
+        deps.editor.setPosition({ lineNumber: last, column: model.getLineMaxColumn(last) });
+        await deps.saveFile(rel);
+        toast(`${o.title}: added`);
+    }
+
+    let copies = [];   // Paste from History: shared by every editor, the newest first
     function attachEditor(ed, monaco, refactorItems) {
         const rel = () => deps.relOfModel(ed.getModel());
         // a menu of PyMagic's own, opened where the cursor is
@@ -168,9 +241,31 @@ export function setupFileActions(deps) {
             { keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.Enter] });
         if (refactorItems) add('pymagic.refactorThis', 'Refactor…', '1_modification', 0.5, () => atCursor(refactorItems()),
             { keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.KeyT] });
+        if (refactorItems) add('pymagic.generate', 'Generate…', '1_modification', 0.6, file((r) => generate(r, atCursor)),
+            { keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.Insert], precondition: 'editorLangId == python' });
         add('pymagic.columnSelection', 'Column Selection Mode (on / off)', '9_cutcopypaste', 10,
             () => ed.updateOptions({ columnSelection: !ed.getOption(monaco.editor.EditorOption.columnSelection) }),
             { keybindings: [monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.Insert] });
+        add('pymagic.pasteHistory', 'Paste from History…', '9_cutcopypaste', 11, () => {
+            if (copies.length === 0) { toast('Nothing was copied in the editor yet.', true); return; }
+            atCursor(copies.map((text) => ({ label: copyLabel(text), run: () => { ed.focus(); ed.pushUndoStop(); ed.executeEdits('paste-history', ed.getSelections().map((range) => ({ range, text, forceMoveMarkers: true }))); ed.pushUndoStop(); } })));
+        }, { keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyV] });
+        // what is copied or cut in this editor goes into the history (the whole lines, as Monaco copies them, when nothing is selected)
+        const remember = () => {
+            const model = ed.getModel();
+            if (!model) return;
+            const text = ed.getSelections().map((s) => (s.isEmpty() ? model.getLineContent(s.startLineNumber) + model.getEOL() : model.getValueInRange(s))).join(model.getEOL());
+            copies = rememberCopy(copies, text);
+        };
+        ed.getContainerDomNode().addEventListener('copy', remember, true);
+        ed.getContainerDomNode().addEventListener('cut', remember, true);
+        add('pymagic.goToLine', 'Go to Line…', 'navigation', 1.9, () => ed.getAction('editor.action.gotoLine')?.run());
+        add('pymagic.goToTest', 'Go to Test', 'navigation', 1.95, file(async (r) => {
+            const found = testPartners(r, deps.pythonFiles());
+            if (found.length === 0) { toast(isTestFile(r) ? 'No module of the name this test has was found.' : `No test file for ${r} (test_${r.slice(r.lastIndexOf('/') + 1)}) was found.`, true); return; }
+            if (found.length === 1) await deps.openFile(found[0]);
+            else atCursor(found.map((f) => ({ label: f, run: () => deps.openFile(f) })));
+        }), { keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyT], precondition: 'editorLangId == python' });
         add('pymagic.foldAll', 'Fold All', 'y_folding', 1, () => ed.getAction('editor.foldAll')?.run());
         add('pymagic.unfoldAll', 'Unfold All', 'y_folding', 2, () => ed.getAction('editor.unfoldAll')?.run());
         const py = { precondition: 'editorLangId == python' };
@@ -182,5 +277,5 @@ export function setupFileActions(deps) {
         add('pymagic.openInTerminal', 'Open in Terminal', 'z_run', 6, file((r) => deps.terminal.openAt(folderOf(r))));
     }
 
-    return { fileItems, treeItems, tabItems, typeItems, history, reveal, compareWithClipboard, openIn, attachEditor };
+    return { fileItems, treeItems, tabItems, typeItems, history, reveal, compareWithClipboard, openIn, attachEditor, usagesOf, findUsages };
 }

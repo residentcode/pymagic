@@ -101,6 +101,9 @@ export function setupSplit(deps) {
             get split() { return sides.length < MAX_SIDES ? (rel) => open(rel, undefined, 'right', side) : (rel) => deps.openMain(rel); },
             get splitLabel() { return sides.length < MAX_SIDES ? 'Split right' : 'Open in the first editor'; },
             get splitDown() { return sides.length < MAX_SIDES ? (rel) => open(rel, undefined, 'down', side) : undefined; },
+            // Rename File…, Run, History, Open In and the rest, as on the first editor's tabs
+            renameFile: deps.renameFile,
+            items: deps.tabItems,
         });
         divider.addEventListener('mousedown', (e) => dragDivider(e, side));
         divider.addEventListener('dblclick', () => { const i = sides.indexOf(side); weights = resizePair(weights, i, 0.5); layout(); saveLayout(); });

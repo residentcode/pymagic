@@ -3,8 +3,8 @@
 const $ = (id) => document.getElementById(id);
 const FILE = '.pymagic/bookmarks.json';
 
-export function setupBookmarks({ monaco, editor, openFile, relOf }) {
-    let list = [];                    // { rel, line (1-based), text }
+export function setupBookmarks({ monaco, editor, openFile, relOf, revealInTree }) {
+    let list = [];                    // { rel, line (1-based; 0 for a bookmark on a whole file or folder), text, dir? }
     const marks = new Map();          // bookmark -> the id of its decoration in the model that is open
     let shownModel = null;
     let timer = 0;
@@ -14,7 +14,7 @@ export function setupBookmarks({ monaco, editor, openFile, relOf }) {
     function persist() {
         window.clearTimeout(timer);
         timer = window.setTimeout(() => {
-            fetch('/api/file?path=' + encodeURIComponent(FILE), { method: 'PUT', body: JSON.stringify(list.map(({ rel, line, text }) => ({ rel, line, text }))) }).catch(() => { /* not kept this time */ });
+            fetch('/api/file?path=' + encodeURIComponent(FILE), { method: 'PUT', body: JSON.stringify(list.map(({ rel, line, text, dir }) => ({ rel, line, text, ...(dir ? { dir: true } : {}) }))) }).catch(() => { /* not kept this time */ });
         }, 600);
     }
 
@@ -26,7 +26,7 @@ export function setupBookmarks({ monaco, editor, openFile, relOf }) {
         shownModel = model;
         const rel = model && relOf(model);
         if (!model || !rel) return;
-        for (const b of list.filter((x) => x.rel === rel && x.line <= model.getLineCount())) {
+        for (const b of list.filter((x) => x.rel === rel && x.line >= 1 && x.line <= model.getLineCount())) {
             const [id] = model.deltaDecorations([], [{
                 range: new monaco.Range(b.line, 1, b.line, 1),
                 options: { isWholeLine: false, glyphMarginClassName: 'bookmark-glyph', glyphMarginHoverMessage: { value: 'Bookmark' }, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges },
@@ -64,10 +64,10 @@ export function setupBookmarks({ monaco, editor, openFile, relOf }) {
         ul.className = 'tree';
         for (const b of sorted()) {
             const li = document.createElement('li');
-            li.title = `${b.rel}:${b.line}`;
+            li.title = b.line ? `${b.rel}:${b.line}` : b.rel;
             const where = document.createElement('span');
             where.className = 'fname';
-            where.textContent = `${b.rel.split('/').pop()}:${b.line}`;
+            where.textContent = b.line ? `${b.rel.split('/').pop()}:${b.line}` : `${b.rel.split('/').pop()}${b.dir ? '/' : ''}`;
             const text = document.createElement('span');
             text.className = 'sym-detail';
             text.textContent = b.text;
@@ -94,7 +94,18 @@ export function setupBookmarks({ monaco, editor, openFile, relOf }) {
     }
 
     async function go(b) {
-        await openFile(b.rel, new monaco.Range(b.line, 1, b.line, 1));
+        if (b.dir) revealInTree?.(b.rel);
+        else if (b.line === 0) await openFile(b.rel);
+        else await openFile(b.rel, new monaco.Range(b.line, 1, b.line, 1));
+    }
+
+    /** A bookmark on a whole file or folder (the project tree's and the tabs' menus), or off when it has one. */
+    function toggleFile(rel, isDir) {
+        const here = list.find((b) => b.rel === rel && b.line === 0);
+        if (here) { remove(here); return; }
+        list.push({ rel, line: 0, text: isDir ? 'folder' : 'file', ...(isDir ? { dir: true } : {}) });
+        persist();
+        draw();
     }
 
     function toggle() {
@@ -136,10 +147,10 @@ export function setupBookmarks({ monaco, editor, openFile, relOf }) {
     $('bm-clear').onclick = () => { for (const b of [...list]) remove(b); };
 
     fetch('/api/file?path=' + encodeURIComponent(FILE)).then((r) => (r.ok ? r.json() : [])).then((stored) => {
-        if (Array.isArray(stored)) list = stored.filter((b) => b && typeof b.rel === 'string' && Number.isInteger(b.line)).map((b) => ({ rel: b.rel, line: b.line, text: String(b.text ?? '') }));
+        if (Array.isArray(stored)) list = stored.filter((b) => b && typeof b.rel === 'string' && Number.isInteger(b.line)).map((b) => ({ rel: b.rel, line: b.line, text: String(b.text ?? ''), ...(b.dir === true ? { dir: true } : {}) }));
         paintModel();
         draw();
     }).catch(() => { draw(); });
     draw();
-    return { toggle, next: () => step(1), previous: () => step(-1), count: () => list.length };
+    return { toggle, toggleFile, hasFile: (rel) => list.some((b) => b.rel === rel && b.line === 0), next: () => step(1), previous: () => step(-1), count: () => list.length };
 }

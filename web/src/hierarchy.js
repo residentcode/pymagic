@@ -172,6 +172,33 @@ export function setupHierarchy(deps) {
         keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH],
         run: () => void open('type'),
     });
+    // Go to Super Method (Ctrl+U): the method or class the definition around the cursor overrides or implements, from the same marks as the gutter
+    editor.addAction({
+        id: 'pymagic.superMethod', label: 'Go to Super Method', contextMenuGroupId: 'navigation', contextMenuOrder: 1.8,
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyU],
+        precondition: 'editorLangId == python',
+        run: () => void superMethod(),
+    });
+    async function superMethod() {
+        const model = editor.getModel(), pos = editor.getPosition();
+        const uri = model && deps.uriOf(model);
+        if (!uri || !pos)
+            return;
+        flush(model, uri);
+        let list = [];
+        try {
+            list = (await lsp.request('pymagic/inheritance', { textDocument: { uri } })) ?? [];
+        }
+        catch { /* none */ }
+        // the nearest definition above the cursor (or on its line) that has something above it
+        const up = list.filter((m) => isUp(m) && m.line <= pos.lineNumber - 1).sort((a, b) => b.line - a.line)[0];
+        if (!up) {
+            toast('Nothing above this: it overrides no method and has no base class in the project.', true);
+            return;
+        }
+        const box = editor.getDomNode()?.getBoundingClientRect(), at = editor.getScrolledVisiblePosition(pos);
+        pick(editor, up.targets.map((loc) => ({ label: up.label, loc })), (box?.left ?? 0) + (at?.left ?? 0), (box?.top ?? 0) + (at?.top ?? 0) + (at?.height ?? 0));
+    }
     // ---------------------------------------------------------------- go to implementations
     monaco.languages.registerImplementationProvider('python', {
         async provideImplementation(model, position) {

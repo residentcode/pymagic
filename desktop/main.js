@@ -175,7 +175,14 @@ app.whenReady().then(async () => {
     shell.showItemInFolder(full);
     return true;
   });
-  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  // Open Tab in New Window: the page opens itself again (?open=<file>) in a window of PyMagic; any other address goes to the browser
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    let own = false;
+    try { const u = new URL(url); own = (u.hostname === '127.0.0.1' || u.hostname === 'localhost') && Number(u.port) === port && u.searchParams.has('open'); } catch { /* not an address */ }
+    if (own) return { action: 'allow', overrideBrowserWindowOptions: { width: 1100, height: 800, backgroundColor: '#0f111a', title: 'PyMagic', icon, autoHideMenuBar: true, webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.js') } } };
+    shell.openExternal(url);
+    return { action: 'deny' };
+  });
   menu();
   const report = t => win.webContents.executeJavaScript(`document.getElementById('t') && (document.getElementById('t').textContent = ${JSON.stringify(t)})`).catch(() => {});
   try {

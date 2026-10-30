@@ -4,6 +4,9 @@
 import { clampToGroup, dropIndex, moveBy, moveTo, pinFirst, staysPut } from './taborder';
 import { movedPath } from './explorer-model';
 import { openMenu } from './menu';
+import { settings } from './settings';
+import { openSettings } from './settings-ui';
+import { tabLimitVictims } from './taborder';
 
 const $ = (id) => document.getElementById(id);
 export const TAB_TYPE = 'application/x-pymagic-tab';   // not text/plain, so a tab dropped on the editor inserts nothing
@@ -222,9 +225,20 @@ export function setupTabs(deps) {
         if (!known) tabs.push(rel);
         active = rel;
         if (cycling < 0) mru = [rel, ...mru.filter((r) => r !== rel)];
+        if (!known) keepToLimit();
         remember();
         // a tab that is already there keeps its element, so a press that is turning into a drag is not cut off
         if (known) refresh(); else render();
+    }
+
+    /** The tab limit of Settings > Editor tabs: past it, the tabs used longest ago go (pinned ones and those with unsaved changes stay). */
+    function keepToLimit() {
+        const limit = settings().tabLimit;
+        if (!limit) return;
+        const spare = tabLimitVictims(tabs, mru, pinned, active, limit, deps.isDirty);
+        if (spare.length === 0) return;
+        tabs = tabs.filter((r) => !spare.includes(r));
+        mru = mru.filter((r) => !spare.includes(r));
     }
 
     /** A file or folder moved or was renamed: its tabs keep their places, pins and the open one under the new paths. */
@@ -352,6 +366,7 @@ export function setupTabs(deps) {
         if (deps.splitDown) items.push({ label: 'Split and move down', disabled: alone, run: async () => { await deps.splitDown(rel); await closeTab(rel); } });
         if (deps.renameFile) items.push('-', { label: 'Rename file…', run: () => deps.renameFile(rel) });
         if (deps.items) items.push('-', ...deps.items(rel));
+        items.push('-', { label: 'Configure editor tabs…', run: () => openSettings('tabs') });
         items.push('-', { label: 'Copy path', run: () => navigator.clipboard?.writeText(rel) });
         openMenu({ x, y }, items);
     }

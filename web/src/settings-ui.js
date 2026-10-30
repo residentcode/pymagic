@@ -38,6 +38,10 @@ const PAGES = [
         { key: 'cursorStyle', label: 'Cursor', type: 'choice', options: [['line', 'Line'], ['block', 'Block'], ['underline', 'Underline']] },
         { key: 'cursorBlinking', label: 'Cursor blinking', type: 'choice', options: [['blink', 'Blink'], ['smooth', 'Smooth'], ['phase', 'Phase'], ['expand', 'Expand'], ['solid', 'None']] },
     ]],
+    ['tabs', 'Editor tabs', [
+        { key: 'tabLimit', label: 'Tab limit', type: 'number', min: 0, max: 100, unit: '0 for none', hint: 'Past it, the tabs used longest ago close; pinned tabs and those with unsaved changes stay.' },
+        { key: 'tabClose', label: 'A close button on each tab', type: 'bool', hint: 'Without it a tab closes with a middle click or its menu.' },
+    ]],
     ['files', 'Files', [
         { key: 'autoSave', label: 'Save files automatically', type: 'choice', options: [['off', 'Never'], ['blur', 'When the window is left'], ['delay', 'A second after the last change']], hint: 'Saving also formats the file when "format on save" is on.' },
     ]],
