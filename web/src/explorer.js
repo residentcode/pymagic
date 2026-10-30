@@ -1,7 +1,7 @@
 // The project tree in the sidebar: folders that open and close, every text file, and new / rename / delete.
 import { toast } from './toast';
 import { openMenu } from './menu';
-import { copyName, join, moveProblem, movedPath } from './explorer-model';
+import { copyName, join, moveProblem, movedPath, packageTarget, moduleTarget } from './explorer-model';
 import { templateText } from './codegen';
 
 const FILE_TYPE = 'application/x-pymagic-file';   // a row of the tree being dragged; the editor and the tab bars take nothing from it
@@ -293,6 +293,16 @@ export function setupExplorer(deps) {
 
     const exists = (path) => dirs.includes(path) || files.some((f) => f.path === path);
 
+    /** Moves a module to its package's __init__.py or back, then takes away the folder left empty (`emptied`). */
+    async function convert(from, to, emptied) {
+        await deps.saveAll();
+        if (!(await deps.beforeMove(from, to))) return;
+        if (!(await post({ op: 'rename', from, to }))) return;
+        if (emptied && !(await post({ op: 'delete', path: emptied }))) return;
+        await afterMove(from, to, false);
+        toast(`${from} is now ${to}`);
+    }
+
     /** Moves a file or folder into the folder `dir` ('' is the project folder), keeping its name. True when it moved. */
     async function move(path, dir) {
         const problem = moveProblem(path, dir);
@@ -418,6 +428,10 @@ export function setupExplorer(deps) {
                 { label: 'Delete…', key: 'Del', run: () => remove(path, isDir) },
                 { label: 'Copy path', run: () => navigator.clipboard?.writeText(path) });
         }
+        // Convert to Package / to Module: the file moves, imports of it stay the same
+        if (path && !isDir && packageTarget(path, exists)) items.push('-', { label: 'Convert to package', run: () => void convert(path, packageTarget(path, exists), null) });
+        const inside = isDir ? files.map((f) => f.path).filter((f) => f.startsWith(path + '/')) : [];
+        if (isDir && path && moduleTarget(path, inside, exists)) items.push('-', { label: 'Convert to module', run: () => void convert(`${path}/__init__.py`, moduleTarget(path, inside, exists), path) });
         if (isDir && path) {
             const mark = markOf(path);
             items.push('-', { label: 'Mark directory as', submenu: [

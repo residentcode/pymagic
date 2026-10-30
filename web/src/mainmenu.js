@@ -23,6 +23,11 @@ export function refactorMenu(editor, refactor) {
         '-',
         { label: 'Change signature…', key: 'Ctrl+F6', run: () => { editor.focus(); void refactor.trigger('changeSignature'); } },
         { label: 'Move to another file…', key: 'F6', run: () => { editor.focus(); void refactor.trigger('moveSymbol'); } },
+        '-',
+        ...[['introduceParameter', 'Introduce parameter'], ['introduceField', 'Introduce attribute'], ['extractSuperclass', 'Extract superclass…'], ['extractDelegate', 'Extract delegate…'],
+            ['pullMembersUp', 'Pull members up…'], ['pushMembersDown', 'Push members down…'], ['encapsulateField', 'Encapsulate field'], ['invertBoolean', 'Invert boolean…'],
+            ['makeTopLevel', 'Make function top-level'], ['moveStaticMember', 'Move static member…']]
+            .map(([kind, label]) => ({ label, run: () => { editor.focus(); void refactor.trigger(kind); } })),
     ];
 }
 

@@ -10,7 +10,8 @@ namespace PyMagic.Server;
 /// <summary>What a refactoring offers in the lightbulb menu.</summary>
 /// <param name="Kind">extractVariable, extractConstant, extractMethod, inlineVariable or safeDelete.</param>
 /// <param name="DefaultName">Suggested name; null when the refactoring needs no name.</param>
-public sealed record RefactorOption(string Kind, string Title, string? DefaultName, bool All = false);
+/// <param name="Members">The members of a class the person chooses from (Extract Superclass, Pull Up...), with <paramref name="Chosen"/> ticked at first.</param>
+public sealed record RefactorOption(string Kind, string Title, string? DefaultName, bool All = false, IReadOnlyList<string>? Members = null, IReadOnlyList<string>? Chosen = null);
 
 /// <summary>
 /// Refactorings that rewrite code: extract variable / constant / method, inline variable, safe delete. Each works from the
@@ -49,9 +50,9 @@ public sealed partial class LanguageService
         int start = lines.OffsetOf(range.Start), end = lines.OffsetOf(range.End);
         var options = new List<RefactorOption>();
 
-        bool Feasible(string kind, string? name, bool all = false)
+        bool Feasible(string kind, string? name, bool all = false, IReadOnlyList<string>? members = null)
         {
-            try { Plan(snap, m, kind, start, end, name, all); return true; }
+            try { Plan(snap, m, kind, start, end, name, all, members); return true; }
             catch (ServiceException) { return false; }
         }
 
@@ -70,6 +71,8 @@ public sealed partial class LanguageService
                 string constant = SuggestConstantName(m, sel.Expression);
                 if (Feasible("extractConstant", constant))
                     options.Add(new RefactorOption("extractConstant", "Extract constant", constant));
+                if (Feasible("introduceParameter", variable)) options.Add(new RefactorOption("introduceParameter", "Introduce parameter", variable));
+                if (Feasible("introduceField", variable)) options.Add(new RefactorOption("introduceField", "Introduce attribute", variable));
             }
             if (sel != null)
             {
@@ -85,17 +88,18 @@ public sealed partial class LanguageService
             if (CanMove(uri, range.Start)) options.Add(new RefactorOption("moveSymbol", "Move to another file…", null));
             if (Feasible("inlineMethod", null)) options.Add(new RefactorOption("inlineMethod", "Inline method (this call)", null));
             if (CanInlineAll(snap, m, start)) options.Add(new RefactorOption("inlineMethodAll", "Inline method and remove it", null));
+            ClassRefactorOptions(snap, m, start, options, (k, n, a, ms) => Feasible(k, n, a, ms));
         }
         return options;
     }
 
     /// <exception cref="ServiceException">The refactoring cannot be done here; the message says why.</exception>
-    public WorkspaceEdit Refactor(string uri, string kind, Range range, string? name, bool all = false)
+    public WorkspaceEdit Refactor(string uri, string kind, Range range, string? name, bool all = false, IReadOnlyList<string>? members = null)
     {
         var snap = Full();
         if (!snap.ByUri.TryGetValue(uri, out var m)) throw new ServiceException("unknown document");
         var lines = Lines(m);
-        var edits = Plan(snap, m, kind, lines.OffsetOf(range.Start), lines.OffsetOf(range.End), name, all);
+        var edits = Plan(snap, m, kind, lines.OffsetOf(range.Start), lines.OffsetOf(range.End), name, all, members);
 
         // edits may land in several files (safe delete of a name does not, inline of a project-wide name does not either, but keep it general)
         var changes = new Dictionary<string, List<TextEdit>>();
@@ -108,7 +112,7 @@ public sealed partial class LanguageService
         return new WorkspaceEdit(changes);
     }
 
-    Dictionary<ModuleInfo, List<Edit>> Plan(Snapshot snap, ModuleInfo m, string kind, int start, int end, string? name, bool all)
+    Dictionary<ModuleInfo, List<Edit>> Plan(Snapshot snap, ModuleInfo m, string kind, int start, int end, string? name, bool all, IReadOnlyList<string>? members = null)
     {
         if (m.SyntaxErrors.Count > 0) throw new ServiceException("Fix the syntax errors in this file first.");
         var one = (List<Edit> list) => new Dictionary<ModuleInfo, List<Edit>> { [m] = list };
@@ -121,6 +125,16 @@ public sealed partial class LanguageService
             case "inlineMethod": return InlineMethod(snap, m, start, all: false);
             case "inlineMethodAll": return InlineMethod(snap, m, start, all: true);
             case "safeDelete": return SafeDelete(snap, m, start);
+            case "introduceParameter": return one(IntroduceParameter(m, RequireSelection(m, start, end), name));
+            case "introduceField": return one(IntroduceField(m, RequireSelection(m, start, end), name));
+            case "extractSuperclass": return ExtractSuperclass(m, start, name, members);
+            case "extractDelegate": return ExtractDelegate(m, start, name, members);
+            case "pullMembersUp": return PullMembersUp(snap, m, start, members);
+            case "pushMembersDown": return PushMembersDown(snap, m, start, members);
+            case "encapsulateField": return EncapsulateField(m, start);
+            case "invertBoolean": return InvertBoolean(snap, m, start, name);
+            case "makeTopLevel": return MakeTopLevel(snap, m, start);
+            case "moveStaticMember": return MoveStaticMember(snap, m, start, name);
             default: throw new ServiceException($"unknown refactoring '{kind}'");
         }
     }

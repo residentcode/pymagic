@@ -84,7 +84,7 @@ public sealed partial class LanguageService
         {
             foreach (var option in RefactorOptions(uri, range))
                 actions.Add(new CodeAction(option.Title, RefactorActionKind(option.Kind), null, false,
-                    new LspCommand(option.Title, "pymagic.refactor", new object[] { option.Kind, uri, range, option.DefaultName ?? "", option.All })));
+                    new LspCommand(option.Title, "pymagic.refactor", new object[] { option.Kind, uri, range, option.DefaultName ?? "", option.All, option.Members ?? (object)Array.Empty<string>(), option.Chosen ?? (object)Array.Empty<string>() })));
         }
         catch (Exception e) when (e is InvalidOperationException or ArgumentException or KeyNotFoundException or IndexOutOfRangeException) { /* the quick fixes above still work */ }
         var organized = OrganizedText(snap, m);

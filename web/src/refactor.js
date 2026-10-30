@@ -61,10 +61,89 @@ export function setupRefactor(deps) {
             input.select();
         });
     }
+    /** A box asking for a name (when value is not null) and which members of a class to take; Enter or OK accepts, Escape cancels. */
+    function chooseMembers(title, nameTitle, value, members, chosen) {
+        return new Promise((resolve) => {
+            const box = document.createElement('div');
+            box.id = 'membersbox';
+            const head = document.createElement('div');
+            head.className = 'mb-title';
+            head.textContent = title;
+            box.append(head);
+            let input = null;
+            if (value !== null) {
+                const label = document.createElement('label');
+                label.textContent = nameTitle;
+                input = document.createElement('input');
+                input.value = value;
+                input.spellcheck = false;
+                label.append(input);
+                box.append(label);
+            }
+            const list = document.createElement('div');
+            list.className = 'mb-list';
+            const checks = members.map((m) => {
+                const row = document.createElement('label');
+                const c = document.createElement('input');
+                c.type = 'checkbox';
+                c.checked = chosen.includes(m);
+                row.append(c, document.createTextNode(' ' + m));
+                list.append(row);
+                return [m, c];
+            });
+            const buttons = document.createElement('div');
+            buttons.className = 'mb-buttons';
+            const ok = document.createElement('button');
+            ok.className = 'primary';
+            ok.textContent = 'OK';
+            const cancel = document.createElement('button');
+            cancel.textContent = 'Cancel';
+            buttons.append(cancel, ok);
+            box.append(list, buttons);
+            document.body.appendChild(box);
+            const finish = (result) => {
+                box.remove();
+                document.removeEventListener('keydown', onKey, true);
+                editor.focus();
+                resolve(result);
+            };
+            const accept = () => {
+                const picked = checks.filter(([, c]) => c.checked).map(([m]) => m);
+                if (picked.length === 0) {
+                    toast('Choose at least one member.', true);
+                    return;
+                }
+                finish({ name: input ? input.value.trim() : null, members: picked });
+            };
+            const onKey = (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    finish(null);
+                }
+                else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    accept();
+                }
+            };
+            document.addEventListener('keydown', onKey, true);
+            ok.onclick = accept;
+            cancel.onclick = () => finish(null);
+            (input ?? checks[0]?.[1])?.focus();
+            input?.select();
+        });
+    }
     const titles = {
         extractVariable: 'Name of the new variable',
         extractConstant: 'Name of the new constant',
         extractMethod: 'Name of the new function',
+        introduceParameter: 'Name of the new parameter',
+        introduceField: 'Name of the new attribute',
+        extractSuperclass: 'Name of the superclass',
+        extractDelegate: 'Name of the new class',
+        invertBoolean: 'Name of the inverted variable',
+        moveStaticMember: 'Move it to the class',
     };
     const displayName = (uri) => decodeURIComponent(uri.replace(/^file:\/\/\/?/, '')).split('/').slice(-2).join('/');
     /**
@@ -153,8 +232,13 @@ export function setupRefactor(deps) {
     const titleOf = {
         extractVariable: 'Extract variable', extractConstant: 'Extract constant', extractMethod: 'Extract method', inlineVariable: 'Inline variable',
         inlineMethod: 'Inline method', inlineMethodAll: 'Inline method and remove it', safeDelete: 'Safe delete',
+        introduceParameter: 'Introduce parameter', introduceField: 'Introduce attribute', extractSuperclass: 'Extract superclass', extractDelegate: 'Extract delegate',
+        pullMembersUp: 'Pull members up', pushMembersDown: 'Push members down', encapsulateField: 'Encapsulate field', invertBoolean: 'Invert boolean',
+        makeTopLevel: 'Make function top-level', moveStaticMember: 'Move static member',
     };
-    async function run(kind, uri, range, defaultName, all) {
+    // the ones that change other code or other files are always shown first
+    const previewed = new Set(['inlineMethodAll', 'safeDelete', 'extractSuperclass', 'extractDelegate', 'pullMembersUp', 'pushMembersDown', 'invertBoolean', 'makeTopLevel', 'moveStaticMember']);
+    async function run(kind, uri, range, defaultName, all, members = [], chosen = []) {
         if (kind === 'moveSymbol') {
             await moveSymbol(uri, range.start);
             return;
@@ -163,8 +247,15 @@ export function setupRefactor(deps) {
             await changeSignature(uri, range.start);
             return;
         }
-        let name;
-        if (defaultName) {
+        let name, picked;
+        if (members.length > 0) {
+            const answer = await chooseMembers(titleOf[kind] ?? 'Refactor', titles[kind] ?? 'Name', defaultName || null, members, chosen);
+            if (answer === null)
+                return;
+            name = answer.name ?? undefined;
+            picked = answer.members;
+        }
+        else if (defaultName) {
             const answer = await promptName(titles[kind] ?? 'Name', defaultName);
             if (answer === null)
                 return;
@@ -177,16 +268,16 @@ export function setupRefactor(deps) {
         }
         let edit;
         try {
-            edit = await lsp.request('pymagic/refactor', { textDocument: { uri }, range, kind, name, all });
+            edit = await lsp.request('pymagic/refactor', { textDocument: { uri }, range, kind, name, all, members: picked });
         }
         catch (e) {
             toast(e.message ?? 'The refactoring could not be done.', true);
             return;
         }
-        await applyEdits(titleOf[kind] ?? 'Refactor', edit.changes, { alwaysPreview: kind === 'inlineMethodAll' || kind === 'safeDelete' });
+        await applyEdits(titleOf[kind] ?? 'Refactor', edit.changes, { alwaysPreview: previewed.has(kind) });
     }
-    monaco.editor.registerCommand('pymagic.refactor', (_accessor, kind, uri, range, defaultName, all) => {
-        void run(kind, uri, range, defaultName, all);
+    monaco.editor.registerCommand('pymagic.refactor', (_accessor, kind, uri, range, defaultName, all, members, chosen) => {
+        void run(kind, uri, range, defaultName, all, members ?? [], chosen ?? []);
     });
     /** Runs the refactoring of this kind for the current selection (or cursor), through the same menu the lightbulb uses. */
     async function trigger(kind) {
@@ -205,8 +296,8 @@ export function setupRefactor(deps) {
             toast(kind === 'inlineVariable' ? 'Put the cursor on a variable that can be inlined.' : 'This refactoring is not available for the current selection.', true);
             return;
         }
-        const [k, u, r, name, all] = match.command.arguments;
-        await run(k, u, r, name, all);
+        const [k, u, r, name, all, members, chosen] = match.command.arguments;
+        await run(k, u, r, name, all, members ?? [], chosen ?? []);
     }
     const M = monaco.KeyMod, K = monaco.KeyCode;
     editor.addCommand(M.CtrlCmd | M.Alt | K.KeyV, () => void trigger('extractVariable'));

@@ -333,7 +333,9 @@ public static class Program
         if (args.Length >= 2 && args[0] == "service") return OnBigStack(() => ServiceCorpus(args[1]));
         if (args.Length >= 2 && args[0] == "inspect") return OnBigStack(() => InspectCorpus(args[1], args.Length > 2 ? int.Parse(args[2]) : int.MaxValue));
         int pass = 0, fail = 0;
-        foreach (var type in Assembly.GetExecutingAssembly().GetTypes().Where(t => t.IsClass && t.Name.EndsWith("Tests")))
+        // PYMAGIC_TEST_ONLY=Refactor runs only the classes whose name has that text
+        string? only = Environment.GetEnvironmentVariable("PYMAGIC_TEST_ONLY");
+        foreach (var type in Assembly.GetExecutingAssembly().GetTypes().Where(t => t.IsClass && t.Name.EndsWith("Tests") && (string.IsNullOrEmpty(only) || t.Name.Contains(only))))
         {
             var inst = Activator.CreateInstance(type)!;
             foreach (var m in type.GetMethods().Where(m => m.GetCustomAttribute<FactAttribute>() != null))

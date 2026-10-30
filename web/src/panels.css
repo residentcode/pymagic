@@ -357,3 +357,11 @@
 .tpl-row { display: grid; grid-template-columns: 140px 1fr auto; gap: 6px; align-items: start; }
 .tpl-row .tpl-body { grid-column: 1 / 3; min-height: 64px; font-family: Consolas, monospace; font-size: 12px; resize: vertical; }
 .tpl-row .tpl-field, .tpl-row .tpl-body { background: transparent; color: inherit; border: 1px solid rgba(128, 128, 128, 0.45); border-radius: 4px; padding: 3px 6px; }
+
+/* the box of a refactoring that takes members of a class (Extract Superclass, Pull Members Up...) */
+#membersbox { position: fixed; top: 90px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; min-width: 300px; max-height: 70vh; background: var(--panel); border: 1px solid var(--accent); border-radius: 6px; box-shadow: 0 6px 20px #0008; }
+#membersbox .mb-title { font-weight: 600; }
+#membersbox label { color: var(--fg); display: flex; align-items: center; gap: 6px; }
+#membersbox input:not([type]) { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px; font: 13px Consolas, monospace; outline: none; }
+#membersbox .mb-list { overflow: auto; display: flex; flex-direction: column; gap: 3px; font: 13px Consolas, monospace; }
+#membersbox .mb-buttons { display: flex; justify-content: flex-end; gap: 6px; }

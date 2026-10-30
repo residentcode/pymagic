@@ -269,7 +269,8 @@ public sealed class Server
             case "pymagic/move":
                 return _service.MoveSymbol(UriOf(p), PositionOf(p), p!["target"]!.GetValue<string>());
             case "pymagic/refactor":
-                return _service.Refactor(UriOf(p), p!["kind"]!.GetValue<string>(), RangeOf(p), p["name"]?.GetValue<string>(), p["all"]?.GetValue<bool>() ?? false);
+                return _service.Refactor(UriOf(p), p!["kind"]!.GetValue<string>(), RangeOf(p), p["name"]?.GetValue<string>(), p["all"]?.GetValue<bool>() ?? false,
+                    p["members"] is System.Text.Json.Nodes.JsonArray ms ? ms.Select(x => x!.GetValue<string>()).ToList() : null);
             case "textDocument/codeAction":
                 return _service.CodeActions(UriOf(p), RangeOf(p));
             case "textDocument/formatting":

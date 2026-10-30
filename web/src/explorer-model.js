@@ -33,3 +33,16 @@ export function movedPath(path, from, to) {
     if (path === from) return to;
     return path.startsWith(from + '/') ? to + path.slice(from.length) : path;
 }
+
+/** Convert to Package: `a/b.py` becomes `a/b/__init__.py`; null when the file is not a module or the folder exists. */
+export function packageTarget(path, exists) {
+    if (!path.endsWith('.py') || baseName(path) === '__init__.py') return null;
+    const dir = path.slice(0, -3);
+    return exists(dir) ? null : `${dir}/__init__.py`;
+}
+
+/** Convert to Module: a folder holding only its `__init__.py` becomes `folder.py`; null when it holds more, or that file exists. */
+export function moduleTarget(dir, filesIn, exists) {
+    if (!dir || filesIn.length !== 1 || filesIn[0] !== `${dir}/__init__.py`) return null;
+    return exists(`${dir}.py`) ? null : `${dir}.py`;
+}
