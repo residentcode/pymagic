@@ -688,6 +688,8 @@ public sealed partial class TypeEvaluator
             decls.AddRange(setting.Declarations);
             return;
         }
+        // the fields attrs' these={...} gives the class
+        if (TheseMember(c, name, instance) is { } theseMember) { types.Add(theseMember); return; }
         if (unknownBase) { types.Add(PyType.Unknown); return; }
         // type[Any]: whatever the class turns out to be may have it
         if (IsClassOfAny(c)) { types.Add(c.Args[0]); return; }

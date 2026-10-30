@@ -13,7 +13,7 @@ public sealed record FieldInfo(string Name, PyType Type, bool HasDefault, bool I
 /// </summary>
 public sealed partial class TypeEvaluator
 {
-    sealed record DataclassOptions(bool Init, bool KwOnly, bool Frozen, bool Attrs = false);
+    sealed record DataclassOptions(bool Init, bool KwOnly, bool Frozen, bool Attrs = false, Expr? These = null);
 
     readonly Dictionary<ClassInfo, DataclassOptions?> _dataclassOptions = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<ClassInfo, List<FieldInfo>> _ownFields = new(ReferenceEqualityComparer.Instance);
@@ -217,7 +217,8 @@ public sealed partial class TypeEvaluator
                 Init: call == null || BoolConst(KeywordArg(call, "init")) != false,
                 KwOnly: call != null && BoolConst(KeywordArg(call, "kw_only")) == true,
                 Frozen: attrs && name == "frozen" || call != null && BoolConst(KeywordArg(call, "frozen")) == true,
-                Attrs: attrs);
+                Attrs: attrs,
+                These: attrs && call != null && KeywordArg(call, "these") is { } these && these is not ConstExpr { Kind: ConstKind.None } ? these : null);
             break;
         }
         // a decorator or a base class marked with dataclass_transform (attrs, pydantic, your own)
@@ -249,6 +250,25 @@ public sealed partial class TypeEvaluator
         : KeywordArg(call, "factory") is { } factory ? CallResultNoArgs(TypeOf(m, factory))
         : PyType.Any;
 
+    /// <summary>attrs' these={"x": attr.ib(), ...} that can be read: a dict display of string keys, each value an attr.ib / attrs.field call.</summary>
+    static bool ReadableThese(Expr these) =>
+        these is DictExpr d && d.Keys.All(k => StringValue(k) != null)
+        && d.Values.All(v => IsFieldSpecifier(v, out var vc) && vc.Func is NameExpr { Name: "ib" or "attrib" or "field" } or AttributeExpr { Attr: "ib" or "attrib" or "field" });
+
+    /// <summary>The class or one of its bases has a these= that cannot be read: its fields, and so its __init__ and attributes, are not known.</summary>
+    bool HasUnreadableThese(ClassInfo c) =>
+        Mro(c).Any(e => e is ClassType ec && DataclassOf(ec.Info) is { These: { } t } && !ReadableThese(t));
+
+    /// <summary>`obj.name` where name is a field given by attrs' these= (not in the class body): the field's type; null if it is not one.</summary>
+    PyType? TheseMember(ClassType c, string name, bool instance)
+    {
+        if (!Mro(c.Info).Any(e => e is ClassType ec && DataclassOf(ec.Info) is { These: not null })) return null;
+        if (HasUnreadableThese(c.Info)) return PyType.Unknown;
+        var field = DataclassFields(c).FirstOrDefault(f => f.Name == name);
+        // on the class object it is a slot descriptor or nothing at all: say nothing either way
+        return field == null ? null : instance ? field.Type : PyType.Unknown;
+    }
+
     public bool IsDataclass(ClassInfo c) => Mro(c).Any(e => e is ClassType ec && DataclassOf(ec.Info) != null);
 
     List<FieldInfo> OwnDataclassFields(ClassInfo c, bool classKwOnly)
@@ -256,6 +276,18 @@ public sealed partial class TypeEvaluator
         if (_ownFields.TryGetValue(c, out var cached)) return cached;
         var list = new List<FieldInfo>();
         bool kwOnly = classKwOnly;
+        // attrs' these={...}: the fields are its entries in the dict's order, the class body is not looked at
+        if (DataclassOf(c) is { These: { } these })
+        {
+            if (ReadableThese(these))
+                foreach (var (key, value) in ((DictExpr)these).Keys.Zip(((DictExpr)these).Values))
+                {
+                    IsFieldSpecifier(value, out var tc);
+                    list.Add(new FieldInfo(StringValue(key)!, AttribFieldType(c.Module, tc), FieldHasDefault(tc),
+                        BoolConst(KeywordArg(tc, "init")) != false, BoolConst(KeywordArg(tc, "kw_only")) == true || kwOnly));
+                }
+            return _ownFields[c] = list;
+        }
         var found = new List<(int Start, FieldInfo Field)>();
         var annotatedNames = AnnotatedFields(c).Select(a => ((NameExpr)a.Target).Name).ToHashSet(StringComparer.Ordinal);
         // fields written without an annotation: `x = attr.ib()`, `y = attr.ib(default=1, type=int)`, `z = attrs.field()` in an attrs class
@@ -460,6 +492,12 @@ public sealed partial class TypeEvaluator
         if (dc != null)
         {
             if (!dc.Init) return null;
+            if (HasUnreadableThese(receiver.Info))
+                return new List<ParamInfo>
+                {
+                    new("args", PyType.Any, ParamCategory.VarPositional, false),
+                    new("kwargs", PyType.Any, ParamCategory.VarKeyword, false),
+                };
             var fields = DataclassFields(receiver).Where(f => f.InInit).ToList();
             return fields.Where(f => !f.KwOnly).Select(f => new ParamInfo(f.Name, f.Type, ParamCategory.Normal, f.HasDefault))
                 .Concat(fields.Where(f => f.KwOnly).Select(f => new ParamInfo(f.Name, f.Type, ParamCategory.KeywordOnly, f.HasDefault))).ToList();

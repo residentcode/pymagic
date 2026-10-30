@@ -82,7 +82,6 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - `NoReturn` calls, `with` blocks that swallow exceptions, `break`/`return` through `finally` (4, 5); call-site parameter inference (5).
 - Overrides: a rename that follows overriding methods, a change of signature passed on to them, a call hierarchy that includes them, marks and hierarchy for library classes (8, 17, 30).
 - Narrowing: the types of the names that `match` patterns bind (`case int() as n`, captures, `*rest`; item 157 narrows the tuple items by their sub-patterns), the "at least n" tuple form for `len(t) >= n` (152); `Literal` through tuples (40).
-- attrs and hooks: `attr.s` options such as `these=`, `__init_subclass__` hook parameter types (42).
 - Small gaps: `pop` of a required TypedDict key (87), a constant index past the end of a tuple subclass (88).
 - The PyCharm inspections that need full types and are not done yet, and those for other tools (pandas, Spark, mock, notebooks) (47, 77).
 - Speed on large projects: find usages and rename on one thread, the Problems of unchanged files not remembered, parsing only the edited region, about 1 to 1.5 GB while the problems are computed (78). Keeping the types of unchanged files across edits was measured and left out: the files they depend on are only about a fifth of an edit's time.
@@ -147,4 +146,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 182 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 183 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

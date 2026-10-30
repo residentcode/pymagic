@@ -137,4 +137,19 @@ public class RealAttrsTests
         Assert.Contains("d: str", Hover(code, "d = attr.ib(type=str)", 0));
         Assert.Contains("e: str", Hover(code, "e = attr.ib(default=", 0));
     }
+
+    [Fact]
+    public void TheseGivesTheFieldsAndTheirAttributes()
+    {
+        if (Site == null) return;
+        string code = "import attr\nimport attrs\n\n\n@attr.s(these={\"x\": attr.ib(), \"y\": attr.ib(default=0, type=int)})\nclass C:\n    z = attr.ib()\n\n" +
+            "    def total(self) -> int:\n        return self.x + self.y\n\n\n" +
+            "@attrs.define(these={\"p\": attrs.field(type=str)})\nclass G:\n    pass\n\n\n" +
+            "C(1, 2)\nC(x=1)\nC(z=1)\nc = C(1)\nc.y\nG(\"s\").p\nG(1)\n";
+        var p = Problems(code);
+        Assert.Equal("20 24", string.Join(" ", p.Keys.OrderBy(k => k)));
+        Assert.True(p[20].Any(m => m.Contains("'z'")), string.Join(" / ", p[20]));
+        Assert.True(p[24].Any(m => m.Contains("Expected type 'str'")), string.Join(" / ", p[24]));
+        Assert.Contains("y: int", Hover(code, "c.y"));
+    }
 }
