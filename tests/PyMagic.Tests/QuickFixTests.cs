@@ -112,6 +112,36 @@ public class QuickFixTests
         Assert.True(!Offers("Create function", "x = foo\n"), "only calls can become functions");
     }
 
+    [Fact]
+    public void CreatesAClassFromItsFirstUse()
+    {
+        // a capitalised call: a class whose __init__ keeps what it is given
+        Assert.Equal("class Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\n\np = Point(x=1, y=2)\n",
+            Fix("Create class 'Point'", "p = Point(x=1, y=2)\n"));
+        // a base class, an exception and an isinstance check, whatever the name looks like
+        Assert.Equal("class base:\n    pass\n\n\nclass A(base):\n    pass\n", Fix("Create class 'base'", "class A(base):\n    pass\n"));
+        Assert.Equal("class NotFound(Exception):\n    pass\n\n\ntry:\n    pass\nexcept NotFound:\n    pass\n",
+            Fix("Create class 'NotFound'", "try:\n    pass\nexcept NotFound:\n    pass\n"));
+        Assert.True(Offers("Create class 'kind'", "x = 1\nisinstance(x, kind)\n"));
+        Assert.True(!Offers("Create class", "x = compute(1)\n"), "a lower-case call is a function");
+        Assert.True(!Offers("Create class", "x = URL\n"), "an all-capital name is a constant");
+    }
+
+    [Fact]
+    public void CreatesAMethodOrAnAttributeInTheProjectsClass()
+    {
+        const string shapes = "class Shape:\n    def __init__(self, name):\n        self.name = name\n\n    def area(self):\n        return 0\n";
+        var actions = Actions("from lib import Shape\ns = Shape('a')\ns.scale(2, factor=3)\nprint(s.colour)\nShape.make(1)\n", (Lib, shapes));
+        string Owner(string title) => Apply(shapes, actions.First(a => a.Title == title).Edit!, Lib);
+        Assert.Equal(shapes + "\n    def scale(self, arg0, factor):\n        raise NotImplementedError\n", Owner("Create method 'scale' in 'Shape'"));
+        Assert.Equal("class Shape:\n    def __init__(self, name):\n        self.name = name\n        self.colour = None\n\n    def area(self):\n        return 0\n",
+            Owner("Create attribute 'colour' in 'Shape'"));
+        Assert.Equal(shapes + "\n    @classmethod\n    def make(cls, arg0):\n        raise NotImplementedError\n", Owner("Create method 'make' in 'Shape'"));
+        // a class with only `pass` loses it; a class of the standard library is not changed
+        Assert.Equal("class C:\n    def go(self):\n        raise NotImplementedError\nC().go()\n", Fix("Create method 'go' in 'C'", "class C:\n    pass\nC().go()\n"));
+        Assert.True(!Offers("Create method", "'a'.shout()\n"));
+    }
+
     // ------------------------------------------------------------ attributes
 
     [Fact]

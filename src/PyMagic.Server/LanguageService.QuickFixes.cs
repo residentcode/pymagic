@@ -55,7 +55,7 @@ public sealed partial class LanguageService
                     break;
                 }
                 case "missing-attribute":
-                    MissingAttributeFixes(snap, m, ds, de, Add);
+                    MissingAttributeFixes(snap, m, ds, de, Add, actions);
                     break;
                 case "unresolved-import" or "unresolved-import-name" or "package-not-installed":
                     ImportFixes(snap, m, ev, ds, actions, Add);
@@ -224,9 +224,56 @@ public sealed partial class LanguageService
             offered++;
         }
 
-        // create it
-        if (m.ParentOf(name) is CallExpr call && ReferenceEquals(call.Func, name))
+        // create it: a class when it is written like one or used as one, else a function when it is called
+        var parent = m.ParentOf(name);
+        var call = parent is CallExpr c && ReferenceEquals(c.Func, name) ? c : null;
+        var grand = parent == null ? null : m.ParentOf(parent);
+        bool usedAsClass = parent is Argument { Name: null, Stars: 0 } && grand is ClassDef
+            || parent is ExceptHandler
+            || parent is TupleExpr && grand is ExceptHandler
+            || parent is Argument arg && grand is CallExpr { Func: NameExpr { Name: "isinstance" or "issubclass" } } ic && ic.Args.Count == 2 && ReferenceEquals(ic.Args[1], arg);
+        if (usedAsClass || char.IsUpper(name.Name[0]) && name.Name.Any(char.IsLower))
+            add($"Create class '{name.Name}'", false, new[] { CreateClassEdit(m, name, call, parent is ExceptHandler || parent is TupleExpr) });
+        if (call != null)
             add($"Create function '{name.Name}'", false, new[] { CreateFunctionEdit(m, name, call) });
+    }
+
+    /// <summary>The parameter names a call suggests: keyword names, plain names passed, else arg0, arg1...</summary>
+    static List<string> ParamsFromCall(CallExpr call)
+    {
+        var args = new List<string>();
+        int n = 0;
+        foreach (var a in call.Args)
+        {
+            string p = a.Stars switch
+            {
+                2 => "**kwargs",
+                1 => "*args",
+                _ => a.Name ?? (a.Value is NameExpr ne && !args.Contains(ne.Name) ? ne.Name : $"arg{n}"),
+            };
+            if (!args.Contains(p)) args.Add(p);
+            n++;
+        }
+        return args;
+    }
+
+    /// <summary>Text put above the top-level statement that holds a node, with blank lines around it.</summary>
+    static Edit TopLevelInsert(ModuleInfo m, Node inner, string definition)
+    {
+        Node top = inner;
+        for (var p = m.ParentOf(top); p != null && p is not PyModule; p = m.ParentOf(top)) top = p;
+        int at = LineStart(m.Source, top.Start);
+        bool afterCode = at > 0 && m.Source[LineStart(m.Source, at - 1)..at].Trim().Length > 0;
+        return new Edit(at, at, (afterCode ? "\n\n" : "") + definition + "\n\n\n");
+    }
+
+    static Edit CreateClassEdit(ModuleInfo m, NameExpr name, CallExpr? call, bool exception)
+    {
+        var args = call == null ? new List<string>() : ParamsFromCall(call);
+        string body = args.Count == 0 ? "    pass"
+            : $"    def __init__(self, {string.Join(", ", args)}):\n" + string.Join("\n", args.Where(a => !a.StartsWith('*')).Select(a => $"        self.{a} = {a}"))
+              + (args.All(a => a.StartsWith('*')) ? "        pass" : "");
+        return TopLevelInsert(m, name, $"class {name.Name}{(exception ? "(Exception)" : "")}:\n{body}");
     }
 
     IEnumerable<string> ImportCandidates(Snapshot snap, ModuleInfo current, string name)
@@ -277,28 +324,8 @@ public sealed partial class LanguageService
         return new Edit(at, at, (needsNewline ? "\n" : "") + (sawImport ? "" : "\n") + line + "\n" + trailer);
     }
 
-    Edit CreateFunctionEdit(ModuleInfo m, NameExpr name, CallExpr call)
-    {
-        var args = new List<string>();
-        int n = 0;
-        foreach (var a in call.Args)
-        {
-            string p = a.Stars switch
-            {
-                2 => "**kwargs",
-                1 => "*args",
-                _ => a.Name ?? (a.Value is NameExpr ne && !args.Contains(ne.Name) ? ne.Name : $"arg{n}"),
-            };
-            if (!args.Contains(p)) args.Add(p);
-            n++;
-        }
-
-        Node top = call;
-        for (var p = m.ParentOf(top); p != null && p is not PyModule; p = m.ParentOf(top)) top = p;
-        int at = LineStart(m.Source, top.Start);
-        bool afterCode = at > 0 && m.Source[LineStart(m.Source, at - 1)..at].Trim().Length > 0;
-        return new Edit(at, at, (afterCode ? "\n\n" : "") + $"def {name.Name}({string.Join(", ", args)}):\n    raise NotImplementedError\n\n\n");
-    }
+    static Edit CreateFunctionEdit(ModuleInfo m, NameExpr name, CallExpr call) =>
+        TopLevelInsert(m, call, $"def {name.Name}({string.Join(", ", ParamsFromCall(call))}):\n    raise NotImplementedError");
 
     /// <summary>`foo` inside a method where `self.foo` exists.</summary>
     void SelfFix(Snapshot snap, ModuleInfo m, NameExpr name, Action<string, bool, Edit[]> add)
@@ -321,7 +348,7 @@ public sealed partial class LanguageService
 
     // ------------------------------------------------------------ misspelled attributes
 
-    void MissingAttributeFixes(Snapshot snap, ModuleInfo m, int start, int end, Action<string, bool, Edit[]> add)
+    void MissingAttributeFixes(Snapshot snap, ModuleInfo m, int start, int end, Action<string, bool, Edit[]> add, List<CodeAction> actions)
     {
         var access = AstChildren.Descendants(m.Ast).OfType<AttributeExpr>()
             .FirstOrDefault(a => a.End - a.Attr.Length == start && a.End == end);
@@ -332,6 +359,64 @@ public sealed partial class LanguageService
             .Where(x => access.Attr.StartsWith("__") || !x.StartsWith("__")).ToList();
         foreach (var near in Closest(access.Attr, names, 3))
             add($"Change to '{near}'", false, new[] { new Edit(start, end, near) });
+
+        // create it in the project's class: a method when it is called, else an attribute set in __init__
+        if (recv is not ClassType { Info: var info } owner || !snap.UriOf.TryGetValue(info.Module, out var ownerUri)
+            || !snap.Project.Contains(info.Module) || info.Module.IsStub) return;
+        var cls = info.Node;
+        string indent = cls.Body.Count > 0 ? LineIndent(info.Module.Source, cls.Body[0].Start) : LineIndent(info.Module.Source, cls.Start) + "    ";
+        string inner = indent + "    ";
+        var call = m.ParentOf(access) is CallExpr c && ReferenceEquals(c.Func, access) ? c : null;
+        bool onlyPass = cls.Body.Count == 1 && cls.Body[0] is PassStmt;
+        Edit edit;
+        string title;
+        if (call != null)
+        {
+            var args = ParamsFromCall(call);
+            string head = owner.IsInstance ? "self" : "cls";
+            string def = (owner.IsInstance ? "" : indent + "@classmethod\n") + $"{indent}def {access.Attr}({string.Join(", ", args.Prepend(head))}):\n{inner}raise NotImplementedError\n";
+            edit = AtClassEnd(info.Module, cls, def, onlyPass);
+            title = $"Create method '{access.Attr}' in '{info.Name}'";
+        }
+        else
+        {
+            var init = cls.Body.OfType<FunctionDef>().FirstOrDefault(f => f.Name == "__init__");
+            if (owner.IsInstance && init != null && init.Params.FirstOrDefault()?.Name is { } self)
+            {
+                int at = LineEndInclusive(info.Module.Source, CodeEnd(info.Module.Source, init.Body[^1].End));
+                string bodyIndent = LineIndent(info.Module.Source, init.Body[^1].Start);
+                bool atEof = at == info.Module.Source.Length && at > 0 && info.Module.Source[at - 1] != '\n';
+                edit = new Edit(at, at, (atEof ? "\n" : "") + $"{bodyIndent}{self}.{access.Attr} = None\n");
+            }
+            else edit = AtClassEnd(info.Module, cls, $"{indent}{access.Attr} = None\n", onlyPass);
+            title = $"Create attribute '{access.Attr}' in '{info.Name}'";
+        }
+        var ownerLines = Lines(info.Module);
+        actions.Add(new CodeAction(title, QuickFixKind, new WorkspaceEdit(new Dictionary<string, List<TextEdit>>
+        {
+            [ownerUri] = new() { new TextEdit(ownerLines.RangeOf(edit.Start, edit.End), edit.Text) },
+        })));
+    }
+
+    /// <summary>Where a statement's own text ends: its End can run on over the blank lines after it.</summary>
+    static int CodeEnd(string text, int end)
+    {
+        while (end > 0 && char.IsWhiteSpace(text[end - 1])) end--;
+        return end;
+    }
+
+    /// <summary>Text added as the last member of a class (in place of a lone `pass`), a blank line before a method.</summary>
+    static Edit AtClassEnd(ModuleInfo m, ClassDef cls, string member, bool replacePass)
+    {
+        if (replacePass)
+        {
+            var pass = cls.Body[0];
+            return new Edit(LineStart(m.Source, pass.Start), LineEndInclusive(m.Source, pass.End), member);
+        }
+        int at = LineEndInclusive(m.Source, CodeEnd(m.Source, cls.Body[^1].End));
+        bool atEof = at == m.Source.Length && at > 0 && m.Source[at - 1] != '\n';
+        bool method = member.TrimStart().StartsWith("def ") || member.TrimStart().StartsWith('@');
+        return new Edit(at, at, (atEof ? "\n" : "") + (method ? "\n" : "") + member);
     }
 
     // ------------------------------------------------------------ helpers

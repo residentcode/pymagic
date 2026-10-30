@@ -260,6 +260,8 @@ public sealed class Server
                 return _service.ExpressionType(UriOf(p), RangeOf(p));
             case "pymagic/externalDoc":
                 return _service.ExternalDoc(UriOf(p), PositionOf(p));
+            case "pymagic/templates":
+                return _service.TemplateList();
             case "pymagic/inlayHints":
                 return _service.InlayHints(UriOf(p), RangeOf(p));
             case "pymagic/fileUsages":

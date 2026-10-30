@@ -4,6 +4,14 @@
 import { change, resetAll, settings } from './settings';
 import { buildLabel, shortTime } from './build-info.js';
 import { KEYMAP } from './keymap';
+import { readSnippets, writeSnippets, readFileTemplates } from './codegen-model.js';
+
+const SNIPPETS = '.pymagic/snippets.json', FILE_TEMPLATES = '.pymagic/fileTemplates.json';
+let liveTemplateSource = null;
+/** Where the Templates page gets the built-in live and postfix templates (the language server). */
+export function setLiveTemplateSource(fn) {
+    liveTemplateSource = fn;
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -188,6 +196,89 @@ const SPECIAL = {
             mirrorCheck($('git-inline'), 'Show who changed the current line', 'After the line, in grey.'),
         );
     },
+    templates(page) {
+        const section = (title, hint) => {
+            const h = document.createElement('h3');
+            h.textContent = title;
+            page.append(h);
+            if (hint) page.append(note(hint));
+        };
+        const input = (value, placeholder, onInput, cls = '') => {
+            const el = document.createElement(cls === 'body' ? 'textarea' : 'input');
+            el.value = value;
+            el.placeholder = placeholder;
+            el.spellcheck = false;
+            el.className = 'tpl-' + (cls || 'field');
+            el.oninput = () => onInput(el.value);
+            return el;
+        };
+        // an editable list kept in a file of the project: rows of fields, Add and Save
+        function editable(file, read, write, blankItem, fields, empty) {
+            const box = document.createElement('div');
+            box.className = 'tpl-list';
+            const buttons = document.createElement('div');
+            buttons.className = 'set-buttons';
+            const add = document.createElement('button');
+            add.textContent = 'Add';
+            const save = document.createElement('button');
+            save.className = 'primary';
+            save.textContent = 'Save';
+            buttons.append(add, save);
+            page.append(box, buttons);
+            let items = [];
+            const draw = () => {
+                box.replaceChildren();
+                if (items.length === 0) box.append(note(empty));
+                items.forEach((item, i) => {
+                    const row = document.createElement('div');
+                    row.className = 'tpl-row';
+                    for (const [key, placeholder, kind] of fields) row.append(input(item[key], placeholder, (v) => { item[key] = v; }, kind));
+                    const del = document.createElement('button');
+                    del.textContent = 'Remove';
+                    del.onclick = () => { items.splice(i, 1); draw(); };
+                    row.append(del);
+                    box.append(row);
+                });
+            };
+            add.onclick = () => { items.push(blankItem()); draw(); box.lastElementChild?.querySelector('input,textarea')?.focus(); };
+            save.onclick = async () => {
+                const res = await fetch('/api/file?path=' + encodeURIComponent(file), { method: 'PUT', body: write(items) }).catch(() => null);
+                save.textContent = res?.ok ? 'Saved' : 'Not saved';
+                window.setTimeout(() => { save.textContent = 'Save'; }, 1500);
+            };
+            fetch('/api/file?path=' + encodeURIComponent(file)).then((r) => (r.ok ? r.text() : '')).catch(() => '').then((text) => { items = read(text); draw(); });
+        }
+
+        section('Live templates', 'Typed at the start of a statement, then Tab or Enter. Postfix templates are typed after an expression: items.for, x.if, value.par.');
+        const builtIn = document.createElement('div');
+        builtIn.className = 'keymap';
+        page.append(builtIn);
+        liveTemplateSource?.().then((list) => {
+            for (const t of list?.live ?? []) {
+                const a = document.createElement('kbd');
+                a.textContent = t.prefix;
+                const b = document.createElement('span');
+                b.textContent = t.description + (t.classBody ? ' (in a class)' : '') + (t.import ? ` (imports ${t.import})` : '');
+                b.title = t.body.replace(/\$\{\d+:([^}]*)\}/g, '$1').replace(/\$\{?\d+\}?/g, '').replaceAll('\t', '    ');
+                builtIn.append(b, a);
+            }
+            for (const t of list?.postfix ?? []) {
+                const a = document.createElement('kbd');
+                a.textContent = '.' + t.key;
+                const b = document.createElement('span');
+                b.textContent = 'postfix: ' + t.example;
+                builtIn.append(b, a);
+            }
+        }).catch(() => { /* the server is not there yet */ });
+
+        section('This project\'s templates', `Kept in ${SNIPPETS}, in VS Code's form. In the text, $1 and \${1:name} are the places Tab goes to and $0 is where the cursor ends.`);
+        editable(SNIPPETS, (text) => readSnippets(text) ?? [], writeSnippets, () => ({ name: '', prefix: '', description: '', body: '' }),
+            [['prefix', 'abbreviation'], ['description', 'description'], ['body', 'text', 'body']], 'None yet.');
+
+        section('File templates', `What a new file starts with, the first whose pattern fits its name; kept in ${FILE_TEMPLATES}. \${NAME}, \${FILE_NAME}, \${DATE}, \${TIME}, \${YEAR} and \${PROJECT_NAME} are filled in.`);
+        editable(FILE_TEMPLATES, (text) => readFileTemplates(text).map((t) => ({ ...t })), (items) => JSON.stringify(items, null, 2) + '\n',
+            () => ({ name: '', pattern: '*.py', body: '' }), [['name', 'name'], ['pattern', 'pattern such as test_*.py'], ['body', 'text', 'body']], 'None: new files start empty.');
+    },
     keymap(page) {
         for (const [group, keys] of KEYMAP) {
             const h = document.createElement('h3');
@@ -227,7 +318,7 @@ const SPECIAL = {
     },
 };
 
-const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections', 'Inspections'], ['terminal', 'Terminal'], ['git', 'Git'], ['keymap', 'Keymap'], ['about', 'About']];
+const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections', 'Inspections'], ['terminal', 'Terminal'], ['git', 'Git'], ['templates', 'Templates'], ['keymap', 'Keymap'], ['about', 'About']];
 
 let isOpen = false;
 

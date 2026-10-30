@@ -2,6 +2,7 @@
 import { toast } from './toast';
 import { openMenu } from './menu';
 import { copyName, join, moveProblem, movedPath } from './explorer-model';
+import { templateText } from './codegen';
 
 const FILE_TYPE = 'application/x-pymagic-file';   // a row of the tree being dragged; the editor and the tab bars take nothing from it
 
@@ -247,7 +248,8 @@ export function setupExplorer(deps) {
         if (!name) return;
         if (INVALID.test(name) || name.includes('\\') || name.startsWith('/')) { toast('That is not a usable name.', true); return; }
         const path = dir ? `${dir}/${name}` : name;
-        if (!(await post({ op: 'create', path, dir: isDir }))) return;
+        const content = isDir ? '' : await templateText(name.slice(name.lastIndexOf('/') + 1));
+        if (!(await post({ op: 'create', path, dir: isDir, content }))) return;
         if (dir) open.add(dir);
         if (isDir) open.add(path);
         remember();

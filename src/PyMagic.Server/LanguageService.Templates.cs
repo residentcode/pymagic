@@ -150,6 +150,13 @@ public sealed partial class LanguageService
         return new List<UserSnippet>();
     }
 
+    /// <summary>The built-in live and postfix templates, for the settings page that lists them beside the project's own.</summary>
+    public object TemplateList() => new
+    {
+        live = LiveTemplates.Select(t => new { prefix = t.Prefix, description = t.Description, body = t.Body, classBody = t.Context == TemplateContext.ClassBody, import = t.ImportModule }).ToList(),
+        postfix = PostfixTemplates.Select(t => new { key = t.Key, description = t.Description, example = t.Example }).ToList(),
+    };
+
     // ------------------------------------------------------------ live templates
 
     /// <summary>Templates whose name starts with what is typed, at the start of a statement.</summary>

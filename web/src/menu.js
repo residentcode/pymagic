@@ -1,6 +1,7 @@
 // A menu that opens under a button or at a point: rows with a shortcut, a check mark or a submenu, separators, and the keys.
 //
-// items: '-' (a separator) or { label, key?, run?, checked?, disabled?, submenu? }; a submenu is another list of items.
+// items: '-' (a separator) or { label, key?, run?, checked?, disabled?, submenu?, onActive? }; a submenu is another list of items;
+// onActive runs when the row becomes the active one (by the mouse or the arrow keys).
 // Returns the function that closes it (all levels). Only one menu is open at a time.
 
 let closeOpen = null;
@@ -95,6 +96,7 @@ export function openMenu(anchor, items) {
         level.active = index;
         level.rows.forEach((r, i) => r.row.classList.toggle('active', i === index));
         const { row, item } = level.rows[index];
+        item.onActive?.();
         if (openSub && item.submenu && !item.disabled) {
             const sub = build(item.submenu, depth + 1);
             levels.push(sub);

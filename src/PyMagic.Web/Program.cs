@@ -292,7 +292,7 @@ app.MapPost("/api/fs", async (HttpRequest req) =>
                 if (IsInsideGit(full)) return Results.BadRequest(new { error = "not inside .git" });
                 if (File.Exists(full) || Directory.Exists(full)) return Results.Conflict(new { error = "it exists already" });
                 if (body["dir"]?.GetValue<bool>() == true) Directory.CreateDirectory(full);
-                else { Directory.CreateDirectory(Path.GetDirectoryName(full)!); await File.WriteAllTextAsync(full, "", new UTF8Encoding(false)); }
+                else { Directory.CreateDirectory(Path.GetDirectoryName(full)!); await File.WriteAllTextAsync(full, body["content"]?.GetValue<string>() ?? "", new UTF8Encoding(false)); }
                 return Results.NoContent();
             }
             case "rename":
