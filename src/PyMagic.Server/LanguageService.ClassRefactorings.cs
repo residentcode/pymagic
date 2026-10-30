@@ -208,7 +208,7 @@ public sealed partial class LanguageService
 
     /// <summary>The names of an expression that belong to a scope (its own locals and parameters).</summary>
     static List<string> LocalNamesIn(ModuleInfo m, Expr e, Node scopeNode) =>
-        AstChildren.Descendants(e).Prepend(e).OfType<NameExpr>()
+        AstChildren.Descendants(e).OfType<NameExpr>()
             .Where(n => m.Semantics.Resolve(n) is { } sym && ReferenceEquals(sym.Scope.Node, scopeNode))
             .Select(n => n.Name).Distinct().ToList();
 

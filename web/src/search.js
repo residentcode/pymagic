@@ -2,6 +2,8 @@
 import * as monaco from 'monaco-editor';
 import { showTab } from './panel';
 import { fileScore } from './filescore';
+import { openMenu } from './menu';
+import { readTrace } from './stacktrace-model.js';
 const $ = (id) => document.getElementById(id);
 const KINDS = { 2: 'module', 5: 'class', 6: 'method', 7: 'property', 8: 'field', 9: 'constructor', 12: 'function', 13: 'variable', 14: 'constant' };
 export function setupSearch(deps) {
@@ -15,6 +17,12 @@ export function setupSearch(deps) {
     const caseBox = $('fs-case');
     const wordBox = $('fs-word');
     const regexBox = $('fs-regex');
+    const structBox = $('fs-struct');
+    const spattern = $('fs-spattern');
+    const sreplace = $('fs-sreplace');
+    // what is searched for and what replaces it, in the boxes of the mode that is on
+    const what = () => (structBox.checked ? spattern.value : query.value);
+    const withWhat = () => (structBox.checked ? sreplace.value : replace.value);
     const summary = $('fs-summary');
     const results = $('fs-results');
     const replaceAll = $('fs-replace-all');
@@ -23,7 +31,7 @@ export function setupSearch(deps) {
         include: include.value, exclude: exclude.value, unsaved: deps.unsavedTexts(),
     });
     async function search() {
-        if (!query.value) {
+        if (!what()) {
             summary.textContent = '';
             results.replaceChildren();
             last = null;
@@ -32,6 +40,10 @@ export function setupSearch(deps) {
         }
         const ticket = ++running;
         summary.textContent = 'Searching…';
+        if (structBox.checked) {
+            await structural(ticket);
+            return;
+        }
         let res;
         try {
             res = await fetch('/api/search', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...options(), replace: replace.value || undefined }) });
@@ -55,6 +67,39 @@ export function setupSearch(deps) {
         last = await res.json();
         render();
     }
+    /** Structural search: the engine matches the pattern against the syntax of the project's Python files. */
+    async function structural(ticket) {
+        let found;
+        try {
+            found = await lsp.request('pymagic/structuralSearch', { pattern: spattern.value, replacement: sreplace.value || undefined });
+        }
+        catch (e) {
+            if (ticket !== running)
+                return;
+            summary.textContent = e.message ?? 'The search failed.';
+            summary.className = 'bad';
+            results.replaceChildren();
+            last = null;
+            replaceAll.disabled = true;
+            return;
+        }
+        if (ticket !== running)
+            return;
+        const byFile = new Map();
+        for (const m of found) {
+            const path = relOf(m.uri);
+            if (!byFile.has(path))
+                byFile.set(path, []);
+            const { start, end } = m.range;
+            const length = end.line === start.line ? end.character - start.character : m.text.length - start.character;
+            byFile.get(path).push({ line: start.line, column: start.character, length, text: m.text, replacement: m.replacement ?? null, endLine: end.line, endColumn: end.character });
+        }
+        summary.className = '';
+        last = { total: found.length, files: [...byFile].map(([path, matches]) => ({ path, matches })), filesSearched: 0, truncated: found.length >= 2000 };
+        render();
+        if (found.length === 0)
+            summary.textContent = 'Nothing has that shape in the Python files of the project';
+    }
     function render() {
         results.replaceChildren();
         if (!last)
@@ -63,7 +108,7 @@ export function setupSearch(deps) {
         summary.textContent = r.total === 0
             ? `No results in ${r.filesSearched} files`
             : `${r.total}${r.truncated ? '+' : ''} result${r.total === 1 ? '' : 's'} in ${r.files.length} file${r.files.length === 1 ? '' : 's'}${r.truncated ? ' (showing the first ones; narrow the search)' : ''}`;
-        replaceAll.disabled = r.total === 0 || !replace.value || r.files.every((f) => !deps.isEditable(f.path));
+        replaceAll.disabled = r.total === 0 || !withWhat() || r.files.every((f) => !deps.isEditable(f.path));
         for (const file of r.files) {
             const group = document.createElement('div');
             group.className = 'fs-file';
@@ -84,7 +129,7 @@ export function setupSearch(deps) {
                 row.className = 'fs-match';
                 const num = document.createElement('span');
                 num.className = 'fs-line';
-                num.textContent = String(m.line + 1);
+                num.textContent = m.line === null ? '' : String(m.line + 1);
                 const text = document.createElement('span');
                 const lead = m.text.slice(0, m.column).trimStart();
                 const hit = document.createElement('mark');
@@ -97,7 +142,12 @@ export function setupSearch(deps) {
                 }
                 text.append(m.text.slice(m.column + m.length));
                 row.append(num, text);
-                row.onclick = () => void deps.openFile(file.path, new monaco.Range(m.line + 1, m.column + 1, m.line + 1, m.column + 1 + m.length));
+                // a row can name its own file (duplicates, a stack trace); one with no file of the project is only text
+                const target = m.path === undefined ? file.path : m.path;
+                if (target)
+                    row.onclick = () => void deps.openFile(target, new monaco.Range(m.line + 1, m.column + 1, (m.endLine ?? m.line) + 1, m.endLine === undefined ? m.column + 1 + m.length : m.endColumn + 1));
+                else
+                    row.classList.add('fs-plain');
                 body.appendChild(row);
             }
             group.append(head, body);
@@ -105,7 +155,7 @@ export function setupSearch(deps) {
         }
     }
     async function replaceEverywhere() {
-        if (!last || !replace.value)
+        if (!last || !withWhat())
             return;
         // search again so that the matches carry exactly the replacement that is typed now
         await search();
@@ -119,13 +169,13 @@ export function setupSearch(deps) {
                 continue;
             }
             changes[deps.uriFor(file.path)] = file.matches.map((m) => ({
-                range: { start: { line: m.line, character: m.column }, end: { line: m.line, character: m.column + m.length } },
+                range: { start: { line: m.line, character: m.column }, end: m.endLine === undefined ? { line: m.line, character: m.column + m.length } : { line: m.endLine, character: m.endColumn } },
                 newText: m.replacement ?? '',
             }));
         }
         if (Object.keys(changes).length === 0)
             return;
-        const done = await deps.applyEdits(`Replace "${query.value}" with "${replace.value}"`, changes, { alwaysPreview: true });
+        const done = await deps.applyEdits(`Replace "${what()}" with "${withWhat()}"`, changes, { alwaysPreview: true });
         if (done) {
             summary.textContent = `Replaced${skipped ? ` (${skipped} matches in files that cannot be edited here were left alone)` : ''}. The files are changed in the editor; save them with Ctrl+S.`;
             results.replaceChildren();
@@ -150,6 +200,109 @@ export function setupSearch(deps) {
     include.onchange = exclude.onchange = () => void search();
     for (const box of [caseBox, wordBox, regexBox])
         box.onchange = () => void search();
+    const structural_ = () => {
+        const on = structBox.checked;
+        for (const box of [caseBox, wordBox, regexBox])
+            box.disabled = on;
+        query.style.display = replace.style.display = on ? 'none' : '';
+        spattern.style.display = sreplace.style.display = on ? '' : 'none';
+    };
+    structBox.onchange = () => { structural_(); void search(); };
+    // patterns to start from, as PyCharm's templates are
+    const PATTERNS = [
+        ['Comparisons with None by ==', '$x$ == None', '$x$ is None'],
+        ['Empty test by len', 'len($x$) == 0', 'not $x$'],
+        ['print calls', 'print($args*$)', ''],
+        ['Test functions', 'def $f:^test_$($p*$):\n    $body*$', ''],
+        ['Bare except', 'try:\n    $body*$\nexcept:\n    $handler*$', ''],
+        ['open() without with', '$f$ = open($args*$)', ''],
+        ['dict.keys() in a loop', 'for $k$ in $d$.keys():\n    $body*$', 'for $k$ in $d$:\n    $body*$'],
+        ['isinstance with a tuple', 'isinstance($x$, ($types*$))', ''],
+        ['Assignments to self', 'self.$a$ = $v$', ''],
+    ];
+    $('fs-patterns').onclick = (e) => openMenu(e.currentTarget, PATTERNS.map(([label, pattern, replacement]) => ({
+        label,
+        run: () => {
+            structBox.checked = true;
+            structural_();
+            spattern.value = pattern;
+            sreplace.value = replacement;
+            spattern.focus();
+            void search();
+        },
+    })));
+    /** Code written more than once: each group is a heading with the places under it. */
+    async function duplicates() {
+        showTab('search');
+        summary.className = '';
+        summary.textContent = 'Looking for duplicated code…';
+        results.replaceChildren();
+        let groups;
+        try {
+            groups = await lsp.request('pymagic/duplicates', { minLines: 6 });
+        }
+        catch (e) {
+            summary.textContent = e.message ?? 'The search failed.';
+            return;
+        }
+        const files = groups.map((g) => ({
+            path: `${g.lines} lines in ${g.places.length} places: ${g.preview}`,
+            matches: g.places.map((p) => ({ line: p.range.start.line, column: 0, length: 0, text: `${relOf(p.uri)}  lines ${p.range.start.line + 1}-${p.range.end.line + 1}`, replacement: null, path: relOf(p.uri), endLine: p.range.end.line, endColumn: p.range.end.character })),
+        }));
+        showFound(groups.length === 0 ? 'No code of 6 lines or more is written twice in the project' : `${groups.length} fragment${groups.length === 1 ? ' is' : 's are'} written more than once`, files);
+    }
+    /** A stack trace pasted from elsewhere: shown with its lines, those that name a project file open it. */
+    function analyzeTrace() {
+        const shade = document.createElement('div');
+        shade.className = 'settings-shade';
+        const box = document.createElement('div');
+        box.className = 'trace-box';
+        const head = document.createElement('h3');
+        head.textContent = 'Analyze a stack trace';
+        const area = document.createElement('textarea');
+        area.placeholder = 'Paste a traceback, a pytest report or a log here';
+        area.spellcheck = false;
+        const buttons = document.createElement('div');
+        buttons.className = 'set-buttons';
+        const cancel = document.createElement('button');
+        cancel.textContent = 'Cancel';
+        const ok = document.createElement('button');
+        ok.className = 'primary';
+        ok.textContent = 'Show';
+        buttons.append(cancel, ok);
+        box.append(head, area, buttons);
+        shade.append(box);
+        document.body.append(shade);
+        navigator.clipboard?.readText?.().then((t) => { if (!area.value && /line \d+|\.py:\d+/.test(t)) area.value = t; }).catch(() => { /* no clipboard */ });
+        area.focus();
+        const close = () => shade.remove();
+        cancel.onclick = close;
+        shade.onmousedown = (e) => { if (e.target === shade) close(); };
+        area.onkeydown = (e) => { if (e.key === 'Escape') close(); };
+        ok.onclick = async () => {
+            const all = await fetch('/api/files').then((r) => r.json()).catch(() => []);
+            const lines = readTrace(area.value, all.map((f) => (typeof f === 'string' ? f : f.path)).filter(Boolean));
+            close();
+            const linked = lines.filter((l) => l.rel).length, named = lines.filter((l) => l.path).length;
+            showFound(`Stack trace: ${linked} of ${named} places are in the project`, [{
+                path: 'Stack trace',
+                matches: lines.filter((l) => l.text.trim()).map((l) => ({ line: l.rel ? l.line - 1 : null, column: 0, length: 0, text: l.text, replacement: null, path: l.rel })),
+            }]);
+        };
+    }
+    for (const box of [spattern, sreplace]) {
+        box.onkeydown = (e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                void search();
+            }
+            else if (e.key === 'Escape')
+                editor.focus();
+        };
+        box.oninput = () => { if (box === sreplace && last) later(); };
+    }
+    $('fs-dups').onclick = () => void duplicates();
+    $('fs-trace').onclick = () => analyzeTrace();
     for (const input of [query, replace, include, exclude]) {
         input.onkeydown = (e) => {
             if (e.key === 'Enter') {
@@ -406,5 +559,5 @@ export function setupSearch(deps) {
             });
         });
     }
-    return { open, symbolPicker, anythingPicker, showFound };
+    return { open, symbolPicker, anythingPicker, showFound, duplicates, analyzeTrace, structural: () => { showTab('search'); structBox.checked = true; structural_(); spattern.focus(); } };
 }

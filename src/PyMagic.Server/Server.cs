@@ -260,6 +260,10 @@ public sealed class Server
                 return _service.ExpressionType(UriOf(p), RangeOf(p));
             case "pymagic/externalDoc":
                 return _service.ExternalDoc(UriOf(p), PositionOf(p));
+            case "pymagic/structuralSearch":
+                return _service.StructuralSearch(p!["pattern"]!.GetValue<string>(), p["replacement"]?.GetValue<string>());
+            case "pymagic/duplicates":
+                return _service.Duplicates(p?["minLines"]?.GetValue<int>() ?? 6);
             case "pymagic/templates":
                 return _service.TemplateList();
             case "pymagic/inlayHints":

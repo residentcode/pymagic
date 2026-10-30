@@ -365,3 +365,9 @@
 #membersbox input:not([type]) { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px; font: 13px Consolas, monospace; outline: none; }
 #membersbox .mb-list { overflow: auto; display: flex; flex-direction: column; gap: 3px; font: 13px Consolas, monospace; }
 #membersbox .mb-buttons { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* the Search panel: rows that are only text (a stack trace's other lines), and the box a trace is pasted into */
+.fs-match.fs-plain { cursor: default; opacity: 0.7; }
+.trace-box { position: fixed; top: 12%; left: 50%; transform: translateX(-50%); width: min(760px, 92vw); display: flex; flex-direction: column; gap: 8px; padding: 14px; background: var(--panel); border: 1px solid var(--line-strong, #555); border-radius: 8px; box-shadow: 0 10px 30px #0009; z-index: 70; }
+.trace-box textarea { min-height: 280px; resize: vertical; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: 12px Consolas, monospace; }
+#fs-spattern, #fs-sreplace { flex: 1 1 260px; min-width: 200px; resize: vertical; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font: 12px Consolas, monospace; }

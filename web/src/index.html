@@ -228,11 +228,17 @@
             <label title="Match case"><input type="checkbox" id="fs-case"> Aa</label>
             <label title="Whole word"><input type="checkbox" id="fs-word"> word</label>
             <label title="Regular expression"><input type="checkbox" id="fs-regex"> .*</label>
+            <label title="Structural search: a pattern of Python code, $x$ for any expression or statement, $x*$ for any number of them, $x:regex$ for one whose text fits"><input type="checkbox" id="fs-struct"> { }</label>
+            <button id="fs-patterns" title="Patterns to start a structural search from">Patterns ▾</button>
+            <textarea id="fs-spattern" rows="3" placeholder="Pattern, such as:&#10;$f$ = open($p$)&#10;$d$ = $f$.read()   (Ctrl+Enter searches)" spellcheck="false" style="display:none"></textarea>
+            <textarea id="fs-sreplace" rows="3" placeholder="Replace with, such as:&#10;with open($p$) as $f$:&#10;    $d$ = $f$.read()" spellcheck="false" style="display:none"></textarea>
             <button id="fs-go">Search</button>
             <input id="fs-replace" placeholder="Replace with" autocomplete="off" spellcheck="false">
             <button id="fs-replace-all" disabled title="Replace every result in .py files (shows a preview)">Replace all</button>
             <input id="fs-include" placeholder="Files to include: *.py, src/**" autocomplete="off" spellcheck="false">
             <input id="fs-exclude" placeholder="Files to exclude: tests/**" autocomplete="off" spellcheck="false">
+            <button id="fs-dups" title="Find code written more than once in the project (6 lines or more)">Duplicates</button>
+            <button id="fs-trace" title="Paste a stack trace from a log or another machine; its lines become links">Stack trace…</button>
           </div>
           <div id="fs-summary"></div>
           <div class="body" id="fs-results"></div>
