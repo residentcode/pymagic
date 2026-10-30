@@ -42,7 +42,7 @@ The test project is a plain console runner because this machine's NuGet only has
 
 ## Open work
 
-Everything that is known to be left, in one place, gathered on 30 October 2026 from the "Not done" and "Still open" notes of items 2 to 154 (the item a line comes from is in brackets). **How it is kept:** when an item does one of these, the line goes from here and the item says so; a new item's own "Not done" note is added here too. Code signing, auto-update and anything else for selling PyMagic are left out on purpose.
+Everything that is known to be left, in one place, gathered on 30 October 2026 from the "Not done" and "Still open" notes of items 2 to 154 (the item a line comes from is in brackets), and from PyCharm's own dialogs and menus (what PyMagic's notes never named). **How it is kept:** when an item does one of these, the line goes from here and the item says so; a new item's own "Not done" note is added here too. Code signing, auto-update and anything else for selling PyMagic are left out on purpose.
 
 **Frameworks**
 - Django admin: `list_display` entries that are callables from other modules, and `get_queryset` / `formfield_for_*` overrides (37).
@@ -86,6 +86,16 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Small gaps: `pop` of a required TypedDict key (87), a constant index past the end of a tuple subclass (88).
 - The PyCharm inspections that need full types and are not done yet, and those for other tools (pandas, Spark, mock, notebooks) (47, 77).
 - Speed on large projects: find usages and rename on one thread, the Problems of unchanged files not remembered, parsing only the edited region, about 1 to 1.5 GB while the problems are computed (78). Keeping the types of unchanged files across edits was measured and left out: the files they depend on are only about a fifth of an edit's time.
+
+**Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
+- New project: a *New Project* dialog with a location and project types (pure Python, FastAPI, Flask, Django, Jupyter, each with its starting files), *Create Git repository*, *Create a welcome script*, and the interpreter made with it: a project venv, uv (with the path to uv), base conda or a custom environment, and a Python version. PyMagic only opens a folder and makes a `.venv` from the Python panel.
+- Run configurations: only "a script" exists (name, script, parameters, folder, variables). Missing: kinds of configuration (Django server with host and port, pytest, a module with `-m`, FastAPI/uvicorn and Flask servers), `.env` files, running with `uv run`, the PYTHONPATH switches (content and source roots), *Store as project file*, *Open the Run panel when started*, and *Edit Configurations...* from the run selector.
+- Project tree menu: it has New, Cut, Copy, Paste, Rename, Delete, Copy path and Refresh. Missing: *Find Usages* of a file, *Find in Files* and *Replace in Files* of a folder, *Inspect Code* of a folder, *Refactor* (move, safe delete), *Reformat Code* and *Optimize Imports* of a folder, *Run* / *Debug* the tests of a folder or file, *Open In* (Explorer, terminal), *Local History* of a file or folder, *Reload from Disk*, *Compare With...*, *Mark Directory As* (sources, tests, excluded), *Clean Python Compiled Files*, *Bookmarks*.
+- Tab menu: it has Close, Close others, Close all, Pin, Split right and down, Copy path. Missing: *Close Tabs to the Left* / *to the Right*, *Split and Move Right* / *Down*, *Open Tab in New Window*, *Configure Editor Tabs...*, *Bookmarks*, *Override File Type*, *Run* / *Debug* the file, *Rename File...*, *Local History*, *Add to .gitignore*, *Open In*.
+- Editor menu: it is Monaco's own plus Call and Type Hierarchy. Missing: *Show Context Actions* (Alt+Enter) in the menu, *Copy / Paste Special* (paste as plain text, from history), *Column Selection Mode* as a switch, the *Go To*, *Folding* and *Refactor* submenus, *Generate...* (Alt+Insert: `__init__`, properties, overriding methods, tests), *Run* / *Debug* the file, *Open In*, *Local History*, *Compare with Clipboard*.
+- Python console: an interactive interpreter beside the editor, with *Execute Line in Python Console* (Alt+Shift+E), *Run File in Python Console* and a view of its variables. PyMagic has the Terminal and notebooks, not a console.
+- Terminal: the prompt does not show the virtual environment (`(.venv) PS ...`): the environment is active (its folder first on the PATH, `VIRTUAL_ENV` set) but its activation script is not run.
+- Diagrams: of classes, modules and Django models.
 
 **To check** (old notes that later work may have covered; each needs a look before it is counted as open or done)
 - Parser: store-context validation and finer error messages (2). Scopes: `__all__`, `try/except ImportError` fallbacks, definitions under conditions (3).
