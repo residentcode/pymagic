@@ -5,7 +5,7 @@ namespace PyMagic.Core.Types;
 
 public sealed partial class TypeEvaluator
 {
-    /// <summary>The inspections of PyCharm that need types: protected members, tuple items, functions that return nothing, exceptions and read-only properties.</summary>
+    /// <summary>The inspections of PyCharm that need types: protected members, tuple items and indexes, functions that return nothing, exceptions, read-only properties and required TypedDict keys.</summary>
     void InspectTyped(ModuleInfo m, Node node, List<Diagnostic> diags)
     {
         switch (node)
@@ -36,7 +36,59 @@ public sealed partial class TypeEvaluator
             case RaiseStmt { Exc: { } exc }:
                 NotAnException(m, exc, "Exceptions must derive from BaseException", diags);
                 break;
+            case SubscriptExpr sub when !IsStoreTarget(m, sub):
+                TupleIndex(m, sub, diags);
+                break;
+            case DelStmt del:
+                foreach (var target in del.Targets)
+                    if (target is SubscriptExpr ds) RequiredKeyRemoved(m, ds.Value, ds.Index, diags);
+                break;
+            case CallExpr { Func: AttributeExpr { Attr: "pop" } pop } popCall when popCall.Args.Count > 0 && popCall.Args[0] is { Name: null, Stars: 0 } key:
+                RequiredKeyRemoved(m, pop.Value, key.Value, diags);
+                break;
         }
+    }
+
+    // ------------------------------------------------------------ tuple index, required TypedDict keys
+
+    /// <summary>The subscript is assigned or deleted rather than read (`t[0] = 1` has a report of its own).</summary>
+    static bool IsStoreTarget(ModuleInfo m, SubscriptExpr sub) => m.ParentOf(sub) switch
+    {
+        AssignStmt a => a.Targets.Any(t => ReferenceEquals(t, sub)),
+        AugAssignStmt au => ReferenceEquals(au.Target, sub),
+        DelStmt => true,
+        _ => false,
+    };
+
+    /// <summary>
+    /// A constant index past either end of a tuple whose length is known: a plain tuple, a named tuple or a subclass of
+    /// tuple[...] (PyCharm's "Tuple index out of range"). Every member of a union has to be such a tuple and too short for it.
+    /// </summary>
+    void TupleIndex(ModuleInfo m, SubscriptExpr sub, List<Diagnostic> diags)
+    {
+        if (ConstIndex(sub.Index) is not int i) return;
+        bool outside = false;
+        foreach (var member in TypeOf(m, sub.Value).Members)
+        {
+            if (member is not ClassType { IsInstance: true } c || TupleItemsOf(c) is not { } items) return;
+            int idx = i < 0 ? items.Count + i : i;
+            if (idx >= 0 && idx < items.Count) return;
+            outside = true;
+        }
+        if (outside) diags.Add(new Diagnostic(sub.Index.Start, Math.Max(sub.Index.End - sub.Index.Start, 1), "Tuple index out of range"));
+    }
+
+    /// <summary>`del td["k"]` and `td.pop("k")` on a key the TypedDict requires (in every member of a union), as PyCharm reports them.</summary>
+    void RequiredKeyRemoved(ModuleInfo m, Expr receiver, Expr key, List<Diagnostic> diags)
+    {
+        if (StringValue(key) is not string name) return;
+        ClassInfo? owner = null;
+        foreach (var member in TypeOf(m, receiver).Members)
+        {
+            if (member is not ClassType { IsInstance: true } c || TypedDictFieldsOf(c.Info) is not { } fields || !fields.Any(f => f.Field.Name == name && f.Required)) return;
+            owner ??= c.Info;
+        }
+        if (owner != null) diags.Add(new Diagnostic(key.Start, Math.Max(key.End - key.Start, 1), $"Key '{name}' of TypedDict '{owner.Name}' cannot be deleted"));
     }
 
     // ------------------------------------------------------------ protected members

@@ -69,18 +69,6 @@ public sealed partial class LanguageService
         return result;
     }
 
-    /// <summary>The classes this one derives from, nearest first (itself and object left out).</summary>
-    static List<(ModuleInfo Module, ClassDef Class)> Ancestors(Snapshot snap, ModuleInfo module, ClassDef cd)
-    {
-        var result = new List<(ModuleInfo, ClassDef)>();
-        var ev = snap.Workspace.Evaluator;
-        if (ClassInfoOf(module, cd, ev) is not { } info) return result;
-        foreach (var t in ev.MroOf(info).Skip(1))
-            if (t is ClassType c && !ReferenceEquals(c.Info.Node, cd) && !(c.Info.Name == "object" && c.Info.Module.Name == "builtins"))
-                result.Add((c.Info.Module, c.Info.Node));
-        return result;
-    }
-
     /// <summary>The def that a class body binds to this name, if any.</summary>
     static FunctionDef? MethodIn(ModuleInfo module, ClassDef cd, string name)
     {
@@ -93,6 +81,51 @@ public sealed partial class LanguageService
 
     static ClassDef? ClassOfMethod(ModuleInfo module, FunctionDef f) =>
         module.Semantics.ScopeOf(f)?.Parent is { Kind: ScopeKind.Class, Node: ClassDef c } ? c : null;
+
+    // ------------------------------------------------------------ overrides
+
+    /// <summary>A method that other methods can override: not a constructor, and not a private `__name` (each class has its own).</summary>
+    static bool Overridable(string name) => !UnmarkedMethods.Contains(name) && !(name.StartsWith("__") && !name.EndsWith("__"));
+
+    /// <summary>The methods of this name in the classes a class derives from, nearest first (object included); InProject is false for a library's class.</summary>
+    static List<(ModuleInfo Module, ClassDef Class, FunctionDef Method, bool InProject)> SuperMethods(Snapshot snap, ModuleInfo module, ClassDef cd, string name) =>
+        SuperMethods(MroClasses(snap, module, cd), name);
+
+    static List<(ModuleInfo Module, ClassDef Class, FunctionDef Method, bool InProject)> SuperMethods(List<(ModuleInfo Module, ClassDef Class, bool InProject)> mro, string name)
+    {
+        var result = new List<(ModuleInfo, ClassDef, FunctionDef, bool)>();
+        foreach (var (m, c, inProject) in mro)
+            if (MethodIn(m, c, name) is { } f) result.Add((m, c, f, inProject));
+        return result;
+    }
+
+    /// <summary>The classes a class derives from, nearest first, object included; InProject is false for a library's class.</summary>
+    static List<(ModuleInfo Module, ClassDef Class, bool InProject)> MroClasses(Snapshot snap, ModuleInfo module, ClassDef cd)
+    {
+        var result = new List<(ModuleInfo, ClassDef, bool)>();
+        var ev = snap.Workspace.Evaluator;
+        if (ClassInfoOf(module, cd, ev) is not { } info) return result;
+        foreach (var t in ev.MroOf(info).Skip(1))
+            if (t is ClassType c && !ReferenceEquals(c.Info.Node, cd))
+                result.Add((c.Info.Module, c.Info.Node, snap.Project.Contains(c.Info.Module)));
+        return result;
+    }
+
+    /// <summary>The methods of the project that override this one, in every class below its own (all levels down).</summary>
+    static List<(ModuleInfo Module, ClassDef Class, FunctionDef Method)> OverridingMethods(Snapshot snap, ClassDef owner, string name) =>
+        Descendants(snap, owner).Select(d => (d.Module, d.Class, Method: MethodIn(d.Module, d.Class, name))).Where(x => x.Method != null)
+            .Select(x => (x.Module, x.Class, x.Method!)).ToList();
+
+    /// <summary>The project method at the top of the chain a method overrides (as PyCharm's deepest super method), or null when it overrides none of the project's.</summary>
+    static (ModuleInfo Module, ClassDef Class, FunctionDef Method)? DeepestProjectSuper(Snapshot snap, ModuleInfo module, ClassDef cd, string name)
+    {
+        var above = SuperMethods(snap, module, cd, name).Where(s => s.InProject).ToList();
+        return above.Count == 0 ? null : (above[^1].Module, above[^1].Class, above[^1].Method);
+    }
+
+    /// <summary>The nearest library method this one overrides, as "Thread (threading)"; null when there is none.</summary>
+    static string? LibrarySuper(Snapshot snap, ModuleInfo module, ClassDef cd, string name) =>
+        SuperMethods(snap, module, cd, name).Where(s => !s.InProject).Select(s => $"{s.Class.Name} ({s.Module.Name})").FirstOrDefault();
 
     ModuleInfo? ModuleAtUri(Snapshot snap, string uri)
     {
@@ -136,6 +169,9 @@ public sealed partial class LanguageService
     (ModuleInfo Module, Node Def)? DefOf(Snapshot snap, HierarchyItem item)
     {
         var m = ModuleAtUri(snap, item.Uri);
+        // a library's class (a supertype of the project's) is found again by its module, which its item names
+        if (m == null && item.Kind == KindClass && item.Detail != null && snap.Workspace.GetModule(item.Detail) is { } library
+            && string.Equals(UriOfModule(library), item.Uri, StringComparison.OrdinalIgnoreCase)) m = library;
         if (m == null) return null;
         int offset = Lines(m).OffsetOf(item.SelectionRange.Start);
         foreach (var n in AstChildren.Descendants(m.Ast))
@@ -224,7 +260,7 @@ public sealed partial class LanguageService
         foreach (var cd in AstChildren.Descendants(m.Ast).OfType<ClassDef>())
         {
             var descendants = Descendants(snap, cd);
-            var ancestors = Ancestors(snap, m, cd);
+            var ancestors = MroClasses(snap, m, cd);
 
             var direct = SubclassIndex(snap).GetValueOrDefault(cd);
             if (direct is { Count: > 0 })
@@ -242,13 +278,15 @@ public sealed partial class LanguageService
                 int line = lines.PositionOf(f.NameStart).Line;
                 bool abstractMethod = IsAbstractDef(f);
 
-                foreach (var (am, ac) in ancestors)
+                // the nearest method above; a library's (typeshed, site-packages, object's own) is named with its module and points into its file when it has one
+                if (SuperMethods(ancestors, f.Name).FirstOrDefault() is ({ } am, { } ac, { } above, var inProject))
                 {
-                    if (MethodIn(am, ac, f.Name) is not { } above) continue;
-                    if (Where(am, above) is { } where)
-                        markers.Add(new InheritanceMarker(line, IsAbstractDef(above) ? "implements" : "overrides",
-                            $"{(IsAbstractDef(above) ? "Implements" : "Overrides")} {ac.Name}.{f.Name}", new List<Location> { where }));
-                    break;
+                    string kind = IsAbstractDef(above) ? "implements" : "overrides";
+                    if (inProject && Where(am, above) is { } where)
+                        markers.Add(new InheritanceMarker(line, kind, $"{(kind == "implements" ? "Implements" : "Overrides")} {ac.Name}.{f.Name}", new List<Location> { where }));
+                    else if (!inProject)
+                        markers.Add(new InheritanceMarker(line, kind, $"{(kind == "implements" ? "Implements" : "Overrides")} method in {ac.Name} ({am.Name})",
+                            UriOfModule(am) is { } u ? new List<Location> { new(u, Lines(am).RangeOf(above.NameStart, above.NameStart + above.Name.Length)) } : new List<Location>()));
                 }
 
                 var below = descendants.Select(d => (d.Module, Method: MethodIn(d.Module, d.Class, f.Name))).Where(x => x.Method != null)
@@ -310,29 +348,38 @@ public sealed partial class LanguageService
         if (DefOf(snap, item) is not { } target) return Array.Empty<IncomingCall>();
 
         // calling a class calls its __init__, so the calls of the class are the calls of the constructor
-        var names = new List<(ModuleInfo Module, Node Def)> { target };
-        if (target.Def is FunctionDef { Name: "__init__" } init && ClassOfMethod(target.Module, init) is { } owner) names.Add((target.Module, owner));
+        var names = new List<(ModuleInfo Module, Node Def, string? Via)> { (target.Module, target.Def, null) };
+        if (target.Def is FunctionDef { Name: "__init__" } init && ClassOfMethod(target.Module, init) is { } owner) names.Add((target.Module, owner, null));
+        // as in PyCharm, a call of a method it overrides may run it too (`s.area()` with `s: Shape` for Circle.area); object's methods are left out
+        if (target.Def is FunctionDef method && Overridable(method.Name) && ClassOfMethod(target.Module, method) is { } cls)
+            foreach (var (sm, sc, sf, _) in SuperMethods(snap, target.Module, cls, method.Name))
+                if (!(sc.Name == "object" && sm.Name == "builtins")) names.Add((sm, sf, $"{sc.Name}.{sf.Name}"));
 
-        var callers = new Dictionary<Node, (ModuleInfo Module, List<Range> Ranges)>(ReferenceEqualityComparer.Instance);
-        var order = new List<Node>();
-        foreach (var (module, def) in names)
+        // a caller that calls it directly and one that calls it through a base's method are two entries
+        var direct = new Dictionary<Node, (ModuleInfo Module, List<Range> Ranges, string? Via)>(ReferenceEqualityComparer.Instance);
+        var through = new Dictionary<Node, (ModuleInfo Module, List<Range> Ranges, string? Via)>(ReferenceEqualityComparer.Instance);
+        var order = new List<(Node Caller, bool Through)>();
+        foreach (var (module, def, via) in names)
         {
             int nameStart = def switch { FunctionDef f => f.NameStart, ClassDef c => c.NameStart, _ => -1 };
             if (nameStart < 0 || FindTarget(snap, module, nameStart) is not { } t) continue;
+            var callers = via == null ? direct : through;
             foreach (var site in Usages(snap, t, forRename: false))
             {
                 if (site.IsDeclaration || CallAt(site) is not { } call) continue;
+                if (via != null && call.Func is AttributeExpr { Value: CallExpr { Func: NameExpr { Name: "super" } } }) continue;   // super().area() runs the base's
                 var caller = EnclosingCaller(site.Module, call);
-                if (!callers.TryGetValue(caller, out var entry)) { callers[caller] = entry = (site.Module, new List<Range>()); order.Add(caller); }
+                if (!callers.TryGetValue(caller, out var entry)) { callers[caller] = entry = (site.Module, new List<Range>(), via); order.Add((caller, via != null)); }
                 entry.Ranges.Add(Lines(site.Module).RangeOf(site.Start, site.End));
             }
         }
 
         var result = new List<IncomingCall>();
-        foreach (var caller in order)
+        foreach (var (caller, isThrough) in order)
         {
-            var (module, ranges) = callers[caller];
+            var (module, ranges, via) = (isThrough ? through : direct)[caller];
             var from = caller is PyMagic.Core.Syntax.Module ? ModuleItem(module) : ItemOf(module, caller);
+            if (from is { } calling && via != null) from = calling with { Detail = $"{calling.Detail}, through {via}" };   // the call names the base's method
             if (from != null) result.Add(new IncomingCall(from, ranges.OrderBy(r => r.Start.Line).ThenBy(r => r.Start.Character).ToList()));
         }
         return result.OrderBy(c => c.From.Uri, StringComparer.Ordinal).ThenBy(c => c.From.SelectionRange.Start.Line).ToList();

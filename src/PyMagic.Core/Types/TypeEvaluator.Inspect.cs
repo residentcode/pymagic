@@ -24,7 +24,7 @@ public sealed partial class TypeEvaluator
                     InspectCall(m, call, includeTypeMismatches, diags);
                     break;
                 case ClassDef cd:
-                    InspectClassKeywords(m, cd, diags);
+                    InspectClassKeywords(m, cd, includeTypeMismatches, diags);
                     break;
                 case AttributeExpr attr when !IsStoreTarget(m, attr):
                     InspectAttribute(m, attr, diags, includeOptionalMisses);

@@ -63,6 +63,8 @@ public sealed partial class LanguageService
 
         public IReadOnlyList<ModuleInfo> ConftestsOf(Workspace ws, ModuleInfo m) => ConftestsFor(ws, m);
 
+        public IReadOnlyList<ModuleInfo> PluginsOf(Workspace ws, ModuleInfo m) => PluginsFor(ws, m);
+
         string? PathOf(ModuleInfo m)
         {
             if (m.Path != null) return System.IO.Path.GetFullPath(m.Path);

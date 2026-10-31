@@ -61,22 +61,31 @@ public sealed partial class LanguageService
         var target = FindTarget(snap, m, Lines(m).OffsetOf(pos));
         if (target == null) return null;
         EnsureRenameable(snap, target);
-        return new PrepareRenameResult(Lines(m).RangeOf(target.Token.Start, target.Token.End), target.Name);
+        // a method that overrides others: the page asks whether the base method goes with it, or warns that a library's cannot
+        var range = Lines(m).RangeOf(target.Token.Start, target.Token.End);
+        if (MethodOf(snap, target) is { } method)
+        {
+            string? baseClass = DeepestProjectSuper(snap, method.Module, method.Class, method.Def.Name)?.Class.Name;
+            string? library = LibrarySuper(snap, method.Module, method.Class, method.Def.Name);
+            if (baseClass != null || library != null) return new PrepareRenameResult(range, target.Name, method.Class.Name, baseClass, library);
+        }
+        return new PrepareRenameResult(range, target.Name);
     }
 
     /// <exception cref="ServiceException">The thing cannot be renamed, or the new name is not valid.</exception>
-    public WorkspaceEdit Rename(string uri, Position pos, string newName)
+    /// <param name="renameBase">For a method that overrides one of the project's: rename the method at the top of the chain (and all that override it) instead.</param>
+    public WorkspaceEdit Rename(string uri, Position pos, string newName, bool renameBase = false)
     {
         using var searching = Searching(uri, pos);
         if (DjangoRename(uri, pos, newName) is { } urlRename) return urlRename;
         var snap = Full();
         if (snap.ByUri.TryGetValue(uri, out var fm) && FixtureTargetAt(snap, fm, Lines(fm).OffsetOf(pos)) is { } fixture)
             return RenameFixture(snap, fixture, newName);
-        return RenameSymbol(uri, pos, newName);
+        return RenameSymbol(uri, pos, newName, renameBase);
     }
 
     /// <summary>Rename of the thing under the cursor as a name in the program (a fixture is handled by <see cref="RenameFixture"/>).</summary>
-    WorkspaceEdit RenameSymbol(string uri, Position pos, string newName)
+    WorkspaceEdit RenameSymbol(string uri, Position pos, string newName, bool renameBase = false)
     {
         var snap = Full();
         if (!snap.ByUri.TryGetValue(uri, out var m)) throw new ServiceException("unknown document");
@@ -89,14 +98,43 @@ public sealed partial class LanguageService
             if (newName != target.Name && s.Scope.Symbols.TryGetValue(newName, out var clash) && (clash.Redirect ?? clash).Declarations.Count > 0)
                 throw new ServiceException($"'{newName}' is already defined in this scope");
 
-        var changes = new Dictionary<string, List<TextEdit>>();
-        foreach (var site in Usages(snap, target, forRename: true))
+        // a method takes the methods that override it along (all levels down), and with renameBase the method at the top of its chain
+        var targets = new List<Target> { target };
+        if (MethodOf(snap, target) is { } method)
         {
-            var loc = ToLocation(site) ?? throw new ServiceException("a usage lies in a file that cannot be edited");
-            if (!changes.TryGetValue(loc.Uri, out var list)) changes[loc.Uri] = list = new List<TextEdit>();
-            list.Add(new TextEdit(loc.Range, newName));
+            var root = (method.Module, method.Class, Method: method.Def);
+            if (renameBase && DeepestProjectSuper(snap, method.Module, method.Class, method.Def.Name) is { } top) root = top;
+            var family = new List<(ModuleInfo Module, ClassDef Class, FunctionDef Method)> { root };
+            family.AddRange(OverridingMethods(snap, root.Class, root.Method.Name));
+            foreach (var (module, cls, def) in family)
+            {
+                if (newName != def.Name && module.Semantics.ScopeOf(cls) is { } scope && scope.Symbols.TryGetValue(newName, out var clash) && clash.Declarations.Count > 0)
+                    throw new ServiceException($"'{newName}' is already defined in class {cls.Name}");
+                if (ReferenceEquals(def, method.Def) || FindTarget(snap, module, def.NameStart) is not { } t) continue;
+                EnsureRenameable(snap, t);
+                targets.Add(t);
+            }
         }
+
+        var changes = new Dictionary<string, List<TextEdit>>();
+        var done = new HashSet<(string, int, int)>();
+        foreach (var t in targets)
+            foreach (var site in Usages(snap, t, forRename: true))
+            {
+                var loc = ToLocation(site) ?? throw new ServiceException("a usage lies in a file that cannot be edited");
+                if (!done.Add((loc.Uri, loc.Range.Start.Line, loc.Range.Start.Character))) continue;
+                if (!changes.TryGetValue(loc.Uri, out var list)) changes[loc.Uri] = list = new List<TextEdit>();
+                list.Add(new TextEdit(loc.Range, newName));
+            }
         return new WorkspaceEdit(changes);
+    }
+
+    /// <summary>The project method a rename target stands for (its def or a use of it), when it is one that overrides or can be overridden.</summary>
+    static (ModuleInfo Module, ClassDef Class, FunctionDef Def)? MethodOf(Snapshot snap, Target target)
+    {
+        var def = target.Nodes.OfType<FunctionDef>().LastOrDefault();
+        if (def == null || !Overridable(def.Name) || OwnerModule(def, snap.Project) is not { } module || ClassOfMethod(module, def) is not { } cls) return null;
+        return MethodIn(module, cls, def.Name) is { } bound && ReferenceEquals(bound, def) ? (module, cls, def) : null;
     }
 
     void EnsureRenameable(Snapshot snap, Target target)
@@ -363,40 +401,56 @@ public sealed partial class LanguageService
     }
 
     /// <summary>
-    /// Searches the modules on several workers: this thread takes the first share, the others each work in a copy of this service (an evaluator of its own,
-    /// the same parsed modules, so the declarations the target holds are the very same objects). False when a worker failed; the caller then does it all itself.
+    /// Searches the modules on several workers: this thread and copies of this service (each with an evaluator of its own and the same parsed modules, so the
+    /// declarations the target holds are the very same objects) take the modules a few at a time from one queue, so a worker that meets slow files does not hold
+    /// the others up. What each module gives is kept by its place in the project and handed on in that order, the order one thread gives (a module a copy
+    /// does not have is done here at the end). False when a worker failed, before anything was handed on; the caller then does it all itself.
     /// </summary>
     bool UsagesInParallel(Snapshot snap, Target target, bool forRename, bool memberLike, int workers, Action<ModuleInfo, (int Start, int End), bool> add)
     {
         var modules = snap.Project;
-        var uriOf = modules.ToDictionary(m => m, m => UriOfModule(m) ?? "", ReferenceEqualityComparer.Instance as IEqualityComparer<ModuleInfo>);
-        var byUri = new Dictionary<string, ModuleInfo>(StringComparer.Ordinal);
-        foreach (var (m, uri) in uriOf) if (uri.Length > 0) byUri[uri] = m;
+        var uris = modules.Select(m => UriOfModule(m) ?? "").ToArray();
         var files = modules.Select(m => m.Path).Where(p => p != null).Select(p => p!).ToList();
-        int per = (modules.Count + workers - 1) / workers;
-        var shares = Enumerable.Range(0, workers).Select(i => modules.Skip(i * per).Take(per).ToList()).Where(l => l.Count > 0).ToList();
+        var found = new List<((int Start, int End) Span, bool Decl)>[modules.Count];
+        int next = 0;
+        const int Batch = 4;
+        bool failed = false;
 
-        var tasks = shares.Skip(1).Select(share => Task.Run(() =>
+        // takes batches until the queue is empty; moduleAt gives this searcher's own module for a place in the project (null: it has none)
+        void Drain(LanguageService svc, Snapshot s, Func<int, ModuleInfo?> moduleAt)
         {
-            var worker = Fork(files);
-            var wsnap = worker.Full();
-            var mine = new HashSet<string>(share.Select(m => uriOf[m]), StringComparer.Ordinal);
-            var found = new List<(string Uri, (int Start, int End) Span, bool Decl)>();
-            foreach (var wm in wsnap.Project)
+            for (int from; !Volatile.Read(ref failed) && (from = Interlocked.Add(ref next, Batch) - Batch) < modules.Count;)
+                for (int i = from; i < Math.Min(from + Batch, modules.Count); i++)
+                    if (moduleAt(i) is { } m)
+                    {
+                        var list = new List<((int Start, int End) Span, bool Decl)>();
+                        svc.UsagesIn(s, target, m, forRename, memberLike, (span, decl) => list.Add((span, decl)));
+                        found[i] = list;
+                    }
+        }
+
+        var tasks = Enumerable.Range(1, workers - 1).Select(_ => Task.Run(() =>
+        {
+            try
             {
-                if (worker.UriOfModule(wm) is not { } uri || !mine.Contains(uri)) continue;
-                worker.UsagesIn(wsnap, target, wm, forRename, memberLike, (span, decl) => found.Add((uri, span, decl)));
+                var worker = Fork(files);
+                var wsnap = worker.Full();
+                var byUri = new Dictionary<string, ModuleInfo>(StringComparer.Ordinal);
+                foreach (var wm in wsnap.Project) if (worker.UriOfModule(wm) is { } u) byUri[u] = wm;
+                Drain(worker, wsnap, i => byUri.GetValueOrDefault(uris[i]));
             }
-            return found;
+            catch { Volatile.Write(ref failed, true); throw; }
         })).ToArray();
 
-        foreach (var m in shares[0])
-            UsagesIn(snap, target, m, forRename, memberLike, (span, decl) => add(m, span, decl));
+        try { Drain(this, snap, i => modules[i]); }
+        catch { Volatile.Write(ref failed, true); try { Task.WaitAll(tasks); } catch (AggregateException) { } throw; }
         try { Task.WaitAll(tasks); }
         catch (AggregateException) { return false; }
-        foreach (var t in tasks)
-            foreach (var (uri, span, decl) in t.Result)
-                if (byUri.TryGetValue(uri, out var m)) add(m, span, decl);
+        for (int i = 0; i < modules.Count; i++)
+        {
+            if (found[i] == null) { UsagesIn(snap, target, modules[i], forRename, memberLike, (span, decl) => add(modules[i], span, decl)); continue; }
+            foreach (var (span, decl) in found[i]) add(modules[i], span, decl);
+        }
         return true;
     }
 

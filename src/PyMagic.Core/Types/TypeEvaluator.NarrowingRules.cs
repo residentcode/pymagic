@@ -43,6 +43,10 @@ public sealed partial class TypeEvaluator
             if (op is not ("==" or "!=")) return t;
         }
 
+        // x[0] == "a", x[1] is None: the tuples whose item cannot be that go
+        if (c.Left is SubscriptExpr ls && IsReferenceSide(m, ls.Value, assertion) && ConstIndex(ls.Index) is int li) return NarrowByItem(m, t, li, right, equal, op);
+        if (right is SubscriptExpr rs && IsReferenceSide(m, rs.Value, assertion) && ConstIndex(rs.Index) is int ri) return NarrowByItem(m, t, ri, c.Left, equal, op);
+
         Expr other;
         if (IsReferenceSide(m, c.Left, assertion)) other = right;
         else if (IsReferenceSide(m, right, assertion)) other = c.Left;
@@ -60,10 +64,39 @@ public sealed partial class TypeEvaluator
         return t;
     }
 
+    /// <summary>
+    /// `x[i] == L`, `x[i] != L`, `x[i] is None`, `x[i] is Color.RED` on a union of tuples (as pyright does): a fixed tuple whose
+    /// item i cannot be what the comparison says on this branch goes; the others, and anything else, stay as they are.
+    /// </summary>
+    PyType NarrowByItem(ModuleInfo m, PyType t, int index, Expr other, bool equal, string op)
+    {
+        Func<PyType, PyType>? narrowItem = null;
+        if (other is ConstExpr { Kind: ConstKind.None }) narrowItem = item => equal ? OnlyNone(item) : WithoutNone(item);
+        else if (LiteralOf(other) is { } literal) narrowItem = item => NarrowLiteral(item, literal, equal);
+        else if (other is NameExpr or AttributeExpr && TypeOf(m, other) is ClassType { IsInstance: true, EnumMember: not null } member && IsEnumClass(member.Info))
+            narrowItem = item => equal ? NarrowToEnumMember(item, member, identity: op is "is" or "is not") : WithoutEnumMember(item, member);
+        if (narrowItem == null) return t;
+        var kept = new List<PyType>();
+        foreach (var x in t.Members)
+        {
+            if (x is ClassType { IsInstance: true } c && TupleItemsOf(c) is { } items)
+            {
+                int i = index < 0 ? items.Count + index : index;
+                if (i >= 0 && i < items.Count && !items[i].IsDynamic && narrowItem(items[i]) is NeverType) continue;
+            }
+            kept.Add(x);
+        }
+        return kept.Count == 0 ? PyType.Never : PyType.Union(kept);
+    }
+
     static string Flipped(string op) => op switch { "<" => ">", "<=" => ">=", ">" => "<", ">=" => "<=", _ => op };
     static string Negated(string op) => op switch { "==" => "!=", "!=" => "==", "<" => ">=", "<=" => ">", ">" => "<=", _ => "<" };
 
-    /// <summary>`len(x) == n`, `len(x) < n` and the like (<paramref name="op"/> holds on this branch): a fixed tuple stays when its length fits; `tuple[X, ...]` becomes the fixed tuples of the lengths that fit, when none is longer than 8.</summary>
+    /// <summary>
+    /// `len(x) == n`, `len(x) < n` and the like (<paramref name="op"/> holds on this branch): a fixed tuple stays when its length
+    /// fits; `tuple[X, ...]` becomes the fixed tuples of the lengths that fit, when none is longer than 8, or the "at least n"
+    /// form `tuple[X, X, *tuple[X, ...]]` for `>=` and `>` (n up to 8); a tuple already in that form likewise.
+    /// </summary>
     PyType NarrowLength(PyType t, string op, long n)
     {
         bool Fits(long k) => op switch { "==" => k == n, "!=" => k != n, "<" => k < n, "<=" => k <= n, ">" => k > n, _ => k >= n };
@@ -74,16 +107,49 @@ public sealed partial class TypeEvaluator
             if (x is ClassType { IsInstance: true, Info.Name: "tuple" } tup && tup.Info.Module.Name == "builtins")
             {
                 // tuple[int, *Ts] has no fixed length
-                if (tup.TupleItems != null && !tup.TupleItems.Any(i => i is TypeVarTupleType)) { if (Fits(tup.TupleItems.Count)) result.Add(x); continue; }
-                if (tup.TupleItems == null && tup.Args.Count == 1 && longest is <= 8)
+                if (tup.TupleItems != null && !tup.TupleItems.Any(i => i is TypeVarTupleType or UnboundedItemsType)) { if (Fits(tup.TupleItems.Count)) result.Add(x); continue; }
+                if (AtLeastParts(tup) is { } p)
                 {
-                    for (int k = 0; k <= longest; k++) if (Fits(k)) result.Add(TupleOf(Enumerable.Repeat(tup.Args[0], k).ToList()));
+                    int least = p.Before.Count + p.After.Count;
+                    if (longest != null)
+                    {
+                        if (longest > 8) { result.Add(x); continue; }
+                        for (int k = least; k <= longest; k++) if (Fits(k)) result.Add(Lengthened(p, k, false));
+                        continue;
+                    }
+                    // `len(t) >= 2`, `len(t) > 1`, `len(t) != 0`: at least so many items
+                    long atLeast = op switch { ">=" => n, ">" => n + 1, _ => n == least ? n + 1 : least };
+                    result.Add(atLeast > least && atLeast <= 8 ? Lengthened(p, (int)atLeast, true) : x);
                     continue;
                 }
             }
             result.Add(x);
         }
         return result.Count == 0 ? PyType.Never : PyType.Union(result);
+    }
+
+    /// <summary>
+    /// The parts of a tuple of unbounded length: the items before a `*tuple[X, ...]`, X, and the items after it (none
+    /// before or after for `tuple[X, ...]`); null for a fixed tuple and any other type.
+    /// </summary>
+    static (IReadOnlyList<PyType> Before, PyType Item, IReadOnlyList<PyType> After)? AtLeastParts(PyType x)
+    {
+        if (x is not ClassType { IsInstance: true, Info.Name: "tuple" } c || c.Info.Module.Name != "builtins") return null;
+        if (c.TupleItems == null) return c.Args.Count == 1 ? (Array.Empty<PyType>(), c.Args[0], Array.Empty<PyType>()) : null;
+        var items = c.TupleItems;
+        if (items.Any(i => i is TypeVarTupleType)) return null;
+        int at = items.ToList().FindIndex(i => i is UnboundedItemsType);
+        if (at < 0) return null;
+        return (items.Take(at).ToList(), ((UnboundedItemsType)items[at]).Item, items.Skip(at + 1).ToList());
+    }
+
+    /// <summary>The tuple of <paramref name="length"/> items (or, <paramref name="orMore"/>, of at least that many) that an unbounded tuple can be.</summary>
+    PyType Lengthened((IReadOnlyList<PyType> Before, PyType Item, IReadOnlyList<PyType> After) p, int length, bool orMore)
+    {
+        if (BuiltinClass("tuple") is not { } tuple) return PyType.Unknown;
+        var items = p.Before.Concat(Enumerable.Repeat(p.Item, length - p.Before.Count - p.After.Count));
+        if (!orMore) return TupleOf(items.Concat(p.After).ToList());
+        return TupleOf(tuple, items.Append(new UnboundedItemsType(p.Item)).Concat(p.After).ToList());
     }
 
     static readonly HashSet<string> NotSequences = new() { "str", "bytes", "bytearray", "int", "float", "bool", "complex", "dict", "set", "frozenset", "NoneType" };
@@ -100,14 +166,15 @@ public sealed partial class TypeEvaluator
         var result = new List<PyType>();
         foreach (var x in t.Members)
         {
-            bool fits = x is ClassType { IsInstance: true, Info.Name: "tuple", TupleItems: { } items } tc && tc.Info.Module.Name == "builtins" ? (star ? items.Count >= count : items.Count == count) : true;
+            var unbounded = AtLeastParts(x);
+            bool fits = unbounded is { } u ? star || count >= u.Before.Count + u.After.Count
+                : x is ClassType { IsInstance: true, Info.Name: "tuple", TupleItems: { } items } tc && tc.Info.Module.Name == "builtins" ? (star ? items.Count >= count : items.Count == count) : true;
             if (matched)
             {
                 if (IsBuiltinInstance(x, NotSequences) || !fits) continue;
                 var y = x;
-                if (x is ClassType { IsInstance: true, Info.Name: "tuple", TupleItems: null, Args.Count: 1 } homogeneous && !star && homogeneous.Info.Module.Name == "builtins")
-                    y = TupleOf(Enumerable.Repeat(homogeneous.Args[0], count).ToList());
-                if (y is ClassType { TupleItems: { } fixedItems } && fixedItems.All(i => i is not TypeVarTupleType))
+                if (unbounded != null && !star) y = Lengthened(unbounded.Value, count, false);
+                if (y is ClassType { TupleItems: { } fixedItems } && fixedItems.All(i => i is not (TypeVarTupleType or UnboundedItemsType)))
                 {
                     // a tuple in which some item cannot match is left out
                     var narrowed = fixedItems.ToList();
@@ -117,7 +184,9 @@ public sealed partial class TypeEvaluator
                 }
                 result.Add(y);
             }
-            else if (fits && x is ClassType { IsInstance: true, Info.Name: "tuple", TupleItems: { } fixedItems })
+            // `case (a, b, *rest):` surely matches a tuple of at least two items
+            else if (unbounded is { } least && star && count <= least.Before.Count + least.After.Count && p.Items.All(Irrefutable)) continue;
+            else if (fits && unbounded == null && x is ClassType { IsInstance: true, Info.Name: "tuple", TupleItems: { } fixedItems })
             {
                 // a fitting tuple goes when every item surely matches; when only one can fail, that item is narrowed the other way
                 bool variadic = fixedItems.Any(i => i is TypeVarTupleType);
@@ -403,6 +472,179 @@ public sealed partial class TypeEvaluator
             }
         }
         return t;
+    }
+
+    // ------------------------------------------------------------ names bound by patterns
+
+    /// <summary>
+    /// The type of a name a pattern binds (a capture, `as`, `*rest`, `**rest`): the part of the subject it matches, after
+    /// the narrowing of the earlier cases and of the pattern itself. A subject nothing is known about binds Unknown.
+    /// </summary>
+    PyType PatternBindingType(ModuleInfo m, Declaration d)
+    {
+        Node? node = d.Node;
+        while (node != null && node is not MatchCase) node = m.ParentOf(node);
+        if (node is not MatchCase mc || m.ParentOf(mc) is not MatchStmt ms) return PyType.Unknown;
+        var t = TypeOf(m, ms.Subject);
+        foreach (var earlier in ms.Cases)
+        {
+            if (ReferenceEquals(earlier, mc)) break;
+            // a case with a guard can fail after its pattern matched
+            if (earlier.Guard == null) t = NarrowPattern(m, earlier.Pattern, t, false);
+        }
+        if (t.IsDynamic) return PyType.Unknown;
+        if (t is NeverType) return t;    // the earlier cases leave nothing for this one
+        return BoundType(m, mc.Pattern, t, d.Name) ?? PyType.Unknown;
+    }
+
+    /// <summary>What <paramref name="name"/> is bound to when <paramref name="p"/> matches a value of type <paramref name="t"/>; null when p does not bind it.</summary>
+    PyType? BoundType(ModuleInfo m, Pattern p, PyType t, string name)
+    {
+        switch (p)
+        {
+            case MatchCapture c:
+                return c.Name == name ? t : null;
+
+            case MatchAs a:
+                return a.Name == name ? NarrowPattern(m, a.Pattern, t, true) : BoundType(m, a.Pattern, t, name);
+
+            case MatchOr o:
+            {
+                // each alternative is tried on what the ones before it did not match
+                var parts = new List<PyType>();
+                foreach (var alt in o.Alternatives)
+                {
+                    if (BoundType(m, alt, t, name) is { } part) parts.Add(part);
+                    t = NarrowPattern(m, alt, t, false);
+                }
+                return parts.Count == 0 ? null : PyType.Union(parts);
+            }
+
+            case MatchSequence sq:
+            {
+                int at = sq.Items.ToList().FindIndex(i => Binds(i, name));
+                if (at < 0) return null;
+                var narrowed = NarrowSequence(m, sq, t, true);
+                if (sq.Items[at] is MatchStar)
+                {
+                    // one list of what the star takes from each sequence; one that it takes nothing from adds nothing
+                    var taken = PyType.Union(narrowed.Members.Select(x => SequenceItemType(sq, x, at)));
+                    return Inst("list", taken is NeverType ? PyType.Unknown : taken);
+                }
+                return PyType.Union(narrowed.Members.Select(x => BoundType(m, sq.Items[at], SequenceItemType(sq, x, at), name) ?? PyType.Unknown));
+            }
+
+            case MatchMapping mp:
+            {
+                int at = mp.Patterns.ToList().FindIndex(i => Binds(i, name));
+                if (at < 0 && mp.Rest != name) return null;
+                var narrowed = NarrowMapping(t, true);
+                return PyType.Union(narrowed.Members.Select(x =>
+                {
+                    var (key, value) = MappingItemTypes(x, at < 0 ? null : mp.Keys[at]);
+                    return at < 0 ? Inst("dict", key, value) : BoundType(m, mp.Patterns[at], value, name) ?? PyType.Unknown;
+                }));
+            }
+
+            case MatchClass c:
+            {
+                int pos = c.Positional.ToList().FindIndex(i => Binds(i, name));
+                int kw = c.KeywordPatterns.ToList().FindIndex(i => Binds(i, name));
+                if (pos < 0 && kw < 0) return null;
+                var sub = pos >= 0 ? c.Positional[pos] : c.KeywordPatterns[kw];
+                var narrowed = NarrowPattern(m, c, t, true);
+                return PyType.Union(narrowed.Members.Select(x =>
+                {
+                    if (x is not ClassType { IsInstance: true } xc) return PyType.Unknown;
+                    // `case int(n):`: the builtins that match their one positional argument against the whole subject
+                    if (pos == 0 && xc.Info.Module.Name == "builtins" && SelfMatching.Contains(xc.Info.Name) && MatchArgs(xc) == null)
+                        return BoundType(m, sub, xc, name) ?? PyType.Unknown;
+                    var attr = pos >= 0 ? MatchArgs(xc) is { } names && pos < names.Count ? names[pos] : null : c.KeywordNames[kw];
+                    if (attr == null) return PyType.Unknown;
+                    var attrType = AttributeType(xc, attr);
+                    return attrType.Missing.Count > 0 ? PyType.Unknown : BoundType(m, sub, attrType.Type, name) ?? PyType.Unknown;
+                }));
+            }
+        }
+        return null;
+    }
+
+    static bool Binds(Pattern p, string name) => p switch
+    {
+        MatchCapture c => c.Name == name,
+        MatchStar s => s.Name == name,
+        MatchAs a => a.Name == name || Binds(a.Pattern, name),
+        MatchOr o => o.Alternatives.Any(alt => Binds(alt, name)),
+        MatchSequence sq => sq.Items.Any(i => Binds(i, name)),
+        MatchMapping mp => mp.Rest == name || mp.Patterns.Any(i => Binds(i, name)),
+        MatchClass c => c.Positional.Any(i => Binds(i, name)) || c.KeywordPatterns.Any(i => Binds(i, name)),
+        _ => false,
+    };
+
+    /// <summary>The type of the items that item <paramref name="at"/> of a sequence pattern matches in <paramref name="x"/>; for the star, the items it takes (one type for all of them).</summary>
+    PyType SequenceItemType(MatchSequence sq, PyType x, int at)
+    {
+        if (x is not ClassType { IsInstance: true } c) return PyType.Unknown;
+        if (c.TupleItems != null && c.TupleItems.Any(i => i is TypeVarTupleType)) return PyType.Unknown;
+        if (TupleItemsOf(c) is { } items)
+        {
+            if (sq.Items[at] is MatchStar)
+            {
+                // the items between those matched before the star and those matched after it
+                int after = sq.Items.Count - at - 1;
+                var taken = items.Skip(at).Take(items.Count - at - after).ToList();
+                return PyType.Union(taken);
+            }
+            foreach (var (sub, index) in ItemPatterns(sq, items.Count))
+                if (ReferenceEquals(sub, sq.Items[at])) return index >= 0 && index < items.Count ? items[index] : PyType.Unknown;
+            return PyType.Unknown;
+        }
+        // tuple[int, *tuple[str, ...]] with `case (a, *rest)`: the items the pattern reaches by position, the others all together
+        int starAt = sq.Items.ToList().FindIndex(i => i is MatchStar);
+        if (AtLeastParts(c) is { } p && starAt >= 0)
+        {
+            int fromEnd = sq.Items.Count - at;
+            if (at < starAt && at < p.Before.Count) return p.Before[at];
+            if (at > starAt && fromEnd <= p.After.Count) return p.After[p.After.Count - fromEnd];
+            int after = sq.Items.Count - starAt - 1;
+            if (at == starAt && starAt <= p.Before.Count && after <= p.After.Count)
+                return PyType.Union(p.Before.Skip(starAt).Append(p.Item).Concat(p.After.Take(p.After.Count - after)));
+        }
+        return IterElement(c);
+    }
+
+    /// <summary>The key and value types of a mapping; with a constant key of a TypedDict, the value is that key's.</summary>
+    (PyType Key, PyType Value) MappingItemTypes(PyType x, Expr? key)
+    {
+        if (x is not ClassType { IsInstance: true } c) return (PyType.Unknown, PyType.Unknown);
+        if (TypedDictFieldsOf(c.Info) is { } fields)
+        {
+            if (key == null) return (Inst("str"), Inst("object"));
+            return (Inst("str"), StringValue(key) is { } k && fields.FirstOrDefault(f => f.Field.Name == k).Field is { } field ? field.Type : PyType.Unknown);
+        }
+        if (TypingClass("Mapping") is { } mapping && SpecializeAs(c, mapping.Info) is { Args.Count: 2 } spec) return (spec.Args[0], spec.Args[1]);
+        return (PyType.Unknown, PyType.Unknown);
+    }
+
+    /// <summary>The builtins whose class pattern matches its one positional sub-pattern against the subject itself.</summary>
+    static readonly HashSet<string> SelfMatching = new() { "bool", "bytearray", "bytes", "dict", "float", "frozenset", "int", "list", "set", "str", "tuple" };
+
+    /// <summary>
+    /// The attribute names a class pattern's positional sub-patterns stand for: a `__match_args__ = ("x", "y")` in the
+    /// class or a base, else the fields of a named tuple, else the init fields of a dataclass that are not keyword-only.
+    /// </summary>
+    IReadOnlyList<string>? MatchArgs(ClassType c)
+    {
+        if (FindMember(c, "__match_args__", false, null, out _) is { ClassSymbol: { } sym } hit)
+        {
+            foreach (var d in sym.Declarations)
+                if (d.Node is Expr target && hit.Owner.Info.Module.ParentOf(target) is AssignStmt { Value: TupleExpr tuple } && tuple.Items.All(i => StringValue(i) != null))
+                    return tuple.Items.Select(i => StringValue(i)!).ToList();
+            return null;
+        }
+        if (NamedTupleFieldsOf(c.Info) is { } tupleFields) return tupleFields.Select(f => f.Name).ToList();
+        if (IsDataclass(c.Info)) return DataclassFields(c).Where(f => f.InInit && !f.KwOnly).Select(f => f.Name).ToList();
+        return null;
     }
 
     // ------------------------------------------------------------ literal values

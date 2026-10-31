@@ -267,4 +267,49 @@ public class FlowTests
         var r = Reach(Load(sb.ToString()), "x");
         Assert.True(!r.MaybeUnbound);
     }
+
+    [Fact]
+    public void BreakRunsTheFinallyBlockOnItsWayOut()
+    {
+        const string src = "def f():\n    while True:\n        try:\n            break\n        finally:\n            r = 1\n    return r\n";
+        var r = Reach(Load(src), "r");
+        Assert.True(!r.MaybeUnbound);
+        Assert.Equal("6", Lines(src, r));
+        Assert.Equal(0, Load(src).Flow.Analyse().Count);
+    }
+
+    [Fact]
+    public void ContinueRunsTheFinallyBlockAndGoesBackToTheLoop()
+    {
+        const string src = "def f(xs):\n    last = None\n    for x in xs:\n        try:\n            continue\n        finally:\n            last = x\n        never()\n    return last\n";
+        var ctx = Load(src);
+        Assert.Equal("2,7", Lines(src, Reach(ctx, "last", 0)));
+        var d = ctx.Flow.Analyse();
+        Assert.Equal(1, d.Count(x => x.Message == "Unreachable code"));
+        Assert.Equal(8, src.Take(d.Single().Start).Count(ch => ch == '\n') + 1);
+    }
+
+    [Fact]
+    public void ReturnRunsTheFinallyBlockThenLeavesTheFunction()
+    {
+        const string src = "def f():\n    try:\n        return g()\n    finally:\n        z = 2\n    print(z)\n";
+        var d = Load(src).Flow.Analyse();
+        Assert.Equal(1, d.Count(x => x.Message == "Unreachable code"));
+        Assert.True(!d.Any(x => x.Message.StartsWith("Local variable")));
+        // through two finally blocks: both have run where the break arrives
+        const string nested = "def f():\n    while True:\n        try:\n            try:\n                break\n            finally:\n                a = 1\n        finally:\n            b = 2\n    return a, b\n";
+        var ctx = Load(nested);
+        Assert.True(!Reach(ctx, "a").MaybeUnbound && !Reach(ctx, "b").MaybeUnbound);
+    }
+
+    [Fact]
+    public void ReturnInAFinallyBlockEndsTheFunctionOnEveryPath()
+    {
+        var ctx = Load("def f():\n    while True:\n        try:\n            break\n        finally:\n            return 2\n    print(1)\n");
+        Assert.True(!ctx.Flow.For(ctx.Sem.ModuleScope.Children[0])!.Graph.EndReachable);
+        Assert.Equal(1, ctx.Flow.Analyse().Count(x => x.Message == "Unreachable code"));
+        // dead code after it does not make the end of the function reachable
+        var g = Load("def f():\n    try:\n        return 1\n    finally:\n        return 2\n    print(3)\n");
+        Assert.True(!g.Flow.For(g.Sem.ModuleScope.Children[0])!.Graph.EndReachable);
+    }
 }

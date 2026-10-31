@@ -446,6 +446,7 @@ public sealed partial class TypeEvaluator
             case DeclKind.Variable: return d.Node is Expr target ? InferTargetType(m, target) : PyType.Unknown;
             case DeclKind.Import: return ImportType(m, (ImportAlias)d.Node);
             case DeclKind.TypeParam: return TypeParamType((TypeParam)d.Node);
+            case DeclKind.MatchCapture: return PatternBindingType(m, d);
             case DeclKind.ExceptionVar:
             {
                 var h = (ExceptHandler)d.Node;
@@ -465,6 +466,8 @@ public sealed partial class TypeEvaluator
     /// <summary>The type a parameter has inside its function body.</summary>
     PyType ParameterType(ModuleInfo m, Parameter p)
     {
+        // an evaluator made for one call site: the argument's type (see ReturnAtCallSite)
+        if (_callSiteParams != null && _callSiteParams.TryGetValue(p, out var given)) return given;
         var owner = m.ParentOf(p);
         FunctionInfo? fn = owner switch
         {

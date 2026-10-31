@@ -18,3 +18,15 @@ export function relUnderRoot(uri, rootUri) {
     const rel = file.slice(root.length);
     return rel.length > 0 && !rel.split('/').includes('..') ? rel : null;
 }
+
+/** The path of a file address as the system writes it (`C:/Program Files/x/threading.pyi`), for a place the page cannot open; the address itself when it is not a file's. */
+export function filePathOf(uri) {
+    if (!uri || !uri.startsWith('file://')) return uri ?? '';
+    let path;
+    try {
+        path = decodeURIComponent(uri.slice('file://'.length));
+    } catch {
+        return uri;
+    }
+    return /^\/[A-Za-z]:/.test(path) ? path.slice(1) : path;
+}

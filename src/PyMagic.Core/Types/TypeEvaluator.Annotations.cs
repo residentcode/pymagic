@@ -173,12 +173,17 @@ public sealed partial class TypeEvaluator
             return new ClassType(tuple.Info, new[] { Annotation(m, args[0], lookup, deferred) }, true);
         if (args.Count == 1 && args[0] is TupleExpr { Items.Count: 0 })
             return new ClassType(tuple.Info, new[] { PyType.Unknown }, true, Array.Empty<PyType>());
-        return TupleOf(tuple, args.Select(a => Annotation(m, a, lookup, deferred)).ToList());
+        // tuple[int, *tuple[str, ...]]: at least the other items
+        var items = args.Select(a => a is StarExpr { Value: var unpacked } && Annotation(m, unpacked, lookup, deferred) is ClassType { TupleItems: null, Args: [var item] } inner
+            && ReferenceEquals(inner.Info, tuple.Info) ? new UnboundedItemsType(item) : Annotation(m, a, lookup, deferred)).ToList();
+        if (items.Count(x => x is UnboundedItemsType) > 1) return new ClassType(tuple.Info, new[] { PyType.Unknown }, true);
+        if (items is [UnboundedItemsType only]) return new ClassType(tuple.Info, new[] { only.Item }, true);
+        return TupleOf(tuple, items);
     }
 
     /// <summary>A tuple of these items; with a `*Ts` among them its length is not known, so its element type is not either.</summary>
     static ClassType TupleOf(ClassType tuple, IReadOnlyList<PyType> items) =>
-        new(tuple.Info, new[] { items.Any(x => x is TypeVarTupleType) ? PyType.Unknown : PyType.Union(items) }, true, items);
+        new(tuple.Info, new[] { items.Any(x => x is TypeVarTupleType) ? PyType.Unknown : PyType.Union(items.Select(x => x is UnboundedItemsType u ? u.Item : x)) }, true, items);
 
     PyType SpecialFormSubscript(ModuleInfo m, string form, IReadOnlyList<Expr> args, Scope? lookup, bool deferred = false)
     {

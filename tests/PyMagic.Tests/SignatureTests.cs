@@ -226,9 +226,12 @@ public class SignatureTests
     [Fact]
     public void WarnsAboutOverridesAndComments()
     {
+        // an override takes the change (README item 160); a same-named method of an unrelated class is only reported
         var r = Change(null, new[] { P(0, "x") },
-            (Main, Src("class A:", "    def go|(self, x, y):", "        pass", "", "class B(A):", "    def go(self, x, y):", "        pass")));
-        Assert.True(r.Warnings.Any(w => w.Contains("define a method with this name") || w.Contains("1 other class")), string.Join(" | ", r.Warnings));
+            (Main, Src("class A:", "    def go|(self, x, y):", "        pass", "", "class B(A):", "    def go(self, x, y):", "        pass", "", "class C:", "    def go(self, x, y):", "        pass")));
+        Assert.Contains("class B(A):\n    def go(self, x):", r.Texts[Main]);
+        Assert.Contains("class C:\n    def go(self, x, y):", r.Texts[Main]);
+        Assert.True(r.Warnings.Any(w => w.Contains("define a method with this name") && w.Contains("1 other class")), string.Join(" | ", r.Warnings));
 
         var c = Change(null, new[] { P(0, "x") }, (Main, Src("def f|(x, y  # the second one", "      ):", "    return x")));
         Assert.True(c.Warnings.Any(w => w.Contains("Comments")), string.Join(" | ", c.Warnings));

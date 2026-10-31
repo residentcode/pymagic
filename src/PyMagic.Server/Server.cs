@@ -245,7 +245,7 @@ public sealed class Server
             case "textDocument/prepareRename":
                 return _service.PrepareRename(UriOf(p), PositionOf(p));
             case "textDocument/rename":
-                return _service.Rename(UriOf(p), PositionOf(p), p!["newName"]!.GetValue<string>());
+                return _service.Rename(UriOf(p), PositionOf(p), p!["newName"]!.GetValue<string>(), p["renameBase"]?.GetValue<bool>() ?? false);
             case "pymagic/signature":
                 return _service.GetSignature(UriOf(p), PositionOf(p));
             case "pymagic/changeSignature":

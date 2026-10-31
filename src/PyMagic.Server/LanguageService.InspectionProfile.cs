@@ -63,6 +63,7 @@ public sealed partial class LanguageService
         ("pep8-ambiguous-name", "PEP 8", "Ambiguous variable name (E741)", "l, O or I as a name.", "weak"),
         ("protected-member", "Python", "Access to a protected member", "x._name used on an object or module from outside its class.", "weak"),
         ("tuple-item-assignment", "Python", "Tuple item assignment", "t[0] = 1 where t is a tuple.", "warning"),
+        ("tuple-index", "Python", "Tuple index out of range", "A constant index past either end of a tuple whose length is known.", "warning"),
         ("none-function-assignment", "Python", "Function returns nothing", "x = f() where f has no return value.", "weak"),
         ("except-clauses-order", "Python", "Exception clause already handled", "An except clause for a class an earlier clause already catches.", "warning"),
         ("exception-inherit", "Python", "Not an exception class", "raise or except of something that does not derive from BaseException.", "warning"),

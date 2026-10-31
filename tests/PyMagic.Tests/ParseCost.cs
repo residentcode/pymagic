@@ -7,7 +7,7 @@ namespace PyMagic.Tests;
 public static class ParseCost
 {
     /// <summary>Samples the allocations of the process (the runtime reports one event per 100 KB) by type.</summary>
-    sealed class AllocationSampler : System.Diagnostics.Tracing.EventListener
+    internal sealed class AllocationSampler : System.Diagnostics.Tracing.EventListener
     {
         public readonly Dictionary<string, long> Counts = new();
         protected override void OnEventSourceCreated(System.Diagnostics.Tracing.EventSource source)

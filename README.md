@@ -79,13 +79,13 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - A checkbox for the desktop shortcut and a safe folder page (they need NSIS script), PyMagic's own pictures in the wizard (66).
 
 **Type engine** (ibnbolbna's area; the order is in [issue #3](https://github.com/residentcode/pymagic/issues/3))
-- `NoReturn` calls, `with` blocks that swallow exceptions, `break`/`return` through `finally` (4, 5); call-site parameter inference (5).
-- Overrides: a rename that follows overriding methods, a change of signature passed on to them, a call hierarchy that includes them, marks and hierarchy for library classes (8, 17, 30).
-- Narrowing: the types of the names that `match` patterns bind (`case int() as n`, captures, `*rest`; item 157 narrows the tuple items by their sub-patterns), the "at least n" tuple form for `len(t) >= n` (152); `Literal` through tuples (40).
-- attrs and hooks: `attr.s` options such as `these=`, `__init_subclass__` hook parameter types (42).
-- Small gaps: `pop` of a required TypedDict key (87), a constant index past the end of a tuple subclass (88).
+- ~~`NoReturn` calls, `with` blocks that swallow exceptions, `break`/`return` through `finally` (4, 5); call-site parameter inference (5)~~ (done, item 186).
+- ~~Overrides: a rename that follows overriding methods, a change of signature passed on to them, a call hierarchy that includes them, marks and hierarchy for library classes (8, 17, 30)~~ (done, item 187).
+- ~~Narrowing: the types of the names that `match` patterns bind (`case int() as n`, captures, `*rest`; item 157 narrows the tuple items by their sub-patterns), the "at least n" tuple form for `len(t) >= n` (152); `Literal` through tuples (40)~~ (done, item 188).
+- ~~attrs and hooks: `attr.s` options such as `these=`, `__init_subclass__` hook parameter types (42)~~ (done, item 185).
+- ~~Small gaps: `pop` of a required TypedDict key (87), a constant index past the end of a tuple subclass (88)~~ (done, item 189).
 - The PyCharm inspections that need full types and are not done yet, and those for other tools (pandas, Spark, mock, notebooks) (47, 77).
-- Speed on large projects: find usages and rename on one thread, the Problems of unchanged files not remembered, parsing only the edited region, about 1 to 1.5 GB while the problems are computed (78). Keeping the types of unchanged files across edits was measured and left out: the files they depend on are only about a fifth of an edit's time.
+- ~~Speed on large projects: find usages and rename on one thread, the Problems of unchanged files not remembered (78)~~ (done, item 190). Measured and left out: keeping the types of unchanged files across edits (the files they depend on are only about a fifth of an edit's time) and parsing only the edited region (10 ms of a 450 ms check); the peak while the problems are computed is still about 2.6 GB.
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
 - New project: ~~a *New Project* dialog with a location and project types (pure Python, FastAPI, Flask, Django, Jupyter, each with its starting files), *Create Git repository*, *Create a welcome script*, and the interpreter made with it: a project venv, uv (with the path to uv), base conda or a custom environment, and a Python version~~ (done, item 169). Unlike PyCharm, the packages a kind needs are listed in requirements.txt, not installed while the project is made.
@@ -147,4 +147,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 184 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 190 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

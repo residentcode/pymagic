@@ -125,6 +125,7 @@ public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool 
         if (IsInstance && Info.Name == "NoneType" && Info.Module.Name is "builtins" or "types") return "None";
         if (IsInstance && EnumMember != null) return $"{Info.Name}.{EnumMember}";
         if (IsInstance && LiteralValue != null) return $"Literal[{LiteralText(LiteralValue)}]";
+        if (TupleItems == null && Args.Count == 0) return IsInstance ? Info.Name : $"type[{Info.Name}]";   // the usual case, without a builder
         var sb = new StringBuilder(Info.Name);
         if (TupleItems != null)
         {
@@ -168,6 +169,15 @@ public sealed record ParamSpecType(string Name) : PyType
 public sealed record TypeVarTupleType(string Name) : PyType
 {
     public override string Display(int depth = 0) => Name;
+}
+
+/// <summary>
+/// `*tuple[X, ...]` among a tuple's items: any number of X there, so the tuple has at least as many items as the others
+/// (`len(t) >= 2` makes `tuple[int, int, *tuple[int, ...]]` of a `tuple[int, ...]`).
+/// </summary>
+public sealed record UnboundedItemsType(PyType Item) : PyType
+{
+    public override string Display(int depth = 0) => $"*tuple[{Item.Display(depth + 1)}, ...]";
 }
 
 public sealed record ModuleType(ModuleInfo Module) : PyType

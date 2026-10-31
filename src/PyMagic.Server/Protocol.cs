@@ -47,7 +47,10 @@ public sealed record DocumentSymbol(string Name, int Kind, Range Range, Range Se
 
 public sealed record TextEdit(Range Range, string NewText);
 public sealed record WorkspaceEdit(Dictionary<string, List<TextEdit>> Changes);
-public sealed record PrepareRenameResult(Range Range, string Placeholder);
+/// <param name="MethodClass">For a method that overrides another: its class.</param>
+/// <param name="BaseClass">The class of the project method at the top of the chain it overrides (the page asks whether to rename that one instead).</param>
+/// <param name="LibraryBase">The library class whose method it overrides, as "Thread (threading)": that one is not renamed.</param>
+public sealed record PrepareRenameResult(Range Range, string Placeholder, string? MethodClass = null, string? BaseClass = null, string? LibraryBase = null);
 
 /// <summary>A request the server understood but cannot satisfy (for example renaming a library symbol).</summary>
 public sealed class ServiceException(string message) : Exception(message);

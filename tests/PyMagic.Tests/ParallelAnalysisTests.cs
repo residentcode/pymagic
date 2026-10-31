@@ -38,7 +38,7 @@ public class ParallelAnalysisTests
         string root = BigProject(220);
         try
         {
-            var svc = new LanguageService();
+            var svc = new LanguageService { RememberProblems = false };   // each run works every file out
             svc.SourceRoots.Add(root);
             string open = LanguageService.UriOfPath(Path.Combine(root, "pkg", "mod3.py"));
             svc.Open(open, File.ReadAllText(Path.Combine(root, "pkg", "mod3.py")) + "\nvalue = unresolved_here\n", 1);   // an unsaved edit counts too
@@ -61,7 +61,7 @@ public class ParallelAnalysisTests
         string root = BigProject(20);
         try
         {
-            var svc = new LanguageService();
+            var svc = new LanguageService { RememberProblems = false };   // each run works every file out
             svc.SourceRoots.Add(root);
             Assert.Equal(string.Join("\n", svc.Problems(4, 100000, 1).Select(Key)), string.Join("\n", svc.Problems(4, 100000).Select(Key)));
         }
