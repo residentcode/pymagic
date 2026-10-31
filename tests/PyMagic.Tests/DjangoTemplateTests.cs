@@ -431,4 +431,76 @@ public class DjangoTemplateTests
         var d = r.Svc.Diagnostics("file:///c:/proj/shop/views.py").Where(x => x.Code is "django-partial" or "django-template").ToList();
         Assert.Equal("'shop/page.html' has no {% partialdef cart %}. Partials: card", d.Single().Message);
     }
+
+    // ------------------------------------------------------------ include context, processors, blocktranslate, installed libraries, HTML (item 203)
+
+    static string TemplateUri(Rig r, string rel) => LanguageService.UriOfPath(Path.Combine(r.Dir, "shop", "templates", rel.Replace('/', Path.DirectorySeparatorChar)));
+
+    [Fact]
+    public void AnIncludedTemplateSeesTheVariablesItIsGiven()
+    {
+        var r = Make("{% for b in books %}\n{% include \"shop/card.html\" with book=b %}\n{% endfor %}\n{% include \"shop/bare.html\" with book=books.0 only %}\n",
+            templates: new[] { ("shop/card.html", "{{ book.titel }} {{ count }}\n"), ("shop/bare.html", "{{ book.title }} {{ count }}\n") });
+        var card = TemplateUri(r, "shop/card.html");
+        Assert.True(r.Svc.Diagnostics(card).Any(d => d.Message.Contains("'Book' has no attribute 'titel'")), string.Join(" | ", r.Svc.Diagnostics(card).Select(d => d.Message)));
+        var count = r.Svc.Hover(card, new Position(0, 21));
+        Assert.Contains("int", count!.Contents.Value);
+        Assert.Contains("page.html", count.Contents.Value);
+        var bare = TemplateUri(r, "shop/bare.html");
+        Assert.Contains("Book", r.Svc.Hover(bare, new Position(0, 4))!.Contents.Value);
+        Assert.True(r.Svc.Hover(bare, new Position(0, 21)) == null, "only: the includer's other variables are not given");
+    }
+
+    [Fact]
+    public void ContextProcessorsOfTheSettingsAddToEveryTemplate()
+    {
+        var r = Make("{{ cart_total }} {{ STATIC_URL }}\n", python: new[]
+        {
+            ("proj/__init__.py", ""),
+            ("proj/settings.py", "TEMPLATES = [{\"BACKEND\": \"django.template.backends.django.DjangoTemplates\", \"OPTIONS\": {\"context_processors\": [\"django.template.context_processors.static\", \"shop.processors.cart\"]}}]\n"),
+            ("shop/processors.py", "def cart(request):\n    return {\"cart_total\": 3}\n"),
+        });
+        var hover = r.Svc.Hover(r.Uri, new Position(0, 5))!.Contents.Value;
+        Assert.Contains("int", hover);
+        Assert.Contains("shop.processors.cart", hover);
+        Assert.Contains("str", r.Svc.Hover(r.Uri, new Position(0, 22))!.Contents.Value);
+    }
+
+    [Fact]
+    public void BlockTranslateTakesPlainNamesAndNoTags()
+    {
+        var r = Make("{% load i18n %}\n{% for book in books %}\n{% blocktranslate with t=book.title trimmed %}{{ t }} by {{ book.author }}{% if t %}x{% endif %}{% endblocktranslate %}\n{% blocktranslate wiht a=1 %}{{ a }}{% endblocktranslate %}\n{% blocktranslate count n=books|length %}one{% plural %}{{ n }} books{% endblocktranslate %}\n{% endfor %}\n");
+        var found = DiagnosticsOf(r).Where(d => d.Code == "template-blocktrans").Select(d => d.Message).ToList();
+        Assert.True(found.Any(m => m.Contains("'book.author' is looked up as a whole")), string.Join(" | ", found));
+        Assert.True(found.Any(m => m.Contains("allows no tags inside it") && m.Contains("{% if %}")), string.Join(" | ", found));
+        Assert.True(found.Any(m => m.Contains("Unknown option 'wiht'")), string.Join(" | ", found));
+        Assert.True(found.Count == 3, string.Join(" | ", found));
+        var t = r.Svc.Hover(r.Uri, new Position(2, 49));
+        Assert.Contains("str", t!.Contents.Value);
+    }
+
+    [Fact]
+    public void TheTagsOfAnInstalledLibraryAreKnown()
+    {
+        string site = Path.Combine(Path.GetTempPath(), "pymagic_site_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(site, "crispy_forms", "templatetags"));
+        File.WriteAllText(Path.Combine(site, "crispy_forms", "templatetags", "crispy_forms_tags.py"),
+            "from django import template\n\nregister = template.Library()\n\n\n@register.filter(name=\"crispy\")\ndef as_crispy_form(form):\n    return form\n\n\n@register.tag\ndef crispy(parser, token):\n    return None\n");
+        var r = Make("{% load crispy_forms_tags %}\n{{ books|crispy }}\n{{ books|nope }}\n{% crispy books %}\n{% wrong %}\n");
+        r.Svc.LibraryRoots.Add(site);
+        var found = DiagnosticsOf(r).Where(d => d.Code is "template-filter" or "template-tag").Select(d => d.Message).ToList();
+        Assert.Equal(2, found.Count);
+        Assert.True(found.Any(m => m.Contains("'nope'")) && found.Any(m => m.Contains("'wrong'")), string.Join(" | ", found));
+    }
+
+    [Fact]
+    public void HtmlClosingTagsAndAttributesAreChecked()
+    {
+        var found = DiagnosticsOf(Make("<div class=\"a\" class=\"b\">\n<span>text\n</div>\n")).Where(d => d.Code == "template-html").Select(d => d.Message).ToList();
+        Assert.True(found.Any(m => m.Contains("'class' is written twice")), string.Join(" | ", found));
+        Assert.True(found.Any(m => m.Contains("</div> closes <div> while <span> inside it is still open")), string.Join(" | ", found));
+        Assert.Equal(2, found.Count);
+        Assert.True(DiagnosticsOf(Make("<ul><li>a<li>b</ul>\n<p>text\n<table><tr><td>x</table>\n</section>\n")).Count(d => d.Code == "template-html") == 1);
+        Assert.True(!DiagnosticsOf(Make("{% if books %}<div class=\"a\">{% else %}<div>{% endif %}\n</div>\n<script>if (a < b) { x = \"</p>\"; }</script>\n")).Any(d => d.Code == "template-html"));
+    }
 }

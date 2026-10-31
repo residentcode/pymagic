@@ -163,6 +163,8 @@ public sealed partial class LanguageService
         ("template-structure", "Django templates", "Unclosed or unmatched tags", "Block tags that do not close, extends that is not first, a block defined twice, {% endblock name %} or {% endpartialdef name %} with another name.", "error"),
         ("template-comment", "Django templates", "Broken line comment", "A {# with no #} on its line: Django comments cannot span lines, so the text is shown.", "warning"),
         ("template-if-spaces", "Django templates", "Comparison without spaces", "{% if a==b %}: Django fails with 'Could not parse the remainder'.", "error"),
+        ("template-blocktrans", "Django templates", "blocktranslate body", "{% blocktranslate %} with an unknown option, a tag inside it, or {{ a.b }} / {{ a|f }} that it shows as nothing.", "warning"),
+        ("template-html", "Django templates", "HTML structure", "A closing tag that closes nothing or the wrong element, an attribute written twice.", "warning"),
         ("template-tag", "Django templates", "Unknown tag", "A tag no loaded library provides.", "weak"),
         ("template-filter", "Django templates", "Unknown filter", "A filter no loaded library provides.", "weak"),
         ("template-static", "Django templates", "Missing static file", "A static tag path no static folder has.", "weak"),

@@ -44,7 +44,7 @@ public sealed partial class LanguageService
         "autoescape", "block", "comment", "csrf_token", "cycle", "debug", "extends", "filter", "firstof", "for", "if", "ifchanged", "include", "load", "lorem",
         "now", "regroup", "resetcycle", "spaceless", "templatetag", "url", "verbatim", "widthratio", "with", "elif", "else", "empty",
         "endautoescape", "endblock", "endcomment", "endfilter", "endfor", "endif", "endifchanged", "endspaceless", "endverbatim", "endwith",
-        "partialdef", "endpartialdef", "partial",
+        "partialdef", "endpartialdef", "partial", "querystring", "csp_nonce_attr",
     };
 
     /// <summary>Libraries whose tags and filters are known: `{% load static %}`.</summary>
@@ -89,6 +89,7 @@ public sealed partial class LanguageService
         ["load"] = "Loads tag and filter libraries: `{% load static i18n %}`.", ["lorem"] = "Outputs placeholder text.", ["now"] = "Outputs the current date and time in the given format.", ["regroup"] = "Regroups a list by an attribute.",
         ["resetcycle"] = "Resets a `cycle` tag.", ["spaceless"] = "Removes whitespace between HTML tags.", ["templatetag"] = "Outputs one of the characters of template syntax.", ["url"] = "Outputs the URL of a named route: `{% url 'name' arg %}`.",
         ["verbatim"] = "Stops the template engine from rendering the contents.", ["widthratio"] = "Computes a ratio for bar charts.", ["with"] = "Caches a value under a name in the block: `{% with total=a.b.c %}`.",
+        ["querystring"] = "Outputs the query string of the request with the given changes: `{% querystring page=2 %}` (Django 5.1).", ["csp_nonce_attr"] = "Outputs ` nonce=\"...\"` for the request's Content Security Policy nonce (Django 6).",
         ["static"] = "Outputs the URL of a static file.", ["trans"] = "Translates a string.", ["translate"] = "Translates a string.", ["blocktrans"] = "Translates a block with variables.", ["blocktranslate"] = "Translates a block with variables.",
     };
 
@@ -313,7 +314,7 @@ public sealed partial class LanguageService
 
     // ------------------------------------------------------------ variables in a template
 
-    sealed record TemplateVar(string Name, PyType? Type, int Start, int End, string Origin, ContextEntry? Entry);
+    sealed record TemplateVar(string Name, PyType? Type, int Start, int End, string Origin, ContextEntry? Entry, string? Uri = null);
 
     sealed class TemplateScope
     {
@@ -337,13 +338,15 @@ public sealed partial class LanguageService
         public Snapshot Snap = null!;
         /// <summary>Jinja rather than Django: Flask, Starlette and FastAPI templates, `.jinja` / `.j2` files and a Django project's `jinja2` folders.</summary>
         public bool Jinja;
+        /// <summary>What the templates that `{% include %}` this one give it: their variables at the include (unless `only`) and its `with` names.</summary>
+        public List<TemplateVar> Included = new();
     }
 
-    TemplateAnalysis AnalyzeTemplate(string uri)
+    TemplateAnalysis AnalyzeTemplate(string uri, int depth = 0)
     {
         var snap = Full();
-        string text = _templateDocs.TryGetValue(uri, out var doc) ? doc.Text : "";
         string? path = PathOfUri(uri);
+        string text = _templateDocs.TryGetValue(uri, out var doc) ? doc.Text : depth > 0 && path != null ? TemplateTextOf(path) ?? "" : "";
         string? name = null;
         if (path != null)
         {
@@ -351,7 +354,13 @@ public sealed partial class LanguageService
             if (match.Name != null) name = match.Name;
         }
         bool jinja = IsJinjaTemplate(uri, snap);
-        return new TemplateAnalysis { Uri = uri, Text = text, Name = name, Parsed = DjangoTemplateParser.Parse(text, jinja), Snap = snap, Context = name == null ? new() : ContextOf(snap, name), Jinja = jinja };
+        var analysis = new TemplateAnalysis { Uri = uri, Text = text, Name = name, Parsed = DjangoTemplateParser.Parse(text, jinja), Snap = snap, Context = name == null ? new() : ContextOf(snap, name), Jinja = jinja };
+        if (!jinja)
+        {
+            analysis.Context.AddRange(ContextProcessorEntries(snap));
+            if (name != null && depth < 3) analysis.Included = IncludeContext(name, depth);
+        }
+        return analysis;
     }
 
     PyType? TypeOfEntry(TemplateAnalysis a, ContextEntry e)
@@ -373,6 +382,8 @@ public sealed partial class LanguageService
         if (a.Jinja) return JinjaScopeAt(a, offset);
         foreach (var e in a.Context.Where(e => e.Name != UnknownContextName).GroupBy(e => e.Name).Select(g => g.First()))
             scope.Frames[0].Vars.Add(new TemplateVar(e.Name, TypeOfEntry(a, e), e.Start, e.End, "context", e));
+        foreach (var v in a.Included.GroupBy(v => v.Name).Select(g => g.First()))
+            if (scope.Find(v.Name) == null) scope.Frames[0].Vars.Add(v);
         foreach (var n in AlwaysInContext.Where(n => scope.Find(n) == null))
         {
             PyType? t = n == "request" ? (ev.InstanceOf("django.http.request", "HttpRequest") ?? ev.InstanceOf("django.http", "HttpRequest")) : null;
@@ -425,10 +436,13 @@ public sealed partial class LanguageService
                 case "block":
                     scope.Frames.Add(("endblock", new List<TemplateVar> { new("block", null, tag.Start, tag.Start + 2, "block", null) }));
                     break;
-                case "endfor" or "endwith" or "endblock":
+                case "blocktrans" or "blocktranslate":
+                    scope.Frames.Add(("end" + tag.Name, BlockTranslateVars(a, scope, tag)));
+                    break;
+                case "endfor" or "endwith" or "endblock" or "endblocktrans" or "endblocktranslate":
                     if (scope.Frames.Count > 1 && scope.Frames[^1].Closer == tag.Name) scope.Frames.RemoveAt(scope.Frames.Count - 1);
                     break;
-                case "url" or "trans" or "translate" or "firstof" or "cycle" or "now" or "regroup" or "blocktrans" or "blocktranslate" or "static" or "get_static_prefix" or "get_media_prefix" or "lorem" or "get_current_language" or "get_available_languages" or "get_language_info" or "get_current_timezone":
+                case "url" or "trans" or "translate" or "firstof" or "cycle" or "now" or "regroup" or "static" or "get_static_prefix" or "get_media_prefix" or "lorem" or "get_current_language" or "get_available_languages" or "get_language_info" or "get_current_timezone":
                 {
                     var asMatch = AsVar.Match(tag.Args);
                     if (asMatch.Success)
@@ -691,11 +705,13 @@ public sealed partial class LanguageService
             "loop" => "(loop) loop — index, index0, revindex, first, last, length, cycle(...), depth, previtem, nextitem, changed(...)",
             "forloop" => "(loop) forloop — counter, counter0, revcounter, first, last, parentloop",
             "block" => "(block) block — block.super renders the parent's block",
+            "include" => $"(included) {variable.Name} — given by `{System.IO.Path.GetFileName(PathOfUri(variable.Uri ?? "") ?? "")}`, which includes this template",
             _ => $"(variable) {variable.Name} — from `{{% {variable.Origin} %}}`",
         };
         if (at.Index == 0)
         {
             if (variable.Entry != null && FixtureLocation(variable.Entry.Module, variable.Entry.Start, variable.Entry.End) is { } vl) locations.Add(vl);
+            else if (variable.Origin == "include" && variable.Uri != null && PathOfUri(variable.Uri) is { } includer && InFile(includer, variable.Start, variable.End) is { } il) locations.Add(il);
             else if (variable.Origin is "for" or "with" or "url" or "trans" or "translate" or "firstof" or "cycle" or "now" or "regroup" or "set" or "macro" or "call" && InTemplate(a, variable.Start, variable.End) is { } tl) locations.Add(tl);
         }
         else
@@ -760,7 +776,13 @@ public sealed partial class LanguageService
                 loaded.Add(lib);
                 if (KnownLibraries.TryGetValue(lib, out var known)) { foreach (var t in known) tags.Add(t); foreach (var f in LibraryFilters) filters.Add(f); continue; }
                 var project = libraries.Where(l => l.Name == lib).ToList();
-                if (project.Count == 0) { opaque = true; continue; }
+                if (project.Count == 0)
+                {
+                    // a library of an installed package: what it registers
+                    if (InstalledTagLibrary(lib) is { } installed) { tags.UnionWith(installed.Tags); filters.UnionWith(installed.Filters); }
+                    else opaque = true;
+                    continue;
+                }
                 foreach (var l in project) { foreach (var t in l.Tags.Keys) tags.Add(t); foreach (var f in l.Filters.Keys) filters.Add(f); }
             }
         }
@@ -845,6 +867,9 @@ public sealed partial class LanguageService
             if (parts.Count > 0 && !partials.Contains(parts[0].Text))
                 Add(parts[0].Offset, parts[0].Offset + parts[0].Text.Length, $"No {{% partialdef {parts[0].Text} %}} in this template{(partials.Count > 0 ? ". Partials: " + string.Join(", ", partials.Order(StringComparer.Ordinal)) : "")}", Severity.Error, "django-partial");
         }
+
+        BlockTranslateProblems(a, Add);
+        HtmlProblems(a, Add);
 
         // {# ... #} ends on its own line: a {# with no #} after it on the line is shown as text
         foreach (var start in BrokenLineComments(a))
