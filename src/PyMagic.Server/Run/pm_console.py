@@ -84,6 +84,27 @@ class Console:
             self.show_error()
         return True
 
+    def setup_django(self, root):
+        """The settings manage.py names, its folder on sys.path, and django.setup(): the models can be used at once."""
+        import re
+        for folder, dirs, names in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in (".git", ".venv", "venv", "node_modules", "__pycache__") and not d.startswith(".")]
+            if "manage.py" in names:
+                with open(os.path.join(folder, "manage.py"), encoding="utf-8", errors="replace") as f:
+                    found = re.search(r"DJANGO_SETTINGS_MODULE['\"]\s*,\s*['\"]([\w.]+)", f.read())
+                if found:
+                    os.environ.setdefault("DJANGO_SETTINGS_MODULE", found.group(1))
+                if folder not in sys.path:
+                    sys.path.insert(0, folder)
+                break
+        try:
+            import django
+            django.setup()
+            from django.conf import settings
+            print("Django %s, settings %s" % (django.get_version(), settings.SETTINGS_MODULE))
+        except Exception:
+            self.show_error()
+
     def run_file(self, path):
         try:
             with open(path, "rb") as f:
@@ -160,6 +181,7 @@ def main():
     parser.add_argument("--token", required=True)
     parser.add_argument("--root", required=True)
     parser.add_argument("--startup", default=None, help="a script run first in the console's names")
+    parser.add_argument("--django", action="store_true", help="set Django up first, as manage.py shell does (the Django console)")
     options = parser.parse_args()
     sock = socket.create_connection((options.host, options.port))
     console = Console(sock)
@@ -170,6 +192,8 @@ def main():
     if options.root not in sys.path:
         sys.path.insert(0, options.root)
     print("Python %s on %s" % (sys.version.split()[0], sys.platform))
+    if options.django:
+        console.setup_django(options.root)
     if options.startup and os.path.isfile(options.startup):
         console.run_file(options.startup)
     sys.stdout.flush()

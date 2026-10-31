@@ -27,3 +27,37 @@ export function migrationLabel(m) {
     const at = m.name.indexOf('_');
     return at > 0 ? `${m.name.slice(0, at)}  ${m.name.slice(at + 1).replace(/_/g, ' ')}` : m.name;
 }
+
+// ------------------------------------------------------------ the manage.py console
+
+/** The commands of `manage.py help --commands`: one name per line. */
+export function parseCommands(text) {
+    return [...new Set(text.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^[A-Za-z_][\w-]*$/.test(l)))].sort();
+}
+
+/** The options of `manage.py help <command>` (argparse's help): each with its flags and what it does. */
+export function parseOptions(text) {
+    const out = [];
+    for (const line of text.split(/\r?\n/)) {
+        const m = /^\s{2,}(-{1,2}[\w-]+(?:[ =][A-Z0-9_{}\[\],.|-]+)?(?:,\s*-{1,2}[\w-]+(?:[ =][A-Z0-9_{}\[\],.|-]+)?)*)(?:\s{2,}(.*))?$/.exec(line);
+        if (m) {
+            const flags = [...m[1].matchAll(/-{1,2}[\w-]+/g)].map((f) => f[0]);
+            out.push({ flags, help: (m[2] ?? '').trim() });
+        }
+        else if (out.length && /^\s{20,}\S/.test(line))
+            out[out.length - 1].help = (out[out.length - 1].help + ' ' + line.trim()).trim();   // argparse continues a long help on the next lines
+    }
+    return out;
+}
+
+/** What Tab completes in the manage.py console: a command for the first word, else an option of that command (the long ones first). */
+export function completeManage(text, commands, optionsOf) {
+    const words = text.split(/\s+/);
+    const word = words[words.length - 1];
+    if (words.length === 1)
+        return { word, items: commands.filter((c) => c.startsWith(word)) };
+    if (!word.startsWith('-'))
+        return { word, items: [] };
+    const flags = (optionsOf(words[0]) ?? []).flatMap((o) => o.flags);
+    return { word, items: [...new Set(flags.filter((f) => f.startsWith(word)))].sort((a, b) => (b.startsWith('--') - a.startsWith('--')) || a.localeCompare(b)) };
+}

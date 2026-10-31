@@ -31,3 +31,40 @@ test('every command is manage.py followed by words, none empty', () => {
         assert.ok(args.length > 0 && args.every((a) => a.length > 0));
     }
 });
+
+const HELP = `usage: manage.py migrate [-h] [--noinput] [--database DATABASE] [--fake] [--plan] [app_label] [migration_name]
+
+Updates database schema.
+
+positional arguments:
+  app_label             App label of an application to synchronize the state.
+  migration_name        Database state will be brought to the state after that migration.
+
+options:
+  -h, --help            show this help message and exit
+  --noinput, --no-input
+                        Tells Django to NOT prompt the user for input of any kind.
+  --database DATABASE   Nominates a database to synchronize. Defaults to the
+                        "default" database.
+  --fake                Mark migrations as run without actually running them.
+  -v {0,1,2,3}, --verbosity {0,1,2,3}
+                        Verbosity level
+`;
+
+test('the manage.py console reads the commands and the options of a command from Django\'s help', () => {
+    assert.deepEqual(d.parseCommands('check\nmigrate\n\nrunserver\nmigrate\n'), ['check', 'migrate', 'runserver']);
+    const options = d.parseOptions(HELP);
+    assert.deepEqual(options.map((o) => o.flags.join(' ')), ['-h --help', '--noinput --no-input', '--database', '--fake', '-v --verbosity']);
+    assert.equal(options[2].help, 'Nominates a database to synchronize. Defaults to the "default" database.');
+    assert.equal(options[1].help, 'Tells Django to NOT prompt the user for input of any kind.');
+});
+
+test('Tab completes a command, then the options of that command', () => {
+    const commands = ['makemigrations', 'migrate', 'runserver'];
+    const optionsOf = (c) => (c === 'migrate' ? d.parseOptions(HELP) : null);
+    assert.deepEqual(d.completeManage('m', commands, optionsOf), { word: 'm', items: ['makemigrations', 'migrate'] });
+    assert.deepEqual(d.completeManage('mi', commands, optionsOf).items, ['migrate']);
+    assert.deepEqual(d.completeManage('migrate --n', commands, optionsOf), { word: '--n', items: ['--no-input', '--noinput'] });
+    assert.deepEqual(d.completeManage('migrate -', commands, optionsOf).items.slice(0, 2), ['--database', '--fake']);
+    assert.deepEqual(d.completeManage('migrate sho', commands, optionsOf).items, []);
+});

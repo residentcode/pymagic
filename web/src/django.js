@@ -2,7 +2,7 @@
 // and the apps with their migrations.
 import { showTab } from './panel';
 import { toast } from './toast';
-import { COMMANDS, splitArguments, migrationLabel } from './django-model';
+import { COMMANDS, splitArguments, migrationLabel, parseCommands, parseOptions, completeManage } from './django-model';
 const $ = (id) => document.getElementById(id);
 function el(tag, className, text) {
     const e = document.createElement(tag);
@@ -17,6 +17,28 @@ export function setupDjango(deps) {
     const summary = $('django-summary');
     let project = null;
     const opened = new Set();
+    // the manage.py console's history, and what Django said of its commands (asked once per page)
+    let manageHistory = [];
+    try { manageHistory = JSON.parse(localStorage.getItem('pymagic.manageHistory') ?? '[]'); } catch { /* none */ }
+    const optionCache = new Map();
+    let commandList = null;
+    async function manageHelp(command) {
+        const r = await fetch('/api/django/help' + (command ? '?command=' + encodeURIComponent(command) : '')).catch(() => null);
+        return r?.ok ? r.text() : null;
+    }
+    async function manageCommands() {
+        commandList ??= parseCommands(await manageHelp(null) ?? '');
+        return commandList;
+    }
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.altKey && !e.shiftKey && (e.key === 'r' || e.key === 'R')) {
+            e.preventDefault();
+            // the tab fills itself when it is opened: its own button does that, then the console takes the keys
+            document.getElementById('t-django')?.click();
+            const focus = (tries) => { const box = document.getElementById('dj-manage'); if (box) box.focus(); else if (tries > 0) window.setTimeout(() => focus(tries - 1), 100); };
+            focus(30);
+        }
+    });
     async function runManage(args, debug = false) {
         if (!project?.manage)
             return;
@@ -55,18 +77,58 @@ export function setupDjango(deps) {
                 own.append(button(c, `manage.py ${c}`, () => void runManage([c])));
             commands.append(own);
         }
+        // the manage.py console (Ctrl+Alt+R): its history, Tab completing commands and their options, F1 for a command's help
         const free = el('div', 'dj-row');
         const input = el('input');
-        input.placeholder = 'manage.py … (for example: sqlmigrate shop 0001, or loaddata fixtures.json)';
+        input.id = 'dj-manage';
+        input.placeholder = 'manage.py … (Tab completes, F1 shows the command\'s help, Up / Down the history)';
         input.spellcheck = false;
         input.autocomplete = 'off';
         input.className = 'dj-input';
-        const go = () => { const words = splitArguments(input.value); if (words.length)
-            void runManage(words); };
-        input.onkeydown = (e) => { if (e.key === 'Enter')
-            go(); };
-        free.append(input, button('Run', 'Run manage.py with these arguments', go));
-        commands.append(free);
+        const hints = el('div', 'dj-hints');
+        const go = () => {
+            const words = splitArguments(input.value);
+            if (!words.length)
+                return;
+            manageHistory = [...manageHistory.filter((h) => h !== input.value), input.value].slice(-100);
+            try { localStorage.setItem('pymagic.manageHistory', JSON.stringify(manageHistory)); } catch { /* not kept */ }
+            at = manageHistory.length;
+            hints.replaceChildren();
+            void runManage(words);
+        };
+        let at = manageHistory.length;
+        input.onkeydown = async (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); go(); }
+            else if (e.key === 'ArrowUp' && manageHistory.length) { e.preventDefault(); at = Math.max(0, at - 1); input.value = manageHistory[at]; }
+            else if (e.key === 'ArrowDown' && manageHistory.length) { e.preventDefault(); at = Math.min(manageHistory.length, at + 1); input.value = manageHistory[at] ?? ''; }
+            else if (e.key === 'Tab') {
+                e.preventDefault();
+                const command = splitArguments(input.value)[0];
+                const done = completeManage(input.value.slice(0, input.selectionStart), await manageCommands(), (c) => optionCache.get(c));
+                if (command && input.value.includes(' ') && !optionCache.has(command)) {
+                    optionCache.set(command, parseOptions(await manageHelp(command) ?? ''));
+                    return input.onkeydown(e);
+                }
+                if (done.items.length === 1)
+                    input.setRangeText(done.items[0].slice(done.word.length) + ' ', input.selectionStart, input.selectionStart, 'end');
+                hints.replaceChildren(...(done.items.length > 1 ? done.items.slice(0, 40).map((item) => {
+                    const h = el('button', 'dj-hint', item);
+                    h.onclick = () => { input.setRangeText(item.slice(done.word.length) + ' ', input.selectionStart, input.selectionStart, 'end'); input.focus(); hints.replaceChildren(); };
+                    return h;
+                }) : []));
+            }
+            else if (e.key === 'F1' || (e.key === 'q' && e.ctrlKey)) {
+                e.preventDefault();
+                const command = splitArguments(input.value)[0];
+                const text = command ? await manageHelp(command) : (await manageCommands()).join('  ');
+                const pre = el('pre', 'dj-help', text ?? `No help for '${command}'.`);
+                hints.replaceChildren(pre);
+            }
+            else if (e.key === 'Escape')
+                hints.replaceChildren();
+        };
+        free.append(input, button('Run', 'Run manage.py with these arguments', go), button('Django console', 'A Python console with Django set up, as manage.py shell (its models ready to use)', () => window.dispatchEvent(new CustomEvent('pymagic:djangoConsole'))));
+        commands.append(free, hints);
         const startapp = el('div', 'dj-row');
         const name = el('input');
         name.placeholder = 'New app name';

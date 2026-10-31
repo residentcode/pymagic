@@ -164,6 +164,27 @@ public class RunTests
     }
 
     [Fact]
+    public void TheDjangoConsoleHasDjangoSetUp()
+    {
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_DJANGO") is not { Length: > 0 } python) return;
+        using var h = new Harness();
+        Directory.CreateDirectory(Path.Combine(h.Root, "cfg"));
+        Directory.CreateDirectory(Path.Combine(h.Root, "shop"));
+        h.Script("manage.py", "import os, sys\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'cfg.settings')\n");
+        h.Script("cfg/__init__.py", "");
+        h.Script("cfg/settings.py", "SECRET_KEY = 'x'\nINSTALLED_APPS = ['django.contrib.contenttypes', 'shop']\nDATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n");
+        h.Script("shop/__init__.py", "");
+        h.Script("shop/models.py", "from django.db import models\n\n\nclass Item(models.Model):\n    name = models.CharField(max_length=20)\n");
+        h.Session.Python = python;
+        h.Session.StartConsole(h.Root, null, django: true);
+        h.Type("consoleReady");
+        h.Request("consoleExec", new JsonObject { ["code"] = "from shop.models import Item\nprint(Item._meta.label)" });
+        string output = h.AllOutput();
+        Assert.Contains("settings cfg.settings", output);
+        Assert.Contains("shop.Item", output);
+    }
+
+    [Fact]
     public void DotEnvFilesAreReadAndPythonPathFollowsTheRoots()
     {
         var env = RunConfigurations.ParseDotEnv("# settings\nDEBUG=1\nexport NAME = Ann \nQUOTED=\"a\\nb\"\nSINGLE='x # y'\nCOMMENTED=v # note\nbroken line\n=nothing\n");

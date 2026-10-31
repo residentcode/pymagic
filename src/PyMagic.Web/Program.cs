@@ -644,6 +644,34 @@ app.MapGet("/api/pypi", async (string name) =>
 });
 app.MapGet("/api/tests", () => TestDiscovery.Discover(root));
 app.MapGet("/api/django", () => DjangoProject.Scan(root));
+// the manage.py console's completion and documentation: the project's own `manage.py help --commands`, or `manage.py help <command>`
+var djangoHelp = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
+app.MapGet("/api/django/help", async (string? command) =>
+{
+    var project = DjangoProject.Scan(root);
+    if (project.Manage == null) return Results.NotFound(new { error = "no manage.py" });
+    if (command != null && !System.Text.RegularExpressions.Regex.IsMatch(command, @"^[A-Za-z_][\w-]{0,60}$")) return Results.BadRequest(new { error = "not a command name" });
+    string key = (interpreters.Current?.Path ?? "") + "|" + (command ?? "--commands");
+    if (djangoHelp.TryGetValue(key, out var cached)) return Results.Text(cached);
+    string manage = Path.Combine(root, project.Manage);
+    var psi = new System.Diagnostics.ProcessStartInfo(interpreters.Current?.Python ?? python) { WorkingDirectory = Path.GetDirectoryName(manage)!, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+    psi.ArgumentList.Add(manage);
+    psi.ArgumentList.Add("help");
+    psi.ArgumentList.Add(command ?? "--commands");
+    psi.Environment["PYTHONIOENCODING"] = "utf-8";
+    try
+    {
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        var stdout = p.StandardOutput.ReadToEndAsync();
+        var stderr = p.StandardError.ReadToEndAsync();
+        if (!await Task.Run(() => p.WaitForExit(30000))) { try { p.Kill(true); } catch (InvalidOperationException) { } return Results.BadRequest(new { error = "manage.py help took too long" }); }
+        if (p.ExitCode != 0) return Results.BadRequest(new { error = (await stderr).Trim().Split('\n').LastOrDefault() ?? "manage.py help failed" });
+        string text = await stdout;
+        djangoHelp[key] = text;
+        return Results.Text(text);
+    }
+    catch (System.ComponentModel.Win32Exception e) { return Results.BadRequest(new { error = e.Message }); }
+});
 
 // the lines the last coverage run executed, from .pymagic/coverage.json
 app.MapGet("/api/coverage", () =>
@@ -986,7 +1014,7 @@ app.Map("/run", async (HttpContext ctx) =>
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
                 string? startup = msg["startup"]?.GetValue<string>() is { Length: > 0 } st ? st : null;
                 if (startup != null) ResolveInRoot(startup);
-                session.StartConsole(root, startup);
+                session.StartConsole(root, startup, msg["django"]?.GetValue<bool>() == true);
             }
             else if (msg["type"]?.GetValue<string>() == "attach" && msg["pid"]?.GetValue<int>() is int attachPid)
             {

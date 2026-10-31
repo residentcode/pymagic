@@ -14,7 +14,7 @@ export function setupPythonConsole(deps) {
     const out = $('pyc-output');
     const input = $('pyc-input');
     const varsBox = $('pyc-vars');
-    let client = null, ready = null, pending = '';
+    let client = null, ready = null, pending = '', django = false;
     let history = [], at = 0;
 
     function append(text, cls = '') {
@@ -33,7 +33,7 @@ export function setupPythonConsole(deps) {
         out.textContent = '';
         ready = new Promise((resolve) => {
             fetch('/api/file?path=' + encodeURIComponent(STARTUP)).then((r) => r.ok).catch(() => false).then((hasStartup) => {
-                const me = new RunClient({ type: 'console', startup: hasStartup ? STARTUP : undefined });
+                const me = new RunClient({ type: 'console', startup: hasStartup ? STARTUP : undefined, django });
                 client = me;
                 // a console that was restarted may still send its last messages: only this one's count
                 me.onMessage = (m) => {
@@ -144,6 +144,18 @@ export function setupPythonConsole(deps) {
         }
     };
 
+    // the Django console: the same console, started again with Django set up
+    window.addEventListener('pymagic:djangoConsole', () => {
+        client?.send({ type: 'stop' });
+        client?.close();
+        client = null;
+        ready = null;
+        pending = '';
+        django = true;
+        showTab('pyconsole');
+        void start();
+        input.focus();
+    });
     $('pyc-restart').onclick = () => { client?.send({ type: 'stop' }); client?.close(); client = null; ready = null; pending = ''; void start(); };
     $('pyc-stop').onclick = () => { client?.send({ type: 'stop' }); };
     $('pyc-clear').onclick = () => { out.textContent = ''; };

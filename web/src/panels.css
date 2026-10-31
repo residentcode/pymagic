@@ -426,3 +426,8 @@
 .dg-head-hollow { fill: var(--bg); stroke: var(--dim); }
 .dg-head-open { fill: none; stroke: var(--dim); stroke-width: 1.4; }
 .dg-edge-label { fill: var(--amber, #da5); font-size: 11px; }
+
+/* the manage.py console of the Django tab */
+.dj-hints { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 6px; }
+.dj-hint { font: 12px Consolas, monospace; padding: 1px 6px; }
+.dj-help { margin: 0; padding: 6px 8px; max-height: 220px; overflow: auto; width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; font: 12px Consolas, monospace; white-space: pre-wrap; }
