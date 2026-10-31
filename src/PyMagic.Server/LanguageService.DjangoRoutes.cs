@@ -152,10 +152,20 @@ public sealed partial class LanguageService
                     case AttributeExpr { Attr: "urls", Value: var r }:
                         ExpandRouter(modules, ev, m, r, joined, found);
                         break;
+                    case ConstExpr lit when FixtureModel.StringValue(lit) is { } library:
+                        // the URLs of an app that is not the project's (a library): one entry for all of them
+                        found.Add(EntryOf("ANY", joined + "…", library, "library", m, call.Start, new()));
+                        break;
                     case { } list:
                         WalkPatterns(modules, ev, m, PatternItems(m, list).ToList(), joined, depth + 1, stack, found);
                         break;
                 }
+                continue;
+            }
+            // admin.site.urls and the like: a library's URLs under this prefix
+            if (view is AttributeExpr { Attr: "urls" } site)
+            {
+                found.Add(EntryOf("ANY", joined + "…", m.Source[site.Start..site.End], "library", m, call.Start, new()));
                 continue;
             }
 

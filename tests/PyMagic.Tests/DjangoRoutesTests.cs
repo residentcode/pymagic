@@ -196,7 +196,8 @@ public class DjangoRoutesTests
     {
         string root = "from django.urls import path, include\nfrom django.contrib import admin\n\nurlpatterns = [path('admin/', admin.site.urls), path('api/', include('shop.urls'))]\n";
         var routes = RoutesOf(Urls, rootUrls: root);
-        Assert.True(!routes.Any(r => r.Path.StartsWith("/admin")));
+        // the admin is one entry of a library (item 180), not views of the project; item 127 left it out
+        Assert.Equal("library:/admin/…", string.Join(",", routes.Where(r => r.Path.StartsWith("/admin")).Select(r => r.Framework + ":" + r.Path)));
     }
 
     [Fact]

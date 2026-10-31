@@ -233,7 +233,31 @@ public sealed partial class LanguageService
             .Where(e => e.Uri.Length > 0)
             .Concat(FlaskExtraRoutes())
             .Concat(DjangoRoutes())
+            .Concat(TestRequests())
             .ToList();
+    }
+
+    static readonly HashSet<string> RequestMethods = new(StringComparer.Ordinal) { "get", "post", "put", "patch", "delete", "head", "options" };
+
+    /// <summary>The URLs the project's tests request: `self.client.get("/shop/")`, `client.post("/items", ...)` in test files, each as an endpoint seen from a test.</summary>
+    IEnumerable<RouteEntry> TestRequests()
+    {
+        var snap = Full();
+        foreach (var m in snap.Project.Where(p => InProject(snap, p)))
+        {
+            string uri = UriOfModule(m) ?? "";
+            string file = Uri.UnescapeDataString(uri[(uri.LastIndexOf('/') + 1)..]);   // an open file may have no path on disk
+            bool isTest = file.StartsWith("test", StringComparison.Ordinal) || file.EndsWith("_test.py", StringComparison.Ordinal) || file == "tests.py";
+            if (!isTest) continue;
+            foreach (var call in AstChildren.Descendants(m.Ast).OfType<CallExpr>())
+            {
+                if (call.Func is not AttributeExpr { Attr: var verb } || !RequestMethods.Contains(verb)) continue;
+                if (call.Args.FirstOrDefault(a => a.Name == null) is not { Value: ConstExpr { Kind: ConstKind.Str } lit } || FixtureModel.StringValue(lit) is not { } url || !url.StartsWith('/')) continue;
+                string test = "";
+                for (var p = m.ParentOf(call); p != null; p = m.ParentOf(p)) if (p is FunctionDef f) { test = f.Name; break; }
+                yield return new RouteEntry(verb.ToUpperInvariant(), url, test, "test", uri, Lines(m).PositionOf(call.Start).Line);
+            }
+        }
     }
 
     // ------------------------------------------------------------ go to, hover

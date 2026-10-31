@@ -438,3 +438,16 @@
 .st-action { margin-left: 6px; padding: 0 5px; font-size: 11px; line-height: 16px; }
 .dg-note rect { fill: #f5e6a3; stroke: #c9b458; }
 .dg-note text { fill: #3b3418; font-size: 11px; }
+
+/* the Endpoints tab: the parts of an open route, the request and its answer */
+#routes-base { width: 170px; }
+.route-panes { padding: 2px 0 8px 22px; }
+.route-tabs { display: flex; gap: 4px; margin: 4px 0; }
+.route-tabs button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.route-request { width: 100%; max-width: 760px; resize: vertical; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: 12px Consolas, monospace; }
+.route-buttons { display: flex; gap: 6px; margin: 4px 0; align-items: center; }
+.route-result .good { color: var(--green); } .route-result .bad, .route-detail .bad { color: var(--red); }
+.route-body, .route-doc, .route-headers pre { margin: 4px 0; padding: 6px 8px; max-height: 300px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; font: 12px Consolas, monospace; white-space: pre-wrap; }
+.openapi-all { max-height: 60vh; }
+.route-origin { font-size: 11px; padding: 0 5px; border-radius: 3px; border: 1px solid var(--line); color: var(--dim); }
+.route-library .rpath, .route-test .rpath { opacity: .8; }

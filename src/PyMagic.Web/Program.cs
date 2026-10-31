@@ -375,6 +375,42 @@ app.MapPost("/api/fs", async (HttpRequest req) =>
 
 // Find in files: the page sends the texts of its unsaved editors so that results match what is on screen.
 // the RegExp checker: a pattern tried on a text by Python's own re (the rules of JavaScript's are not the same)
+// the Endpoints tab's requests: sent by the engine (the page could not read another port's answers), to this computer only
+var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+app.MapPost("/api/http", async (HttpRequest req) =>
+{
+    var b = await JsonNode.ParseAsync(req.Body);
+    string method = (b?["method"]?.GetValue<string>() ?? "GET").ToUpperInvariant();
+    if (!Uri.TryCreate(b?["url"]?.GetValue<string>() ?? "", UriKind.Absolute, out var url) || url.Scheme is not ("http" or "https"))
+        return Results.BadRequest(new { error = "an http:// or https:// address" });
+    if (!url.IsLoopback) return Results.BadRequest(new { error = "only servers on this computer (localhost, 127.0.0.1)" });
+    if (!System.Text.RegularExpressions.Regex.IsMatch(method, "^[A-Z]{3,7}$")) return Results.BadRequest(new { error = "not a method" });
+    var message = new HttpRequestMessage(new HttpMethod(method), url);
+    string? body = b?["body"]?.GetValue<string>();
+    if (!string.IsNullOrEmpty(body)) message.Content = new StringContent(body);
+    foreach (var (k, v) in b?["headers"] as JsonObject ?? new JsonObject())
+    {
+        string value = v?.GetValue<string>() ?? "";
+        if (k.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)) { if (message.Content != null) message.Content.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse(value); }
+        else message.Headers.TryAddWithoutValidation(k, value);
+    }
+    var watch = System.Diagnostics.Stopwatch.StartNew();
+    try
+    {
+        using var res = await httpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead);
+        var bytes = await res.Content.ReadAsByteArrayAsync();
+        var headers = new JsonObject();
+        foreach (var h in res.Headers.Concat(res.Content.Headers)) headers[h.Key] = string.Join(", ", h.Value);
+        const int max = 1024 * 1024;
+        return Results.Json(new
+        {
+            status = (int)res.StatusCode, reason = res.ReasonPhrase, headers, ms = watch.ElapsedMilliseconds,
+            body = System.Text.Encoding.UTF8.GetString(bytes, 0, Math.Min(bytes.Length, max)), truncated = bytes.Length > max,
+        });
+    }
+    catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return Results.BadRequest(new { error = e is TaskCanceledException ? "no answer in 30 seconds" : e.Message + " (is the server running?)" }); }
+});
+
 app.MapPost("/api/regex", async (HttpRequest req) =>
 {
     string body = await new StreamReader(req.Body).ReadToEndAsync();

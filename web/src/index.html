@@ -383,6 +383,12 @@
           <div id="routes-bar">
             <span id="routes-summary"></span>
             <input id="routes-filter" type="text" placeholder="Filter by path, method or function" spellcheck="false" autocomplete="off">
+            <select id="routes-method" title="Only this method"><option value="">Any method</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
+            <label title="The project's own routes"><input type="checkbox" id="routes-o-project" checked> project</label>
+            <label title="The endpoints of libraries: Django's admin, an app included from a package"><input type="checkbox" id="routes-o-library" checked> libraries</label>
+            <label title="The URLs the tests request"><input type="checkbox" id="routes-o-test" checked> tests</label>
+            <input id="routes-base" type="text" value="http://127.0.0.1:8000" title="Where the server runs: the requests go there" spellcheck="false" autocomplete="off">
+            <button id="routes-openapi" title="The OpenAPI document of the project's routes">OpenAPI…</button>
             <button id="routes-refresh" title="Read the routes again">Refresh</button>
           </div>
           <div class="body" id="routes-list"></div>

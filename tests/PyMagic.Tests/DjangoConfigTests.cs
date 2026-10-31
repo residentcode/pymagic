@@ -119,6 +119,19 @@ public class DjangoConfigTests
     }
 
     [Fact]
+    public void EndpointsOfLibrariesAndOfTheTests()
+    {
+        var svc = DjangoFixture.Service()
+            .With("site_cfg/urls.py", "from django.contrib import admin\nfrom django.urls import include, path\n\nurlpatterns = [\n    path('admin/', admin.site.urls),\n    path('api-auth/', include('rest_framework.urls')),\n]\n")
+            .With("shop/tests.py", "from django.test import TestCase\n\n\nclass Pages(TestCase):\n    def test_home(self):\n        self.client.get('/shop/')\n        self.client.post('/shop/items/', {'name': 'x'})\n        self.client.get(reverse('home'))\n").Service;
+        var routes = svc.Routes();
+        string Show(RouteEntry r) => $"{r.Framework}:{r.Methods} {r.Path} {r.Name}";
+        var mine = routes.Where(r => r.Framework is "library" or "test").Select(Show).OrderBy(x => x, StringComparer.Ordinal).ToList();
+        Assert.Equal("library:ANY /admin/… admin.site.urls | library:ANY /api-auth/… rest_framework.urls | test:GET /shop/ test_home | test:POST /shop/items/ test_home", string.Join(" | ", mine));
+        Assert.Equal(5, routes.Single(r => r.Path == "/shop/").Line);   // 0-based: the sixth line
+    }
+
+    [Fact]
     public void AFolderMarkedAsTemplatesHoldsTemplates()
     {
         string root = Folder();
