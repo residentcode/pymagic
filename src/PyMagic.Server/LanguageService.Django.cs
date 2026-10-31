@@ -201,6 +201,7 @@ public sealed partial class LanguageService
         var snap = Full();
         if (!snap.ByUri.TryGetValue(uri, out var m)) return Array.Empty<Location>();
         int offset = Lines(m).OffsetOf(pos);
+        if (SettingsPathDefinition(snap, m, offset) is { Count: > 0 } settingsTargets) return settingsTargets;
         if (NamedStringAt(snap, m, offset) is not { } s) return MetaFieldTarget(snap, m, offset)?.Locations ?? (IReadOnlyList<Location>)Array.Empty<Location>();
         switch (s.Kind)
         {

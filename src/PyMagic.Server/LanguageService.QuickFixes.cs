@@ -89,6 +89,7 @@ public sealed partial class LanguageService
         }
         catch (Exception e) when (e is InvalidOperationException or ArgumentException or KeyNotFoundException or IndexOutOfRangeException) { /* the quick fixes above still work */ }
         actions.AddRange(CreateTemplateActions(uri, range));
+        actions.AddRange(ClassBasedViewActions(snap, m, uri, rs));
         var organized = OrganizedText(snap, m);
         if (organized != null && organized != m.Source)
             actions.Add(new CodeAction("Optimize imports", OrganizeImportsKind, new WorkspaceEdit(new Dictionary<string, List<TextEdit>> { [uri] = DiffEdit(m, organized) })));
