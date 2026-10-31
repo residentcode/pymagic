@@ -960,7 +960,6 @@ public static class PythonFormatter
 
             var pieces = new List<Piece>();     // the same line as tokens with their spaces, for the line wrapper
             int row = 0;                        // the source line of the token, counted from the statement's first
-            bool legacyOnly = false;            // multi-line strings: keep the line breaks as they are (a backslash continuation is only a space, as in black)
 
             for (int k = 0; k < toks.Count; k++)
             {
@@ -1000,7 +999,9 @@ public static class PythonFormatter
                     if (lineBreak || pieces.Count == 0) pieces.Add(new Piece { Text = comment, Kind = TokenKind.Comment, Standalone = true, Row = row });
                     else pieces[^1].Comments.Add(comment);
                 }
-                if (t.Kind == TokenKind.String && text.Contains('\n')) legacyOnly = true;
+                // a multi-line string goes to the line wrapper with the rest, which lays it out as black 26 does (its multiline_string_handling);
+                // the tokens after it are on later rows of the source
+                int stringRows = t.Kind == TokenKind.String ? text.Count(c => c == '\n') : 0;
 
                 bool sliceBefore = false, sliceAfter = false;
                 if (sliceColon) (sliceBefore, sliceAfter) = SliceSpacing(toks, k);
@@ -1016,6 +1017,7 @@ public static class PythonFormatter
                         IsOpen = t.Kind == TokenKind.Operator && text is "(" or "[" or "{",
                         IsClose = t.Kind == TokenKind.Operator && text is ")" or "]" or "}",
                     });
+                row += stringRows;
 
                 if (k == 0)
                 {
@@ -1076,7 +1078,7 @@ public static class PythonFormatter
                 }
                 else if (t.Kind == TokenKind.Keyword && text == "lambda") lambdaDepths.Push(frames.Count);
             }
-            if (legacyOnly || pieces.Count == 0) return sb.ToString().TrimEnd();
+            if (pieces.Count == 0) return sb.ToString().TrimEnd();
 
             // wrap what is too long, join what was wrapped by hand but fits
             var lines = new LineWrapper(pieces, _o).Wrap(newIndent);

@@ -96,4 +96,30 @@ public class BlackRightHandSplitTests
         Same("x = [1.00000000e+00, 2.5E+10, 3e-05]\n",
              "x = [1.00000000e00, 2.5e10, 3e-05]\n");
     }
+
+    // ------------------------------------------------------------ item 218: lines that hold a multi-line string (black 26's multiline_string_handling)
+
+    [Fact]
+    public void AMultilineStringAmongArgumentsSplitsTheCall()
+    {
+        Same("call(arg, \"\"\"\ntext\n\"\"\")\n", "call(\n    arg,\n    \"\"\"\ntext\n\"\"\",\n)\n");
+        Same("parser.add_argument(\"--flag\", help=\"\"\"Some help\nthat goes on.\"\"\")\n",
+             "parser.add_argument(\n    \"--flag\",\n    help=\"\"\"Some help\nthat goes on.\"\"\",\n)\n");
+        Same("cursor.execute(\"\"\"\n    SELECT 1\n\"\"\", (a, b))\n", "cursor.execute(\n    \"\"\"\n    SELECT 1\n\"\"\",\n    (a, b),\n)\n");
+        Same("register(name=\"n\", doc=\"\"\"\ndoc\n\"\"\", extra=1)\n", "register(\n    name=\"n\",\n    doc=\"\"\"\ndoc\n\"\"\",\n    extra=1,\n)\n");
+    }
+
+    [Fact]
+    public void AMultilineStringOnItsOwnStaysAsWritten()
+    {
+        // the sole argument is hugged, an assignment, a method of the string, an assert message and `%` stay on their lines
+        Same("call(\"\"\"\ntext\n\"\"\")\n", "call(\"\"\"\ntext\n\"\"\")\n");
+        Same("def f():\n    return textwrap.dedent(\"\"\"\\\n        hello\n    \"\"\")\n", "def f():\n    return textwrap.dedent(\"\"\"\\\n        hello\n    \"\"\")\n");
+        Same("x = \"\"\"\nabc\n\"\"\"\n", "x = \"\"\"\nabc\n\"\"\"\n");
+        Same("y = \"\"\"\na {}\n\"\"\".format(1)\n", "y = \"\"\"\na {}\n\"\"\".format(1)\n");
+        Same("assert some_condition(value), \"\"\"\nmessage\n\"\"\"\n", "assert some_condition(value), \"\"\"\nmessage\n\"\"\"\n");
+        Same("print(\"\"\"a\nb\"\"\" % x)\n", "print(\"\"\"a\nb\"\"\" % x)\n");
+        // already split by hand with a trailing comma: kept so
+        Same("w = [\n    \"\"\"\nitem\n\"\"\",\n]\n", "w = [\n    \"\"\"\nitem\n\"\"\",\n]\n");
+    }
 }

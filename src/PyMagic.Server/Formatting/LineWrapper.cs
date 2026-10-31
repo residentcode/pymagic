@@ -890,7 +890,76 @@ internal sealed class LineWrapper
     bool Short(Ln l, int width = -1)
     {
         if (l.Kind == LineKind.Comment || HasStandalone(l.A, l.B)) return false;
-        return Fits(Render(l), width < 0 ? Width : width);
+        var o = Render(l);
+        if (!o.Text.Contains('\n')) return Fits(o, width < 0 ? Width : width);
+        return ShortWithMultilineString(l, o, width < 0 ? Width : width);
+    }
+
+    bool HasMultilineString(Ln l)
+    {
+        for (int i = l.A; i < l.B; i++) if (IsMultilineString(i)) return true;
+        return false;
+    }
+
+    bool IsMultilineString(int i) => i >= 0 && i < _p.Count && _p[i].Kind == TokenKind.String && _p[i].Text.Contains('\n');
+
+    /// <summary>
+    /// Black's is_line_short_enough for a line holding a multi-line string (multiline_string_handling, stable in black 26): its first and last
+    /// lines fit, there is only one such string, and the string is not among other items of its brackets (`f(a, """...""")` is split, one item a
+    /// line; `f("""...""")` and `"""...""".format(x)` stay as they are). A comma that ends the line right after the string does not count.
+    /// </summary>
+    bool ShortWithMultilineString(Ln l, OutLine o, int width)
+    {
+        string text = o.Text + (o.Comment.Length > 0 ? "  " + o.Comment : "");
+        int firstBreak = text.IndexOf('\n'), lastBreak = text.LastIndexOf('\n');
+        if (o.Indent + text[..firstBreak].TrimEnd('\r').Length > width || text[(lastBreak + 1)..].Length > width) return false;
+
+        int baseDepth = int.MaxValue;
+        for (int i = l.A; i < l.B; i++) baseDepth = Math.Min(baseDepth, _depth[i]);
+        var commas = new List<int>();
+        int mls = -1;
+        int maxLevel = int.MaxValue;   // the depth of the string once its brackets are left (black's max_level_to_update)
+        int count = l.B - l.A + (l.Comma ? 1 : 0);
+        for (int n = 0; n < count; n++)
+        {
+            int i = l.A + n;
+            bool added = i >= l.B;                       // the comma the split adds after the last piece
+            int depth = added ? 0 : _depth[i] - baseDepth;
+            if (maxLevel == int.MaxValue)
+            {
+                int? hadComma = null;
+                if (depth + 1 > commas.Count) commas.Add(0);
+                else if (depth + 1 < commas.Count) { hadComma = commas[^1]; commas.RemoveAt(commas.Count - 1); }
+                if (hadComma != null && mls >= 0 && _depth[mls] - baseDepth == depth + 1)
+                {
+                    maxLevel = depth;
+                    if (hadComma > 0) return false;      // the string was in brackets with at least one comma: split
+                }
+            }
+            bool comma = added || IsComma(i);
+            if (depth <= maxLevel && comma && depth < commas.Count)
+            {
+                // the comma that ends the line right after the string (or the expression holding it) is not counted
+                bool last = n == count - 1;
+                bool afterString = last && mls >= 0 && !CommaBetween(mls, i, _depth[mls] > _depth[Math.Min(i, l.B - 1)] ? _depth[Math.Min(i, l.B - 1)] : _depth[mls]);
+                if ((l.Inside || depth > 0) && !afterString) commas[depth]++;
+            }
+            if (maxLevel != int.MaxValue) maxLevel = Math.Min(maxLevel, depth);
+            if (!added && IsMultilineString(i))
+            {
+                if (mls >= 0) return false;              // two multi-line strings cannot share a line
+                mls = i;
+            }
+        }
+        if (mls < 0) return true;                        // a string with an escaped line break, not a triple-quoted one
+        return commas.All(c => c == 0);
+    }
+
+    /// <summary>Whether a comma at the given depth stands between two pieces (the string is then not the item the comma ends).</summary>
+    bool CommaBetween(int from, int to, int depth)
+    {
+        for (int i = from + 1; i < to && i < _p.Count; i++) if (_depth[i] == depth && IsComma(i)) return true;
+        return false;
     }
 
     static bool Fits(OutLine o, int width) => !o.IsComment && o.Indent + o.Text.Length + (o.Comment.Length > 0 ? 2 + o.Comment.Length : 0) <= width;
@@ -988,7 +1057,7 @@ internal sealed class LineWrapper
             anyOptional = true;
             if (_depth[i] == baseDepth && _p[i].Visible) optionalUsed = true;
         }
-        if (!anyOptional || optionalUsed || Fits(result[0].Out, Width) || UnsplittableTypeIgnore(result[0].Line) || OverOnlyBySubscriptComment(result[0].Line)) return result;
+        if (!anyOptional || optionalUsed || HasMultilineString(l) || Fits(result[0].Out, Width) || UnsplittableTypeIgnore(result[0].Line) || OverOnlyBySubscriptComment(result[0].Line)) return result;
 
         var after = SaveVisible();
         RestoreVisible(before);
@@ -1405,6 +1474,8 @@ internal sealed class LineWrapper
         if (lastAt > body.A && _p[lastAt].IsClose && (_p[lastAt].Text is ")" or "}" || _p[lastAt].Text == "]" && _atom[_p[lastAt].Match]))
         {
             if (_p[lastAt - 1].IsOpen) return false;
+            // the body starts with a multi-line string: without the parentheses its first line is as long as before
+            if (IsMultilineString(firstAt)) return true;
             if (CanOmitClosingParen(body, lastAt)) return true;
         }
         return false;
