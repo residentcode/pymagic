@@ -382,6 +382,17 @@ function registerProviders() {
     });
     monaco.languages.registerDocumentRangeFormattingEditProvider('python', {
         async provideDocumentRangeFormattingEdits(model, range) {
+            if (notebook?.isCell(model)) {
+                // the selected lines of a cell, the cell read as the piece of code it is
+                try {
+                    const text = await notebook.formatted(model, { start: { line: range.startLineNumber - 1, character: range.startColumn - 1 }, end: { line: range.endLineNumber - 1, character: range.endColumn - 1 } });
+                    return text === model.getValue() ? [] : [{ range: model.getFullModelRange(), text }];
+                }
+                catch (e) {
+                    toast(e.message ?? 'The selection cannot be formatted.', true);
+                    return [];
+                }
+            }
             const uri = serverUri.get(model);
             if (!uri)
                 return [];
@@ -864,6 +875,9 @@ async function openFile(rel, reveal, opts = {}) {
     refreshDirty();
 }
 async function save() {
+    // format on save: a notebook's code cells too, before they are written into its file
+    if ($('fmt-save').checked && currentRel.endsWith('.ipynb'))
+        await notebook?.formatShown();
     notebook?.flushAll();
     if ($('fmt-save').checked && currentRel.endsWith('.py'))
         await formatCurrent(true);

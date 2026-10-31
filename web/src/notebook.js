@@ -316,6 +316,12 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         editor.addCommand(M.CtrlCmd | K.Enter, () => runSelected(state, false));
         editor.addCommand(M.Alt | K.Enter, () => { runSelected(state, false); addCell(state, 'code'); });
         editor.addCommand(M.CtrlCmd | K.KeyS, () => { flush(state); void save(); });
+        // Shift+Alt+F with a selection lays out only the lines it touches, as in the code editor
+        if (cell.cell_type === 'code')
+            editor.addCommand(M.Shift | M.Alt | K.KeyF, () => {
+                const sel = editor.getSelection();
+                void editor.getAction(sel && !sel.isEmpty() ? 'editor.action.formatSelection' : 'editor.action.formatDocument')?.run();
+            });
         if (cell.cell_type === 'markdown') editor.addCommand(K.Escape, () => { view.rendered = true; paintMarkdown(state, view); });
         if (focus) editor.focus();
     }
@@ -556,16 +562,18 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         return i;
     }
 
-    /** The text of a code cell laid out by the formatter; the text itself when it has `!` or `%` lines, which are not Python, with a reason thrown. */
-    async function formattedText(state, text) {
-        if (/^\s*[!%]/m.test(text)) throw new Error('A cell with !commands or %magics cannot be formatted.');
+    /**
+     * The text of a code cell laid out by the formatter (its `%magic` and `!command` lines are set aside and put back by the engine); with a
+     * range (0-based lines and characters), only the lines it touches. Throws with a reason when the cell cannot be formatted (`%%bash`, errors).
+     */
+    async function formattedText(state, text, range) {
         if (text.trim() === '') return text;
-        const r = await lsp.request('pymagic/formatText', { textDocument: { uri: state.vuri }, text, options: { pymagicEngine: formatEngine() } });
+        const r = await lsp.request('pymagic/formatText', { textDocument: { uri: state.vuri }, text, range, options: { pymagicEngine: formatEngine() } });
         return r.text;
     }
 
-    /** Formats every code cell that can be; the ones that cannot (syntax errors, magics) are counted, not touched. */
-    async function formatAll(state) {
+    /** Formats every code cell that can be; the ones that cannot (syntax errors, `%%bash` cells) are counted, not touched. */
+    async function formatAll(state, quiet = false) {
         let changed = 0, skipped = 0;
         for (const view of state.views) {
             if (view.cell.cell_type !== 'code') continue;
@@ -581,16 +589,21 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
                 changed++;
             } catch { skipped++; }
         }
-        toast(changed || skipped ? `Formatted ${changed} cell${changed === 1 ? '' : 's'}${skipped ? `, ${skipped} left as they are` : ''}` : 'Every cell is already formatted');
+        if (!quiet || skipped)
+            toast(changed || skipped ? `Formatted ${changed} cell${changed === 1 ? '' : 's'}${skipped ? `, ${skipped} left as they are` : ''}` : 'Every cell is already formatted');
     }
 
     return {
         /** Whether a Monaco model is the editor of a notebook cell. */
         isCell(model) { return cellModels.has(model); },
         /** The text of a cell's editor laid out by the formatter (throws when it cannot be). */
-        formatted(model) {
+        formatted(model, range) {
             const entry = cellModels.get(model);
-            return entry ? formattedText(entry.state, model.getValue()) : Promise.resolve(model.getValue());
+            return entry ? formattedText(entry.state, model.getValue(), range) : Promise.resolve(model.getValue());
+        },
+        /** Formats every code cell of the notebook on screen (format on save): quietly, unless some cells could not be. */
+        async formatShown() {
+            if (shown?.nb) await formatAll(shown, true);
         },
         /** Shows the notebook of a file (an open editor model) in place of the code editor. */
         show(rel, model) {

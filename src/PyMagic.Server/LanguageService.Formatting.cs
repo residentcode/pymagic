@@ -96,12 +96,26 @@ public sealed partial class LanguageService
     /// A cell has no newline at its end by convention, so none is left there when the text had none. Imports are not sorted: they are another cell's business.
     /// </summary>
     /// <exception cref="ServiceException">The text has syntax errors, opts out with `fmt: off`, or the tool is missing or fails.</exception>
-    public string FormatText(string text, string uri, string engine = "builtin")
+    public string FormatText(string text, string uri, string engine = "builtin", Range? range = null)
     {
-        if (PyMagic.Core.Syntax.Parser.Parse(text).Diagnostics.Count > 0) throw new ServiceException("Fix the syntax errors first: code that does not parse cannot be formatted.");
-        string formatted = engine is "builtin" or ""
-            ? PythonFormatter.Format(text, FormatConfigOf(uri)) ?? throw new ServiceException("This code cannot be formatted (it has `fmt: off`, or the result could have changed it).")
-            : RunExternal(engine, text, uri);
+        // `%magic` and `!command` lines are set aside while the rest is laid out, and put back after
+        var magics = CellMagics.Mask(text);
+        string code = magics?.Text ?? text;
+        if (PyMagic.Core.Syntax.Parser.Parse(code).Diagnostics.Count > 0) throw new ServiceException("Fix the syntax errors first: code that does not parse cannot be formatted.");
+        string formatted;
+        if (range is { } r)
+        {
+            // only the lines the selection touches (the placeholders keep the lines where they were, so the range still fits)
+            var lm = new LineMap(code);
+            int start = lm.OffsetOf(new Position(r.Start.Line, 0)), end = lm.OffsetOf(r.End);
+            formatted = PythonFormatter.FormatRange(code, start, end, FormatConfigOf(uri))
+                ?? throw new ServiceException("This selection cannot be formatted on its own (it has `fmt: off`, or formatting it would change the code): select whole statements, or format the cell.");
+        }
+        else
+            formatted = engine is "builtin" or ""
+                ? PythonFormatter.Format(code, FormatConfigOf(uri)) ?? throw new ServiceException("This code cannot be formatted (it has `fmt: off`, or the result could have changed it).")
+                : RunExternal(engine, code, uri);
+        if (magics is { } set) formatted = CellMagics.Unmask(formatted, set.Lines);
         return text.EndsWith('\n') ? formatted : formatted.TrimEnd('\n');
     }
 

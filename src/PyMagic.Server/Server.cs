@@ -308,7 +308,7 @@ public sealed class Server
             case "pymagic/formatConfig":
                 return _service.FormatConfigOf(UriOf(p));
             case "pymagic/formatText":
-                return new { text = _service.FormatText(p!["text"]!.GetValue<string>(), UriOf(p), EngineOf(p)) };
+                return new { text = _service.FormatText(p!["text"]!.GetValue<string>(), UriOf(p), EngineOf(p), p["range"] != null ? RangeOf(p) : null) };
             case "pymagic/organizeImports":
                 return _service.OrganizeImports(UriOf(p));
             case "workspace/symbol":
