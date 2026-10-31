@@ -487,3 +487,8 @@
 .fs-kinds { display: flex; gap: 4px; flex-wrap: wrap; }
 .fs-kinds button { padding: 1px 8px; border-radius: 10px; font-size: 12px; }
 .fs-kinds button.on { background: var(--accent); color: #fff; }
+/* the refactoring preview: a box per file and per change, the words that changed */
+#sigdialog .pname { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+#sigdialog .pchoose { margin: 0 6px 0 -4px; vertical-align: middle; height: 12px; }
+#sigdialog pre.skipped { opacity: 0.45; }
+#sigdialog .add .word { background: var(--good)66; border-radius: 2px; } #sigdialog .del .word { background: var(--bad)66; border-radius: 2px; }

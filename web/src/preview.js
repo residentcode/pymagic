@@ -67,10 +67,78 @@ export function hunksOf(lines, context = 2) {
         to = Math.min(to + context, numbered.length - 1);
         k++;
         const slice = numbered.slice(from, to + 1);
-        hunks.push({ oldStart: slice[0].oldNo, newStart: slice[0].newNo, lines: slice.map((e) => e.l) });
+        hunks.push({ oldStart: slice[0].oldNo, newStart: slice[0].newNo, lines: slice.map((e) => e.l), from });
     }
     return hunks;
 }
+/** The changes of a line diff: each run of removed and added lines that are next to each other, by the indexes of its lines. */
+export function blocksOf(lines) {
+    const blocks = [];
+    let current = null;
+    lines.forEach((l, i) => {
+        if (l.kind === ' ') {
+            current = null;
+            return;
+        }
+        if (!current) {
+            current = [];
+            blocks.push(current);
+        }
+        current.push(i);
+    });
+    return blocks;
+}
+
+/** The new text with only the chosen changes (by their index in blocksOf) made: the others keep their old lines. */
+export function textWithChosen(lines, chosen) {
+    const block = new Map();
+    blocksOf(lines).forEach((b, n) => b.forEach((i) => block.set(i, n)));
+    const out = [];
+    lines.forEach((l, i) => {
+        const take = !block.has(i) || chosen.has(block.get(i));
+        if (l.kind === ' ' || (l.kind === '+' && take) || (l.kind === '-' && !take))
+            out.push(l.text);
+    });
+    return out.join('\n');
+}
+
+/**
+ * The words that changed between a removed line and the added line that replaces it: the part between their common start and their common
+ * end, widened to whole words; null when the lines have nothing in common.
+ */
+export function changedSpan(oldLine, newLine) {
+    let head = 0;
+    while (head < oldLine.length && head < newLine.length && oldLine[head] === newLine[head])
+        head++;
+    let tail = 0;
+    while (tail < oldLine.length - head && tail < newLine.length - head && oldLine[oldLine.length - 1 - tail] === newLine[newLine.length - 1 - tail])
+        tail++;
+    if (head === 0 && tail === 0)
+        return null;
+    const word = /[\w]/;
+    while (head > 0 && word.test(oldLine[head - 1]) && word.test(newLine[head - 1] ?? ''))
+        head--;
+    while (tail > 0 && word.test(oldLine[oldLine.length - tail] ?? '') && word.test(newLine[newLine.length - tail] ?? ''))
+        tail--;
+    return { old: [head, oldLine.length - tail], new: [head, newLine.length - tail] };
+}
+
+/** For each line of a change, the span of it that differs from its partner (the n-th removed line with the n-th added one of the block). */
+export function wordSpans(lines) {
+    const spans = new Map();
+    for (const b of blocksOf(lines)) {
+        const removed = b.filter((i) => lines[i].kind === '-'), added = b.filter((i) => lines[i].kind === '+');
+        for (let k = 0; k < Math.min(removed.length, added.length); k++) {
+            const s = changedSpan(lines[removed[k]].text, lines[added[k]].text);
+            if (!s)
+                continue;
+            spans.set(removed[k], s.old);
+            spans.set(added[k], s.new);
+        }
+    }
+    return spans;
+}
+
 const store = {
     get always() { try {
         return localStorage.getItem('pm.previewAlways') === '1';
@@ -84,7 +152,10 @@ const store = {
     catch { /* not available */ } },
 };
 export const previewAlways = () => store.always;
-/** Shows the changes and resolves true when the user applies them. */
+/**
+ * Shows the changes and resolves true when the user applies them all, false when cancelled, and { texts } when only some are chosen:
+ * for each file (by its index in changes) the text it gets, null for a file left as it is.
+ */
 export function previewChanges(title, changes, warnings = []) {
     return new Promise((resolve) => {
         const overlay = document.createElement('div');
@@ -96,6 +167,8 @@ export function previewChanges(title, changes, warnings = []) {
         const h = document.createElement('h2');
         const added = { n: 0 }, removed = { n: 0 };
         const sections = [];
+        // what is chosen: for each file the changes (blocks) that are to be made, all of them at first
+        const files = [];
         for (const change of changes) {
             const lines = diffLines(change.oldText, change.newText);
             for (const l of lines) {
@@ -104,29 +177,83 @@ export function previewChanges(title, changes, warnings = []) {
                 else if (l.kind === '-')
                     removed.n++;
             }
+            const blocks = blocksOf(lines);
+            const blockOf = new Map();
+            blocks.forEach((b, n) => b.forEach((i) => blockOf.set(i, n)));
+            const file = { lines, blocks, chosen: new Set(blocks.map((_, n) => n)), boxes: [] };
+            files.push(file);
+            const spans = wordSpans(lines);
             const section = document.createElement('div');
             section.className = 'pfile';
-            const name = document.createElement('div');
+            const name = document.createElement('label');
             name.className = 'pname';
+            const fileBox = document.createElement('input');
+            fileBox.type = 'checkbox';
+            fileBox.checked = true;
+            fileBox.title = 'Change this file';
             const fileAdded = lines.filter((l) => l.kind === '+').length, fileRemoved = lines.filter((l) => l.kind === '-').length;
-            name.textContent = `${change.name}   +${fileAdded} −${fileRemoved}`;
+            name.append(fileBox, ` ${change.name}   +${fileAdded} −${fileRemoved}`);
             section.appendChild(name);
             const pre = document.createElement('pre');
+            const sync = () => {
+                fileBox.checked = file.chosen.size > 0;
+                fileBox.indeterminate = file.chosen.size > 0 && file.chosen.size < blocks.length;
+                for (const [n, box] of file.boxes) box.checked = file.chosen.has(n);
+                pre.classList.toggle('skipped', file.chosen.size === 0);
+            };
+            fileBox.onchange = () => {
+                file.chosen = fileBox.checked ? new Set(blocks.map((_, n) => n)) : new Set();
+                sync();
+            };
             for (const hunk of hunksOf(lines)) {
                 const head = document.createElement('div');
                 head.className = 'hunk';
                 head.textContent = `@@ line ${hunk.oldStart} @@`;
                 pre.appendChild(head);
-                for (const l of hunk.lines) {
+                hunk.lines.forEach((l, k) => {
+                    const at = hunk.from + k;
                     const row = document.createElement('div');
                     row.className = l.kind === '+' ? 'add' : l.kind === '-' ? 'del' : 'ctx';
-                    row.textContent = (l.kind === ' ' ? '  ' : l.kind + ' ') + l.text;
+                    // the first line of each change carries the box that chooses it
+                    const n = blockOf.get(at);
+                    if (n !== undefined && blocks[n][0] === at && blocks.length > 1) {
+                        const box = document.createElement('input');
+                        box.type = 'checkbox';
+                        box.checked = true;
+                        box.title = 'Make this change';
+                        box.className = 'pchoose';
+                        box.onchange = () => {
+                            if (box.checked)
+                                file.chosen.add(n);
+                            else
+                                file.chosen.delete(n);
+                            sync();
+                        };
+                        file.boxes.push([n, box]);
+                        row.appendChild(box);
+                    }
+                    const span = spans.get(at);
+                    const mark = (l.kind === ' ' ? '  ' : l.kind + ' ');
+                    if (span) {
+                        const word = document.createElement('span');
+                        word.className = 'word';
+                        word.textContent = l.text.slice(span[0], span[1]);
+                        row.append(mark + l.text.slice(0, span[0]), word, l.text.slice(span[1]));
+                    }
+                    else
+                        row.append(mark + l.text);
                     pre.appendChild(row);
-                }
+                });
             }
             section.appendChild(pre);
             sections.push(section);
         }
+        /** What Apply resolves with: true for everything, otherwise each file's text with only its chosen changes. */
+        const outcome = () => {
+            if (files.every((f) => f.chosen.size === f.blocks.length))
+                return true;
+            return { texts: files.map((f, i) => (f.chosen.size === 0 ? null : f.chosen.size === f.blocks.length ? changes[i].newText : textWithChosen(f.lines, f.chosen))) };
+        };
         h.textContent = `${title} — ${changes.length} file${changes.length === 1 ? '' : 's'}, +${added.n} −${removed.n}`;
         box.appendChild(h);
         if (warnings.length) {
@@ -161,7 +288,7 @@ export function previewChanges(title, changes, warnings = []) {
         box.appendChild(buttons);
         const finish = (ok) => { store.always = check.checked; overlay.remove(); resolve(ok); };
         cancel.onclick = () => finish(false);
-        apply.onclick = () => finish(true);
+        apply.onclick = () => finish(outcome());
         overlay.onkeydown = (e) => {
             if (e.key === 'Escape') {
                 e.preventDefault();
@@ -169,7 +296,7 @@ export function previewChanges(title, changes, warnings = []) {
             }
             else if (e.key === 'Enter' && !(e.target instanceof HTMLInputElement)) {
                 e.preventDefault();
-                finish(true);
+                finish(outcome());
             }
         };
         overlay.onmousedown = (e) => { if (e.target === overlay)

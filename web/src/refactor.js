@@ -171,10 +171,23 @@ export function setupRefactor(deps) {
                     text = text.slice(0, t.model.getOffsetAt({ lineNumber: r.startLineNumber, column: r.startColumn })) + (e.text ?? '')
                         + text.slice(t.model.getOffsetAt({ lineNumber: r.endLineNumber, column: r.endColumn }));
                 }
-                return { name: displayName(t.uri), oldText, newText: text };
+                return { name: displayName(t.uri), oldText, newText: text, target: t };
             }).filter((f) => f.oldText !== f.newText);
-            if (files.length > 0 && !(await previewChanges(title, files, warnings)))
+            const answer = files.length > 0 ? await previewChanges(title, files, warnings) : true;
+            if (!answer)
                 return false;
+            if (answer !== true) {
+                // only some files or changes were chosen: each file gets the text its chosen changes make, the others are left alone
+                const chosen = [];
+                files.forEach((f, i) => {
+                    const text = answer.texts[i];
+                    if (text !== null)
+                        chosen.push({ ...f.target, edits: text === f.newText ? f.target.edits : [{ range: f.target.model.getFullModelRange(), text }] });
+                });
+                if (chosen.length === 0)
+                    return false;
+                targets.splice(0, targets.length, ...chosen);
+            }
         }
         editor.pushUndoStop();
         for (const t of targets)

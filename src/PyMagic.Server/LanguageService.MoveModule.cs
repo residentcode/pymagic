@@ -232,6 +232,9 @@ public sealed partial class LanguageService
                         if (alias.AsName == null && alias.Name.Contains('.')) edits.AddRange(DottedUses(x, alias.Name, to));
                     }
                     break;
+                case ImportFromStmt { IsStar: true } star:
+                    edits.AddRange(StarImportEdits(x, star, map, newPackage, nl));
+                    break;
                 case ImportFromStmt from:
                     edits.AddRange(FromImportEdits(x, from, map, newPackage, nl));
                     break;
@@ -257,6 +260,42 @@ public sealed partial class LanguageService
     }
 
     static string? FixtureModelString(ConstExpr c) => PyMagic.Server.Pytest.FixtureModel.StringValue(c);
+
+    /// <summary>
+    /// `from pkg import *` and code that uses a submodule it brings (`b.VALUE`, the package listing `b` in `__all__` or importing it): when the submodule is
+    /// renamed in the package, the uses take the new name, which the star now brings; when it leaves the package, it is imported by name after the star.
+    /// The star of a module that itself moves is followed by FromImportEdits' rules for the module part.
+    /// </summary>
+    IEnumerable<Edit> StarImportEdits(ModuleInfo x, ImportFromStmt star, Func<string, string?> map, string newPackage, string nl)
+    {
+        foreach (var e in FromImportEdits(x, star, map, newPackage, nl)) yield return e;
+        string? package = Workspace.AbsoluteName(x, star.Level, star.Module);
+        if (package == null) yield break;
+        string newPackageName = map(package) ?? package;
+        // the names the code reads that it does not bind itself, so that they can only come from a star
+        var uses = AstChildren.Descendants(x.Ast).OfType<NameExpr>().Where(n => x.Semantics.Resolve(n) is null || x.Semantics.Resolve(n)!.Declarations.All(d => d.Kind == DeclKind.Import && d.Node is ImportFromStmt { IsStar: true })).ToList();
+        var added = new List<string>();
+        foreach (var name in uses.Select(n => n.Name).Distinct())
+        {
+            string full = package.Length == 0 ? name : package + "." + name;
+            if (map(full) is not { Length: > 0 } to || to == full) continue;
+            string expected = newPackageName.Length == 0 ? name : newPackageName + "." + name;
+            if (to == expected) continue;   // the package moved with it: the star still brings it by that name
+            string last = Last(to);
+            if (Parent(to) == newPackageName)
+            {
+                // renamed in the package: the star brings it by its new name
+                foreach (var n in uses.Where(n => n.Name == name)) yield return new Edit(n.Start, n.End, last);
+                continue;
+            }
+            added.Add(Parent(to).Length == 0 ? (last == name ? $"import {last}" : $"import {last} as {name}") : $"from {Parent(to)} import {(last == name ? last : $"{last} as {name}")}");
+        }
+        if (added.Count > 0)
+        {
+            string indent = LineIndent(x.Source, star.Start);
+            yield return new Edit(star.End, star.End, string.Concat(added.Select(a => nl + indent + a)));
+        }
+    }
 
     /// <summary>`pkg.b.f()` after `import pkg.b`: the chain `pkg.b` becomes the new dotted name.</summary>
     static IEnumerable<Edit> DottedUses(ModuleInfo x, string oldName, string newName)
@@ -328,7 +367,8 @@ public sealed partial class LanguageService
         if (apart.Count == 0)
         {
             // only the module part: the names, their parentheses and comments stay as written
-            var m = Regex.Match(src[from.Start..from.End], @"^from\s+(?<mod>\.*[\w.]*)\s+import\b");
+            // the line may go on with a backslash: `from pkg.b \` then `import VALUE`
+            var m = Regex.Match(src[from.Start..from.End], @"^from(?:\s|\\\r?\n)+(?<mod>\.*[\w.]*)(?:\s|\\\r?\n)+import\b");
             if (!m.Success) yield break;
             int s = from.Start + m.Groups["mod"].Index;
             yield return new Edit(s, s + m.Groups["mod"].Length, modulePart);

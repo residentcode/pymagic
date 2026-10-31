@@ -157,4 +157,38 @@ public class MoveModuleTests
         var (_, plan) = Move(Project.Append(("notes/readme.md", "# hi\n")).ToArray(), "notes", "other/notes");
         Assert.Equal("", string.Join("|", plan.Changes.Keys) + string.Join("|", plan.Warnings));
     }
+
+    // ------------------------------------------------------------ item 214: `from pkg import *`, backslashes
+
+    static readonly (string, string)[] StarProject =
+    {
+        ("pkg/__init__.py", "__all__ = ['a', 'b']\n"),
+        ("pkg/a.py", "X = 1\n"),
+        ("pkg/b.py", "VALUE = 1\n"),
+        ("other/__init__.py", ""),
+        ("star.py", "from pkg import *\n\nprint(b.VALUE, a.X)\n"),
+        ("bs.py", "from pkg.b \\\n    import VALUE\nimport os, \\\n    pkg.b\nprint(VALUE, pkg.b.VALUE, os)\n"),
+    };
+
+    [Fact]
+    public void CodeThatUsesASubmoduleThroughAStarFollowsIt()
+    {
+        // renamed in its package: the star brings it by the new name
+        var (renamed, _) = Move(StarProject, "pkg/b.py", "pkg/c.py");
+        Assert.Equal("from pkg import *\n\nprint(c.VALUE, a.X)\n", renamed["star.py"]);
+        Assert.Equal("__all__ = ['a', 'c']\n", renamed["pkg/__init__.py"]);
+        // moved out of it: imported by name after the star, the uses unchanged
+        var (moved, _) = Move(StarProject, "pkg/b.py", "other/b.py");
+        Assert.Equal("from pkg import *\nfrom other import b\n\nprint(b.VALUE, a.X)\n", moved["star.py"]);
+        // a name the file binds itself is not the submodule
+        var own = StarProject.Select(f => f.Item1 == "star.py" ? (f.Item1, "from pkg import *\n\nb = 2\nprint(b, a.X)\n") : f).ToArray();
+        Assert.Equal("from pkg import *\n\nb = 2\nprint(b, a.X)\n", Move(own, "pkg/b.py", "pkg/c.py").After["star.py"]);
+    }
+
+    [Fact]
+    public void ImportsWrittenOverLinesWithBackslashes()
+    {
+        var (after, _) = Move(StarProject, "pkg/b.py", "other/b.py");
+        Assert.Equal("from other.b \\\n    import VALUE\nimport os, \\\n    other.b\nprint(VALUE, other.b.VALUE, os)\n", after["bs.py"]);
+    }
 }
