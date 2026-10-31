@@ -24,6 +24,7 @@ import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
 import { setupRequirementsCheck } from './requirements-check';
+import { setupSemantic } from './semantic';
 import { setupProfiler } from './profiler';
 import { setupNotebook } from './notebook';
 import { buildInfo, buildLabel } from './build-info.js';
@@ -919,6 +920,7 @@ async function main() {
         wordBasedSuggestions: 'off',
         snippetSuggestions: 'inline',
         suggest: { showWords: false, insertMode: 'replace' },
+        'semanticHighlighting.enabled': true,
     });
     editor = createEditor($('editor'));
     editor.onDidChangeModel(() => updateWelcome());
@@ -1054,6 +1056,7 @@ async function main() {
     codeGen.attach(editor);
     setLiveTemplateSource(() => lsp.request('pymagic/templates', {}));
     window.addEventListener('pymagic:folders', () => lsp.notify('pymagic/foldersChanged', {}));
+    setupSemantic({ lsp, uriOf: (model) => model && serverUri.get(model) });
     const codeVision = setupCodeVision({ editor, lsp, uriOf: (model) => model && serverUri.get(model), relOf: (model) => model && relPathOf.get(normalise(serverUri.get(model) ?? '')), savedText: (rel) => savedText.get(rel) });
     setupRoutes({ editor, lsp, openFile, relOfUri });
     setupDjango({

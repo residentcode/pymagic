@@ -62,7 +62,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Notebooks: formatting a selection of a cell, formatting on save, cells with magics (120).
 - Refactoring: choosing which files or hunks of a preview to apply, word-level highlighting in the diff (19); a module reached through `from pkg import *` and imports written over lines with backslashes are not followed by a move (143).
 - Unresolved imports: asking PyPI whether a suggested package exists, an install command for other LSP clients, remembering "ignore this import" (15).
-- Language server: semantic tokens, cancelling a request, UTF-8 position encoding (8).
+- Language server: ~~semantic tokens~~ (done, item 197: the colours of names by their meaning, compared with VS Code's); cancelling a request, UTF-8 position encoding (8).
 - Formatter: the import settings of ruff and isort not read yet: `lines-after-imports`, `section-order`, `force-wrap-aliases`, `from-first`, `relative-imports-order`, `split-on-trailing-comma` (44).
 
 **Run, debug and tests**
@@ -154,4 +154,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 196 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 197 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

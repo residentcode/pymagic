@@ -276,6 +276,8 @@ public sealed class Server
                 return _service.TemplateList();
             case "pymagic/inlayHints":
                 return _service.InlayHints(UriOf(p), RangeOf(p));
+            case "pymagic/semanticTokens":
+                return new { data = _service.SemanticTokens(UriOf(p)) };
             case "pymagic/fileUsages":
                 return _service.FileUsages(UriOf(p));
             case "pymagic/move":
