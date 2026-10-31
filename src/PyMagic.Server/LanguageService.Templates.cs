@@ -115,7 +115,28 @@ public sealed partial class LanguageService
 
     // ------------------------------------------------------------ the user's own snippets
 
-    sealed record UserSnippet(string Prefix, string Description, string Body);
+    /// <param name="Scope">python (the default) or template: where the snippet is offered.</param>
+    sealed record UserSnippet(string Prefix, string Description, string Body, string Scope = "python");
+
+    /// <summary>Live templates of Django templates, typed in the text of a template (outside the tags): each writes a whole tag, a block one with its end.</summary>
+    static readonly LiveTemplate[] TemplateLiveTemplates =
+    {
+        new("if", "{% if %} … {% endif %}", "{% if ${1:condition} %}\n\t$0\n{% endif %}"),
+        new("ife", "{% if %} … {% else %} … {% endif %}", "{% if ${1:condition} %}\n\t$2\n{% else %}\n\t$0\n{% endif %}"),
+        new("for", "{% for %} … {% endfor %}", "{% for ${1:item} in ${2:items} %}\n\t$0\n{% endfor %}"),
+        new("fore", "{% for %} … {% empty %} … {% endfor %}", "{% for ${1:item} in ${2:items} %}\n\t$3\n{% empty %}\n\t$0\n{% endfor %}"),
+        new("block", "{% block %} … {% endblock %}", "{% block ${1:content} %}\n\t$0\n{% endblock %}"),
+        new("with", "{% with %} … {% endwith %}", "{% with ${1:name}=${2:value} %}\n\t$0\n{% endwith %}"),
+        new("extends", "{% extends \"base.html\" %}", "{% extends \"${1:base.html}\" %}\n$0"),
+        new("include", "{% include \"…\" %}", "{% include \"${1:name.html}\" %}$0"),
+        new("load", "{% load static %}", "{% load ${1:static} %}$0"),
+        new("static", "{% static \"…\" %}", "{% static \"${1:path}\" %}$0"),
+        new("url", "{% url \"…\" %}", "{% url \"${1:name}\" %}$0"),
+        new("csrf", "{% csrf_token %}", "{% csrf_token %}$0"),
+        new("comment", "{# … #}", "{# $0 #}"),
+        new("var", "{{ … }}", "{{ ${1:value} }}$0"),
+        new("trans", "{% translate \"…\" %}", "{% translate \"${1:text}\" %}$0"),
+    };
 
     (string Path, DateTime Stamp, List<UserSnippet> Snippets)? _userSnippets;
 
@@ -140,7 +161,9 @@ public sealed partial class LanguageService
                         ? p.ValueKind == JsonValueKind.Array ? p.EnumerateArray().Select(x => x.GetString() ?? "").ToList() : new List<string> { p.GetString() ?? "" }
                         : new List<string> { entry.Name };
                     string description = entry.Value.TryGetProperty("description", out var d) ? d.GetString() ?? entry.Name : entry.Name;
-                    foreach (var prefix in prefixes.Where(x => x.Length > 0)) list.Add(new UserSnippet(prefix, description, text));
+                    // VS Code's "scope" names languages: a template one is offered in templates
+                    string scope = entry.Value.TryGetProperty("scope", out var sc) && sc.GetString() is { } sv && (sv.Contains("html") || sv.Contains("template") || sv.Contains("jinja")) ? "template" : "python";
+                    foreach (var prefix in prefixes.Where(x => x.Length > 0)) list.Add(new UserSnippet(prefix, description, text, scope));
                 }
             }
             catch (Exception e) when (e is JsonException or IOException or InvalidOperationException) { /* a broken file offers nothing */ }
@@ -155,9 +178,20 @@ public sealed partial class LanguageService
     {
         live = LiveTemplates.Select(t => new { prefix = t.Prefix, description = t.Description, body = t.Body, classBody = t.Context == TemplateContext.ClassBody, import = t.ImportModule }).ToList(),
         postfix = PostfixTemplates.Select(t => new { key = t.Key, description = t.Description, example = t.Example }).ToList(),
+        template = TemplateLiveTemplates.Select(t => new { prefix = t.Prefix, description = t.Description, body = t.Body }).ToList(),
     };
 
     // ------------------------------------------------------------ live templates
+
+    /// <summary>The live templates of a template file, built in and the project's own, for the word typed in its text.</summary>
+    IEnumerable<CompletionItem> TemplateLiveItems(string word)
+    {
+        foreach (var t in TemplateLiveTemplates.Where(t => t.Prefix.StartsWith(word, StringComparison.Ordinal)))
+            yield return new CompletionItem(t.Prefix, CompletionKind.Snippet, t.Description, "4" + t.Prefix, t.Body, IsSnippet: true,
+                Documentation: "```django\n" + Regex.Replace(t.Body, @"\$\{\d+:([^}]*)\}|\$\{?\d+\}?", "$1").Replace("\t", "    ") + "\n```");
+        foreach (var s in UserSnippets().Where(s => s.Scope == "template" && s.Prefix.StartsWith(word, StringComparison.Ordinal)))
+            yield return new CompletionItem(s.Prefix, CompletionKind.Snippet, s.Description, "3" + s.Prefix, s.Body, IsSnippet: true, Documentation: "```django\n" + s.Body + "\n```");
+    }
 
     /// <summary>Templates whose name starts with what is typed, at the start of a statement.</summary>
     IEnumerable<CompletionItem> LiveTemplateItems(ModuleInfo m, LineMap lines, string prefix, bool inClassBody)
@@ -175,7 +209,7 @@ public sealed partial class LanguageService
             yield return new CompletionItem(t.Prefix, CompletionKind.Snippet, t.Description, "4" + t.Prefix, t.Body, IsSnippet: true,
                 AdditionalTextEdits: edits, Documentation: "```python\n" + Regex.Replace(t.Body, @"\$\{\d+:([^}]*)\}|\$\{?\d+\}?", "$1").Replace("\t", "    ") + "\n```");
         }
-        foreach (var s in UserSnippets())
+        foreach (var s in UserSnippets().Where(s => s.Scope == "python"))
             if (s.Prefix.StartsWith(prefix, StringComparison.Ordinal))
                 yield return new CompletionItem(s.Prefix, CompletionKind.Snippet, s.Description, "3" + s.Prefix, s.Body, IsSnippet: true,
                     Documentation: "```python\n" + s.Body.Replace("\t", "    ") + "\n```");

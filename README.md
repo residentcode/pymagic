@@ -109,9 +109,9 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Templates:
   - breakpoints in `.html` templates, with their variables in the debugger;
   - a live preview beside the editor through the template's URL (URL parameters, back and forward, Refresh);
-  - margin icons from a view to its template and from a template to every view that renders it;
-  - creating a missing template from its name (Alt+Enter), in a chosen templates folder;
-  - live templates you can see and edit (today block tags complete as fixed snippets);
+  - ~~margin icons from a view to its template and from a template to every view that renders it~~ (done, item 181, as lenses);
+  - ~~creating a missing template from its name (Alt+Enter), in a chosen templates folder~~ (done, item 181);
+  - ~~live templates you can see and edit~~ (done, item 181);
   - completion and checks of the HTML, CSS and JavaScript inside a template.
 - Inspections: Django ORM error (an ORM method that cannot be called there); `{% endblock name %}` whose name is not its block's; a broken `#}` comment in Django templates (checked only in Jinja today); a comparison without spaces in `{% if %}`; unresolved Django 6 partial names (`{% partialdef %}`); django-constance keys unresolved or missing from the fieldsets.
 - Code insight: an intention that turns a function-based generic view into a class-based one; dotted paths in settings (`INSTALLED_APPS`, `MIDDLEWARE`, `AUTH_USER_MODEL`, `ROOT_URLCONF`) checked and followed.
@@ -147,4 +147,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 180 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 181 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

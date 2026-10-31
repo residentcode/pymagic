@@ -105,7 +105,10 @@ test('file templates: the first fitting pattern, with its variables filled in', 
 
 test('snippets: read and written in VS Code\'s form, lines kept, names made unique', () => {
     const list = readSnippets('{"Print": {"prefix": ["pr"], "body": ["print($1)", "$0"], "description": "a print"}}');
-    assert.deepEqual(list, [{ name: 'Print', prefix: 'pr', description: 'a print', body: 'print($1)\n$0' }]);
+    assert.deepEqual(list, [{ name: 'Print', prefix: 'pr', description: 'a print', body: 'print($1)\n$0', scope: '' }]);
+    // a template snippet keeps its scope; a Python one writes none
+    assert.equal(readSnippets(writeSnippets([{ name: 'card', prefix: 'card', description: '', body: '<div>', scope: 'django-html' }]))[0].scope, 'django-html');
+    assert.ok(!('scope' in JSON.parse(writeSnippets(list)).Print));
     const text = writeSnippets([...list, { name: 'Print', prefix: 'p2', description: '', body: 'x' }]);
     assert.deepEqual(Object.keys(JSON.parse(text)), ['Print', 'Print 2']);
     assert.deepEqual(readSnippets(text)[0], list[0]);

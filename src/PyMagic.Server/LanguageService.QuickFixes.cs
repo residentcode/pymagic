@@ -26,6 +26,7 @@ public sealed partial class LanguageService
 
     public IReadOnlyList<CodeAction> CodeActions(string uri, Range range)
     {
+        if (_templateDocs.ContainsKey(uri)) return CreateTemplateActions(uri, range).ToList();
         var snap = Full();
         if (!snap.ByUri.TryGetValue(uri, out var m)) return Array.Empty<CodeAction>();
         var lines = Lines(m);
@@ -87,6 +88,7 @@ public sealed partial class LanguageService
                     new LspCommand(option.Title, "pymagic.refactor", new object[] { option.Kind, uri, range, option.DefaultName ?? "", option.All, option.Members ?? (object)Array.Empty<string>(), option.Chosen ?? (object)Array.Empty<string>() })));
         }
         catch (Exception e) when (e is InvalidOperationException or ArgumentException or KeyNotFoundException or IndexOutOfRangeException) { /* the quick fixes above still work */ }
+        actions.AddRange(CreateTemplateActions(uri, range));
         var organized = OrganizedText(snap, m);
         if (organized != null && organized != m.Source)
             actions.Add(new CodeAction("Optimize imports", OrganizeImportsKind, new WorkspaceEdit(new Dictionary<string, List<TextEdit>> { [uri] = DiffEdit(m, organized) })));

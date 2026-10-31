@@ -132,6 +132,58 @@ public class DjangoConfigTests
     }
 
     [Fact]
+    public void ViewsAndTemplatesAreLinkedBothWaysAndAMissingTemplateCanBeMade()
+    {
+        string root = Folder();
+        try
+        {
+            Write(root, "shop/templates/shop/list.html", "<ul></ul>\n");
+            Write(root, "shop/__init__.py", "");
+            string views = "from django.shortcuts import render\nfrom django.views.generic import TemplateView\n\n\ndef items(request):\n    return render(request, 'shop/list.html')\n\n\nclass About(TemplateView):\n    template_name = 'shop/list.html'\n\n\ndef gone(request):\n    return render(request, 'shop/gone.html')\n";
+            Write(root, "shop/views.py", views);
+            var svc = new LanguageService();
+            svc.AddSourceRoot(root);
+            foreach (var (u, t) in DjangoFixture.LibraryFiles()) svc.Open(u, t, 1);
+            string viewsUri = LanguageService.UriOfPath(Path.Combine(root, "shop", "views.py"));
+            string templateUri = LanguageService.UriOfPath(Path.Combine(root, "shop", "templates", "shop", "list.html"));
+            svc.Open(viewsUri, views, 1);
+            svc.Open(templateUri, "<ul></ul>\n", 1);
+
+            var fromView = svc.TemplateLinks(viewsUri);
+            Assert.Equal("5:shop/list.html 9:shop/list.html", string.Join(" ", fromView.Select(l => $"{l.Line}:{l.Label}")));
+            Assert.True(fromView[0].Uri.EndsWith("templates/shop/list.html"));
+            var fromTemplate = svc.TemplateLinks(templateUri);
+            Assert.Equal("items (shop.views)@5 About (shop.views)@9", string.Join(" ", fromTemplate.Select(l => $"{l.Label}@{l.TargetLine}")));
+
+            Assert.Equal(Path.Combine(root, "shop", "templates"), string.Join(",", svc.TemplateFolders()));
+            var create = svc.CodeActions(viewsUri, new PyMagic.Server.Range(new Position(13, 25), new Position(13, 25))).Single(a => a.Title.StartsWith("Create template"));
+            Assert.Equal("Create template 'shop/gone.html'", create.Title);
+            Assert.Equal("pymagic.createTemplate", create.Command!.Command);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void TemplatesHaveTheirOwnLiveTemplatesAndTheProjectsOnes()
+    {
+        string root = Folder();
+        try
+        {
+            Write(root, ".pymagic/snippets.json", "{\"card\": {\"prefix\": \"card\", \"scope\": \"django-html\", \"body\": [\"<div class=\\\"card\\\">$0</div>\"]}, \"main\": {\"prefix\": \"pymain\", \"body\": \"x\"}}");
+            Write(root, "templates/page.html", "<div>\n</div>\n");
+            var svc = new LanguageService();
+            svc.AddSourceRoot(root);
+            string uri = LanguageService.UriOfPath(Path.Combine(root, "templates", "page.html"));
+            string Labels(string text, int line, int col) { svc.Open(uri, text, 1); return string.Join(",", svc.Completion(uri, new Position(line, col)).Select(i => i.Label).OrderBy(x => x)); }
+            Assert.Equal("for,fore", Labels("<div>\nfo\n</div>\n", 1, 2));
+            Assert.Equal("card", Labels("<div>\nca\n</div>\n", 1, 2));
+            Assert.Equal("", Labels("<div cl\n</div>\n", 0, 7));   // inside an HTML tag: nothing
+            Assert.True(!Labels("<div>\npym\n</div>\n", 1, 3).Contains("pymain"), "a Python snippet is not offered in a template");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void AFolderMarkedAsTemplatesHoldsTemplates()
     {
         string root = Folder();

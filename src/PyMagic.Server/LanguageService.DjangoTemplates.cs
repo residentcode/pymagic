@@ -905,7 +905,15 @@ public sealed partial class LanguageService
         int closeVar = openVar >= 0 ? text.IndexOf("}}", openVar + 2, StringComparison.Ordinal) : -1;
         bool inTag = openTag >= 0 && openTag >= openVar && (closeTag < 0 || closeTag >= offset) && offset >= openTag + 2;
         bool inVar = !inTag && openVar >= 0 && (closeVar < 0 || closeVar >= offset) && offset >= openVar + 2;
-        if (!inTag && !inVar) return items;
+        if (!inTag && !inVar)
+        {
+            // in the text: the live templates, for the word being typed (not inside an HTML tag)
+            int w = offset;
+            while (w > 0 && (char.IsLetterOrDigit(text[w - 1]) || text[w - 1] == '_')) w--;
+            int lt = text.LastIndexOf('<', Math.Max(0, offset - 1)), gt = text.LastIndexOf('>', Math.Max(0, offset - 1));
+            if (offset > w && !(lt > gt)) items.AddRange(TemplateLiveItems(text[w..offset]));
+            return items;
+        }
 
         string inside = text[((inTag ? openTag : openVar) + 2)..offset];
         if (a.Jinja) return JinjaCompletion(a, inTag, inside.Length > 0 && inside[0] is '-' or '+' ? " " + inside[1..] : inside, offset, closedAfter: inTag ? text[offset..LineEndOf(text, offset)].Contains("%}") : text[offset..LineEndOf(text, offset)].Contains("}}"));

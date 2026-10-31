@@ -270,6 +270,8 @@ public sealed class Server
                 return _service.DjangoStructure();
             case "pymagic/logicalStructure":
                 return _service.LogicalStructure(UriOf(p));
+            case "pymagic/templateLinks":
+                return _service.TemplateLinks(UriOf(p));
             case "pymagic/templates":
                 return _service.TemplateList();
             case "pymagic/inlayHints":

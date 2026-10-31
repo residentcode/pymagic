@@ -12,6 +12,7 @@ import { setupCodeGen } from './codegen';
 import { setupSharedText } from './sharedtext';
 import { setupPythonConsole } from './pyconsole';
 import { setupDiagrams } from './diagram';
+import { setupTemplateLinks } from './templatelinks';
 import { addModelAdmin, addModelSerializer } from './django-model';
 import { setLiveTemplateSource } from './settings-ui';
 import { setupHierarchy } from './hierarchy';
@@ -999,6 +1000,16 @@ async function main() {
         const m = editor.getModel(), pos = editor.getPosition();
         const word = m && pos ? m.getWordAtPosition(pos)?.word : null;
         if (word) void diagrams.openModel(word);
+    });
+    setupTemplateLinks({
+        editor, lsp, relOfUri, uriOf: (model) => serverUri.get(model), refreshTree: async () => { await explorer?.refresh(); },
+        openFile: (rel, range) => openFile(rel, range),
+        // a folder's full path as a path of the project ('' for the project folder itself), or null outside it
+        relOfPath: (full) => {
+            const root = info.root.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+            const f = full.replace(/\\/g, '/');
+            return f.toLowerCase() === root ? '' : f.toLowerCase().startsWith(root + '/') ? f.slice(root.length + 1) : null;
+        },
     });
     const codeGen = setupCodeGen();
     codeGen.attach(editor);

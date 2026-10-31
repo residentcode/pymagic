@@ -260,6 +260,16 @@ const SPECIAL = {
             if (hint) page.append(note(hint));
         };
         const input = (value, placeholder, onInput, cls = '') => {
+            if (cls === 'scope') {
+                // where a snippet is offered: Python files, or the text of Django templates
+                const sel = document.createElement('select');
+                sel.add(new Option('Python', ''));
+                sel.add(new Option('Django template', 'django-html'));
+                sel.value = value ?? '';
+                sel.className = 'tpl-field';
+                sel.onchange = () => onInput(sel.value);
+                return sel;
+            }
             const el = document.createElement(cls === 'body' ? 'textarea' : 'input');
             el.value = value;
             el.placeholder = placeholder;
@@ -305,7 +315,7 @@ const SPECIAL = {
             fetch('/api/file?path=' + encodeURIComponent(file)).then((r) => (r.ok ? r.text() : '')).catch(() => '').then((text) => { items = read(text); draw(); });
         }
 
-        section('Live templates', 'Typed at the start of a statement, then Tab or Enter. Postfix templates are typed after an expression: items.for, x.if, value.par.');
+        section('Live templates', 'Typed at the start of a statement, then Tab or Enter. Postfix templates are typed after an expression: items.for, x.if, value.par. The Django template ones are typed in the text of a template.');
         const builtIn = document.createElement('div');
         builtIn.className = 'keymap';
         page.append(builtIn);
@@ -315,6 +325,14 @@ const SPECIAL = {
                 a.textContent = t.prefix;
                 const b = document.createElement('span');
                 b.textContent = t.description + (t.classBody ? ' (in a class)' : '') + (t.import ? ` (imports ${t.import})` : '');
+                b.title = t.body.replace(/\$\{\d+:([^}]*)\}/g, '$1').replace(/\$\{?\d+\}?/g, '').replaceAll('\t', '    ');
+                builtIn.append(b, a);
+            }
+            for (const t of list?.template ?? []) {
+                const a = document.createElement('kbd');
+                a.textContent = t.prefix;
+                const b = document.createElement('span');
+                b.textContent = 'Django template: ' + t.description;
                 b.title = t.body.replace(/\$\{\d+:([^}]*)\}/g, '$1').replace(/\$\{?\d+\}?/g, '').replaceAll('\t', '    ');
                 builtIn.append(b, a);
             }
@@ -328,8 +346,8 @@ const SPECIAL = {
         }).catch(() => { /* the server is not there yet */ });
 
         section('This project\'s templates', `Kept in ${SNIPPETS}, in VS Code's form. In the text, $1 and \${1:name} are the places Tab goes to and $0 is where the cursor ends.`);
-        editable(SNIPPETS, (text) => readSnippets(text) ?? [], writeSnippets, () => ({ name: '', prefix: '', description: '', body: '' }),
-            [['prefix', 'abbreviation'], ['description', 'description'], ['body', 'text', 'body']], 'None yet.');
+        editable(SNIPPETS, (text) => readSnippets(text) ?? [], writeSnippets, () => ({ name: '', prefix: '', description: '', body: '', scope: '' }),
+            [['prefix', 'abbreviation'], ['scope', 'where', 'scope'], ['description', 'description'], ['body', 'text', 'body']], 'None yet.');
 
         section('File templates', `What a new file starts with, the first whose pattern fits its name; kept in ${FILE_TEMPLATES}. \${NAME}, \${FILE_NAME}, \${DATE}, \${TIME}, \${YEAR} and \${PROJECT_NAME} are filled in.`);
         editable(FILE_TEMPLATES, (text) => readFileTemplates(text).map((t) => ({ ...t })), (items) => JSON.stringify(items, null, 2) + '\n',

@@ -376,6 +376,7 @@ export function readSnippets(text) {
         prefix: Array.isArray(v.prefix) ? v.prefix[0] ?? '' : v.prefix ?? '',
         description: v.description ?? '',
         body: Array.isArray(v.body) ? v.body.join('\n') : String(v.body),
+        scope: typeof v.scope === 'string' ? v.scope : '',
     }));
 }
 
@@ -386,7 +387,7 @@ export function writeSnippets(list) {
         let name = s.name || s.prefix || 'snippet', n = 2;
         while (name in out)
             name = `${s.name || s.prefix} ${n++}`;
-        out[name] = { prefix: s.prefix, description: s.description, body: s.body.split('\n') };
+        out[name] = { prefix: s.prefix, description: s.description, body: s.body.split('\n'), ...(s.scope ? { scope: s.scope } : {}) };
     }
     return JSON.stringify(out, null, 2) + '\n';
 }
