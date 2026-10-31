@@ -436,3 +436,5 @@
 /* the Django view of the Structure */
 #st-django { font: 600 11px Consolas, monospace; }
 .st-action { margin-left: 6px; padding: 0 5px; font-size: 11px; line-height: 16px; }
+.dg-note rect { fill: #f5e6a3; stroke: #c9b458; }
+.dg-note text { fill: #3b3418; font-size: 11px; }

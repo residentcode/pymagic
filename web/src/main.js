@@ -982,8 +982,24 @@ async function main() {
     setupInspections(lsp);
     const pyConsole = setupPythonConsole({ editor, saveAll: common.saveAll, relOf: (model) => model && relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     const diagrams = setupDiagrams({ lsp, relOfUri, currentUri: () => { const m = editor.getModel(); return m && m.getLanguageId() === 'python' ? serverUri.get(m) : null; },
-        openAt: (rel, line) => openFile(rel, new monaco.Range(line, 1, line, 1)) });
-    window.addEventListener('pymagic:diagram', (e) => void diagrams.open(e.detail));
+        openAt: (rel, line) => openFile(rel, new monaco.Range(line, 1, line, 1)),
+        askText: (...a) => explorer.askText(...a),
+        // a box's menu: the file opened with the cursor on the name, then an editor command on it (find usages, rename, refactor)
+        atSymbol: async (rel, line, name, action) => {
+            await openFile(rel, new monaco.Range(line, 1, line, 1));
+            const m = editor.getModel();
+            const column = m ? m.getLineContent(line).indexOf(name) + 1 : 1;
+            editor.setPosition({ lineNumber: line, column: Math.max(1, column) });
+            editor.focus();
+            if (action) editor.trigger('diagram', action, null);
+        } });
+    window.addEventListener('pymagic:diagram', (e) => {
+        if (e.detail !== 'model') { void diagrams.open(e.detail); return; }
+        // the model at the cursor: the word there, as a class name
+        const m = editor.getModel(), pos = editor.getPosition();
+        const word = m && pos ? m.getWordAtPosition(pos)?.word : null;
+        if (word) void diagrams.openModel(word);
+    });
     const codeGen = setupCodeGen();
     codeGen.attach(editor);
     setLiveTemplateSource(() => lsp.request('pymagic/templates', {}));

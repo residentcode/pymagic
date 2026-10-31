@@ -104,7 +104,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - New Django project: ~~location, Git, environment, template language, templates folder, first app's name, admin on or off~~ (done, items 169 and 176).
 - Django Structure window: ~~models, admin classes and views, grouped by type or by app; create an app, a model or a view; makemigrations and migrate per app; register a model in the admin; from an admin class to its model~~ (done, item 177; a section of the Django tab).
 - Logical structure of a file: ~~models with fields and relations, serializers (nested too), views with their endpoints, admins, forms and signal hooks (`pre_save`, `post_delete`); create a missing ModelAdmin or serializer~~ (done, item 178).
-- Model dependency diagram: of the project or one model, with notes, layout, zoom, going to the source, find usages and refactoring.
+- Model dependency diagram: ~~of the project or one model, with notes, layout, zoom, going to the source, find usages and refactoring~~ (done, items 172 and 179).
 - Endpoints tab: a generated HTTP request that can be sent while the server runs, the OpenAPI specification, the view's documentation, client code examples, filters, and endpoints from libraries and tests. Today it is a list.
 - Templates:
   - breakpoints in `.html` templates, with their variables in the debugger;
@@ -147,4 +147,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 178 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 179 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

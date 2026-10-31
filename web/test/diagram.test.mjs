@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/diagram-model.js', import.meta.url), 'utf8');
-const { rows, boxSize, layout, arrow, BOX } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { rows, boxSize, layout, arrow, BOX, layoutAcross, neighbourhood } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const node = (id, members = []) => ({ id, label: id, members });
 
@@ -39,4 +39,21 @@ test('rows go down the page, centred, with the boxes of a row side by side; arro
     assert.deepEqual([a.y1, a.y2], [square.y, shape.y + shape.height]);
     const side = arrow({ x: 0, y: 0, width: 10, height: 10 }, { x: 50, y: 0, width: 10, height: 10 });
     assert.deepEqual(side, { x1: 10, y1: 5, x2: 50, y2: 5 });
+});
+
+test('left to right: the rows become columns, the base first, the boxes of a column one under the other', () => {
+    const nodes = [node('Shape'), node('Square'), node('Circle')];
+    const edges = [{ from: 'Square', to: 'Shape' }, { from: 'Circle', to: 'Shape' }];
+    const { boxes, width, height } = layoutAcross(nodes, edges);
+    const shape = boxes.get('Shape'), square = boxes.get('Square'), circle = boxes.get('Circle');
+    assert.ok(square.x > shape.x + shape.width && circle.x === square.x);
+    assert.ok(circle.y < square.y, 'the order of the row kept');
+    assert.ok(width > square.x + square.width && height > square.y + square.height);
+});
+
+test('one model and its neighbours', () => {
+    const d = { nodes: ['A', 'B', 'C', 'D'].map((x) => node(x)), edges: [{ from: 'A', to: 'B' }, { from: 'C', to: 'A' }, { from: 'C', to: 'D' }] };
+    const n = neighbourhood(d, 'A');
+    assert.deepEqual(n.nodes.map((x) => x.id), ['A', 'B', 'C']);
+    assert.deepEqual(n.edges.length, 2);
 });

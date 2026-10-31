@@ -230,7 +230,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
             ] },
             { label: 'Tools', submenu: [
                 { label: 'Python console', run: dock('pyconsole') },
-                { label: 'Diagrams', submenu: [['file', 'Classes of this file'], ['classes', 'Classes of the project'], ['modules', 'Modules and imports'], ['models', 'Django models']]
+                { label: 'Diagrams', submenu: [['file', 'Classes of this file'], ['classes', 'Classes of the project'], ['modules', 'Modules and imports'], ['models', 'Django models'], ['model', 'This model and its relations (the name at the cursor)']]
                     .map(([kind, label]) => ({ label, run: () => window.dispatchEvent(new CustomEvent('pymagic:diagram', { detail: kind })) })) },
                 '-',
                 { label: 'Python interpreter…', run: () => openSettings('python') },

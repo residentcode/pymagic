@@ -1,8 +1,11 @@
 // Diagrams (Tools > Diagrams): the classes of the open file (with their bases and what derives from them) or of the project, the
 // modules and their imports, and Django's models with their relations, drawn in a window of their own. A click on a box opens its
 // source; the wheel with Ctrl, or the buttons, zoom; the diagram can be saved as an SVG file.
-import { layout, arrow, BOX } from './diagram-model.js';
+import { layout, layoutAcross, neighbourhood, arrow, BOX } from './diagram-model.js';
 import { toast } from './toast';
+import { openMenu } from './menu';
+
+const NOTES = '.pymagic/diagram-notes.json';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const KINDS = [['file', 'Classes of this file'], ['classes', 'Classes of the project'], ['modules', 'Modules and imports'], ['models', 'Django models']];
@@ -15,7 +18,14 @@ function el(name, attrs = {}, text) {
 }
 
 export function setupDiagrams(deps) {
-    async function open(kind = 'file') {
+    let direction = 'down';
+    try { direction = localStorage.getItem('pymagic.diagramDirection') === 'across' ? 'across' : 'down'; } catch { /* the default */ }
+    let notes = {};
+    fetch('/api/file?path=' + encodeURIComponent(NOTES)).then((r) => (r.ok ? r.json() : {})).then((n) => { notes = n && typeof n === 'object' ? n : {}; }).catch(() => { /* none */ });
+    const saveNotes = () => fetch('/api/file?path=' + encodeURIComponent(NOTES), { method: 'PUT', body: JSON.stringify(notes, null, 2) }).catch(() => { /* kept for now */ });
+
+    /** @param focus a model's name: only that model and the models joined to it by a relation either way. */
+    async function open(kind = 'file', focus = null) {
         const uri = deps.currentUri();
         if (kind === 'file' && !uri) {
             toast('Open a Python file for the diagram of its classes.', true);
@@ -29,10 +39,18 @@ export function setupDiagrams(deps) {
             toast(e.message ?? 'The diagram could not be made.', true);
             return;
         }
-        show(kind, diagram);
+        if (focus) {
+            const node = diagram.nodes.find((n) => n.label === focus);
+            if (!node) {
+                toast(`${focus} is not a model of the project.`, true);
+                return;
+            }
+            diagram = { ...neighbourhood(diagram, node.id), title: `${focus} and the models it is related to` };
+        }
+        show(kind, diagram, focus);
     }
 
-    function show(kind, diagram) {
+    function show(kind, diagram, focus = null) {
         document.querySelector('.diagram-shade')?.remove();
         const shade = document.createElement('div');
         shade.className = 'settings-shade diagram-shade';
@@ -47,6 +65,16 @@ export function setupDiagrams(deps) {
         for (const [k, label] of KINDS) choose.add(new Option(label, k));
         choose.value = kind;
         choose.onchange = () => void open(choose.value);
+        const across = document.createElement('select');
+        across.add(new Option('Top to bottom', 'down'));
+        across.add(new Option('Left to right', 'across'));
+        across.value = direction;
+        across.title = 'Layout';
+        across.onchange = () => {
+            direction = across.value;
+            try { localStorage.setItem('pymagic.diagramDirection', direction); } catch { /* this time only */ }
+            show(kind, diagram, focus);
+        };
         const zoomOut = document.createElement('button');
         zoomOut.textContent = '−';
         const zoomIn = document.createElement('button');
@@ -57,7 +85,7 @@ export function setupDiagrams(deps) {
         save.textContent = 'Save as SVG…';
         const close = document.createElement('button');
         close.textContent = 'Close';
-        bar.append(title, choose, zoomOut, zoomIn, fit, save, close);
+        bar.append(title, choose, across, zoomOut, zoomIn, fit, save, close);
         const view = document.createElement('div');
         view.className = 'diagram-view';
         box.append(bar, view);
@@ -76,7 +104,8 @@ export function setupDiagrams(deps) {
             view.append(none);
             return;
         }
-        const { boxes, width, height } = layout(diagram.nodes, diagram.edges);
+        const { boxes, width, height: laidHeight } = direction === 'across' ? layoutAcross(diagram.nodes, diagram.edges) : layout(diagram.nodes, diagram.edges);
+        const height = laidHeight + 40;   // room for the notes of the last row
         const svg = el('svg', { xmlns: SVG, width, height, viewBox: `0 0 ${width} ${height}`, class: 'diagram-svg' });
         const defs = el('defs');
         // a hollow triangle for "extends", an open arrow for imports and relations
@@ -106,6 +135,41 @@ export function setupDiagrams(deps) {
                 g.append(el('text', { x: 10, y: BOX.head + 14 + shown.length * BOX.line, class: 'dg-member' }, `… ${n.members.length - BOX.members} more`));
             const tip = el('title', {}, `${n.label}${n.members.length ? '\n' + n.members.join('\n') : ''}\n(click to open)`);
             g.append(tip);
+            // a note on the box, kept with the project (.pymagic/diagram-notes.json)
+            // kept by the file and the name, so a change above the class does not lose it
+            const noteKey = `${deps.relOfUri(n.uri) ?? n.uri}#${n.label}`;
+            const note = notes[kind]?.[noteKey];
+            if (note) {
+                const lines = note.split('\n').slice(0, 3).map((l) => (l.length > 40 ? l.slice(0, 39) + '…' : l));
+                const box = el('g', { class: 'dg-note', transform: `translate(0,${b.height + 4})` });
+                box.append(el('rect', { width: b.width, height: lines.length * 14 + 8, rx: 3 }));
+                lines.forEach((l, i) => box.append(el('text', { x: 6, y: 14 + i * 14 }, l)));
+                g.append(box);
+            }
+            g.oncontextmenu = (e) => {
+                e.preventDefault();
+                const rel = deps.relOfUri(n.uri);
+                const at = (action) => { if (!rel) return; done(); void deps.atSymbol(rel, n.line + 1, n.label, action); };
+                const items = [
+                    { label: 'Go to source', run: () => at(null) },
+                    { label: 'Find usages', run: () => at('editor.action.referenceSearch.trigger') },
+                    { label: 'Rename…', run: () => at('editor.action.rename') },
+                    { label: 'Refactor…', run: () => at('pymagic.refactorThis') },
+                    '-',
+                    { label: note ? 'Edit the note…' : 'Add a note…', run: async () => {
+                        const text = await deps.askText('Note', note ?? '', n.label);
+                        if (text === null || text === undefined) return;
+                        notes[kind] = { ...(notes[kind] ?? {}) };
+                        if (text.trim()) notes[kind][noteKey] = text.trim(); else delete notes[kind][noteKey];
+                        void saveNotes();
+                        show(kind, diagram, focus);
+                    } },
+                ];
+                if (note) items.push({ label: 'Remove the note', run: () => { delete notes[kind][noteKey]; void saveNotes(); show(kind, diagram, focus); } });
+                if (n.kind === 'model' && !focus) items.push('-', { label: `Diagram of ${n.label} and its relations`, run: () => void open('models', n.label) });
+                if (focus) items.push('-', { label: 'All the models', run: () => void open('models') });
+                openMenu({ x: e.clientX, y: e.clientY }, items);
+            };
             g.onclick = () => {
                 const rel = deps.relOfUri(n.uri);
                 if (!rel) return;
@@ -135,5 +199,5 @@ export function setupDiagrams(deps) {
         };
         if (width > view.clientWidth || height > view.clientHeight) fit.onclick();
     }
-    return { open };
+    return { open, openModel: (name) => open('models', name) };
 }

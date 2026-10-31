@@ -85,3 +85,42 @@ export function arrow(from, to) {
     const leftToRight = from.x < to.x;
     return { x1: leftToRight ? from.x + from.width : from.x, y1: from.y + from.height / 2, x2: leftToRight ? to.x : to.x + to.width, y2: to.y + to.height / 2 };
 }
+
+/** The same rows laid out left to right: each row a column, the boxes of a column one under the other. */
+export function layoutAcross(nodes, edges) {
+    const down = layout(nodes, edges);
+    const columns = new Map();
+    for (const [id, b] of down.boxes) {
+        if (!columns.has(b.row))
+            columns.set(b.row, []);
+        columns.get(b.row).push([id, b]);
+    }
+    const boxes = new Map();
+    let x = BOX.pad, height = 0;
+    const order = [...columns.keys()].sort((a, b) => a - b);
+    const heights = order.map((r) => columns.get(r).reduce((h, [, b]) => h + b.height, 0) + (columns.get(r).length - 1) * BOX.gapX);
+    const tallest = Math.max(0, ...heights);
+    order.forEach((r, i) => {
+        // the boxes keep their order in the row (left to right becomes top to bottom), centred in the column
+        const list = columns.get(r).sort((a, b) => a[1].x - b[1].x);
+        let y = BOX.pad + (tallest - heights[i]) / 2;
+        const widest = Math.max(...list.map(([, b]) => b.width));
+        for (const [id, b] of list) {
+            boxes.set(id, { x, y, width: b.width, height: b.height, row: r });
+            y += b.height + BOX.gapX;
+        }
+        height = Math.max(height, y - BOX.gapX + BOX.pad);
+        x += widest + BOX.gapY;
+    });
+    return { boxes, width: x - BOX.gapY + BOX.pad, height: Math.max(height, 120) };
+}
+
+/** One box and the boxes joined to it by an arrow either way (a model and the models of its relations), with those arrows. */
+export function neighbourhood(diagram, id) {
+    const keep = new Set([id]);
+    for (const e of diagram.edges) {
+        if (e.from === id) keep.add(e.to);
+        if (e.to === id) keep.add(e.from);
+    }
+    return { ...diagram, nodes: diagram.nodes.filter((n) => keep.has(n.id)), edges: diagram.edges.filter((e) => keep.has(e.from) && keep.has(e.to)) };
+}

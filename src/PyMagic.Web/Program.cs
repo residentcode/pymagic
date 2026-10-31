@@ -105,7 +105,8 @@ if (Directory.Exists(www))
 {
     var files = new PhysicalFileProvider(www);
     app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = files });
-    app.UseStaticFiles(new StaticFileOptions { FileProvider = files });
+    // the page's own files are asked for again at each load (an unchanged one answers 304), so a rebuilt PyMagic never shows an old stylesheet
+    app.UseStaticFiles(new StaticFileOptions { FileProvider = files, OnPrepareResponse = c => c.Context.Response.Headers.CacheControl = "no-cache" });
 }
 
 // ---- workspace files -------------------------------------------------------------------------------------------
