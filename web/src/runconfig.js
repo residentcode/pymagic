@@ -1,10 +1,12 @@
 // Run configurations: named ways to start a file (its parameters, the variables of its environment, the folder it starts in). The one that is chosen is what
 // Run, Debug and Profile start; with none chosen they start the file in the editor. They are kept in the project, in .pymagic/run-configurations.json.
 import { openMenu } from './menu';
-import { blank, formatEnv, parseEnv, read, toStored, uniqueName } from './runconfig-model.js';
+import { KINDS, blank, formatEnv, parseEnv, read, splitShared, toStored, uniqueName } from './runconfig-model.js';
 
 const $ = (id) => document.getElementById(id);
 const FILE = '.pymagic/run-configurations.json';
+// Store as project file: these go with the project's files (and Git), as PyCharm's .run folder
+const SHARED = '.run/pymagic.json';
 
 export function setupRunConfigurations({ currentFile }) {
     let list = [];
@@ -12,13 +14,22 @@ export function setupRunConfigurations({ currentFile }) {
     let ready = Promise.resolve();
     const listeners = new Set();
 
+    let hadShared = false;
     const save = () => {
-        fetch('/api/file?path=' + encodeURIComponent(FILE), { method: 'PUT', body: JSON.stringify(toStored(list, selected)) }).catch(() => { /* not kept this time */ });
+        const { shared, own } = splitShared(list);
+        fetch('/api/file?path=' + encodeURIComponent(FILE), { method: 'PUT', body: JSON.stringify(toStored(own, selected)) }).catch(() => { /* not kept this time */ });
+        if (shared.length || hadShared)
+            fetch('/api/file?path=' + encodeURIComponent(SHARED), { method: 'PUT', body: JSON.stringify(toStored(shared, null), null, 2) + '\n' }).catch(() => { /* not kept this time */ });
+        hadShared = hadShared || shared.length > 0;
         for (const fn of listeners) fn();
     };
 
-    ready = fetch('/api/file?path=' + encodeURIComponent(FILE)).then((r) => (r.ok ? r.json() : null)).then((stored) => {
-        ({ configurations: list, selected } = read(stored));
+    const fetchJson = (file) => fetch('/api/file?path=' + encodeURIComponent(file)).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    ready = Promise.all([fetchJson(FILE), fetchJson(SHARED)]).then(([stored, shared]) => {
+        const sharedList = read(shared).configurations.map((c) => ({ ...c, shared: true }));
+        hadShared = sharedList.length > 0;
+        const own = read({ ...stored, configurations: [...(stored?.configurations ?? []), ...sharedList] });
+        ({ configurations: list, selected } = own);
         for (const fn of listeners) fn();
     }).catch(() => { /* none stored */ });
 
@@ -128,6 +139,29 @@ export function setupRunConfigurations({ currentFile }) {
             const name = document.createElement('input');
             name.value = c.name;
             name.oninput = () => { c.name = name.value; const b = listBox.children[at]; if (b) b.textContent = c.name || '(no name)'; };
+            const check = (label, key, hint) => {
+                const box = document.createElement('input');
+                box.type = 'checkbox';
+                box.checked = c[key];
+                box.onchange = () => { c[key] = box.checked; };
+                return field(label, box, hint);
+            };
+            const text = (key, placeholder) => {
+                const input = document.createElement('input');
+                input.value = c[key] ?? '';
+                input.placeholder = placeholder;
+                input.spellcheck = false;
+                input.oninput = () => { c[key] = input.value; };
+                return input;
+            };
+            const kind = document.createElement('select');
+            for (const [k, label] of KINDS) kind.add(new Option(label, k));
+            kind.value = c.kind;
+            kind.onchange = () => {
+                const fresh = blank(c.name, kind.value);
+                Object.assign(c, { kind: kind.value, app: fresh.app, port: fresh.port, script: kind.value === 'django' && !c.script ? 'manage.py' : c.script });
+                drawForm();
+            };
             const script = document.createElement('select');
             script.add(new Option('Choose a file…', ''));
             for (const f of scripts) script.add(new Option(f, f));
@@ -149,23 +183,52 @@ export function setupRunConfigurations({ currentFile }) {
             env.placeholder = 'NAME=value, one per line';
             env.value = formatEnv(c.env);
             env.oninput = () => { c.env = parseEnv(env.value); };
+            // what each kind asks for
+            const what = {
+                script: [field('Script', script)],
+                module: [field('Module', text('module', 'http.server'), 'Started as python -m module.')],
+                django: [field('manage.py', script), field('Host', text('host', '127.0.0.1')), field('Port', text('port', '8000')), check('Reload on changes', 'reload', 'Off adds --noreload.')],
+                fastapi: [field('Application', text('app', 'main:app'), 'module:variable, given to uvicorn.'), field('Host', text('host', '127.0.0.1')), field('Port', text('port', '8000')), check('Reload on changes', 'reload', 'uvicorn --reload.')],
+                flask: [field('Application', text('app', 'app'), 'The module or file of the Flask app (flask --app).'), field('Host', text('host', '127.0.0.1')), field('Port', text('port', '5000')), check('Debug mode', 'reload', 'flask run --debug: the reloader and the debugger page.')],
+                pytest: [field('Target', text('target', 'tests/ or tests/test_a.py::test_x'), 'A folder, a file or one test; empty for all.')],
+            }[c.kind] ?? [field('Script', script)];
             form.append(
                 field('Name', name),
-                field('Script', script),
-                field('Parameters', args, 'Typed as on a command line: words separated by spaces, "quotes" keep a space in one word.'),
-                field('Working folder', cwd, 'The project folder is always on PYTHONPATH, wherever the program starts.'),
+                field('Kind', kind),
+                ...what,
+                field(c.kind === 'script' || c.kind === 'module' ? 'Parameters' : 'More options', args, 'Typed as on a command line: words separated by spaces, "quotes" keep a space in one word.'),
+                field('Working folder', cwd),
                 field('Environment variables', env, 'PATH, PYTHONPATH and the like are the interpreter\'s; a configuration cannot change them.'),
+                field('.env files', text('envFiles', '.env, config/dev.env'), 'Files of the project, comma separated; their variables come first, the ones above win.'),
+                check('Add the content root to PYTHONPATH', 'contentRoots', 'The project folder.'),
+                check('Add the sources roots to PYTHONPATH', 'sourceRoots', 'The folders marked as sources roots in the project tree.'),
+                check('Run with uv run', 'uv', 'uv starts the interpreter of the project\'s environment and makes it match pyproject.toml first.'),
+                field('uv', text('uvPath', 'uv (or the path to uv.exe)')),
+                check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'),
+                check('Open the Run panel when started', 'openPanel'),
             );
         }
 
-        add.onclick = () => { draft.push({ ...blank(uniqueName(draft, 'New configuration')), script: currentFile() ?? '' }); at = draft.length - 1; chosen = draft[at]; drawList(); drawForm(); };
+        add.onclick = () => openMenu(add, KINDS.map(([k, label]) => ({
+            label,
+            run: () => {
+                const c = blank(uniqueName(draft, label), k);
+                if (k === 'script') c.script = currentFile() ?? '';
+                draft.push(c);
+                at = draft.length - 1;
+                chosen = draft[at];
+                drawList();
+                drawForm();
+            },
+        })));
         copy.onclick = () => { const c = draft[at]; if (!c) return; draft.push({ ...c, env: { ...c.env }, name: uniqueName(draft, c.name) }); at = draft.length - 1; drawList(); drawForm(); };
         del.onclick = () => { if (!draft[at]) return; if (chosen === draft[at]) chosen = null; draft.splice(at, 1); at = Math.max(0, at - 1); drawList(); drawForm(); };
         cancel.onclick = close;
         ok.onclick = () => {
             const names = draft.map((c) => c.name.trim());
             if (names.some((n) => !n) || new Set(names).size !== names.length) { window.alert('Every configuration needs a name of its own.'); return; }
-            if (draft.some((c) => !c.script)) { window.alert('Every configuration needs a script.'); return; }
+            if (draft.some((c) => (c.kind === 'script' || c.kind === 'django') && !c.script)) { window.alert('Every script configuration needs its script.'); return; }
+            if (draft.some((c) => c.kind === 'module' && !/^[A-Za-z_][\w]*(\.[A-Za-z_][\w]*)*$/.test(c.module))) { window.alert('A module configuration needs a module name, such as http.server.'); return; }
             list = draft.map((c) => ({ ...c, name: c.name.trim() }));
             selected = chosen ? chosen.name.trim() : null;
             save();

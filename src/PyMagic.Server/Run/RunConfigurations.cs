@@ -15,6 +15,34 @@ public static class RunConfigurations
         "PYMAGIC_PYTHON", "PYMAGIC_RUN_ID",
     };
 
+    static readonly Regex ModuleName = new(@"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$", RegexOptions.Compiled);
+
+    /// <summary>A module a configuration may start with -m: dotted names only, no options.</summary>
+    public static bool IsModuleName(string? name) => name != null && name.Length <= 200 && ModuleName.IsMatch(name);
+
+    /// <summary>
+    /// The variables of a .env file, as python-dotenv reads the common cases: KEY=value lines, `export ` before the name,
+    /// # comments, and a value in single quotes (kept as written) or double quotes (with \n and \" read).
+    /// </summary>
+    public static Dictionary<string, string> ParseDotEnv(string text)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in text.Replace("\r\n", "\n").Split('\n'))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#')) continue;
+            if (line.StartsWith("export ")) line = line[7..].TrimStart();
+            int eq = line.IndexOf('=');
+            if (eq <= 0) continue;
+            string key = line[..eq].Trim(), value = line[(eq + 1)..].Trim();
+            if (value.Length >= 2 && value[0] == '\'' && value[^1] == '\'') value = value[1..^1];
+            else if (value.Length >= 2 && value[0] == '"' && value[^1] == '"') value = value[1..^1].Replace("\\n", "\n").Replace("\\\"", "\"");
+            else if (value.IndexOf(" #", StringComparison.Ordinal) is var hash and >= 0) value = value[..hash].TrimEnd();
+            result[key] = value;
+        }
+        return result;
+    }
+
     public const int MaxVariables = 50;
     public const int MaxValueLength = 4096;
 

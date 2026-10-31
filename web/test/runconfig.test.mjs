@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { read, startOf, parseEnv, formatEnv, uniqueName, blank } from '../src/runconfig-model.js';
+import { read, startOf, parseEnv, formatEnv, uniqueName, blank, splitShared } from '../src/runconfig-model.js';
 
 test('what is stored is read into well-formed configurations, the broken ones left out', () => {
     const { configurations, selected } = read({
@@ -42,4 +42,26 @@ test('a new configuration gets a name nobody has', () => {
     assert.equal(uniqueName(list, 'New configuration'), 'New configuration 3');
     assert.equal(uniqueName([], 'a'), 'a');
     assert.equal(blank().cwd, '');
+});
+
+test('each kind starts its program: a module, Django, uvicorn, Flask, pytest', () => {
+    assert.deepEqual(startOf({ ...blank('m'), kind: 'module', module: 'http.server', args: '9000' }), { module: 'http.server', args: ['9000'], env: {}, cwd: '' });
+    assert.deepEqual(startOf(blank('d', 'django')).args, ['runserver', '127.0.0.1:8000']);
+    assert.deepEqual(startOf({ ...blank('d', 'django'), host: '0.0.0.0', port: '9000', reload: false }), { file: 'manage.py', args: ['runserver', '0.0.0.0:9000', '--noreload'], env: {}, cwd: '' });
+    assert.deepEqual(startOf(blank('f', 'fastapi')), { module: 'uvicorn', args: ['main:app', '--host', '127.0.0.1', '--port', '8000', '--reload'], env: {}, cwd: '' });
+    assert.deepEqual(startOf(blank('f', 'flask')).args, ['--app', 'app', 'run', '--host', '127.0.0.1', '--port', '5000', '--debug']);
+    assert.deepEqual(startOf({ ...blank('t', 'pytest'), target: 'tests/test_a.py::test_x', args: '-x' }).args, ['tests/test_a.py::test_x', '-x']);
+});
+
+test("the run's settings: .env files, uv run, the roots on PYTHONPATH; the new fields are read with defaults", () => {
+    const s = startOf({ ...blank('x'), script: 'a.py', envFiles: '.env, config/dev.env', uv: true, uvPath: 'C:/uv.exe', contentRoots: false });
+    assert.deepEqual(s, { file: 'a.py', args: [], env: {}, cwd: '', envFiles: ['.env', 'config/dev.env'], uv: true, uvPath: 'C:/uv.exe', contentRoots: false });
+    const { configurations } = read({ configurations: [{ name: 'old', script: 'a.py' }, { name: 'srv', kind: 'fastapi', app: 'api:app', reload: 'yes', shared: true }, { name: 'odd', kind: 'rails', script: 'x.py' }] });
+    assert.equal(configurations[0].kind, 'script');
+    assert.equal(configurations[0].openPanel, true);
+    assert.equal(configurations[1].script, '');
+    assert.equal(configurations[1].app, 'api:app');
+    assert.equal(configurations[1].reload, true);   // not a switch: the default
+    assert.equal(configurations[2].kind, 'script');
+    assert.deepEqual(splitShared(configurations).shared.map((c) => c.name), ['srv']);
 });

@@ -937,13 +937,29 @@ app.Map("/run", async (HttpContext ctx) =>
                     foreach (var (file, lines) in bo)
                         bps[file] = lines is JsonArray arr ? (JsonArray)JsonNode.Parse(arr.ToJsonString())! : new JsonArray();
                 var args = (msg["args"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
-                string file0 = msg["file"]!.GetValue<string>();
-                ResolveInRoot(file0);   // refuses paths outside the workspace
+                string? module = msg["module"]?.GetValue<string>();
+                string file0 = msg["file"]?.GetValue<string>() ?? "";
+                if (module == null) ResolveInRoot(file0);   // refuses paths outside the workspace
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
                 // what a run configuration adds: variables, and a folder inside the project to start in
-                session.ExtraEnvironment = RunConfigurations.CleanEnvironment(msg["env"] as JsonObject);
+                // .env files of the project first, the configuration's own variables over them
+                var variables = new JsonObject();
+                foreach (var f in (msg["envFiles"] as JsonArray)?.Select(x => x?.GetValue<string>()).OfType<string>() ?? Enumerable.Empty<string>())
+                {
+                    string envPath = ResolveInRoot(f);
+                    if (File.Exists(envPath))
+                        foreach (var (k, v) in RunConfigurations.ParseDotEnv(File.ReadAllText(envPath))) variables[k] = v;
+                }
+                if (msg["env"] is JsonObject own) foreach (var (k, v) in own) variables[k] = v?.DeepClone();
+                session.ExtraEnvironment = RunConfigurations.CleanEnvironment(variables);
                 session.WorkingDirectory = msg["cwd"]?.GetValue<string>() is { Length: > 0 } cwd && Directory.Exists(ResolveInRoot(cwd)) ? ResolveInRoot(cwd) : null;
-                if (msg["profile"]?.GetValue<bool>() == true) session.StartProfile(root, file0, args);
+                // PYTHONPATH: the project folder (content root) and the marked sources roots, each when the configuration keeps it
+                bool content = msg["contentRoots"]?.GetValue<bool>() ?? true, sources = msg["sourceRoots"]?.GetValue<bool>() ?? true;
+                session.PythonPath = content && sources ? null
+                    : (content ? new[] { root } : Array.Empty<string>()).Concat(sources ? ProjectFolders.Load(root).Sources.Select(s => Path.Combine(root, s)) : Array.Empty<string>()).ToList();
+                session.UvProgram = msg["uv"]?.GetValue<bool>() == true ? (msg["uvPath"]?.GetValue<string>() is { Length: > 0 } uvPath ? uvPath : "uv") : null;
+                if (msg["profile"]?.GetValue<bool>() == true && module == null) session.StartProfile(root, file0, args);
+                else if (module != null) session.StartModule(root, module, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
                 else session.StartWithBreakpoints(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
                 if (msg["exceptionBreak"]?.GetValue<string>() == "raised")
                     session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised", ["classes"] = msg["exceptionClasses"]?.DeepClone() });

@@ -41,6 +41,12 @@ public sealed class RunSession : IDisposable
 
     /// <summary>The folder the program starts in when it is not the project's own (a run configuration's choice; a run on this computer only: another system has its own folders).</summary>
     public string? WorkingDirectory { get; set; }
+
+    /// <summary>The folders put on PYTHONPATH (a configuration's content and sources roots); null for the project folder, as before.</summary>
+    public IReadOnlyList<string>? PythonPath { get; set; }
+
+    /// <summary>Run through `uv run` (this program, uv) instead of the interpreter itself: uv picks the project's environment and syncs it first.</summary>
+    public string? UvProgram { get; set; }
     public bool IsDebug { get; private set; }
 
     public RunSession(Action<JsonNode> emit) { _emit = emit; }
@@ -54,6 +60,16 @@ public sealed class RunSession : IDisposable
         IReadOnlyDictionary<string, List<int>>? breakpoints = null) =>
         StartWithBreakpoints(root, script, debug, args,
             breakpoints?.ToDictionary(kv => kv.Key, kv => new JsonArray(kv.Value.Select(l => (JsonNode)l).ToArray())));
+
+    /// <summary>Runs or debugs `python -m module args` (a configuration of uvicorn, flask, pytest or any module).</summary>
+    public void StartModule(string root, string module, bool debug, IReadOnlyList<string> args, IReadOnlyDictionary<string, JsonArray>? breakpoints)
+    {
+        _root = root;
+        if (!RunConfigurations.IsModuleName(module)) { Error($"'{module}' is not a module name"); return; }
+        IsDebug = debug;
+        if (debug) Launch(root, true, new[] { "--module", module, "--" }, args, breakpoints);
+        else Launch(root, false, new[] { "-m", module }, args, null);
+    }
 
     /// <param name="breakpoints">Per file, an array of line numbers or of objects {line, condition, hitCondition, logMessage}.</param>
     public void StartWithBreakpoints(string root, string script, bool debug, IReadOnlyList<string> args,
@@ -244,7 +260,14 @@ public sealed class RunSession : IDisposable
         var env = new Dictionary<string, string> { ["PYTHONIOENCODING"] = "utf-8", ["PYTHONUNBUFFERED"] = "1" };
         foreach (var (key, value) in ExtraEnvironment ?? new Dictionary<string, string>()) env[key] = value;
         string? existing = Environment.GetEnvironmentVariable("PYTHONPATH");
-        env["PYTHONPATH"] = Target.IsLocal && !string.IsNullOrEmpty(existing) ? root + Path.PathSeparator + existing : root;
+        string own = PythonPath == null ? root : string.Join(Path.PathSeparator, PythonPath);
+        env["PYTHONPATH"] = Target.IsLocal && !string.IsNullOrEmpty(existing) ? (own.Length > 0 ? own + Path.PathSeparator : "") + existing : own;
+        // uv run: uv starts the interpreter of the project's environment, after making it match pyproject.toml
+        if (UvProgram != null && Target.IsLocal)
+        {
+            args2.InsertRange(0, new[] { "run", "python" });
+            python = UvProgram;
+        }
 
         // a target that does not share the project's files gets them first (the changed ones only)
         try { Target.Prepare(root, helperDirs.Distinct().ToList(), text => _emit(new JsonObject { ["type"] = "output", ["stream"] = "stdout", ["text"] = text })); }

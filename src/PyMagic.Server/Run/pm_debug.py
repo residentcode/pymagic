@@ -763,13 +763,14 @@ class Debugger(bdb.Bdb):
 
     # ---------------------------------------------------------------- running the program
 
-    def run_script(self, path, script_args):
+    def run_script(self, path, script_args, package=None, add_folder=True):
         with open(path, "rb") as f:
             source = f.read()
         code = compile(source, path, "exec")
         sys.argv = [path] + script_args
-        sys.path.insert(0, os.path.dirname(path))
-        globs = {"__name__": "__main__", "__file__": path, "__builtins__": builtins, "__doc__": None, "__package__": None}
+        if add_folder:
+            sys.path.insert(0, os.path.dirname(path))
+        globs = {"__name__": "__main__", "__file__": path, "__builtins__": builtins, "__doc__": None, "__package__": package}
 
         self.reset()
         self.botframe = sys._getframe()
@@ -874,7 +875,8 @@ def main():
     parser.add_argument("--host", default="127.0.0.1", help="where the host listens (WSL and Docker reach it by another address)")
     parser.add_argument("--token", required=True)
     parser.add_argument("--root", required=True)
-    parser.add_argument("--script", required=True)
+    parser.add_argument("--script", help="the file to run")
+    parser.add_argument("--module", help="or the module to run, as python -m does")
     parser.add_argument("--all-code", action="store_true", help="also step into library code")
     parser.add_argument("args", nargs="*")
     options = parser.parse_args()
@@ -886,7 +888,22 @@ def main():
     dbg.go.wait()
 
     os.chdir(options.root)
-    code = dbg.run_script(os.path.abspath(options.script), options.args)
+    if options.module:
+        # python -m: the module's file (a package's __main__), run as __main__ of its package, with the folder the run starts in first on sys.path
+        import importlib.util
+        sys.path.insert(0, os.getcwd())
+        spec = importlib.util.find_spec(options.module)
+        package = options.module
+        if spec is not None and spec.submodule_search_locations is not None:
+            spec = importlib.util.find_spec(options.module + ".__main__")
+        else:
+            package = options.module.rpartition(".")[0]
+        if spec is None or not spec.origin or not os.path.isfile(spec.origin):
+            print("No module named %s" % options.module, file=sys.stderr)
+            sys.exit(1)
+        code = dbg.run_script(spec.origin, options.args, package=package or None, add_folder=False)
+    else:
+        code = dbg.run_script(os.path.abspath(options.script), options.args)
     sys.stdout.flush()
     sys.stderr.flush()
     sys.exit(code)

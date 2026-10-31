@@ -104,6 +104,55 @@ public class RunTests
     }
 
     [Fact]
+    public void AModuleRunsAsPythonDashMAndStopsAtItsBreakpoints()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        Directory.CreateDirectory(Path.Combine(h.Root, "tool"));
+        File.WriteAllText(Path.Combine(h.Root, "tool", "__init__.py"), "");
+        File.WriteAllText(Path.Combine(h.Root, "tool", "core.py"), "def greet(who):\n    return 'hi ' + who\n");
+        File.WriteAllText(Path.Combine(h.Root, "tool", "__main__.py"), "import sys\nfrom .core import greet\nmsg = greet(sys.argv[1])\nprint(msg, __name__)\n");
+        h.Session.StartModule(h.Root, "tool", false, new[] { "ann" }, null);
+        h.Type("exited");
+        Assert.Contains("hi ann __main__", h.AllOutput());
+
+        using var d = new Harness();
+        Directory.CreateDirectory(Path.Combine(d.Root, "tool"));
+        File.WriteAllText(Path.Combine(d.Root, "tool", "__init__.py"), "");
+        File.WriteAllText(Path.Combine(d.Root, "tool", "core.py"), "def greet(who):\n    return 'hi ' + who\n");
+        File.WriteAllText(Path.Combine(d.Root, "tool", "__main__.py"), "import sys\nfrom .core import greet\nmsg = greet(sys.argv[1])\nprint(msg, __name__)\n");
+        d.Session.StartModule(d.Root, "tool", true, new[] { "bob" },
+            new Dictionary<string, JsonArray> { ["tool/core.py"] = new JsonArray(2) });
+        var stopped = d.Type("stopped");
+        Assert.Equal(2, Line(stopped));
+        Assert.True(stopped["frames"]![0]!["file"]!.GetValue<string>().EndsWith("core.py"));
+        d.Command("continue");
+        d.Type("exited");
+        Assert.Contains("hi bob __main__", d.AllOutput());
+
+        using var bad = new Harness();
+        bad.Session.StartModule(bad.Root, "-c print(1)", false, Array.Empty<string>(), null);
+        Assert.True(bad.Type("error")["message"]!.GetValue<string>().Contains("not a module name"));
+    }
+
+    [Fact]
+    public void DotEnvFilesAreReadAndPythonPathFollowsTheRoots()
+    {
+        var env = RunConfigurations.ParseDotEnv("# settings\nDEBUG=1\nexport NAME = Ann \nQUOTED=\"a\\nb\"\nSINGLE='x # y'\nCOMMENTED=v # note\nbroken line\n=nothing\n");
+        Assert.Equal("DEBUG=1|NAME=Ann|QUOTED=a\nb|SINGLE=x # y|COMMENTED=v", string.Join("|", env.Select(kv => kv.Key + "=" + kv.Value)));
+        Assert.True(RunConfigurations.IsModuleName("uvicorn") && RunConfigurations.IsModuleName("a.b_c") && !RunConfigurations.IsModuleName("-m x") && !RunConfigurations.IsModuleName("a..b"));
+
+        if (!HavePython) return;
+        using var h = new Harness();
+        Directory.CreateDirectory(Path.Combine(h.Root, "src"));
+        h.Script("show.py", "import os\nprint('PP=' + '|'.join(os.path.basename(p) for p in os.environ.get('PYTHONPATH', '').split(os.pathsep) if p))\n");
+        h.Session.PythonPath = new[] { Path.Combine(h.Root, "src") };
+        h.Session.Start(h.Root, "show.py", false, Array.Empty<string>());
+        h.Type("exited");
+        Assert.Contains("PP=src", h.AllOutput());
+    }
+
+    [Fact]
     public void OnlyHarmlessVariablesAreTakenFromAConfiguration()
     {
         var env = (JsonObject)JsonNode.Parse("""{ "OK_NAME": "1", "PATH": "x", "pythonpath": "y", "bad name": "z", "1ABC": "z", "NUM": 5, "LONG": "%LONG%" }""".Replace("%LONG%", new string('a', RunConfigurations.MaxValueLength + 1)))!;

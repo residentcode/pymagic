@@ -798,7 +798,12 @@ export function setupRun(deps) {
         const chosen = deps.runConfig?.();
         if (chosen) {
             const s = startOf(chosen);
-            await launch(s.file, debug, profile, s.args, { env: s.env, cwd: s.cwd });
+            if (s.module && profile) {
+                append('The profiler runs a script; this configuration starts a module.\n', 'err');
+                showTab('output');
+                return;
+            }
+            await launch(s.file ?? null, debug, profile, s.args, { ...s, openPanel: chosen.openPanel });
             return;
         }
         const model = editor.getModel();
@@ -877,9 +882,12 @@ export function setupRun(deps) {
         debugging = debug;
         profiling = profile;
         paused = false;
-        showTab('output');
-        run = new RunClient({ type: 'start', file: rel, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
-            exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value });
+        // a configuration may leave the panel where it is (Open the Run panel when started: off)
+        if (extra.openPanel !== false)
+            showTab('output');
+        run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
+            exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value,
+            envFiles: extra.envFiles, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots });
         run.onMessage = handle;
         run.onClose = () => { if (run) {
             append('\nConnection to the host lost.\n', 'err');
