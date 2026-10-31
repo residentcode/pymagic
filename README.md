@@ -78,14 +78,21 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 **Installer**
 - A checkbox for the desktop shortcut and a safe folder page (they need NSIS script), PyMagic's own pictures in the wizard (66).
 
-**Type engine** (ibnbolbna's area; the order is in [issue #3](https://github.com/residentcode/pymagic/issues/3))
+**Type engine** (ibnbolbna's area until 31 October 2026, ours from then on; what ibnbolbna did and left is in [docs/ibnbolbna-work.md](docs/ibnbolbna-work.md))
 - ~~`NoReturn` calls, `with` blocks that swallow exceptions, `break`/`return` through `finally` (4, 5); call-site parameter inference (5)~~ (done, item 186).
 - ~~Overrides: a rename that follows overriding methods, a change of signature passed on to them, a call hierarchy that includes them, marks and hierarchy for library classes (8, 17, 30)~~ (done, item 187).
 - ~~Narrowing: the types of the names that `match` patterns bind (`case int() as n`, captures, `*rest`; item 157 narrows the tuple items by their sub-patterns), the "at least n" tuple form for `len(t) >= n` (152); `Literal` through tuples (40)~~ (done, item 188).
 - ~~attrs and hooks: `attr.s` options such as `these=`, `__init_subclass__` hook parameter types (42)~~ (done, item 185).
 - ~~Small gaps: `pop` of a required TypedDict key (87), a constant index past the end of a tuple subclass (88)~~ (done, item 189).
-- The PyCharm inspections that need full types and are not done yet, and those for other tools (pandas, Spark, mock, notebooks) (47, 77).
+- The PyCharm inspections that need full types (47, 77; issue #48): tuple assignment balance, `assert_type`, invalid and unnecessary `cast`, `NewType`, `ClassVar`, the rest of the protocol checks, variance, `match` patterns, suspicious boolean conditions, `@deprecated`, a redeclared type alias, decorators and their nesting, `str()` of a class without `__str__`; pandas' two inspections. PyCharm Professional's own (Spark, BDD, mock, notebooks) are a choice still to make. Most of these are also in the *Python inspections* line further down.
 - ~~Speed on large projects: find usages and rename on one thread, the Problems of unchanged files not remembered (78)~~ (done, item 190). Measured and left out: keeping the types of unchanged files across edits (the files they depend on are only about a fifth of an edit's time) and parsing only the edited region (10 ms of a 450 ms check); the peak while the problems are computed is still about 2.6 GB.
+- Left by item 186: `try: return 1` / `finally: return 2` followed by dead code still gets "Inconsistent return statements" (the syntactic `Terminates()` in `StyleInspections.cs`; `ScopeFlow.EndReachable` has the right answer); the Server's missing-return check has its own exit test, which `NoReturn` calls do not reach; a function that only raises, without the annotation, is not taken as `NoReturn`; names with no narrowing condition still take their types from reaching definitions computed without types.
+- Left by item 187: with multiple inheritance only one chain counts as the base method's; marks for library methods from the bundled stubs (no file) have no target.
+- Left by item 188: a subject of unknown type binds Unknown where pyright gives the pattern's class; an "at least n" tuple passed where a fixed-length tuple is wanted is not reported; a tuple put in a variable first is not checked by its literals.
+- Left by item 190: compiled modules (`.pyd` / `.so`) that appear on disk during a session are not in the key of the remembered Problems; Django and the web frameworks are recognised by a file's text; the remaining allocations are mostly in the type lists and closures around `Memo`.
+- `TypeForm[T]` (PEP 747), which pydantic 2.14's `TypeAdapter` uses.
+- `mock.patch` used as a decorator: the parameters it injects are reported as not given, since decorators that are instances are skipped.
+- The library scan's remaining reports (issue #8), about 600 over click, rich, jinja2, httpx, requests, urllib3, h11, pydantic, attrs, PyYAML and starlette; root causes 17 and 22 and `rich/traceback.py:349` were judged to match PyCharm.
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
 - New project: ~~a *New Project* dialog with a location and project types (pure Python, FastAPI, Flask, Django, Jupyter, each with its starting files), *Create Git repository*, *Create a welcome script*, and the interpreter made with it: a project venv, uv (with the path to uv), base conda or a custom environment, and a Python version~~ (done, item 169). Unlike PyCharm, the packages a kind needs are listed in requirements.txt, not installed while the project is made.
