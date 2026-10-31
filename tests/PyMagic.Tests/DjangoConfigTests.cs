@@ -72,6 +72,24 @@ public class DjangoConfigTests
     }
 
     [Fact]
+    public void TheStructureListsModelsAdminsAndViews()
+    {
+        var svc = DjangoFixture.Service()
+            .With("django/contrib/__init__.py", "")
+            .With("django/contrib/admin/__init__.py", "class ModelAdmin:\n    pass\n\n\nclass AdminSite:\n    def register(self, model, admin_class=None): ...\n\n\nsite = AdminSite()\n\n\ndef register(*models):\n    def wrap(cls):\n        return cls\n    return wrap\n")
+            .With("django/views/__init__.py", "class View:\n    pass\n")
+            .With("django/views/generic/__init__.py", "from django.views import View\n\n\nclass ListView(View):\n    pass\n")
+            .With("shop/models.py", DjangoFixture.Models + "\n\nclass Base(models.Model):\n    class Meta:\n        abstract = True\n")
+            .With("shop/admin.py", "from django.contrib import admin\n\nfrom .models import Author, Book, Tag\n\n\n@admin.register(Book)\nclass BookAdmin(admin.ModelAdmin):\n    pass\n\n\nclass AuthorAdmin(admin.ModelAdmin):\n    pass\n\n\nadmin.site.register(Author, AuthorAdmin)\nadmin.site.register([Tag])\n")
+            .With("shop/views.py", "from django.views.generic import ListView\n\n\ndef index(request):\n    return None\n\n\ndef _helper(request):\n    return None\n\n\ndef util(x):\n    return x\n\n\nclass BookList(ListView):\n    pass\n").Service;
+        var items = svc.DjangoStructure();
+        string Show(DjangoStructureItem i) => i.Kind + ":" + i.Name + (i.Model != null ? "->" + i.Model : "") + (i.Kind == "model" ? (i.Registered ? "+" : "-") : "");
+        Assert.Equal("admin:AuthorAdmin->Author admin:BookAdmin->Book model:Author+ model:Book+ model:Profile- model:Tag+ view:BookList view:index", string.Join(" ", items.Select(Show)));
+        Assert.True(items.Single(i => i.Name == "BookAdmin").Uri.EndsWith("shop/admin.py"));
+        Assert.Equal(6, items.Single(i => i.Name == "BookAdmin").Line);
+    }
+
+    [Fact]
     public void AFolderMarkedAsTemplatesHoldsTemplates()
     {
         string root = Folder();

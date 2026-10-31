@@ -266,6 +266,8 @@ public sealed class Server
                 return _service.Duplicates(p?["minLines"]?.GetValue<int>() ?? 6);
             case "pymagic/diagram":
                 return _service.Diagram(p?["kind"]?.GetValue<string>() ?? "classes", p?["textDocument"]?["uri"]?.GetValue<string>());
+            case "pymagic/djangoStructure":
+                return _service.DjangoStructure();
             case "pymagic/templates":
                 return _service.TemplateList();
             case "pymagic/inlayHints":

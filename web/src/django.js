@@ -2,7 +2,7 @@
 // and the apps with their migrations.
 import { showTab } from './panel';
 import { toast } from './toast';
-import { COMMANDS, splitArguments, migrationLabel, parseCommands, parseOptions, completeManage } from './django-model';
+import { COMMANDS, splitArguments, migrationLabel, parseCommands, parseOptions, completeManage, groupStructure, appOf, addModel, addView, registerModel } from './django-model';
 const $ = (id) => document.getElementById(id);
 function el(tag, className, text) {
     const e = document.createElement(tag);
@@ -17,6 +17,88 @@ export function setupDjango(deps) {
     const summary = $('django-summary');
     let project = null;
     const opened = new Set();
+    // the Django Structure: models, admin classes and views of the project, by app or by kind
+    let structureBy = 'app', structure = [];
+    async function loadStructure() {
+        try {
+            structure = ((await deps.lsp.request('pymagic/djangoStructure', {})) ?? []).map((i) => ({ ...i, rel: deps.relOfUri(i.uri) ?? '' }));
+        }
+        catch { structure = []; }
+    }
+    /** Changes a file of the project in the editor (the change is there to see and to save) and goes to its end. */
+    async function change(rel, edit) {
+        const model = await deps.modelFor(rel);
+        if (!model) { toast(`${rel} cannot be opened.`, true); return; }
+        model.pushEditOperations([], [{ range: model.getFullModelRange(), text: edit(model.getValue()) }], () => null);
+        await deps.openFile(rel, model.getLineCount());
+        toast(`${rel} is changed in the editor: save it to keep it.`);
+    }
+    async function newEntry(kind, app) {
+        const name = await deps.askText(kind === 'model' ? 'New model' : 'New view', '', `in ${app.name}`);
+        if (!name) return;
+        if (!/^[A-Za-z_]\w*$/.test(name)) { toast('A name is a Python identifier.', true); return; }
+        if (kind === 'model') await change(`${app.path}/models.py`, (t) => addModel(t, name));
+        else await change(`${app.path}/views.py`, (t) => addView(t, name, app.name.split('.').pop()));
+    }
+    function structureSection() {
+        const box = section('Structure');
+        const bar = el('div', 'dj-row');
+        for (const [by, label] of [['app', 'By app'], ['kind', 'By kind']]) {
+            const b = button(label, `Group the models, admin classes and views ${label.toLowerCase()}`, () => { structureBy = by; paint(); });
+            if (structureBy === by) b.classList.add('active');
+            bar.append(b);
+        }
+        bar.append(button('Refresh', 'Read the structure again', async () => { await loadStructure(); paint(); }));
+        box.append(bar);
+        if (!structure.length) {
+            box.append(el('div', 'dj-note', 'No models, admin classes or views found yet.'));
+            return box;
+        }
+        const appsByName = new Map(project.apps.map((a) => [a.name, a]));
+        for (const group of groupStructure(structure, project.apps, structureBy)) {
+            const head = el('div', 'dj-app');
+            head.append(el('span', 'dj-appname', group.title));
+            const app = appsByName.get(group.title);
+            if (structureBy === 'app' && app) {
+                const actions = el('span', 'dj-actions');
+                const label = app.name.split('.').pop();
+                actions.append(
+                    button('New model…', `A model at the end of ${app.path}/models.py`, () => void newEntry('model', app)),
+                    button('New view…', `A view at the end of ${app.path}/views.py`, () => void newEntry('view', app)),
+                    button('makemigrations', `manage.py makemigrations ${label}`, () => void runManage(['makemigrations', label])),
+                    button('migrate', `manage.py migrate ${label}`, () => void runManage(['migrate', label])));
+                head.append(actions);
+            }
+            box.append(head);
+            for (const item of group.items) {
+                const row = el('div', `dj-migration dj-${item.kind}`);
+                const icon = { model: '▣', admin: '⚙', view: '◇' }[item.kind] ?? '·';
+                row.append(el('span', 'dj-kind', icon), el('span', '', ` ${item.name}`));
+                if (structureBy === 'kind') row.append(el('span', 'detail', `  ${item.app}`));
+                if (item.kind === 'admin' && item.model) {
+                    // from an admin class to its model
+                    const to = structure.find((x) => x.kind === 'model' && x.name === item.model);
+                    const link = el('button', 'dj-hint', `→ ${item.model}`);
+                    link.title = `Go to the model ${item.model}`;
+                    link.onclick = (e) => { e.stopPropagation(); if (to) void deps.openFile(to.rel, to.line + 1); };
+                    row.append(link);
+                }
+                if (item.kind === 'model' && !item.registered) {
+                    const owner = appOf(item.rel, project.apps);
+                    if (owner) {
+                        const reg = el('button', 'dj-hint', 'Register in admin');
+                        reg.title = `admin.site.register(${item.name}) in ${owner.path}/admin.py`;
+                        reg.onclick = (e) => { e.stopPropagation(); void change(`${owner.path}/admin.py`, (t) => registerModel(t, item.name)); };
+                        row.append(reg);
+                    }
+                }
+                row.title = `${item.rel}:${item.line + 1}`;
+                row.onclick = () => void deps.openFile(item.rel, item.line + 1);
+                box.append(row);
+            }
+        }
+        return box;
+    }
     // the manage.py console's history, and what Django said of its commands (asked once per page)
     let manageHistory = [];
     try { manageHistory = JSON.parse(localStorage.getItem('pymagic.manageHistory') ?? '[]'); } catch { /* none */ }
@@ -172,7 +254,7 @@ export function setupDjango(deps) {
                 }
             }
         }
-        body.replaceChildren(commands, apps);
+        body.replaceChildren(commands, apps, structureSection());
     }
     async function refresh() {
         try {
@@ -183,9 +265,12 @@ export function setupDjango(deps) {
             summary.textContent = String(e.message ?? e);
             return;
         }
+        if (project?.found)
+            await loadStructure();
         paint();
     }
     $('t-django').onclick = () => { showTab('django'); void refresh(); };
+    window.addEventListener('pymagic:saved', () => { if ($('django-tab').classList.contains('active')) void loadStructure().then(paint); });
     $('django-refresh').onclick = () => void refresh();
     window.addEventListener('pymagic:saved', () => { if ($('django-tab').classList.contains('active'))
         void refresh(); });

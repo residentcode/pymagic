@@ -971,7 +971,10 @@ async function main() {
     window.addEventListener('pymagic:folders', () => lsp.notify('pymagic/foldersChanged', {}));
     const codeVision = setupCodeVision({ editor, lsp, uriOf: (model) => model && serverUri.get(model), relOf: (model) => model && relPathOf.get(normalise(serverUri.get(model) ?? '')), savedText: (rel) => savedText.get(rel) });
     setupRoutes({ editor, lsp, openFile, relOfUri });
-    setupDjango({ openFile, run: runHooks });
+    setupDjango({
+        run: runHooks, lsp, relOfUri, modelFor: ensureModel, askText: (...a) => explorer.askText(...a),
+        openFile: (rel, line) => openFile(rel, line ? new monaco.Range(line, 1, line, 1) : undefined),
+    });
     const problems = setupProblems({ editor, lsp, openFile, relOfUri });
     setupTodo({ editor, lsp, openFile, relOfUri });
     const terminal = setupTerminal();

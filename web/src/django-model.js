@@ -61,3 +61,72 @@ export function completeManage(text, commands, optionsOf) {
     const flags = (optionsOf(words[0]) ?? []).flatMap((o) => o.flags);
     return { word, items: [...new Set(flags.filter((f) => f.startsWith(word)))].sort((a, b) => (b.startsWith('--') - a.startsWith('--')) || a.localeCompare(b)) };
 }
+
+// ------------------------------------------------------------ the Django Structure
+
+const KIND_TITLES = { model: 'Models', admin: 'Admin', view: 'Views' };
+
+/** The app a file belongs to: the app whose folder holds it (the deepest one), else null. */
+export function appOf(rel, apps) {
+    let best = null;
+    for (const a of apps)
+        if ((rel === a.path || rel.startsWith(a.path + '/')) && (!best || a.path.length > best.path.length))
+            best = a;
+    return best;
+}
+
+/** The structure's items in groups: by app (each app's models, admin and views) or by kind (each kind with its app beside each item). */
+export function groupStructure(items, apps, by) {
+    const withApp = items.map((i) => ({ ...i, app: appOf(i.rel, apps)?.name ?? '(no app)' }));
+    const groups = new Map();
+    const key = (i) => (by === 'kind' ? KIND_TITLES[i.kind] ?? i.kind : i.app);
+    for (const i of withApp) {
+        if (!groups.has(key(i)))
+            groups.set(key(i), []);
+        groups.get(key(i)).push(i);
+    }
+    const order = by === 'kind' ? Object.values(KIND_TITLES) : [...groups.keys()].sort();
+    return order.filter((k) => groups.has(k)).map((title) => ({
+        title,
+        items: groups.get(title).sort((a, b) => (by === 'kind' ? a.app.localeCompare(b.app) : Object.keys(KIND_TITLES).indexOf(a.kind) - Object.keys(KIND_TITLES).indexOf(b.kind)) || a.name.localeCompare(b.name)),
+    }));
+}
+
+const endWith = (text, add) => (text.length && !text.endsWith('\n') ? text + '\n' : text) + add;
+/** An import line put after the module's other imports (or at the top), unless the module has it. */
+function withImport(text, line) {
+    if (text.split(/\r?\n/).some((l) => l.trim() === line))
+        return text;
+    const lines = text.split('\n');
+    let at = 0;
+    lines.forEach((l, i) => { if (/^(from|import)\s/.test(l)) at = i + 1; });
+    lines.splice(at, 0, line);
+    return lines.join('\n');
+}
+
+/** models.py with a new model at its end. */
+export function addModel(text, name) {
+    return endWith(withImport(text, 'from django.db import models'), `\n\nclass ${name}(models.Model):\n    name = models.CharField(max_length=100)\n\n    def __str__(self):\n        return self.name\n`);
+}
+
+/** views.py with a new view at its end, rendering a template named after it. */
+export function addView(text, name, app) {
+    return endWith(withImport(text, 'from django.shortcuts import render'), `\n\ndef ${name}(request):\n    return render(request, "${app}/${name}.html")\n`);
+}
+
+/** admin.py with a model registered (its import added). */
+export function registerModel(text, model) {
+    let out = withImport(text, 'from django.contrib import admin');
+    const importLine = out.split('\n').findIndex((l) => /^from \.models import /.test(l));
+    if (importLine >= 0) {
+        const names = out.split('\n')[importLine].replace(/^from \.models import /, '').split(',').map((s) => s.trim()).filter(Boolean);
+        if (!names.includes(model)) {
+            const lines = out.split('\n');
+            lines[importLine] = `from .models import ${[...names, model].join(', ')}`;
+            out = lines.join('\n');
+        }
+    }
+    else
+        out = withImport(out, `from .models import ${model}`);
+    return endWith(out, `\nadmin.site.register(${model})\n`);
+}

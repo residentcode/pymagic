@@ -68,3 +68,24 @@ test('Tab completes a command, then the options of that command', () => {
     assert.deepEqual(d.completeManage('migrate -', commands, optionsOf).items.slice(0, 2), ['--database', '--fake']);
     assert.deepEqual(d.completeManage('migrate sho', commands, optionsOf).items, []);
 });
+
+test('the structure grouped by app or by kind, each item in the deepest app that holds it', () => {
+    const apps = [{ name: 'shop', path: 'shop' }, { name: 'shop.blog', path: 'shop/blog' }];
+    const items = [
+        { kind: 'view', name: 'index', rel: 'shop/views.py' }, { kind: 'model', name: 'Book', rel: 'shop/models.py' },
+        { kind: 'admin', name: 'BookAdmin', rel: 'shop/admin.py' }, { kind: 'model', name: 'Post', rel: 'shop/blog/models.py' }, { kind: 'view', name: 'home', rel: 'site/views.py' },
+    ];
+    const byApp = d.groupStructure(items, apps, 'app');
+    assert.deepEqual(byApp.map((g) => `${g.title}: ${g.items.map((i) => i.name).join(',')}`), ['(no app): home', 'shop: Book,BookAdmin,index', 'shop.blog: Post']);
+    const byKind = d.groupStructure(items, apps, 'kind');
+    assert.deepEqual(byKind.map((g) => `${g.title}: ${g.items.map((i) => `${i.name}@${i.app}`).join(',')}`), ['Models: Book@shop,Post@shop.blog', 'Admin: BookAdmin@shop', 'Views: home@(no app),index@shop']);
+});
+
+test('a new model, a new view and a model registered in the admin, with the imports they need', () => {
+    assert.equal(d.addModel('from django.db import models\n\n# Create your models here.\n', 'Order'),
+        'from django.db import models\n\n# Create your models here.\n\n\nclass Order(models.Model):\n    name = models.CharField(max_length=100)\n\n    def __str__(self):\n        return self.name\n');
+    assert.ok(d.addModel('', 'A').startsWith('from django.db import models\n'));
+    assert.equal(d.addView('', 'about', 'shop'), 'from django.shortcuts import render\n\n\ndef about(request):\n    return render(request, "shop/about.html")\n');
+    assert.equal(d.registerModel('from django.contrib import admin\nfrom .models import Book\n', 'Author'), 'from django.contrib import admin\nfrom .models import Book, Author\n\nadmin.site.register(Author)\n');
+    assert.equal(d.registerModel('# empty\n', 'Book'), 'from django.contrib import admin\nfrom .models import Book\n# empty\n\nadmin.site.register(Book)\n');
+});
