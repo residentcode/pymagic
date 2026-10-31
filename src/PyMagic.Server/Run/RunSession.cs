@@ -109,9 +109,10 @@ public sealed class RunSession : IDisposable
     /// <summary>Where a coverage run leaves the lines that ran.</summary>
     public static string CoveragePath(string root) => Path.Combine(root, ".pymagic", "coverage.json");
 
-    public void StartTests(string root, IReadOnlyList<string> ids, string framework = "auto", bool coverage = false, string? djangoSettings = null, bool failfast = false)
+    public void StartTests(string root, IReadOnlyList<string> ids, string framework = "auto", bool coverage = false, string? djangoSettings = null, bool failfast = false, bool djangoRunner = true)
     {
         var helperArgs = new List<string> { "--framework", framework };
+        if (framework == "django" && !djangoRunner) helperArgs.Add("--no-django-runner");
         if (djangoSettings != null && RunConfigurations.IsModuleName(djangoSettings)) { helperArgs.Add("--django-settings"); helperArgs.Add(djangoSettings); }
         if (failfast) helperArgs.Add("--failfast");
         if (coverage)

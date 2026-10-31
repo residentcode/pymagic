@@ -7,9 +7,11 @@ namespace PyMagic.Server;
 /// and excluded (left out of the analysis, the index, Find in Files and the test runner). Kept in the project, in <c>.pymagic/folders.json</c>, as paths
 /// from the project folder with <c>/</c>.
 /// </summary>
-public sealed record FolderMarks(List<string> Sources, List<string> Tests, List<string> Excluded)
+/// <param name="Templates">Template folders (Mark Directory As > Template folder): every file under them is a template, by its path from there.</param>
+/// <param name="Resources">Resources roots: shown as such (static files, fixtures).</param>
+public sealed record FolderMarks(List<string> Sources, List<string> Tests, List<string> Excluded, List<string>? Templates = null, List<string>? Resources = null)
 {
-    public static FolderMarks None => new(new(), new(), new());
+    public static FolderMarks None => new(new(), new(), new(), new(), new());
 }
 
 public static class ProjectFolders
@@ -27,7 +29,7 @@ public static class ProjectFolders
         try
         {
             if (File.Exists(FileOf(root)) && JsonSerializer.Deserialize<FolderMarks>(File.ReadAllText(FileOf(root)), Options) is { } read)
-                marks = new FolderMarks(Clean(read.Sources), Clean(read.Tests), Clean(read.Excluded));
+                marks = new FolderMarks(Clean(read.Sources), Clean(read.Tests), Clean(read.Excluded), Clean(read.Templates), Clean(read.Resources));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { }
         Use(root, marks);
@@ -54,17 +56,17 @@ public static class ProjectFolders
     {
         rel = rel.Replace('\\', '/').Trim('/');
         var marks = Load(root);
-        var next = new FolderMarks(
-            marks.Sources.Where(p => !p.Equals(rel, StringComparison.OrdinalIgnoreCase)).ToList(),
-            marks.Tests.Where(p => !p.Equals(rel, StringComparison.OrdinalIgnoreCase)).ToList(),
-            marks.Excluded.Where(p => !p.Equals(rel, StringComparison.OrdinalIgnoreCase)).ToList());
+        List<string> Without(List<string>? list) => (list ?? new()).Where(p => !p.Equals(rel, StringComparison.OrdinalIgnoreCase)).ToList();
+        var next = new FolderMarks(Without(marks.Sources), Without(marks.Tests), Without(marks.Excluded), Without(marks.Templates), Without(marks.Resources));
         switch (kind)
         {
             case "sources": next.Sources.Add(rel); break;
             case "tests": next.Tests.Add(rel); break;
             case "excluded": next.Excluded.Add(rel); break;
+            case "templates": next.Templates!.Add(rel); break;
+            case "resources": next.Resources!.Add(rel); break;
         }
-        next = new FolderMarks(Clean(next.Sources), Clean(next.Tests), Clean(next.Excluded));
+        next = new FolderMarks(Clean(next.Sources), Clean(next.Tests), Clean(next.Excluded), Clean(next.Templates), Clean(next.Resources));
         Directory.CreateDirectory(Path.GetDirectoryName(FileOf(root))!);
         File.WriteAllText(FileOf(root), JsonSerializer.Serialize(next, Options));
         Use(root, next);
@@ -85,4 +87,11 @@ public static class ProjectFolders
     /// <summary>The full paths of the folders marked as sources roots, or as test sources.</summary>
     public static IEnumerable<string> SourceRoots => _root == null ? Array.Empty<string>() : _marks.Sources.Select(p => Path.Combine(_root, p));
     public static IEnumerable<string> TestRoots => _root == null ? Array.Empty<string>() : _marks.Tests.Select(p => Path.Combine(_root, p));
+
+    /// <summary>The folders found in TEMPLATES['DIRS'] of the Django settings, marked by themselves (paths from the project folder).</summary>
+    public static List<string> AutoTemplates { get; set; } = new();
+
+    /// <summary>The full paths of the template folders: the ones marked, and the ones Django's settings name.</summary>
+    public static IEnumerable<string> TemplateRoots => _root == null ? Array.Empty<string>()
+        : (_marks.Templates ?? new()).Concat(AutoTemplates).Distinct(StringComparer.OrdinalIgnoreCase).Select(p => Path.Combine(_root, p));
 }

@@ -523,6 +523,7 @@ def main():
     parser.add_argument("--framework", default="auto", choices=["auto", "pytest", "unittest", "doctest", "nose", "trial", "django"])
     parser.add_argument("--django-settings", default=None, help="the settings module of Django's tests (else manage.py's)")
     parser.add_argument("--failfast", action="store_true", help="stop at the first failure")
+    parser.add_argument("--no-django-runner", action="store_true", help="Django set up, the tests run by unittest's runner (no test database)")
     parser.add_argument("--coverage", default=None, help="write the lines that ran to this JSON file")
     parser.add_argument("ids", nargs="*")
     options = parser.parse_args()
@@ -552,6 +553,9 @@ def main():
             code = run_pytest(channel, root, options.ids)
         elif framework == "doctest":
             code = run_doctest(channel, root, options.ids)
+        elif framework == "django" and options.no_django_runner:
+            django_runner(root, options.django_settings, options.failfast).teardown_test_environment()   # the settings and django.setup() only
+            code = run_unittest(channel, root, options.ids)
         elif framework == "django":
             code = run_unittest(channel, root, options.ids, "django", options.django_settings, options.failfast)
         else:

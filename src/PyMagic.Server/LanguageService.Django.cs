@@ -131,7 +131,7 @@ public sealed partial class LanguageService
 
     (DateTime At, List<(string Name, string Path)> Items)? _templates;
 
-    /// <summary>Files below any folder called `templates` in the workspace: name (relative to that folder) and path.</summary>
+    /// <summary>Files below any folder called `templates` in the workspace, and below the template folders marked or named in TEMPLATES['DIRS']: name (relative to that folder) and path.</summary>
     List<(string Name, string Path)> Templates()
     {
         if (_templates is { } cached && DateTime.UtcNow - cached.At < TimeSpan.FromSeconds(5)) return cached.Items;
@@ -169,6 +169,21 @@ public sealed partial class LanguageService
                     stack.Push(d);
                 }
             }
+        }
+        foreach (var d in ProjectFolders.TemplateRoots)
+        {
+            if (!Directory.Exists(d)) continue;
+            try
+            {
+                foreach (var f in Directory.EnumerateFiles(d, "*", SearchOption.AllDirectories))
+                {
+                    string ext = System.IO.Path.GetExtension(f).ToLowerInvariant();
+                    if (ext is not (".html" or ".htm" or ".txt" or ".xml" or ".jinja" or ".jinja2" or ".j2" or ".md")) continue;
+                    string rel = System.IO.Path.GetRelativePath(d, f).Replace('\\', '/');
+                    if (seen.Add(rel + "|" + f)) found.Add((rel, f));
+                }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* skipped */ }
         }
         _templates = (DateTime.UtcNow, found);
         return found;

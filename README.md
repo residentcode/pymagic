@@ -100,7 +100,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 **Django compared with PyCharm** (from PyCharm's Django help pages and its 17 Django inspections, checked against the code on 30 October 2026)
 - Run configurations: ~~a *Django server* configuration (host, port, extra options, working folder, environment variables, `.env` files, open the browser, test server, no reload, debug only my code, log files in the console, tasks before launch); a *Django tests* configuration (a target: an app, a test case or one test; a custom settings file; options such as `--failfast`; variables; results in the test tree)~~ (done, items 170 and 173). The task before launch is another configuration; the Django tab's own `test` buttons still give plain text.
 - manage.py: ~~a console for it (Ctrl+Alt+R) with command history, completion of commands and their options, and quick documentation; a *Django console*, a Python console with Django set up~~ (done, item 174).
-- Settings: a Django settings page (Django support on or off, project root, settings file, manage.py script, environment variables, not using Django's test runner); *Mark Directory As → Template folder* and resources, folders in `TEMPLATES['DIRS']` marked by themselves, template languages per file type.
+- Settings: ~~a Django settings page (Django support on or off, project root, settings file, manage.py script, environment variables, not using Django's test runner); *Mark Directory As → Template folder* and resources, folders in `TEMPLATES['DIRS']` marked by themselves, template languages per file type~~ (done, item 175).
 - New Django project: location, Git, environment, template language, templates folder, first app's name, admin on or off.
 - Django Structure window: models, admin classes and views, grouped by type or by app; create an app, a model or a view; makemigrations and migrate per app; register a model in the admin; from an admin class to its model.
 - Logical structure of a file: models with fields and relations, serializers (nested too), views with their endpoints, admins, forms and signal hooks (`pre_save`, `post_delete`); create a missing ModelAdmin or serializer.
@@ -147,4 +147,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 174 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 175 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

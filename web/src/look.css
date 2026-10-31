@@ -530,3 +530,5 @@ body.row-resizing { cursor: row-resize; user-select: none; }
 .welcome-path { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .welcome-key { display: flex; gap: 12px; align-items: center; padding: 5px 0; }
 .welcome-key kbd { min-width: 104px; font: 12px var(--mono); color: var(--fg); }
+li.mark-templates .fname, li.mark-templates .folder { color: var(--violet, #b48ead); }
+li.mark-resources .fname, li.mark-resources .folder { color: var(--teal, #6cc4c4); }

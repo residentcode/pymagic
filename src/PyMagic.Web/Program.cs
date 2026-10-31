@@ -188,7 +188,7 @@ app.MapGet("/api/tree", () =>
     }
     Walk(root);
     var marks = ProjectFolders.Marks;
-    return Results.Json(new { marks = new { sources = marks.Sources, tests = marks.Tests, excluded = marks.Excluded }, dirs = dirs.OrderBy(x => x, StringComparer.Ordinal), files = files.OrderBy(f => f.Path, StringComparer.Ordinal).Select(f => new { path = f.Path, size = f.Size }) });
+    return Results.Json(new { marks = new { sources = marks.Sources, tests = marks.Tests, excluded = marks.Excluded, templates = marks.Templates ?? new(), resources = marks.Resources ?? new(), autoTemplates = ProjectFolders.AutoTemplates }, dirs = dirs.OrderBy(x => x, StringComparer.Ordinal), files = files.OrderBy(f => f.Path, StringComparer.Ordinal).Select(f => new { path = f.Path, size = f.Size }) });
 });
 
 app.MapGet("/api/file", (string path) =>
@@ -334,7 +334,7 @@ app.MapPost("/api/fs", async (HttpRequest req) =>
                 string rel = body!["path"]!.GetValue<string>();
                 if (!Directory.Exists(ResolveInRoot(rel))) return Results.NotFound();
                 var marks = ProjectFolders.Mark(root, rel, body["kind"]?.GetValue<string>() ?? "none");
-                return Results.Json(new { sources = marks.Sources, tests = marks.Tests, excluded = marks.Excluded });
+                return Results.Json(new { sources = marks.Sources, tests = marks.Tests, excluded = marks.Excluded, templates = marks.Templates ?? new(), resources = marks.Resources ?? new() });
             }
             case "clean":
             {
@@ -643,7 +643,23 @@ app.MapGet("/api/pypi", async (string name) =>
     catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return Results.Json(new { error = "the package index is not reachable" }, statusCode: 502); }
 });
 app.MapGet("/api/tests", () => TestDiscovery.Discover(root));
+DjangoConfig.Load(root);
+ProjectFolders.Load(root);
+ProjectFolders.AutoTemplates = DjangoProject.Scan(root).TemplateDirs?.ToList() ?? new();
 app.MapGet("/api/django", () => DjangoProject.Scan(root));
+// the Django page of the settings (.pymagic/django.json)
+app.MapGet("/api/django/config", () => Results.Json(DjangoConfig.Current, new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase }));
+app.MapPut("/api/django/config", async (HttpRequest req) =>
+{
+    try
+    {
+        var config = await System.Text.Json.JsonSerializer.DeserializeAsync<DjangoConfig>(req.Body, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        var saved = DjangoConfig.Save(root, config ?? new DjangoConfig());
+        ProjectFolders.AutoTemplates = DjangoProject.Scan(root).TemplateDirs?.ToList() ?? new();
+        return Results.Json(saved, new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+    }
+    catch (System.Text.Json.JsonException e) { return Results.BadRequest(new { error = e.Message }); }
+});
 // the manage.py console's completion and documentation: the project's own `manage.py help --commands`, or `manage.py help <command>`
 var djangoHelp = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
 app.MapGet("/api/django/help", async (string? command) =>
@@ -651,7 +667,7 @@ app.MapGet("/api/django/help", async (string? command) =>
     var project = DjangoProject.Scan(root);
     if (project.Manage == null) return Results.NotFound(new { error = "no manage.py" });
     if (command != null && !System.Text.RegularExpressions.Regex.IsMatch(command, @"^[A-Za-z_][\w-]{0,60}$")) return Results.BadRequest(new { error = "not a command name" });
-    string key = (interpreters.Current?.Path ?? "") + "|" + (command ?? "--commands");
+    string key = (interpreters.Current?.Path ?? "") + "|" + System.Text.Json.JsonSerializer.Serialize(DjangoConfig.Current) + "|" + (command ?? "--commands");   // another configuration asks again
     if (djangoHelp.TryGetValue(key, out var cached)) return Results.Text(cached);
     string manage = Path.Combine(root, project.Manage);
     var psi = new System.Diagnostics.ProcessStartInfo(interpreters.Current?.Python ?? python) { WorkingDirectory = Path.GetDirectoryName(manage)!, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
@@ -989,6 +1005,8 @@ app.Map("/run", async (HttpContext ctx) =>
                     if (File.Exists(envPath))
                         foreach (var (k, v) in RunConfigurations.ParseDotEnv(File.ReadAllText(envPath))) variables[k] = v;
                 }
+                if (file0.EndsWith("manage.py", StringComparison.OrdinalIgnoreCase))
+                    foreach (var (k, v) in DjangoConfig.Current.Env ?? new()) variables[k] = v;
                 if (msg["env"] is JsonObject own) foreach (var (k, v) in own) variables[k] = v?.DeepClone();
                 session.ExtraEnvironment = RunConfigurations.CleanEnvironment(variables);
                 session.WorkingDirectory = msg["cwd"]?.GetValue<string>() is { Length: > 0 } cwd && Directory.Exists(ResolveInRoot(cwd)) ? ResolveInRoot(cwd) : null;
@@ -1031,7 +1049,8 @@ app.Map("/run", async (HttpContext ctx) =>
                 var ids = (msg["ids"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
                 session.StartTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto", msg["coverage"]?.GetValue<bool>() == true,
-                    msg["settings"]?.GetValue<string>() is { Length: > 0 } djangoSettings ? djangoSettings : null, msg["failfast"]?.GetValue<bool>() == true);
+                    msg["settings"]?.GetValue<string>() is { Length: > 0 } djangoSettings ? djangoSettings : DjangoConfig.Current.Settings, msg["failfast"]?.GetValue<bool>() == true,
+                    djangoRunner: DjangoConfig.Current.TestRunner);
             }
             else if (msg["type"]?.GetValue<string>() == "startPip")
             {

@@ -196,6 +196,62 @@ const SPECIAL = {
             mirrorCheck($('git-inline'), 'Show who changed the current line', 'After the line, in grey.'),
         );
     },
+    django(page) {
+        page.append(note('Kept in .pymagic/django.json. The engine finds manage.py and the settings by itself; what is set here wins.'));
+        const box = document.createElement('div');
+        page.append(box);
+        fetch('/api/django/config').then((r) => r.json()).then((c) => {
+            const input = (value, placeholder) => { const el = document.createElement('input'); el.value = value ?? ''; el.placeholder = placeholder; el.spellcheck = false; return el; };
+            const check = (on) => { const el = document.createElement('input'); el.type = 'checkbox'; el.checked = on; return el; };
+            const enabled = check(c.enabled !== false), rootBox = input(c.root, 'the project folder'), settingsBox = input(c.settings, 'as manage.py says (site_cfg.settings)');
+            const manageBox = input(c.manage, 'found by itself (manage.py)'), runner = check(c.testRunner !== false);
+            const env = document.createElement('textarea');
+            env.rows = 3;
+            env.placeholder = 'NAME=value, one per line: given to manage.py';
+            env.value = Object.entries(c.env ?? {}).map(([k, v]) => `${k}=${v}`).join('\n');
+            const languages = {};
+            const langRows = ['.html', '.htm', '.jinja', '.jinja2', '.j2'].map((ext) => {
+                const sel = document.createElement('select');
+                for (const [v, l] of [['django', 'Django template'], ['jinja', 'Jinja2'], ['none', 'Plain HTML']]) sel.add(new Option(l, v));
+                sel.value = (c.templateLanguages ?? {})[ext] ?? (ext.startsWith('.j') ? 'jinja' : 'django');
+                languages[ext] = sel;
+                return row(`Template language of ${ext}`, sel);
+            });
+            const save = document.createElement('button');
+            save.className = 'primary';
+            save.textContent = 'Save';
+            save.onclick = async () => {
+                const vars = {};
+                for (const line of env.value.split(/\r?\n/)) { const at = line.indexOf('='); if (at > 0) vars[line.slice(0, at).trim()] = line.slice(at + 1).trim(); }
+                const body = { enabled: enabled.checked, root: rootBox.value, settings: settingsBox.value, manage: manageBox.value, env: vars, testRunner: runner.checked,
+                    templateLanguages: Object.fromEntries(Object.entries(languages).map(([k, s]) => [k, s.value])) };
+                const res = await fetch('/api/django/config', { method: 'PUT', body: JSON.stringify(body) }).catch(() => null);
+                const saved = res?.ok ? await res.json() : null;
+                save.textContent = saved ? 'Saved' : 'Not saved';
+                if (saved) {
+                    window.dispatchEvent(new CustomEvent('pymagic:djangoConfig', { detail: saved }));
+                    window.dispatchEvent(new CustomEvent('pymagic:folders'));   // the language server reads the template types again
+                    settingsBox.value = saved.settings ?? '';
+                    manageBox.value = saved.manage ?? '';
+                    rootBox.value = saved.root ?? '';
+                }
+                window.setTimeout(() => { save.textContent = 'Save'; }, 1500);
+            };
+            const buttons = document.createElement('div');
+            buttons.className = 'set-buttons';
+            buttons.append(save);
+            box.append(
+                row('Django support', enabled, 'Off: no Django tab features, and .html files are plain HTML.'),
+                row('Django project folder', rootBox, 'Where manage.py is looked for, from the project folder.'),
+                row('Settings module', settingsBox),
+                row('manage.py', manageBox, 'A path from the project folder.'),
+                row('Variables for manage.py', env),
+                row("Use Django's test runner", runner, 'Off: Django is set up and the tests run under unittest, without a test database.'),
+                ...langRows,
+                note('A file type set to plain HTML is coloured as before but not read as a template; open files take a new language when they are opened again.'),
+                buttons);
+        }).catch(() => { box.append(note('The engine did not answer.')); });
+    },
     templates(page) {
         const section = (title, hint) => {
             const h = document.createElement('h3');
@@ -318,7 +374,7 @@ const SPECIAL = {
     },
 };
 
-const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections', 'Inspections'], ['terminal', 'Terminal'], ['git', 'Git'], ['templates', 'Templates'], ['keymap', 'Keymap'], ['about', 'About']];
+const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections', 'Inspections'], ['terminal', 'Terminal'], ['git', 'Git'], ['django', 'Django'], ['templates', 'Templates'], ['keymap', 'Keymap'], ['about', 'About']];
 
 let isOpen = false;
 

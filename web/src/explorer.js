@@ -34,7 +34,7 @@ function iconOf(name) {
     return ICONS[ext] ?? ['file', 'doc'];
 }
 
-const MARK_LABELS = { sources: 'sources root', tests: 'test sources root', excluded: 'excluded' };
+const MARK_LABELS = { sources: 'sources root', tests: 'test sources root', excluded: 'excluded', templates: 'template folder', resources: 'resources root' };
 
 function baseName(path) { return path.slice(path.lastIndexOf('/') + 1); }
 function parentOf(path) { const i = path.lastIndexOf('/'); return i < 0 ? '' : path.slice(0, i); }
@@ -120,7 +120,7 @@ export function setupExplorer(deps) {
     let selected = '';
     let clip = null;          // { path, cut }: what Ctrl+X / Ctrl+C took, for Ctrl+V
     let dragging = null;      // the row being dragged onto a folder
-    let marks = { sources: [], tests: [], excluded: [] };   // Mark Directory As (.pymagic/folders.json)
+    let marks = { sources: [], tests: [], excluded: [], templates: [], resources: [], autoTemplates: [] };   // Mark Directory As (.pymagic/folders.json), and TEMPLATES['DIRS']
     try { open = new Set(JSON.parse(localStorage.getItem('pymagic.explorer.open') ?? '[]')); } catch { /* storage unavailable */ }
     list.tabIndex = 0;
 
@@ -132,7 +132,8 @@ export function setupExplorer(deps) {
         return { subdirs, names };
     }
 
-    const markOf = (path) => (marks.sources.includes(path) ? 'sources' : marks.tests.includes(path) ? 'tests' : marks.excluded.includes(path) ? 'excluded' : null);
+    const markOf = (path) => (marks.sources.includes(path) ? 'sources' : marks.tests.includes(path) ? 'tests' : marks.excluded.includes(path) ? 'excluded'
+        : (marks.templates ?? []).includes(path) || (marks.autoTemplates ?? []).includes(path) ? 'templates' : (marks.resources ?? []).includes(path) ? 'resources' : null);
 
     /** Mark Directory As: the folder becomes a sources root, test sources or excluded (or loses its mark); the page starts again so the analysis follows. */
     async function markAs(path, kind) {
@@ -164,7 +165,7 @@ export function setupExplorer(deps) {
         if (path === selected) li.classList.add('sel');
         // a marked folder has its colour: sources blue, test sources green, excluded orange (and what is inside an excluded folder is dim)
         const mark = isDir ? markOf(path) : null;
-        if (mark) { li.classList.add(`mark-${mark}`); li.title = `${path} (${MARK_LABELS[mark]})`; }
+        if (mark) { li.classList.add(`mark-${mark}`); li.title = `${path} (${MARK_LABELS[mark]}${mark === 'templates' && !(marks.templates ?? []).includes(path) ? ", from TEMPLATES['DIRS'] of the settings" : ''})`; }
         if (marks.excluded.some((e) => path.startsWith(e + '/'))) li.classList.add('in-excluded');
         if (clip?.cut && clip.path === path) li.classList.add('cut');
         li.draggable = true;

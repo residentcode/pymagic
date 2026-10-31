@@ -14,15 +14,18 @@ public sealed partial class LanguageService
 
     readonly Dictionary<string, (string Text, int Version)> _templateDocs = new();
 
-    static bool IsTemplateUri(string uri)
+    /// <summary>The template language of a file by its type, as the Django settings page sets it: django, jinja, or none (plain HTML).</summary>
+    static string TemplateLanguageOf(string uri)
     {
         int cut = uri.IndexOfAny(new[] { '?', '#' });
         string path = cut >= 0 ? uri[..cut] : uri;
-        return path.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".htm", StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith(".jinja", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".jinja2", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".j2", StringComparison.OrdinalIgnoreCase);
+        int dot = path.LastIndexOf('.');
+        return dot < 0 || path.IndexOf('/', dot) >= 0 ? "none" : DjangoConfig.Current.LanguageOf(path[dot..]);
     }
 
-    static bool IsJinjaFile(string uri) => uri.EndsWith(".jinja", StringComparison.OrdinalIgnoreCase) || uri.EndsWith(".jinja2", StringComparison.OrdinalIgnoreCase) || uri.EndsWith(".j2", StringComparison.OrdinalIgnoreCase);
+    static bool IsTemplateUri(string uri) => TemplateLanguageOf(uri) != "none";
+
+    static bool IsJinjaFile(string uri) => TemplateLanguageOf(uri) == "jinja";
 
     /// <summary>The text of a template file: the open buffer, else the file.</summary>
     string? TemplateTextOf(string path)

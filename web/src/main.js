@@ -108,6 +108,15 @@ monaco.languages.setMonarchTokensProvider('django-html', {
     },
 });
 /** The language of a file the page shows: Python, templates, and whatever Monaco has a plain highlighter for; the modes that bring a language service (a worker) stay plain text. */
+// the template language of each file type (the Django page of the settings): "none" is plain HTML, which the language server does not read as a template
+let templateLanguages = {};
+fetch('/api/django/config').then((r) => (r.ok ? r.json() : null)).then((c) => { templateLanguages = c?.templateLanguages ?? {}; templateLanguages.__off = c && c.enabled === false; }).catch(() => { /* the defaults */ });
+window.addEventListener('pymagic:djangoConfig', (e) => { templateLanguages = e.detail?.templateLanguages ?? {}; templateLanguages.__off = e.detail?.enabled === false; });
+function templateLanguageOf(rel) {
+    const ext = rel.toLowerCase().match(/\.[^.\/]+$/)?.[0] ?? '';
+    const chosen = templateLanguages[ext] ?? (/^\.(jinja2?|j2)$/.test(ext) ? 'jinja' : /^\.html?$/.test(ext) ? 'django' : 'none');
+    return chosen === 'django' && templateLanguages.__off ? 'none' : chosen;
+}
 function languageFor(rel) {
     const lower = rel.toLowerCase();
     if (/\.(html?|jinja2?|j2)$/.test(lower))
@@ -135,7 +144,7 @@ async function loadModel(rel, key) {
             if (served.has(plain))
                 lsp.notify('textDocument/didChange', { textDocument: { uri, version: plain.getVersionId() }, contentChanges: [{ text: plain.getValue() }] });
         });
-        if (lang === 'django-html') {
+        if (lang === 'django-html' && templateLanguageOf(rel) !== 'none') {
             lsp.notify('textDocument/didOpen', { textDocument: { uri, languageId: 'django-html', version: plain.getVersionId(), text } });
             let templateTimer;
             plain.onDidChangeContent(() => {
