@@ -2,30 +2,51 @@
   {
     "id": "pwsh",
     "name": "PowerShell 7",
-    "find": ["path:pwsh.exe", "%ProgramFiles%\\PowerShell\\7\\pwsh.exe"],
-    "args": "-NoLogo"
+    "find": [
+      "path:pwsh.exe",
+      "%ProgramFiles%\\PowerShell\\7\\pwsh.exe"
+    ],
+    "args": "-NoLogo",
+    "venvArgs": "-NoExit -Command \"function global:prompt { '({prompt}) PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }\""
   },
   {
     "id": "powershell",
     "name": "Windows PowerShell",
-    "find": ["%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "path:powershell.exe"],
-    "args": "-NoLogo"
+    "find": [
+      "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "path:powershell.exe"
+    ],
+    "args": "-NoLogo",
+    "venvArgs": "-NoExit -Command \"function global:prompt { '({prompt}) PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }\""
   },
   {
     "id": "cmd",
     "name": "Command Prompt",
-    "find": ["%ComSpec%", "%SystemRoot%\\System32\\cmd.exe"]
+    "find": [
+      "%ComSpec%",
+      "%SystemRoot%\\System32\\cmd.exe"
+    ],
+    "venvEnv": {
+      "PROMPT": "({prompt}) $P$G"
+    }
   },
   {
     "id": "gitbash",
     "name": "Git Bash",
-    "find": ["path:git.exe>..\\bin\\bash.exe", "%ProgramFiles%\\Git\\bin\\bash.exe"],
+    "find": [
+      "path:git.exe>..\\bin\\bash.exe",
+      "%ProgramFiles%\\Git\\bin\\bash.exe"
+    ],
     "args": "--login -i",
-    "env": { "CHERE_INVOKING": "1" }
+    "env": {
+      "CHERE_INVOKING": "1"
+    }
   },
   {
     "id": "wsl",
     "name": "WSL",
-    "find": ["%SystemRoot%\\System32\\wsl.exe"]
+    "find": [
+      "%SystemRoot%\\System32\\wsl.exe"
+    ]
   }
 ]

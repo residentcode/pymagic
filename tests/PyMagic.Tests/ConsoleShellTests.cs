@@ -80,4 +80,25 @@ public class ConsoleShellTests
         if (!OperatingSystem.IsWindows()) return;
         Assert.True(ConsoleShells.Found().Count > 0);
     }
+
+    [Fact]
+    public void AnActiveVenvShowsInThePromptOfPowerShellAndCmd()
+    {
+        Assert.Equal(".venv", ConsoleShells.VenvPrompt(@"C:\proj\.venv", _ => null));
+        Assert.Equal("shop", ConsoleShells.VenvPrompt(@"C:\proj\.venv", _ => "home = C:\\Python\nprompt = 'shop'\n"));
+        Assert.Equal("bad name", ConsoleShells.VenvPrompt(@"C:\proj\.venv", _ => "prompt = bad\"; name&\n"));
+        Assert.True(ConsoleShells.VenvPrompt(null) == null);
+
+        var list = ConsoleShells.Catalogue();
+        var pwsh = list.Single(p => p.Id == "powershell");
+        var cmd = list.Single(p => p.Id == "cmd");
+        var shell = new ConsoleShell("powershell", "Windows PowerShell", "powershell.exe -NoLogo", null, pwsh.VenvArgs, pwsh.VenvEnv);
+        var (line, env) = shell.WithVenv(".venv");
+        Assert.Equal("powershell.exe -NoLogo -NoExit -Command \"function global:prompt { '(.venv) PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }\"", line);
+        Assert.Equal(".venv", env["VIRTUAL_ENV_PROMPT"]);
+        Assert.Equal("powershell.exe -NoLogo", shell.WithVenv(null).CommandLine);
+        var (cmdLine, cmdEnv) = new ConsoleShell("cmd", "Command Prompt", "cmd.exe", null, cmd.VenvArgs, cmd.VenvEnv).WithVenv("shop");
+        Assert.Equal("cmd.exe", cmdLine);
+        Assert.Equal("(shop) $P$G", cmdEnv["PROMPT"]);
+    }
 }

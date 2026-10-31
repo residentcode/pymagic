@@ -733,7 +733,9 @@ app.Map("/console", async (HttpContext ctx) =>
     TerminalSession.WithInterpreter(env, interpreters.Current is { Target.IsLocal: true } c ? c.Path : null);
     // the page names a shell by its id (?shell=); the command line is the one found here
     var shell = ConsoleShells.Choose(ctx.Request.Query["shell"], ConsoleShells.Found());
-    foreach (var (k, v) in shell.Environment ?? new Dictionary<string, string>()) env[k] = v;
+    // an active virtual environment shows in the prompt, as its activation script would make it: `(.venv) PS C:\proj>`
+    var (commandLine, shellEnv) = shell.WithVenv(ConsoleShells.VenvPrompt(env.TryGetValue("VIRTUAL_ENV", out var venv) ? venv : null));
+    foreach (var (k, v) in shellEnv) env[k] = v;
     Send(new JsonObject { ["type"] = "shell", ["id"] = shell.Id, ["name"] = shell.Name });
     try
     {
@@ -741,7 +743,7 @@ app.Map("/console", async (HttpContext ctx) =>
         string cwd = root;
         if (ctx.Request.Query["cwd"].ToString() is { Length: > 0 } wanted)
             try { if (Directory.Exists(ResolveInRoot(wanted))) cwd = ResolveInRoot(wanted); } catch (UnauthorizedAccessException) { }
-        console.Start(shell.CommandLine, cwd, env, Query("cols", 100), Query("rows", 30),
+        console.Start(commandLine, cwd, env, Query("cols", 100), Query("rows", 30),
             data => Send(new JsonObject { ["type"] = "output", ["data"] = data }),
             code => { Send(new JsonObject { ["type"] = "exit", ["code"] = code }); outbox.CompleteAdding(); });
     }
@@ -976,6 +978,14 @@ app.Map("/run", async (HttpContext ctx) =>
                     session.Handle(new JsonObject { ["type"] = "mute", ["on"] = true });
                 if (msg["loadPolicy"]?.GetValue<string>() is "onDemand")
                     session.Handle(new JsonObject { ["type"] = "setLoadPolicy", ["policy"] = "onDemand" });
+            }
+            else if (msg["type"]?.GetValue<string>() == "console")
+            {
+                // the Python console runs with the project's interpreter, in the project folder
+                session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
+                string? startup = msg["startup"]?.GetValue<string>() is { Length: > 0 } st ? st : null;
+                if (startup != null) ResolveInRoot(startup);
+                session.StartConsole(root, startup);
             }
             else if (msg["type"]?.GetValue<string>() == "attach" && msg["pid"]?.GetValue<int>() is int attachPid)
             {

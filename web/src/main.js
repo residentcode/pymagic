@@ -10,6 +10,8 @@ import { setupEditorNav } from './editornav';
 import { setupCodeVision } from './codevision';
 import { setupCodeGen } from './codegen';
 import { setupSharedText } from './sharedtext';
+import { setupPythonConsole } from './pyconsole';
+import { setupDiagrams } from './diagram';
 import { setLiveTemplateSource } from './settings-ui';
 import { setupHierarchy } from './hierarchy';
 import { setupRoutes } from './routes';
@@ -950,6 +952,10 @@ async function main() {
         openIn: (ed, rel, sel) => split.openIn(ed, rel, sel),
     });
     setupInspections(lsp);
+    const pyConsole = setupPythonConsole({ editor, saveAll: common.saveAll, relOf: (model) => model && relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+    const diagrams = setupDiagrams({ lsp, relOfUri, currentUri: () => { const m = editor.getModel(); return m && m.getLanguageId() === 'python' ? serverUri.get(m) : null; },
+        openAt: (rel, line) => openFile(rel, new monaco.Range(line, 1, line, 1)) });
+    window.addEventListener('pymagic:diagram', (e) => void diagrams.open(e.detail));
     const codeGen = setupCodeGen();
     codeGen.attach(editor);
     setLiveTemplateSource(() => lsp.request('pymagic/templates', {}));
@@ -1099,6 +1105,7 @@ async function main() {
             codeVision.attach(e);
             editorNav.attach(e);
             codeGen.attach(e);
+            pyConsole.attach(e);
             fileActions.attachEditor(e, monaco, () => refactorMenu(e, refactor));
             return e;
         },

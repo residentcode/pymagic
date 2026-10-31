@@ -58,7 +58,7 @@ public class RunTests
             int id = ++_id;
             body["type"] = type; body["id"] = id;
             Session.Handle(body);
-            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", "values" => "values", "jump" => "jumped", "table" => "table", "setName" => "setName", "reprOf" => "reprOf", "typeSource" => "typeSource", _ => "evaluated" };
+            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", "values" => "values", "jump" => "jumped", "table" => "table", "setName" => "setName", "reprOf" => "reprOf", "typeSource" => "typeSource", "consoleExec" or "consoleRunFile" => "consoleDone", "consoleVars" => "consoleVars", "consoleComplete" => "consoleCompletions", _ => "evaluated" };
             return Next(e => e["type"]?.GetValue<string>() == reply && e["id"]?.GetValue<int>() == id);
         }
 
@@ -133,6 +133,34 @@ public class RunTests
         using var bad = new Harness();
         bad.Session.StartModule(bad.Root, "-c print(1)", false, Array.Empty<string>(), null);
         Assert.True(bad.Type("error")["message"]!.GetValue<string>().Contains("not a module name"));
+    }
+
+    [Fact]
+    public void ThePythonConsoleKeepsItsNamesAndShowsValues()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("start.py", "greeting = 'hi'\n");
+        h.Script("lib.py", "def double(n):\n    return 2 * n\n");
+        h.Session.StartConsole(h.Root, "start.py");
+        h.Type("consoleReady");
+        Assert.True(!h.Request("consoleExec", new JsonObject { ["code"] = "x = 21" })["more"]!.GetValue<bool>());
+        h.Request("consoleExec", new JsonObject { ["code"] = "x * 2" });
+        Assert.True(h.Request("consoleExec", new JsonObject { ["code"] = "def f():" })["more"]!.GetValue<bool>(), "a block goes on");
+        h.Request("consoleExec", new JsonObject { ["code"] = "def f():\n    return greeting + '!'\n" });
+        h.Request("consoleExec", new JsonObject { ["code"] = "print(f())\ny = 1" });   // two statements, as a selection sends them
+        h.Request("consoleRunFile", new JsonObject { ["path"] = Path.Combine(h.Root, "lib.py") });
+        h.Request("consoleExec", new JsonObject { ["code"] = "double(x)" });
+        h.Request("consoleExec", new JsonObject { ["code"] = "1/0" });
+        var vars = h.Request("consoleVars", new JsonObject())["vars"]!.AsArray().Select(v => $"{v!["name"]}:{v["type"]}:{v["value"]}").ToList();
+        Assert.True(vars.Contains("x:int:21") && vars.Contains("greeting:str:'hi'") && vars.Contains("y:int:1") && vars.Any(v => v.StartsWith("double:function")), string.Join(" ", vars));
+        var done = h.Request("consoleComplete", new JsonObject { ["text"] = "z = gree" });
+        Assert.Equal("gree", done["word"]!.GetValue<string>());
+        Assert.True(done["items"]!.AsArray().Any(i => i!.GetValue<string>() == "greeting"));
+        string output = h.AllOutput();
+        Assert.Contains("42", output);
+        Assert.Contains("hi!", output);
+        Assert.Contains("ZeroDivisionError", output);
     }
 
     [Fact]

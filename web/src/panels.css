@@ -390,3 +390,39 @@
 .np-kinds { display: flex; gap: 6px; flex-wrap: wrap; }
 .np-kinds button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .np-check { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* the Python console */
+#pyconsole-tab.active { display: flex; }
+#pyc-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#pyc-output { flex: 1; margin: 0; padding: 6px 10px; overflow: auto; white-space: pre-wrap; font: 12px Consolas, monospace; }
+#pyc-output .pyc-echo { color: var(--accent); }
+#pyc-output .err { color: var(--red); }
+#pyc-output .info { color: var(--dim); }
+#pyc-input { margin: 4px 8px 8px; resize: vertical; min-height: 36px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: 12px Consolas, monospace; }
+#pyc-side { width: 280px; border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+#pyc-vars { overflow: auto; font: 12px Consolas, monospace; }
+.pyc-var { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; padding: 2px 8px; white-space: nowrap; }
+.pyc-name { color: var(--fg); }
+.pyc-value { overflow: hidden; text-overflow: ellipsis; color: var(--dim); }
+.pyc-type { color: var(--dim); font-style: italic; }
+
+/* diagrams */
+.diagram-box { position: fixed; inset: 4% 4%; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line-strong, #555); border-radius: 8px; box-shadow: 0 10px 30px #0009; z-index: 70; }
+.diagram-bar { display: flex; gap: 6px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.diagram-title { flex: 1; font-weight: 600; }
+.diagram-view { flex: 1; overflow: auto; background: var(--bg); }
+.diagram-svg { display: block; margin: 0 auto; font: 12px Consolas, monospace; }
+.dg-node { cursor: pointer; }
+.dg-node rect { fill: var(--panel); stroke: var(--accent); stroke-width: 1.2; }
+.dg-node.dg-outside rect { stroke: var(--dim); stroke-dasharray: 4 3; }
+.dg-node.dg-module rect { stroke: var(--green, #5c5); }
+.dg-node.dg-model rect { stroke: var(--amber, #da5); }
+.dg-node:hover rect { stroke-width: 2.2; }
+.dg-label { fill: var(--fg); font-weight: 700; }
+.dg-member { fill: var(--dim); }
+.dg-sep { stroke: var(--line); }
+.dg-edge { stroke: var(--dim); stroke-width: 1.2; fill: none; }
+.dg-edge.dg-imports { stroke-dasharray: 5 4; }
+.dg-head-hollow { fill: var(--bg); stroke: var(--dim); }
+.dg-head-open { fill: none; stroke: var(--dim); stroke-width: 1.4; }
+.dg-edge-label { fill: var(--amber, #da5); font-size: 11px; }

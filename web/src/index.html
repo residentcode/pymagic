@@ -167,6 +167,7 @@
       <div id="tabs">
         <button id="t-output" class="active" title="Output"><svg class="i"><use href="#i-output"/></svg><span class="lbl">Output</span></button>
         <button id="t-debug" title="Debugger"><svg class="i"><use href="#i-debug"/></svg><span class="lbl">Debugger</span></button>
+        <button id="t-pyconsole" title="Python console: an interpreter that keeps its names (Alt+Shift+E sends the selection)"><svg class="i"><use href="#i-py"/></svg><span class="lbl">Python Console</span></button>
         <button id="t-terminal" title="Terminal (Ctrl+`)"><svg class="i"><use href="#i-terminal"/></svg><span class="lbl">Terminal</span></button>
         <button id="t-tests" title="Tests"><svg class="i"><use href="#i-tests"/></svg><span class="lbl">Tests</span></button>
         <button id="t-coverage" title="Coverage"><svg class="i"><use href="#i-shield"/></svg><span class="lbl">Coverage</span></button>
@@ -402,6 +403,23 @@
             <span id="hier-modes"></span>
           </div>
           <div class="body" id="hier-tree"></div>
+        </div>
+      </div>
+      <div id="pyconsole-tab" class="tab">
+        <div class="col" id="pyc-main">
+          <div class="listbar">
+            <span>Python console</span>
+            <span class="spacer" style="flex:1"></span>
+            <button id="pyc-clear" title="Clear the output">Clear</button>
+            <button id="pyc-stop" title="Stop the console"><svg class="i"><use href="#i-stop"/></svg></button>
+            <button id="pyc-restart" title="Start the console again (its names are lost)"><svg class="i"><use href="#i-refresh"/></svg> Restart</button>
+          </div>
+          <pre class="body" id="pyc-output"></pre>
+          <textarea id="pyc-input" rows="2" spellcheck="false" placeholder=">>> Python code (Enter runs it, Shift+Enter for another line)"></textarea>
+        </div>
+        <div class="col" id="pyc-side">
+          <div class="listbar"><span>Variables</span></div>
+          <div class="body" id="pyc-vars"></div>
         </div>
       </div>
       <div id="history-tab" class="tab">

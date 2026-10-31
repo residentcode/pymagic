@@ -18,6 +18,7 @@ public sealed class RunSession : IDisposable
     {
         "setBreakpoints", "setExceptionBreak", "mute", "continue", "next", "stepIn", "stepInto", "stepOut", "runTo", "jump", "scopes", "variables",
         "values", "table", "evaluate", "setVariable", "setName", "reprOf", "typeSource", "setLoadPolicy",
+        "consoleExec", "consoleRunFile", "consoleVars", "consoleComplete",
     };
 
     readonly Action<JsonNode> _emit;
@@ -60,6 +61,19 @@ public sealed class RunSession : IDisposable
         IReadOnlyDictionary<string, List<int>>? breakpoints = null) =>
         StartWithBreakpoints(root, script, debug, args,
             breakpoints?.ToDictionary(kv => kv.Key, kv => new JsonArray(kv.Value.Select(l => (JsonNode)l).ToArray())));
+
+    /// <summary>The Python console: an interpreter that keeps its names, sent code by the page (pm_console.py), with a starting script when given.</summary>
+    public void StartConsole(string root, string? startupScript = null)
+    {
+        _root = root;
+        var leading = new List<string>();
+        if (startupScript != null && File.Exists(Path.Combine(root, startupScript)))
+        {
+            leading.Add("--startup");
+            leading.Add(Path.GetFullPath(Path.Combine(root, startupScript)));
+        }
+        Launch(root, true, leading, Array.Empty<string>(), null, "pm_console.py");
+    }
 
     /// <summary>Runs or debugs `python -m module args` (a configuration of uvicorn, flask, pytest or any module).</summary>
     public void StartModule(string root, string module, bool debug, IReadOnlyList<string> args, IReadOnlyDictionary<string, JsonArray>? breakpoints)

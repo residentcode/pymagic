@@ -4,13 +4,28 @@ using System.Text.RegularExpressions;
 namespace PyMagic.Server;
 
 /// <summary>A shell the Terminal panel can start: its id (what the settings keep), its name, the command line, and variables it needs.</summary>
-public sealed record ConsoleShell(string Id, string Name, string CommandLine, IReadOnlyDictionary<string, string>? Environment = null);
+/// <param name="VenvArgs">Added to the command line while a virtual environment is active, with {prompt} for its name (PowerShell's prompt).</param>
+/// <param name="VenvEnv">Variables set while one is active, with {prompt} (cmd's PROMPT).</param>
+public sealed record ConsoleShell(string Id, string Name, string CommandLine, IReadOnlyDictionary<string, string>? Environment = null,
+    string? VenvArgs = null, IReadOnlyDictionary<string, string>? VenvEnv = null)
+{
+    /// <summary>The command line and the variables for a terminal whose virtual environment is called <paramref name="prompt"/> (null: none is active).</summary>
+    public (string CommandLine, Dictionary<string, string> Environment) WithVenv(string? prompt)
+    {
+        var env = new Dictionary<string, string>(Environment ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
+        if (prompt == null) return (CommandLine, env);
+        foreach (var (k, v) in VenvEnv ?? new Dictionary<string, string>()) env[k] = v.Replace("{prompt}", prompt);
+        env["VIRTUAL_ENV_PROMPT"] = prompt;
+        return (string.IsNullOrEmpty(VenvArgs) ? CommandLine : CommandLine + " " + VenvArgs.Replace("{prompt}", prompt), env);
+    }
+}
 
 /// <summary>
 /// An entry of the shell list (Run/shells.json): where the program may be, first match wins. A place is a path with %VARIABLES%,
 /// "path:name.exe" (searched on the PATH), or "path:name.exe>relative" (a file relative to the folder of one found on the PATH).
 /// </summary>
-public sealed record ShellProfile(string Id, string Name, string[] Find, string? Args = null, Dictionary<string, string>? Env = null);
+public sealed record ShellProfile(string Id, string Name, string[] Find, string? Args = null, Dictionary<string, string>? Env = null,
+    string? VenvArgs = null, Dictionary<string, string>? VenvEnv = null);
 
 /// <summary>
 /// The shells found on this PC for the Terminal panel, from the list in Run/shells.json. The page names one by its id and the engine starts
@@ -77,7 +92,7 @@ public static class ConsoleShells
         {
             if (profile.Find.Select(Place).FirstOrDefault(p => p != null) is not { } program) continue;
             var command = Quote(program) + (string.IsNullOrEmpty(profile.Args) ? "" : " " + profile.Args);
-            shells.Add(new(profile.Id, profile.Name, command, profile.Env));
+            shells.Add(new(profile.Id, profile.Name, command, profile.Env, profile.VenvArgs, profile.VenvEnv));
         }
         return shells;
     }
@@ -92,4 +107,25 @@ public static class ConsoleShells
     }
 
     static string Quote(string path) => path.Contains(' ') ? $"\"{path}\"" : path;
+
+    /// <summary>
+    /// The name a terminal's prompt shows for a virtual environment: the `prompt` of its pyvenv.cfg, else its folder's name; only letters,
+    /// digits, spaces, dots, dashes and underscores, since it goes into a command line.
+    /// </summary>
+    public static string? VenvPrompt(string? venvFolder, Func<string, string?>? readConfig = null)
+    {
+        if (string.IsNullOrEmpty(venvFolder)) return null;
+        readConfig ??= path => File.Exists(path) ? File.ReadAllText(path) : null;
+        string? name = null;
+        try
+        {
+            if (readConfig(Path.Combine(venvFolder, "pyvenv.cfg")) is { } cfg)
+                foreach (var line in cfg.Split('\n'))
+                    if (line.Split('=', 2) is [var k, var v] && k.Trim() == "prompt") name = v.Trim().Trim('\'', '"');
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        name ??= Path.GetFileName(venvFolder.TrimEnd('\\', '/'));
+        string clean = new string(name.Where(c => char.IsLetterOrDigit(c) || c is ' ' or '.' or '-' or '_').ToArray()).Trim();
+        return clean.Length == 0 ? "venv" : clean;
+    }
 }

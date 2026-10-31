@@ -229,6 +229,10 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 { label: 'Run the failed tests again', run: () => { $('t-tests').click(); $('tests-rerun').click(); }, disabled: $('tests-rerun').disabled },
             ] },
             { label: 'Tools', submenu: [
+                { label: 'Python console', run: dock('pyconsole') },
+                { label: 'Diagrams', submenu: [['file', 'Classes of this file'], ['classes', 'Classes of the project'], ['modules', 'Modules and imports'], ['models', 'Django models']]
+                    .map(([kind, label]) => ({ label, run: () => window.dispatchEvent(new CustomEvent('pymagic:diagram', { detail: kind })) })) },
+                '-',
                 { label: 'Python interpreter…', run: () => openSettings('python') },
                 { label: 'Create a .venv…', run: press('b-venv') },
                 { label: 'WSL, Docker or SSH interpreter…', run: press('b-remote') },
