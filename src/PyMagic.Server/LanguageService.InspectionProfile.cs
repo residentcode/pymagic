@@ -32,6 +32,14 @@ public sealed partial class LanguageService
         ("mutable-default", "Python", "Mutable default argument", "A list, dict or set shared by every call.", "warning"),
         ("none-comparison", "Python", "Comparison with None using ==", "Use 'is None' or 'is not None'.", "warning"),
         ("self-assignment", "Python", "Assignment to itself", "x = x does nothing.", "warning"),
+        ("class-no-init", "Python classes", "Class has no __init__", "A class that defines no __init__ and derives from no class that does (dataclasses, enums, named tuples and protocols left out).", "off"),
+        ("decorator-outside-class", "Python", "Decorator meant for classes used outside one", "@classmethod or @staticmethod on a function that is not in a class body.", "warning"),
+        ("decorator-nesting", "Python", "Problematic nesting of decorators", "@classmethod or @staticmethod applied before another decorator, which then receives the descriptor instead of the function.", "warning"),
+        ("relative-import", "Python", "Suspicious relative import", "A relative import in a module outside any package, or in a folder without __init__.py.", "warning"),
+        ("open-encoding", "Python", "open() without an encoding", "open() in text mode with no encoding reads and writes with the system's own (cp1252 on Windows).", "weak"),
+        ("docstring-quotes", "Python", "Docstring not in triple double quotes", "A docstring in single quotes or in '''...'''.", "weak"),
+        ("missing-docstring", "Python", "Missing or empty docstring", "A public module, class, function or method without a docstring, or with an empty one.", "off"),
+        ("missing-type-hint", "Python", "Missing type hints", "A function with a parameter (self and cls aside) or a return without an annotation.", "off"),
         ("missing-super-init", "Python classes", "Missing call to super().__init__()", "An __init__ that does not call the one of its base class.", "warning"),
         ("unimplemented-abstract", "Python classes", "Abstract methods not implemented", "A concrete class that leaves abstract methods open.", "warning"),
         ("statement-effect", "Python", "Statement has no effect", "An expression statement that only computes a value nobody uses.", "weak"),
@@ -205,6 +213,9 @@ public sealed partial class LanguageService
     /// <summary>The URIs of every open document, Python and templates.</summary>
     public IEnumerable<string> AllOpenUris => _docs.Keys.Concat(_templateDocs.Keys);
 
+    /// <summary>The inspections a project turns on itself (as in PyCharm: missing docstrings, missing type hints).</summary>
+    static readonly HashSet<string> OffByDefault = InspectionCatalog.Where(i => i.Default == "off").Select(i => i.Code).ToHashSet(StringComparer.Ordinal);
+
     /// <summary>The severity an inspection has without a profile: the default of its catalog entry.</summary>
     static int DefaultSeverity(string? code) =>
         code != null && InspectionCatalog.FirstOrDefault(i => i.Code == code) is { Code: not null } entry ? SeverityOf(entry.Default) : Severity.Warning;
@@ -215,11 +226,12 @@ public sealed partial class LanguageService
     List<Diag> ApplyProfile(List<Diag> diagnostics)
     {
         var profile = InspectionProfile();
-        if (profile.Count == 0) return diagnostics;
+        if (profile.Count == 0 && !diagnostics.Any(d => d.Code != null && OffByDefault.Contains(d.Code))) return diagnostics;
         var result = new List<Diag>(diagnostics.Count);
         foreach (var d in diagnostics)
         {
-            if (d.Code == null || !profile.TryGetValue(d.Code, out var level)) { result.Add(d); continue; }
+            if (d.Code == null) { result.Add(d); continue; }
+            if (!profile.TryGetValue(d.Code, out var level)) { if (!OffByDefault.Contains(d.Code)) result.Add(d); continue; }
             if (level == "off") continue;
             int severity = SeverityOf(level);
             // the greyed-out look belongs to the "unused" inspections shown as hints
@@ -231,11 +243,12 @@ public sealed partial class LanguageService
     IReadOnlyList<LspDiagnostic> ApplyTemplateProfile(List<LspDiagnostic> found)
     {
         var profile = InspectionProfile();
-        if (profile.Count == 0) return found;
+        if (profile.Count == 0 && !found.Any(d => d.Code != null && OffByDefault.Contains(d.Code))) return found;
         var kept = new List<LspDiagnostic>();
         foreach (var d in found)
         {
-            if (d.Code == null || !profile.TryGetValue(d.Code, out var level)) { kept.Add(d); continue; }
+            if (d.Code == null) { kept.Add(d); continue; }
+            if (!profile.TryGetValue(d.Code, out var level)) { if (!OffByDefault.Contains(d.Code)) kept.Add(d); continue; }
             if (level != "off") kept.Add(d with { Severity = SeverityOf(level) });
         }
         return kept;
