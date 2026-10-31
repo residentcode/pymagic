@@ -563,7 +563,9 @@ app.MapPost("/api/newproject", async (HttpRequest req) =>
     var b = await JsonNode.ParseAsync(req.Body);
     string? Str(string k) => b?[k]?.GetValue<string>();
     var request = new NewProjectRequest(Str("location") ?? "", Str("kind") ?? "python", b?["git"]?.GetValue<bool>() == true, b?["welcome"]?.GetValue<bool>() == true,
-        Str("environment") ?? "none", Str("python"), Str("uvPath"), Str("pythonVersion"));
+        Str("environment") ?? "none", Str("python"), Str("uvPath"), Str("pythonVersion"),
+        b?["django"] is JsonObject dj ? new DjangoProjectOptions(dj["templateLanguage"]?.GetValue<string>() ?? "django", dj["templatesFolder"]?.GetValue<string>() ?? "templates",
+            dj["appName"]?.GetValue<string>(), dj["admin"]?.GetValue<bool>() != false) : null);
     try { return Results.Json(await Task.Run(() => NewProject.Create(request))); }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.BadRequest(new { error = e.Message }); }

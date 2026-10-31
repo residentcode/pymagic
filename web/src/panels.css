@@ -431,3 +431,4 @@
 .dj-hints { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 6px; }
 .dj-hint { font: 12px Consolas, monospace; padding: 1px 6px; }
 .dj-help { margin: 0; padding: 6px 8px; max-height: 220px; overflow: auto; width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; font: 12px Consolas, monospace; white-space: pre-wrap; }
+.np-django { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px; border-left: 2px solid var(--accent); }

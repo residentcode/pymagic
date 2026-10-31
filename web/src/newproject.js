@@ -7,7 +7,7 @@ const KINDS = [
     ['python', 'Pure Python', 'A folder with a welcome script, if you want one.'],
     ['fastapi', 'FastAPI', 'main.py with two endpoints, requests to try them, and requirements.txt.'],
     ['flask', 'Flask', 'app.py, templates and static folders, and requirements.txt.'],
-    ['django', 'Django', 'manage.py and the project package (settings, urls, wsgi, asgi), a templates folder and requirements.txt.'],
+    ['django', 'Django', 'manage.py and the project package (settings, urls, wsgi, asgi), a templates folder, a first app if you name one, and requirements.txt.'],
     ['jupyter', 'Jupyter', 'A first notebook and requirements.txt.'],
 ];
 
@@ -35,6 +35,12 @@ export async function openNewProject() {
       <p class="set-note" id="np-kind-note"></p>
       <label class="np-check"><input type="checkbox" id="np-git" checked> Create a Git repository</label>
       <label class="np-check" id="np-welcome-row"><input type="checkbox" id="np-welcome" checked> Create a welcome script (main.py)</label>
+      <div id="np-django" class="np-django" style="display:none">
+        <label class="np-check">Template language <select id="np-dj-lang"><option value="django">Django</option><option value="jinja2">Jinja2</option></select></label>
+        <label class="np-check">Templates folder <input id="np-dj-folder" value="templates" spellcheck="false"></label>
+        <label class="np-check">First app <input id="np-dj-app" placeholder="none (an app's name, such as shop)" spellcheck="false"></label>
+        <label class="np-check"><input type="checkbox" id="np-dj-admin" checked> The admin (django.contrib.admin and its URL)</label>
+      </div>
       <h4>Interpreter</h4>
       <label class="np-check"><input type="radio" name="np-env" value="venv" checked> A project venv (.venv), made by <select id="np-base"></select></label>
       <label class="np-check"><input type="radio" name="np-env" value="uv"> uv: <input id="np-uv" value="uv" spellcheck="false" title="The uv program, or its path"> Python <input id="np-version" placeholder="3.13" spellcheck="false" size="6"></label>
@@ -58,6 +64,7 @@ export async function openNewProject() {
             for (const x of $('np-kinds').children) x.classList.toggle('active', x === b);
             $('np-kind-note').textContent = note;
             $('np-welcome-row').style.display = id === 'python' ? '' : 'none';
+            $('np-django').style.display = id === 'django' ? '' : 'none';
         };
         $('np-kinds').append(b);
     }
@@ -92,6 +99,7 @@ export async function openNewProject() {
             location: location.value.trim(), kind, git: $('np-git').checked, welcome: $('np-welcome').checked, environment,
             python: environment === 'venv' ? $('np-base').value : environment === 'interpreter' ? $('np-existing').value : undefined,
             uvPath: $('np-uv').value, pythonVersion: $('np-version').value,
+            django: kind === 'django' ? { templateLanguage: $('np-dj-lang').value, templatesFolder: $('np-dj-folder').value.trim() || 'templates', appName: $('np-dj-app').value.trim() || undefined, admin: $('np-dj-admin').checked } : undefined,
         };
         $('np-create').disabled = true;
         $('np-status').textContent = environment === 'none' ? 'Creating…' : 'Creating the project and its environment…';

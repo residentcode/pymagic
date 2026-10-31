@@ -32,6 +32,44 @@ public class NewProjectTests
     }
 
     [Fact]
+    public void ADjangoProjectWithItsTemplateLanguageFolderFirstAppAndAdmin()
+    {
+        var files = NewProject.Files("django", "Shop", true, new DjangoProjectOptions("jinja2", "site/tpl", "Blog Posts", Admin: false));
+        Assert.Equal("manage.py,shop/__init__.py,shop/settings.py,shop/urls.py,shop/wsgi.py,shop/asgi.py,site/tpl/.gitkeep," +
+            "blog_posts/__init__.py,blog_posts/apps.py,blog_posts/models.py,blog_posts/views.py,blog_posts/tests.py,blog_posts/migrations/__init__.py,requirements.txt", string.Join(",", files.Keys));
+        string settings = files["shop/settings.py"];
+        Assert.True(settings.Contains("\"BACKEND\": \"django.template.backends.jinja2.Jinja2\",\n        \"DIRS\": [BASE_DIR / \"site/tpl\"]"), settings);
+        Assert.True(settings.Contains("django.template.backends.django.DjangoTemplates\",\n        \"DIRS\": []"));
+        Assert.True(!settings.Contains("django.contrib.admin") && settings.Contains("    \"blog_posts\",\n]"));
+        Assert.True(!files["shop/urls.py"].Contains("admin"));
+        Assert.True(files["blog_posts/apps.py"].Contains("class BlogPostsConfig(AppConfig):"));
+        Assert.Equal("django\njinja2\n", files["requirements.txt"]);
+        // the defaults are what startproject makes, with the admin
+        var plain = NewProject.Files("django", "Shop", true);
+        Assert.True(plain["shop/settings.py"].Contains("\"django.contrib.admin\"") && plain["shop/urls.py"].Contains("admin.site.urls") && plain.ContainsKey("templates/.gitkeep"));
+        try { NewProject.Files("django", "shop", true, new DjangoProjectOptions(AppName: "shop")); throw new AssertionException("no error"); }
+        catch (ServiceException) { }
+        foreach (var (path, text) in files)
+            if (path.EndsWith(".py")) Assert.Equal(0, Parser.Parse(text).Diagnostics.Count);
+
+        // with Django on the computer, Django's own check passes on what was made
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_DJANGO") is not { Length: > 0 } python) return;
+        string folder = TempFolder();
+        try
+        {
+            NewProject.Create(new NewProjectRequest(folder, "django", false, false, "none", null, null, null, new DjangoProjectOptions("django", "templates", "blog", Admin: false)));
+            var psi = new ProcessStartInfo(python) { WorkingDirectory = folder, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+            psi.ArgumentList.Add("manage.py");
+            psi.ArgumentList.Add("check");
+            using var p = Process.Start(psi)!;
+            string output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+            p.WaitForExit(60000);
+            Assert.True(p.ExitCode == 0 && output.Contains("no issues"), output);
+        }
+        finally { try { Directory.Delete(Path.GetDirectoryName(folder)!, true); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+    }
+
+    [Fact]
     public void MakesTheFolderWithGitAndRefusesOneThatIsNotEmpty()
     {
         string folder = TempFolder();
