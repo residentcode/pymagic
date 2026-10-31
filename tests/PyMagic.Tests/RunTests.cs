@@ -164,6 +164,35 @@ public class RunTests
     }
 
     [Fact]
+    public void ABreakpointInADjangoTemplateStopsWithItsVariables()
+    {
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_DJANGO") is not { Length: > 0 } python) return;
+        using var h = new Harness();
+        Directory.CreateDirectory(Path.Combine(h.Root, "templates"));
+        File.WriteAllText(Path.Combine(h.Root, "templates", "page.html"), "<h1>{{ title }}</h1>\n<p>{{ count }} items</p>\n<footer>\nplain text\n</footer>\n");
+        h.Script("show.py", "import django\nfrom django.conf import settings\n" +
+            "settings.configure(TEMPLATES=[{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'DIRS': ['templates']}])\n" +
+            "django.setup()\nfrom django.template.loader import render_to_string\n" +
+            "print(render_to_string('page.html', {'title': 'Shop', 'count': 3}).strip())\n");
+        h.Session.Python = python;
+        h.Session.StartWithBreakpoints(h.Root, "show.py", true, Array.Empty<string>(),
+            new Dictionary<string, JsonArray> { ["templates/page.html"] = new JsonArray(2, 4) });
+        var stopped = h.Type("stopped");
+        Assert.True(stopped["frames"]![0]!["file"]!.GetValue<string>().EndsWith("page.html"), stopped.ToJsonString());
+        Assert.Equal(2, Line(stopped));
+        var scopes = h.Request("scopes", new JsonObject { ["frameId"] = 0 })["scopes"]!.AsArray();
+        var locals = h.Request("variables", new JsonObject { ["ref"] = scopes.First(s => s!["name"]!.GetValue<string>() == "Locals")!["ref"]!.GetValue<int>() })["items"]!.AsArray()
+            .Select(v => $"{v!["name"]}={v["value"]}").ToList();
+        Assert.True(locals.Contains("title='Shop'") && locals.Contains("count=3") && !locals.Any(l => l.StartsWith("_pm_")), string.Join(" ", locals));
+        // a line of plain HTML (inside a text node that starts on line 2) stops too
+        h.Command("continue");
+        Assert.Equal(4, Line(h.Type("stopped")));
+        h.Command("continue");
+        h.Next(e => e["type"]?.GetValue<string>() == "exited", 90000);
+        Assert.Contains("<p>3 items</p>", h.AllOutput());
+    }
+
+    [Fact]
     public void TheDjangoConsoleHasDjangoSetUp()
     {
         if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_DJANGO") is not { Length: > 0 } python) return;

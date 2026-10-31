@@ -25,6 +25,11 @@ const options = {
   entryPoints: {
     main: 'src/main.js',
     'editor.worker': 'node_modules/monaco-editor/esm/vs/editor/editor.worker.js',
+    // the language services of HTML (templates), CSS and JavaScript / TypeScript / JSON
+    'html.worker': 'node_modules/monaco-editor/esm/vs/language/html/html.worker.js',
+    'css.worker': 'node_modules/monaco-editor/esm/vs/language/css/css.worker.js',
+    'ts.worker': 'node_modules/monaco-editor/esm/vs/language/typescript/ts.worker.js',
+    'json.worker': 'node_modules/monaco-editor/esm/vs/language/json/json.worker.js',
   },
   bundle: true,
   format: 'iife',

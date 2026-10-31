@@ -31,6 +31,7 @@ import builtins
 import contextlib
 import io
 import json
+import keyword
 import os
 import queue
 import re
@@ -179,7 +180,144 @@ class Debugger(bdb.Bdb):
 
     HIT_CONDITION = re.compile(r"^\s*(==|>=|<=|>|<|%)?\s*(\d+)\s*$")
 
+    # ---------------------------------------------------------------- breakpoints in Django templates
+
+    TEMPLATE_SUFFIXES = (".html", ".htm", ".txt", ".xml", ".jinja", ".jinja2", ".j2")
+    template_breaks = None      # normcase(abspath) -> set of lines
+    template_place = None       # (path, line) while stopped in a template
+    last_template_stop = None   # (path, line, context): one stop for the nodes of one line in one rendering
+    templates_hooked = False
+
+    def apply_template_breakpoints(self, filename, lines):
+        if self.template_breaks is None:
+            self.template_breaks = {}
+        path = os.path.normcase(os.path.abspath(filename))
+        wanted = set()
+        for item in lines:
+            spec = item if isinstance(item, dict) else {"line": item}
+            if spec.get("enabled", True) is not False:
+                wanted.add(int(spec.get("line", 0)))
+        if wanted:
+            self.template_breaks[path] = wanted
+        else:
+            self.template_breaks.pop(path, None)
+        self.hook_templates()
+
+    def hook_templates(self):
+        """Django's template nodes are wrapped once django.template.base is imported (now, or when the program imports it)."""
+        if self.templates_hooked:
+            return
+        self.templates_hooked = True
+        if "django.template.base" in sys.modules:
+            self.patch_templates(sys.modules["django.template.base"])
+            return
+        debugger = self
+
+        class Finder:
+            def find_spec(self, name, path=None, target=None):
+                if name != "django.template.base":
+                    return None
+                import importlib.util
+                sys.meta_path.remove(self)
+                try:
+                    spec = importlib.util.find_spec(name)
+                finally:
+                    sys.meta_path.insert(0, self)
+                if spec is None or spec.loader is None:
+                    return spec
+                original = spec.loader.exec_module
+
+                def exec_module(module):
+                    original(module)
+                    debugger.patch_templates(module)
+                spec.loader.exec_module = exec_module
+                return spec
+        sys.meta_path.insert(0, Finder())
+
+    def patch_templates(self, module):
+        node_class = getattr(module, "Node", None)
+        if node_class is None or getattr(node_class, "_pm_wrapped", False):
+            return
+        node_class._pm_wrapped = True
+        # Node's own, and TextNode's (which renders its text without Node's)
+        for cls in (node_class, getattr(module, "TextNode", None)):
+            if cls is not None and "render_annotated" in vars(cls):
+                self.wrap_render(cls)
+
+    def wrap_render(self, cls):
+        original = cls.render_annotated
+        debugger = self
+
+        def render_annotated(node, context):
+            place = debugger.template_hit(node, context)
+            if place is not None:
+                # the stop runs untraced: called from traced code, the debugger's own lines would be traced too, and resuming
+                # (setting the event other threads wait on) would then wait on itself
+                trace = sys.gettrace()
+                sys.settrace(None)
+                try:
+                    debugger.stop_in_template(place, context)
+                finally:
+                    sys.settrace(trace)
+            return original(node, context)
+        cls.render_annotated = render_annotated
+
+    def template_hit(self, node, context):
+        """(file, line) when a breakpoint is on the line of the node being rendered, the first node of that line in this rendering."""
+        if not self.template_breaks or self.muted:
+            return None
+        try:
+            name = getattr(getattr(node, "origin", None), "name", None)
+            token = getattr(node, "token", None)
+            if not name or token is None:
+                return None
+            path = os.path.normcase(os.path.abspath(name))
+            # a text node spans lines (the HTML between two tags): a breakpoint on any of them stops there
+            last = token.lineno + (token.contents.count("\n") if getattr(token, "token_type", None) is not None and token.token_type.name == "TEXT" else 0)
+            lines = [n for n in sorted(self.template_breaks.get(path, ())) if token.lineno <= n <= last]
+            # the line just stopped at (the node before, on the same line) is not stopped at again
+            lines = [n for n in lines if (path, n, id(context)) != self.last_template_stop]
+            if not lines:
+                return None
+            line = lines[0]
+            key = (path, line, id(context))
+            self.last_template_stop = key
+            return (os.path.abspath(name), line)
+        except Exception:
+            return None
+
+    _template_frames = {}
+
+    def stop_in_template(self, place, context):
+        # the template's names become the locals of a frame made for them, so the Variables pane shows them as any frame's
+        try:
+            values = {k: v for k, v in context.flatten().items() if isinstance(k, str) and k.isidentifier() and not keyword.iskeyword(k) and not k.startswith("_pm_")}
+        except Exception:
+            values = {}
+        names = tuple(sorted(values))
+        make = self._template_frames.get(names)
+        if make is None:
+            source = "def template_frame(_pm_debugger, _pm_place%s):\n    _pm_debugger.template_stop(sys._getframe(), _pm_place)\n" % "".join(", " + n for n in names)
+            space = {"sys": sys}
+            exec(compile(source, "<template>", "exec"), space)
+            make = self._template_frames[names] = space["template_frame"]
+        make(self, place, **values)
+
+    def template_stop(self, frame, place):
+        with self.stop_lock:
+            self.stack = self.collect(frame)
+            self.template_place = place
+            try:
+                self.stop("stopped", "breakpoint")
+            finally:
+                self.template_place = None
+        # a step from a template goes on to the next stop: the template has no lines of Python to step through
+        self.set_continue()
+
     def apply_breakpoints(self, filename, lines):
+        if filename.lower().endswith(self.TEMPLATE_SUFFIXES):
+            self.apply_template_breakpoints(filename, lines)
+            return
         path = os.path.abspath(filename)
         try:
             self.clear_all_file_breaks(path)
@@ -373,9 +511,14 @@ class Debugger(bdb.Bdb):
     # ---------------------------------------------------------------- stopped state
 
     def frames_payload(self):
-        return [{"id": i, "name": f.f_code.co_name, "file": os.path.abspath(f.f_code.co_filename)
-                 if not f.f_code.co_filename.startswith("<") else f.f_code.co_filename, "line": line,
-                 "first": f.f_code.co_firstlineno} for i, (f, line) in enumerate(self.stack)]
+        frames = [{"id": i, "name": f.f_code.co_name, "file": os.path.abspath(f.f_code.co_filename)
+                   if not f.f_code.co_filename.startswith("<") else f.f_code.co_filename, "line": line,
+                   "first": f.f_code.co_firstlineno} for i, (f, line) in enumerate(self.stack)]
+        if self.template_place and frames:
+            # stopped in a template: its top frame is the template's line (the frame of its variables), the helper's own frames left out
+            frames[0].update({"name": "template", "file": self.template_place[0], "line": self.template_place[1], "first": self.template_place[1]})
+            frames = [frames[0]] + [f for f in frames[1:] if not f["file"].endswith("pm_debug.py")]
+        return frames
 
     reader_ident = None   # the thread that reads the host's messages: never traced, never held
 
@@ -477,7 +620,7 @@ class Debugger(bdb.Bdb):
 
     def scopes(self, frame_id):
         frame = self.stack[frame_id][0]
-        local_items = [(k, v) for k, v in frame.f_locals.items()]
+        local_items = [(k, v) for k, v in frame.f_locals.items() if not k.startswith("_pm_")]
         global_items = [(k, v) for k, v in frame.f_globals.items() if not (k.startswith("__") and k.endswith("__"))]
         result = []
         if frame_id == 0 and self.returns:

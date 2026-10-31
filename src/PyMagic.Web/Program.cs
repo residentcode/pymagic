@@ -411,6 +411,61 @@ app.MapPost("/api/http", async (HttpRequest req) =>
     catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return Results.BadRequest(new { error = e is TaskCanceledException ? "no answer in 30 seconds" : e.Message + " (is the server running?)" }); }
 });
 
+// the live preview of templates: the server running on this computer, relayed under /preview/ so the page can show it in a frame
+// (Django forbids frames by default, and its pages link to /static/... of their own server): the frame refusal is dropped and the
+// page's own links are pointed back through /preview/
+string? previewBase = null;
+app.MapPost("/api/preview/base", async (HttpRequest req) =>
+{
+    var b = await JsonNode.ParseAsync(req.Body);
+    if (!Uri.TryCreate(b?["url"]?.GetValue<string>() ?? "", UriKind.Absolute, out var url) || url.Scheme is not ("http" or "https") || !url.IsLoopback)
+        return Results.BadRequest(new { error = "a server on this computer (http://127.0.0.1:8000)" });
+    previewBase = url.GetLeftPart(UriPartial.Authority);
+    return Results.NoContent();
+});
+app.Map("/preview/{**rest}", async (HttpContext ctx, string? rest) =>
+{
+    if (previewBase == null) { ctx.Response.StatusCode = 409; await ctx.Response.WriteAsync("No server address: set it in the preview."); return; }
+    var target = new Uri(previewBase + "/" + (rest ?? "") + ctx.Request.QueryString);
+    var message = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), target);
+    if (ctx.Request.ContentLength > 0 || ctx.Request.Headers.ContainsKey("Transfer-Encoding"))
+    {
+        var ms = new MemoryStream();
+        await ctx.Request.Body.CopyToAsync(ms);
+        message.Content = new ByteArrayContent(ms.ToArray());
+        if (ctx.Request.ContentType is { } ct) message.Content.Headers.TryAddWithoutValidation("Content-Type", ct);
+    }
+    foreach (var h in ctx.Request.Headers)
+        if (h.Key is "Cookie" or "Accept" or "Accept-Language" or "X-CSRFToken" or "Referer")
+            message.Headers.TryAddWithoutValidation(h.Key, h.Key == "Referer" ? previewBase + "/" : h.Value.ToString());
+    try
+    {
+        using var res = await httpClient.SendAsync(message);
+        ctx.Response.StatusCode = (int)res.StatusCode;
+        foreach (var h in res.Headers.Concat(res.Content.Headers))
+        {
+            if (h.Key is "X-Frame-Options" or "Content-Security-Policy" or "Transfer-Encoding" or "Content-Length" or "Connection") continue;
+            ctx.Response.Headers[h.Key] = h.Key == "Location" ? new Microsoft.Extensions.Primitives.StringValues(h.Value.Select(v => v.StartsWith('/') ? "/preview" + v : v.Replace(previewBase, "/preview")).ToArray()) : new Microsoft.Extensions.Primitives.StringValues(h.Value.ToArray());
+        }
+        var bytes = await res.Content.ReadAsByteArrayAsync();
+        if (res.Content.Headers.ContentType?.MediaType is "text/html" or "text/css")
+        {
+            // the page's own absolute links go through the preview too: href="/x", src='/x', action="/x", url(/x)
+            string text = System.Text.Encoding.UTF8.GetString(bytes);
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"((?:href|src|action)\s*=\s*[""'])/(?!/|preview/)", "$1/preview/");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"url\((['""]?)/(?!/|preview/)", "url($1/preview/");
+            bytes = System.Text.Encoding.UTF8.GetBytes(text);
+        }
+        await ctx.Response.Body.WriteAsync(bytes);
+    }
+    catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+    {
+        ctx.Response.StatusCode = 502;
+        ctx.Response.ContentType = "text/html; charset=utf-8";
+        await ctx.Response.WriteAsync($"<p style=\"font:14px sans-serif;color:#888\">The server at {System.Net.WebUtility.HtmlEncode(previewBase)} does not answer: is it running?</p>");
+    }
+});
+
 app.MapPost("/api/regex", async (HttpRequest req) =>
 {
     string body = await new StreamReader(req.Body).ReadToEndAsync();

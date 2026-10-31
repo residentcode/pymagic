@@ -451,3 +451,10 @@
 .openapi-all { max-height: 60vh; }
 .route-origin { font-size: 11px; padding: 0 5px; border-radius: 3px; border: 1px solid var(--line); color: var(--dim); }
 .route-library .rpath, .route-test .rpath { opacity: .8; }
+
+/* the live preview of templates */
+#tpreview-tab.active { display: flex; }
+#tp-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#tp-bar { gap: 4px; }
+#tp-base { width: 170px; } #tp-path { flex: 1; min-width: 120px; }
+#tp-frame { flex: 1; border: 0; background: #fff; width: 100%; }

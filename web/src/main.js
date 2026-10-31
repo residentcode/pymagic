@@ -13,6 +13,8 @@ import { setupSharedText } from './sharedtext';
 import { setupPythonConsole } from './pyconsole';
 import { setupDiagrams } from './diagram';
 import { setupTemplateLinks } from './templatelinks';
+import { setupEmbedded } from './embedded';
+import { setupTemplatePreview } from './templatepreview';
 import { addModelAdmin, addModelSerializer } from './django-model';
 import { setLiveTemplateSource } from './settings-ui';
 import { setupHierarchy } from './hierarchy';
@@ -45,7 +47,14 @@ import { setupFileActions, fileTypes } from './fileactions';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
 import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings } from './settings';
-self.MonacoEnvironment = { getWorker: () => new Worker('editor.worker.js') };
+// each language service runs in its worker; the rest share the editor's
+self.MonacoEnvironment = {
+    getWorker: (_id, label) => new Worker(
+        ['html', 'handlebars', 'razor', 'django-html'].includes(label) ? 'html.worker.js'
+            : ['css', 'scss', 'less'].includes(label) ? 'css.worker.js'
+                : ['typescript', 'javascript'].includes(label) ? 'ts.worker.js'
+                    : label === 'json' ? 'json.worker.js' : 'editor.worker.js'),
+};
 const toPos = (p) => ({ line: p.lineNumber - 1, character: p.column - 1 });
 const toRange = (r) => ({
     startLineNumber: r.start.line + 1, startColumn: r.start.character + 1,
@@ -124,7 +133,7 @@ function languageFor(rel) {
     if (/\.(html?|jinja2?|j2)$/.test(lower))
         return 'django-html';
     const id = monaco.languages.getLanguages().find((l) => l.extensions?.some((x) => lower.endsWith(x)))?.id ?? 'plaintext';
-    return ['css', 'scss', 'less', 'json', 'javascript', 'typescript', 'handlebars', 'razor'].includes(id) ? 'plaintext' : id;
+    return id;
 }
 async function loadModel(rel, key) {
     const uri = uriFor(rel);
@@ -1001,6 +1010,8 @@ async function main() {
         const word = m && pos ? m.getWordAtPosition(pos)?.word : null;
         if (word) void diagrams.openModel(word);
     });
+    setupEmbedded();
+    setupTemplatePreview({ editor, lsp, uriOf: (model) => serverUri.get(model) });
     setupTemplateLinks({
         editor, lsp, relOfUri, uriOf: (model) => serverUri.get(model), refreshTree: async () => { await explorer?.refresh(); },
         openFile: (rel, range) => openFile(rel, range),

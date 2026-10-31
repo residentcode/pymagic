@@ -183,6 +183,7 @@
         <button id="t-git" title="Git"><svg class="i"><use href="#i-branch"/></svg><span class="lbl">Git</span></button>
         <button id="t-history" title="Local history"><svg class="i"><use href="#i-clock"/></svg><span class="lbl">History</span></button>
         <button id="t-packages" title="Packages"><svg class="i"><use href="#i-cube"/></svg><span class="lbl">Packages</span></button>
+        <button id="t-tpreview" title="The live preview of the open template: its page on the running server"><svg class="i"><use href="#i-web"/></svg><span class="lbl">Preview</span></button>
         <button id="t-routes" title="Endpoints"><svg class="i"><use href="#i-route"/></svg><span class="lbl">Endpoints</span></button>
         <button id="t-django" title="Django"><svg class="i"><use href="#i-layers"/></svg><span class="lbl">Django</span></button>
         <span class="spacer"></span>
@@ -376,6 +377,20 @@
             <button id="todo-refresh" title="Read the comments again">Refresh</button>
           </div>
           <div class="body" id="todo-list"></div>
+        </div>
+      </div>
+      <div id="tpreview-tab" class="tab">
+        <div class="col" id="tp-main">
+          <div id="tp-bar" class="listbar">
+            <button id="tp-back" title="Back">‹</button>
+            <button id="tp-forward" title="Forward">›</button>
+            <button id="tp-refresh" title="Show it again (it is shown again after each save)"><svg class="i"><use href="#i-refresh"/></svg></button>
+            <input id="tp-base" value="http://127.0.0.1:8000" title="Where the server runs" spellcheck="false" autocomplete="off">
+            <input id="tp-path" placeholder="/path/?a=1" title="The path to show, with its URL parameters" spellcheck="false" autocomplete="off">
+            <button id="tp-go">Go</button>
+            <button id="tp-template" title="The page of the open template, through its view's route">This template</button>
+          </div>
+          <iframe id="tp-frame" title="Preview"></iframe>
         </div>
       </div>
       <div id="routes-tab" class="tab">
