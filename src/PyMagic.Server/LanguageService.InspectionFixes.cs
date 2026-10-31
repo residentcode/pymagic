@@ -25,6 +25,7 @@ public sealed partial class LanguageService
         foreach (var d in ConstanceDiagnostics(m, ev)) yield return d;
         foreach (var d in SettingsPathDiagnostics(m)) yield return d;
         foreach (var d in PyCharmShapeDiagnostics(m, ev)) yield return d;
+        foreach (var d in PyCharmTypeDiagnostics(m, ev)) yield return d;
         foreach (var d in WebRouteDiagnostics(m, ev)) yield return d;
         foreach (var d in FastApiDiagnostics(m, ev)) yield return d;
         foreach (var d in MetaDiagnostics(m, ev, Current())) yield return d;
@@ -150,6 +151,9 @@ public sealed partial class LanguageService
                 break;
             case "open-encoding" or "docstring-quotes":
                 PyCharmShapeFix(m, code, start, end, add);
+                break;
+            case "unnecessary-cast":
+                PyCharmTypeFix(m, code, start, end, add);
                 break;
             case "assert-tuple":
                 if (start < text.Length && text[start] == '(' && end <= text.Length && text[end - 1] == ')')
