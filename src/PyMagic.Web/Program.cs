@@ -501,6 +501,23 @@ app.MapPost("/api/regex", async (HttpRequest req) =>
     catch (System.ComponentModel.Win32Exception e) { return Results.Json(new { error = $"cannot start {py}: {e.Message}" }); }
 });
 
+// the libraries a search may also look in, and the only folders outside the project whose files the page may read: the interpreter's
+// site-packages and standard library, and the folders given with --lib
+List<string> SearchLibraryRoots() => libs.Concat(interpreters.Current?.LibraryRoots(includeStdlib: true) ?? Array.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+app.MapGet("/api/library-file", (string path) =>
+{
+    try
+    {
+        string full = Path.GetFullPath(path);
+        bool inside = SearchLibraryRoots().Any(r => full.StartsWith(Path.GetFullPath(r).TrimEnd('\\', '/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+        if (!inside || Path.GetExtension(full) is not (".py" or ".pyi") || !File.Exists(full)) return Results.NotFound();
+        if (new FileInfo(full).Length > 5 * 1024 * 1024) return Results.StatusCode(413);
+        return Results.Text(File.ReadAllText(full), "text/plain; charset=utf-8");
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return Results.NotFound(); }
+});
+
 app.MapPost("/api/search", async (HttpRequest req) =>
 {
     try
@@ -511,8 +528,8 @@ app.MapPost("/api/search", async (HttpRequest req) =>
         var unsaved = new Dictionary<string, string>(StringComparer.Ordinal);
         if (body["unsaved"] is JsonObject open)
             foreach (var (path, text) in open) if (text is JsonValue tv && tv.TryGetValue<string>(out var t)) unsaved[path] = t;
-        var options = new SearchOptions(Str("query") ?? "", Flag("regex"), Flag("caseSensitive"), Flag("wholeWord"), Str("include"), Str("exclude"), Str("replace"));
-        return Results.Json(WorkspaceSearch.Run(root, options, unsaved), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        var options = new SearchOptions(Str("query") ?? "", Flag("regex"), Flag("caseSensitive"), Flag("wholeWord"), Str("include"), Str("exclude"), Str("replace"), Libraries: Flag("libraries"));
+        return Results.Json(WorkspaceSearch.Run(root, options, unsaved, SearchLibraryRoots()), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
     }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
     catch (System.Text.Json.JsonException) { return Results.BadRequest(new { error = "bad request" }); }

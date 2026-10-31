@@ -128,4 +128,46 @@ public class SearchTests
         Assert.Equal("shop.Cart/add_item", string.Join(",", fuzzy));
         Assert.Equal(5, svc.WorkspaceSymbols("").Count);
     }
+
+    [Fact]
+    public void APatternOverSeveralLines()
+    {
+        // item 212: `\n` in a regex, or text with a line break, matches across lines, whatever line breaks the file has
+        var r = With(MakeProject(("a.py", "try:\r\n    run()\r\nexcept:\r\n    pass\r\n"), ("b.py", "try:\n    go()\nexcept ValueError:\n    pass\n")),
+            d => WorkspaceSearch.Run(d, new SearchOptions(@"except:\n\s+pass", Regex: true, Replace: "except Exception:\n    pass")));
+        Assert.Equal(1, r.Total);
+        var m = r.Files[0].Matches[0];
+        Assert.Equal("a.py", r.Files[0].Path);
+        Assert.Equal(2, m.Line);
+        Assert.Equal(0, m.Column);
+        Assert.Equal(7, m.Length);              // what the match covers of its first line
+        Assert.Equal(3, m.EndLine);
+        Assert.Equal(8, m.EndColumn);
+        Assert.Equal("except:", m.Text);
+        var plain = With(MakeProject(("c.py", "x = 1\ny = 2\nz = 3\n")), d => WorkspaceSearch.Run(d, new SearchOptions("x = 1\ny")));
+        Assert.Equal(1, plain.Total);
+        Assert.Equal(1, plain.Files[0].Matches[0].EndLine);
+        Assert.Equal(1, plain.Files[0].Matches[0].EndColumn);
+        // a match on one line has no end of its own
+        Assert.True(With(MakeProject(("d.py", "a = 1\n")), d => WorkspaceSearch.Run(d, new SearchOptions(@"a\s=", Regex: true))).Files[0].Matches[0].EndLine == null);
+    }
+
+    [Fact]
+    public void LibraryFilesAreSearchedWhenAsked()
+    {
+        string lib = MakeProject(("requests/api.py", "def get(url):\n    return request('get', url)\n"), ("requests/__pycache__/api.cpython-314.pyc", "request"), ("requests/README.md", "request"));
+        try
+        {
+            var project = MakeProject(("main.py", "import requests\nrequests.get('x')\n"));
+            var only = With(project, d => WorkspaceSearch.Run(d, new SearchOptions("request"), libraryRoots: new[] { lib }));
+            Assert.True(only.Files.All(f => !f.Library));
+            project = MakeProject(("main.py", "import requests\nrequests.get('x')\n"));
+            var both = With(project, d => WorkspaceSearch.Run(d, new SearchOptions("request", Libraries: true), libraryRoots: new[] { lib }));
+            var libFile = both.Files.Single(f => f.Library);
+            Assert.True(libFile.Path.EndsWith("requests/api.py"));   // a full path, the library's Python files only
+            Assert.True(Path.IsPathRooted(libFile.Path));
+            Assert.Equal(1, libFile.Matches.Count);
+        }
+        finally { Directory.Delete(lib, true); }
+    }
 }

@@ -4,6 +4,7 @@ import { showTab } from './panel';
 import { fileScore } from './filescore';
 import { openMenu } from './menu';
 import { readTrace } from './stacktrace-model.js';
+import { rememberSearch, multilinePattern, SYMBOL_FILTERS, filterSymbols } from './search-model.js';
 const $ = (id) => document.getElementById(id);
 const KINDS = { 2: 'module', 5: 'class', 6: 'method', 7: 'property', 8: 'field', 9: 'constructor', 12: 'function', 13: 'variable', 14: 'constant' };
 export function setupSearch(deps) {
@@ -26,9 +27,47 @@ export function setupSearch(deps) {
     const summary = $('fs-summary');
     const results = $('fs-results');
     const replaceAll = $('fs-replace-all');
+    const libsBox = $('fs-libs');
+    const recentList = $('fs-recent');
+    // the results left out of Replace all (their checkboxes cleared), by file, line, column and text
+    const skippedMatches = new Set();
+    const matchKey = (path, m) => `${path}\u0000${m.line}\u0000${m.column}\u0000${m.text}`;
     const options = () => ({
         query: query.value, regex: regexBox.checked, caseSensitive: caseBox.checked, wholeWord: wordBox.checked,
-        include: include.value, exclude: exclude.value, unsaved: deps.unsavedTexts(),
+        include: include.value, exclude: exclude.value, unsaved: deps.unsavedTexts(), libraries: libsBox.checked,
+    });
+    // ---------------------------------------------------------------- recent searches, offered under the query box
+    const RECENT_KEY = 'pymagic.recentSearches';
+    function recentSearches() {
+        try {
+            const list = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]');
+            return Array.isArray(list) ? list.filter((q) => typeof q === 'string') : [];
+        }
+        catch {
+            return [];
+        }
+    }
+    function showRecent() {
+        recentList.replaceChildren(...recentSearches().map((q) => Object.assign(document.createElement('option'), { value: q })));
+    }
+    function remember(q) {
+        const list = rememberSearch(recentSearches(), q);
+        try {
+            localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+        }
+        catch { /* storage unavailable: the list lasts as long as the page */ }
+        showRecent();
+    }
+    showRecent();
+    // text of several lines pasted into the box is searched for as it is, line breaks included
+    query.addEventListener('paste', (e) => {
+        const text = e.clipboardData?.getData('text/plain') ?? '';
+        if (!/\r?\n/.test(text.replace(/\r?\n$/, '')))
+            return;
+        e.preventDefault();
+        regexBox.checked = true;
+        query.value = multilinePattern(text);
+        void search();
     });
     async function search() {
         if (!what()) {
@@ -66,6 +105,7 @@ export function setupSearch(deps) {
         summary.className = '';
         last = await res.json();
         render();
+        remember(query.value);
     }
     /** Structural search: the engine matches the pattern against the syntax of the project's Python files. */
     async function structural(ticket) {
@@ -121,12 +161,53 @@ export function setupSearch(deps) {
             const count = document.createElement('span');
             count.className = 'fs-count';
             count.textContent = String(file.matches.length);
+            // with something to replace with, each result of a file that can be edited has a box: Replace all leaves out those cleared
+            const choosing = !!withWhat() && !file.library && deps.isEditable(file.path) && r.replaceable !== false;
+            const boxes = [];
+            if (choosing) {
+                const all = document.createElement('input');
+                all.type = 'checkbox';
+                all.title = 'Replace in this file';
+                all.checked = file.matches.some((m) => !skippedMatches.has(matchKey(file.path, m)));
+                all.onclick = (e) => {
+                    e.stopPropagation();
+                    for (const [m, box] of boxes) {
+                        box.checked = all.checked;
+                        if (all.checked)
+                            skippedMatches.delete(matchKey(file.path, m));
+                        else
+                            skippedMatches.add(matchKey(file.path, m));
+                    }
+                };
+                head.append(all);
+            }
             head.append(arrow, name, count);
+            if (file.library) {
+                const tag = document.createElement('span');
+                tag.className = 'fs-count';
+                tag.textContent = 'library';
+                head.append(tag);
+            }
             const body = document.createElement('div');
             head.onclick = () => { const hidden = body.style.display === 'none'; body.style.display = hidden ? '' : 'none'; arrow.textContent = hidden ? '▾ ' : '▸ '; };
             for (const m of file.matches) {
                 const row = document.createElement('div');
                 row.className = 'fs-match';
+                if (choosing) {
+                    const box = document.createElement('input');
+                    box.type = 'checkbox';
+                    box.title = 'Replace this one';
+                    box.checked = !skippedMatches.has(matchKey(file.path, m));
+                    box.onclick = (e) => {
+                        e.stopPropagation();
+                        if (box.checked)
+                            skippedMatches.delete(matchKey(file.path, m));
+                        else
+                            skippedMatches.add(matchKey(file.path, m));
+                    };
+                    boxes.push([m, box]);
+                    row.append(box);
+                }
                 const num = document.createElement('span');
                 num.className = 'fs-line';
                 num.textContent = m.line === null ? '' : String(m.line + 1);
@@ -144,7 +225,9 @@ export function setupSearch(deps) {
                 row.append(num, text);
                 // a row can name its own file (duplicates, a stack trace); one with no file of the project is only text
                 const target = m.path === undefined ? file.path : m.path;
-                if (target)
+                if (file.library)
+                    row.onclick = () => void showLibraryFile(file.path, m.line, m.column);
+                else if (target)
                     row.onclick = () => void deps.openFile(target, new monaco.Range(m.line + 1, m.column + 1, (m.endLine ?? m.line) + 1, m.endLine === undefined ? m.column + 1 + m.length : m.endColumn + 1));
                 else
                     row.classList.add('fs-plain');
@@ -162,13 +245,17 @@ export function setupSearch(deps) {
         if (!last)
             return;
         const changes = {};
-        let skipped = 0;
+        let skipped = 0, unchosen = 0;
         for (const file of last.files) {
-            if (!deps.isEditable(file.path)) {
+            if (file.library || !deps.isEditable(file.path)) {
                 skipped += file.matches.length;
                 continue;
             }
-            changes[deps.uriFor(file.path)] = file.matches.map((m) => ({
+            const chosen = file.matches.filter((m) => !skippedMatches.has(matchKey(file.path, m)));
+            unchosen += file.matches.length - chosen.length;
+            if (chosen.length === 0)
+                continue;
+            changes[deps.uriFor(file.path)] = chosen.map((m) => ({
                 range: { start: { line: m.line, character: m.column }, end: m.endLine === undefined ? { line: m.line, character: m.column + m.length } : { line: m.endLine, character: m.endColumn } },
                 newText: m.replacement ?? '',
             }));
@@ -177,8 +264,9 @@ export function setupSearch(deps) {
             return;
         const done = await deps.applyEdits(`Replace "${what()}" with "${withWhat()}"`, changes, { alwaysPreview: true });
         if (done) {
-            summary.textContent = `Replaced${skipped ? ` (${skipped} matches in files that cannot be edited here were left alone)` : ''}. The files are changed in the editor; save them with Ctrl+S.`;
+            summary.textContent = `Replaced${unchosen ? `, except the ${unchosen} left out` : ''}${skipped ? ` (${skipped} matches in files that cannot be edited here were left alone)` : ''}. The files are changed in the editor; save them with Ctrl+S.`;
             results.replaceChildren();
+            skippedMatches.clear();
             last = null;
             replaceAll.disabled = true;
         }
@@ -186,7 +274,7 @@ export function setupSearch(deps) {
     /** Results that are not a text search (Find Usages of a file): shown as a search's are, under their own summary; they cannot be replaced. */
     function showFound(title, files) {
         showTab('search');
-        last = { total: files.reduce((n, f) => n + f.matches.length, 0), files, filesSearched: 0, truncated: false };
+        last = { total: files.reduce((n, f) => n + f.matches.length, 0), files, filesSearched: 0, truncated: false, replaceable: false };
         render();
         summary.className = '';
         summary.textContent = title;
@@ -198,8 +286,39 @@ export function setupSearch(deps) {
     replace.oninput = () => { if (last)
         later(); };
     include.onchange = exclude.onchange = () => void search();
-    for (const box of [caseBox, wordBox, regexBox])
+    for (const box of [caseBox, wordBox, regexBox, libsBox])
         box.onchange = () => void search();
+    /** A library's file, read only, in a window over the page at the line of a result (the editor opens only the project's files). */
+    async function showLibraryFile(path, line, column) {
+        const res = await fetch('/api/library-file?path=' + encodeURIComponent(path)).catch(() => null);
+        if (!res?.ok) {
+            summary.textContent = `${path} cannot be read here.`;
+            return;
+        }
+        const text = await res.text();
+        const overlay = document.createElement('div');
+        overlay.id = 'sigdialog';
+        const box = document.createElement('div');
+        box.className = 'box fs-libview';
+        const title = document.createElement('h2');
+        title.textContent = path.split('/').slice(-3).join('/');
+        title.title = path + ' (read only)';
+        const host = document.createElement('div');
+        host.className = 'fs-libview-editor';
+        box.append(title, host);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        const model = monaco.editor.createModel(text, 'python');
+        const view = monaco.editor.create(host, { model, readOnly: true, minimap: { enabled: false }, scrollBeyondLastLine: false, automaticLayout: true, fontSize: editor.getOption(monaco.editor.EditorOption.fontSize) });
+        const at = new monaco.Range(line + 1, column + 1, line + 1, column + 1);
+        view.setSelection(at);
+        view.revealLineInCenter(line + 1);
+        view.focus();
+        const close = () => { view.dispose(); model.dispose(); overlay.remove(); editor.focus(); };
+        overlay.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+        overlay.onmousedown = (e) => { if (e.target === overlay)
+            close(); };
+    }
     const structural_ = () => {
         const on = structBox.checked;
         for (const box of [caseBox, wordBox, regexBox])
@@ -358,7 +477,32 @@ export function setupSearch(deps) {
             input.spellcheck = false;
             const list = document.createElement('div');
             list.className = 'picklist';
-            box.append(title, input, list);
+            // the kinds to show: a row of choices, the last one kept for next time
+            let kind = 'All';
+            try {
+                kind = localStorage.getItem('pymagic.symbolKind') ?? 'All';
+            }
+            catch { /* storage unavailable */ }
+            const kinds = document.createElement('div');
+            kinds.className = 'fs-kinds';
+            for (const [name] of SYMBOL_FILTERS) {
+                const chip = document.createElement('button');
+                chip.textContent = name;
+                chip.className = name === kind ? 'on' : '';
+                chip.onmousedown = (e) => e.preventDefault();   // the input keeps the focus
+                chip.onclick = () => {
+                    kind = name;
+                    for (const c of kinds.children)
+                        c.className = c.textContent === name ? 'on' : '';
+                    try {
+                        localStorage.setItem('pymagic.symbolKind', name);
+                    }
+                    catch { /* storage unavailable */ }
+                    void refresh();
+                };
+                kinds.appendChild(chip);
+            }
+            box.append(title, input, kinds, list);
             overlay.appendChild(box);
             let shown = [];
             let index = 0;
@@ -401,7 +545,7 @@ export function setupSearch(deps) {
                 const found = (await lsp.request('workspace/symbol', { query: input.value })) ?? [];
                 if (mine !== ticket)
                     return;
-                shown = found.slice(0, 100);
+                shown = filterSymbols(found, kind).slice(0, 100);
                 index = 0;
                 draw();
             }

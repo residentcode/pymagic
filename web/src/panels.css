@@ -480,3 +480,10 @@
 .fx-name { font-family: var(--mono, monospace); }
 .fx-meta { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
 .fx-unused .fx-name { opacity: .55; }
+/* Find in files: the boxes that choose what Replace all changes, a library's file read only, the kinds of Go to symbol */
+.fs-head input[type=checkbox], .fs-match input[type=checkbox] { margin: 0 6px 0 0; vertical-align: middle; }
+#sigdialog .box.fs-libview { width: min(1100px, 92vw); height: 80vh; }
+.fs-libview-editor { flex: 1; min-height: 0; border: 1px solid var(--line-strong, #444); }
+.fs-kinds { display: flex; gap: 4px; flex-wrap: wrap; }
+.fs-kinds button { padding: 1px 8px; border-radius: 10px; font-size: 12px; }
+.fs-kinds button.on { background: var(--accent); color: #fff; }

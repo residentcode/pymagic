@@ -232,10 +232,12 @@
       <div id="search-tab" class="tab">
         <div class="col" id="fs-main">
           <div id="fs-bar">
-            <input id="fs-query" placeholder="Find in files (Enter to search)" autocomplete="off" spellcheck="false">
+            <input id="fs-query" placeholder="Find in files (Enter to search; \n in a regex spans lines)" autocomplete="off" spellcheck="false" list="fs-recent">
+            <datalist id="fs-recent"></datalist>
             <label title="Match case"><input type="checkbox" id="fs-case"> Aa</label>
             <label title="Whole word"><input type="checkbox" id="fs-word"> word</label>
             <label title="Regular expression"><input type="checkbox" id="fs-regex"> .*</label>
+            <label title="Also search the Python files of the libraries (site-packages and the standard library); they are read only"><input type="checkbox" id="fs-libs"> libraries</label>
             <label title="Structural search: a pattern of Python code, $x$ for any expression or statement, $x*$ for any number of them, $x:regex$ for one whose text fits"><input type="checkbox" id="fs-struct"> { }</label>
             <button id="fs-patterns" title="Patterns to start a structural search from">Patterns ▾</button>
             <textarea id="fs-spattern" rows="3" placeholder="Pattern, such as:&#10;$f$ = open($p$)&#10;$d$ = $f$.read()   (Ctrl+Enter searches)" spellcheck="false" style="display:none"></textarea>
