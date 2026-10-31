@@ -249,7 +249,7 @@ internal static class FixtureModel
     /// <summary>Tests and fixtures ask for fixtures by naming parameters.</summary>
     public static bool RequestsFixtures(ModuleInfo m, FunctionDef f) => IsFixture(f) || IsTestFunction(m, f);
 
-    static string CalleeText(ModuleInfo m, Expr e) => m.Source[e.Start..e.End];
+    public static string CalleeText(ModuleInfo m, Expr e) => m.Source[e.Start..e.End];
 
     static IEnumerable<ClassDef> ClassesAround(ModuleInfo m, Node n)
     {
@@ -301,7 +301,7 @@ internal static class FixtureModel
     }
 
     /// <summary>`@mock.patch("x")` hands its mock to the first parameters; those are not fixtures either.</summary>
-    static int PatchInjected(ModuleInfo m, FunctionDef f)
+    public static int PatchInjected(ModuleInfo m, FunctionDef f)
     {
         int count = 0;
         foreach (var d in f.Decorators)

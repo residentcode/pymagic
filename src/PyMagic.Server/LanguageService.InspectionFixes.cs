@@ -26,6 +26,7 @@ public sealed partial class LanguageService
         foreach (var d in SettingsPathDiagnostics(m)) yield return d;
         foreach (var d in PyCharmShapeDiagnostics(m, ev)) yield return d;
         foreach (var d in PyCharmTypeDiagnostics(m, ev)) yield return d;
+        foreach (var d in PytestDiagnostics(m, ev)) yield return d;
         foreach (var d in WebRouteDiagnostics(m, ev)) yield return d;
         foreach (var d in FastApiDiagnostics(m, ev)) yield return d;
         foreach (var d in MetaDiagnostics(m, ev, Current())) yield return d;
