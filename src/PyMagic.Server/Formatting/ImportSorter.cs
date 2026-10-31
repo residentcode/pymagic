@@ -12,10 +12,22 @@ public enum ImportSection { Future, Stdlib, ThirdParty, FirstParty, Local }
 /// <param name="OrderByType">Constants, classes, then the rest (the default); off sorts names case-insensitively.</param>
 /// <param name="KnownFirstParty">Top-level packages that are the project's own.</param>
 /// <param name="KnownThirdParty">Top-level packages that are installed ones.</param>
+/// <param name="LinesAfterImports">Blank lines between the imports and the code after them; -1 leaves them as the formatter has them.</param>
+/// <param name="SectionOrder">The order of the sections (`section-order`, isort's `sections`); null for future, standard library, third party, first party, local.</param>
+/// <param name="ForceWrapAliases">A `from` import of several names with an `as` among them is written one name to a line (with <paramref name="CombineAsImports"/>).</param>
+/// <param name="FromFirst">`from x import y` lines before `import x` lines in a section.</param>
+/// <param name="ClosestRelativeFirst">`from . import` before `from .. import` (ruff's `closest-to-furthest`); the default is the furthest first.</param>
+/// <param name="SplitOnTrailingComma">A `from` import written with a trailing comma inside its parentheses stays one name to a line (ruff's default).</param>
 public sealed record ImportOptions(bool ForceSortWithinSections = false, bool CombineAsImports = false, bool ForceSingleLine = false, bool OrderByType = true,
-    IReadOnlyList<string>? KnownFirstParty = null, IReadOnlyList<string>? KnownThirdParty = null)
+    IReadOnlyList<string>? KnownFirstParty = null, IReadOnlyList<string>? KnownThirdParty = null, int LinesAfterImports = -1, IReadOnlyList<ImportSection>? SectionOrder = null,
+    bool ForceWrapAliases = false, bool FromFirst = false, bool ClosestRelativeFirst = false, bool SplitOnTrailingComma = true)
 {
     public static readonly ImportOptions Default = new();
+
+    static readonly ImportSection[] Sections = { ImportSection.Future, ImportSection.Stdlib, ImportSection.ThirdParty, ImportSection.FirstParty, ImportSection.Local };
+
+    /// <summary>The sections in the order they are written: those named first, then any left out, in the usual order.</summary>
+    public IEnumerable<ImportSection> OrderOfSections() => (SectionOrder ?? Array.Empty<ImportSection>()).Concat(Sections).Distinct();
 
     public ImportSection? Override(string top) =>
         KnownFirstParty?.Contains(top) == true ? ImportSection.FirstParty : KnownThirdParty?.Contains(top) == true ? ImportSection.ThirdParty : null;
@@ -40,6 +52,7 @@ public static class ImportSorter
         public List<string> Leading = new();
         public string? Trailing;
         public ImportSection Section;
+        public bool TrailingComma;        // the `from` statement it came from ends its names with a comma: `(a, b,)`
         public bool HasComment => Leading.Count > 0 || Trailing != null;
         public string Key => $"{(IsFrom ? "from" : "import")}|{Level}|{Module}|{Name}|{Alias}";
     }
@@ -72,8 +85,21 @@ public static class ImportSorter
             var replaced = SortRun(text, source, runs[r], tokens, classify, lineLength, nl, options);
             if (replaced == null) continue;
             text = text[..replaced.Value.Start] + replaced.Value.Text + text[replaced.Value.End..];
+            if (options.LinesAfterImports >= 0) text = BlankLinesAfter(text, replaced.Value.Start + replaced.Value.Text.Length, options.LinesAfterImports, nl);
         }
         return text;
+    }
+
+    /// <summary>Exactly <paramref name="count"/> blank lines between the end of an import block and what follows it, when something follows.</summary>
+    static string BlankLinesAfter(string text, int end, int count, string nl)
+    {
+        int p = end;
+        while (p < text.Length && text[p] is '\r' or '\n' or ' ' or '\t') p++;
+        if (p >= text.Length) return text;
+        // back to the start of the line that has the code (its indentation is kept)
+        int lineStart = p;
+        while (lineStart > end && text[lineStart - 1] is ' ' or '\t') lineStart--;
+        return text[..end] + string.Concat(Enumerable.Repeat(nl, count + 1)) + text[lineStart..];
     }
 
     // `text` is the evolving result, `original` the text the offsets of the syntax tree refer to; runs are processed from
@@ -142,9 +168,12 @@ public static class ImportSorter
                     foreach (var a in imp.Names) made.Add(new Entry { IsFrom = false, Module = a.Name, Alias = a.AsName });
                     break;
                 case ImportFromStmt f:
+                {
+                    bool comma = System.Text.RegularExpressions.Regex.IsMatch(s[f.Start..end], @",\s*\)\s*$");
                     if (f.IsStar) made.Add(new Entry { IsFrom = true, Level = f.Level, Module = f.Module ?? "", Name = "*" });
-                    else foreach (var a in f.Names) made.Add(new Entry { IsFrom = true, Level = f.Level, Module = f.Module ?? "", Name = a.Name, Alias = a.AsName });
+                    else foreach (var a in f.Names) made.Add(new Entry { IsFrom = true, Level = f.Level, Module = f.Module ?? "", Name = a.Name, Alias = a.AsName, TrailingComma = comma });
                     break;
+                }
             }
             if (made.Count == 0) return null;
             made[0].Leading = leading;
@@ -174,8 +203,7 @@ public static class ImportSorter
         }
 
         string rendered = Render(unique, lineLength, nl, options);
-        string before = text[regionStart..regionEnd];
-        if (rendered == before) return null;
+        // the region is given back even when it does not change, so that the blank lines after it can be set
         return (regionStart, regionEnd, rendered);
     }
 
@@ -185,7 +213,7 @@ public static class ImportSorter
     {
         var sb = new StringBuilder();
         bool firstSection = true;
-        foreach (var section in new[] { ImportSection.Future, ImportSection.Stdlib, ImportSection.ThirdParty, ImportSection.FirstParty, ImportSection.Local })
+        foreach (var section in options.OrderOfSections())
         {
             var inSection = entries.Where(e => e.Section == section).ToList();
             if (inSection.Count == 0) continue;
@@ -194,11 +222,12 @@ public static class ImportSorter
 
             var plain = inSection.Where(e => !e.IsFrom).OrderBy(e => e.Module.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(e => e.Module, StringComparer.Ordinal).ThenBy(e => e.Alias ?? "", StringComparer.Ordinal).ToList();
             var froms = inSection.Where(e => e.IsFrom).ToList();
-            var ordered = froms.OrderBy(e => -e.Level).ThenBy(e => e.Module.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(e => e.Module, StringComparer.Ordinal)
+            var ordered = froms.OrderBy(e => options.ClosestRelativeFirst ? e.Level : -e.Level).ThenBy(e => e.Module.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(e => e.Module, StringComparer.Ordinal)
                 .ThenBy(e => Mergeable(e, options.CombineAsImports) ? 0 : 1).ThenBy(e => TypeRank(e.Name!, options)).ThenBy(e => e.Name!.ToLowerInvariant(), StringComparer.Ordinal).ThenBy(e => e.Alias ?? "", StringComparer.Ordinal).ToList();
 
             // each statement to write: a plain import, or one from statement made of one or more entries
             var statements = new List<(string SortKey, int Level, Action Write)>();
+            var fromStatements = new List<(string SortKey, int Level, Action Write)>();
             foreach (var e in plain)
             {
                 var entry = e;
@@ -212,12 +241,14 @@ public static class ImportSorter
                 if (group.Count == 0 || !Mergeable(e, options.CombineAsImports)) group = new List<Entry> { e };
                 foreach (var g in group) done.Add(g);
                 var captured = group;
-                statements.Add((e.Module.ToLowerInvariant(), e.Level, () => AppendFrom(sb, captured, lineLength, nl, options)));
+                fromStatements.Add((e.Module.ToLowerInvariant(), e.Level, () => AppendFrom(sb, captured, lineLength, nl, options)));
             }
+            // `from` lines after the plain ones, or before them with from-first
+            statements = options.FromFirst ? fromStatements.Concat(statements).ToList() : statements.Concat(fromStatements).ToList();
             if (options.ForceSortWithinSections)
             {
-                // one run ordered by module name, relative imports keeping their own order (farthest first)
-                foreach (var s in statements.Select((s, i) => (s, i)).OrderBy(x => -x.s.Level).ThenBy(x => x.s.SortKey, StringComparer.Ordinal).ThenBy(x => x.i).Select(x => x.s)) s.Write();
+                // one run ordered by module name, relative imports keeping their own order (farthest first, or closest with closest-to-furthest)
+                foreach (var s in statements.Select((s, i) => (s, i)).OrderBy(x => options.ClosestRelativeFirst ? x.s.Level : -x.s.Level).ThenBy(x => x.s.SortKey, StringComparer.Ordinal).ThenBy(x => x.i).Select(x => x.s)) s.Write();
             }
             else foreach (var s in statements) s.Write();
         }
@@ -247,7 +278,10 @@ public static class ImportSorter
             return;
         }
         string line = $"from {module} import {string.Join(", ", names.Select(Written))}";
-        if (line.Length <= lineLength || names.Count == 1 && first.Name == "*")
+        // kept one to a line: the statement was written so with a trailing comma, or it has an alias among several names (force-wrap-aliases)
+        bool wrap = options.SplitOnTrailingComma && group.Any(g => g.TrailingComma) && first.Name != "*"
+            || options.ForceWrapAliases && options.CombineAsImports && names.Count > 1 && names.Any(n => n.Alias != null);
+        if (!wrap && (line.Length <= lineLength || names.Count == 1 && first.Name == "*"))
         {
             sb.Append(line);
             if (first.Trailing != null) sb.Append("  ").Append(first.Trailing);

@@ -122,9 +122,25 @@ public static class FormatConfig
         }
         bool Flag(string key, bool fallback) => Find(key) is bool b ? b : fallback;
         List<string>? Names(string key) => Find(key) is List<object?> list ? list.OfType<string>().ToList() : null;
+        int lines = Find("lines-after-imports") is long n and >= -1 and <= 10 ? (int)n : -1;
+        // ruff's section names and isort's (FUTURE, STDLIB, THIRDPARTY, FIRSTPARTY, LOCALFOLDER); a name not known is skipped
+        List<ImportSection>? order = (Names("section-order") ?? Names("sections"))?.Select(SectionNamed).OfType<ImportSection>().ToList();
+        // ruff: relative-imports-order = "closest-to-furthest"; isort: reverse_relative = true
+        bool closest = Find("relative-imports-order") is string ro ? ro == "closest-to-furthest" : Flag("reverse-relative", false);
         return new ImportOptions(Flag("force-sort-within-sections", false), Flag("combine-as-imports", false), Flag("force-single-line", false), Flag("order-by-type", true),
-            Names("known-first-party"), Names("known-third-party"));
+            Names("known-first-party"), Names("known-third-party"), lines, order is { Count: > 0 } ? order : null,
+            Flag("force-wrap-aliases", false), Flag("from-first", false), closest, Flag("split-on-trailing-comma", true));
     }
+
+    static ImportSection? SectionNamed(string name) => name.ToLowerInvariant().Replace("_", "-") switch
+    {
+        "future" => ImportSection.Future,
+        "standard-library" or "stdlib" => ImportSection.Stdlib,
+        "third-party" or "thirdparty" => ImportSection.ThirdParty,
+        "first-party" or "firstparty" => ImportSection.FirstParty,
+        "local-folder" or "localfolder" => ImportSection.Local,
+        _ => null,
+    };
 
     /// <summary>The options a configuration text gives; null when it has no black or ruff section (or is not valid TOML).</summary>
     public static FormatOptions? FromToml(string text, bool isRuffFile = false, string? source = null) =>
@@ -136,7 +152,8 @@ public static class FormatConfig
         if (root == null) return null;
         var black = isRuffFile ? null : Toml.At(root, "tool.black") as Dictionary<string, object?>;
         var ruff = (isRuffFile ? root : Toml.At(root, "tool.ruff") as Dictionary<string, object?>);
-        if (black == null && ruff == null) return null;
+        // a project that configures only isort still has its import settings read
+        if (black == null && ruff == null && (isRuffFile || Toml.At(root, "tool.isort") == null)) return null;
         var ruffFormat = (isRuffFile ? Toml.At(root, "format") : Toml.At(root, "tool.ruff.format")) as Dictionary<string, object?>;
 
         int? Int(Dictionary<string, object?>? t, string key) => t != null && t.TryGetValue(key, out var v) && v is long n && n is >= 1 and <= 1000 ? (int)n : null;

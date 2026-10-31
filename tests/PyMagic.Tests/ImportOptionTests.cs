@@ -68,4 +68,56 @@ public class ImportOptionTests
         Assert.True(toml.ForceSortWithinSections);
         Assert.True(FormatConfig.FromToml("[tool.black]\nline-length = 100\n")!.Imports == null, "no isort table");
     }
+
+    // ------------------------------------------------------------ item 217: the rest of ruff's and isort's import settings (checked against ruff 0.16.4)
+
+    static ImportOptions Ruff(string settings) => FormatConfig.FromToml("[tool.ruff.lint.isort]\n" + settings)!.Imports!;
+
+    [Fact]
+    public void LinesAfterImports()
+    {
+        string code = "import os\nimport sys\nx = 1\n";
+        Assert.Equal("import os\nimport sys\n\n\nx = 1", Sort(code, Ruff("lines-after-imports = 2\n")));
+        Assert.Equal("import os\nimport sys\n\ndef f():\n    pass", Sort("import os\nimport sys\ndef f():\n    pass\n", Ruff("lines-after-imports = 1\n")));
+        // not set: the blank lines are the formatter's business, as before
+        Assert.Equal("import os\nimport sys\nx = 1", Sort(code, ImportOptions.Default));
+        Assert.Equal(1, FormatConfig.FromToml("[tool.isort]\nlines_after_imports = 1\n")!.Imports!.LinesAfterImports);
+    }
+
+    [Fact]
+    public void SectionOrder()
+    {
+        string code = "import requests\nimport mine\nimport os\nfrom . import here\n";
+        Assert.Equal("import mine\n\nimport os\n\nimport requests\n\nfrom . import here",
+            Sort(code, Ruff("section-order = [\"future\", \"first-party\", \"standard-library\", \"third-party\", \"local-folder\"]\n")));
+        // isort's names, and sections left out keep their usual place after those named
+        Assert.Equal("import requests\n\nimport os\n\nimport mine\n\nfrom . import here", Sort(code, FormatConfig.FromToml("[tool.isort]\nsections = [\"THIRDPARTY\"]\n")!.Imports!));
+    }
+
+    [Fact]
+    public void ForceWrapAliases()
+    {
+        string code = "from os import path as p, sep\n";
+        Assert.Equal("from os import (\n    path as p,\n    sep,\n)", Sort(code, Ruff("force-wrap-aliases = true\ncombine-as-imports = true\n")));
+        // one name, or no alias, fits on its line
+        Assert.Equal("from os import path as p", Sort("from os import path as p\n", Ruff("force-wrap-aliases = true\ncombine-as-imports = true\n")));
+    }
+
+    [Fact]
+    public void FromFirstAndRelativeOrder()
+    {
+        Assert.Equal("from json import loads\nimport os\nimport sys", Sort("import sys\nfrom json import loads\nimport os\n", Ruff("from-first = true\n")));
+        string relative = "from .. import parent\nfrom . import sibling\n";
+        Assert.Equal("from .. import parent\nfrom . import sibling", Sort(relative, ImportOptions.Default));
+        Assert.Equal("from . import sibling\nfrom .. import parent", Sort(relative, Ruff("relative-imports-order = \"closest-to-furthest\"\n")));
+    }
+
+    [Fact]
+    public void SplitOnTrailingComma()
+    {
+        string code = "from typing import (\n    Any,\n    List,\n)\n";
+        Assert.Equal("from typing import (\n    Any,\n    List,\n)", Sort(code, ImportOptions.Default));
+        Assert.Equal("from typing import Any, List", Sort(code, Ruff("split-on-trailing-comma = false\n")));
+        Assert.Equal("from typing import Any, List", Sort("from typing import (Any, List)\n", ImportOptions.Default));
+    }
 }
