@@ -162,6 +162,7 @@ public sealed partial class LanguageService
         ("flask-no-response", "Web routes", "Flask view that gives no response", "A view that returns None or can end without returning: Flask answers 'The view function did not return a valid response'.", "warning"),
         ("flask-response-type", "Web routes", "Flask view that returns what Flask cannot answer with", "An int, float, bool or set, an object that is neither a Response nor a WSGI application, a tuple of one or of four and more: the view stops with 'did not return a valid response'.", "error"),
         ("flask-url-for-arguments", "Web routes", "url_for without what the route needs", "A path parameter the route has and the call does not give (BuildError), or a non-number for an int parameter.", "warning"),
+        ("flask-form-field", "Web routes", "Form field no form sends", "request.form['x'] (or files, or args with a GET form) in a view whose forms in the templates have no field x: Flask answers 400 Bad Request.", "warning"),
         ("route-endpoint", "Web routes", "Unknown endpoint name", "url_for or url_path_for with a name no route has.", "weak"),
         ("template-structure", "Django templates", "Unclosed or unmatched tags", "Block tags that do not close, extends that is not first, a block defined twice, {% endblock name %} or {% endpartialdef name %} with another name.", "error"),
         ("template-comment", "Django templates", "Broken line comment", "A {# with no #} on its line: Django comments cannot span lines, so the text is shown.", "warning"),

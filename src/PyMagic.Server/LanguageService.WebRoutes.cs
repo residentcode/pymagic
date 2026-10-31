@@ -348,6 +348,7 @@ public sealed partial class LanguageService
 
             findings.AddRange(FlaskResponseFindings(m, ev, r));
             findings.AddRange(FlaskReturnFindings(m, ev, r));
+            findings.AddRange(FlaskFormFindings(m, ev, r, index));
             findings.AddRange(FastApiResponseFindings(m, ev, r));
             if (ShadowingRoute(index, r, m, OrderOf) is { } shadow)
                 findings.Add(new Finding(r.PathStart, r.PathEnd - r.PathStart, $"Route '{r.Methods.First(x => shadow.Methods.Contains(x))} {r.Path}' is never reached: {shadow.Def.Name}() declared earlier handles '{shadow.Path}' first. Declare the fixed path before the one with a parameter.", "route-shadowed", FindingLevel.Warning));
