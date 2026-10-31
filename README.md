@@ -98,7 +98,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Diagrams: ~~of classes, modules and Django models~~ (done, item 172). Simpler than PyCharm's: no editing, notes or other layouts, and a model's relations come from its own fields.
 
 **Django compared with PyCharm** (from PyCharm's Django help pages and its 17 Django inspections, checked against the code on 30 October 2026)
-- Run configurations: a *Django server* configuration (host, port, extra options, working folder, environment variables, `.env` files, open the browser, test server, no reload, debug only my code, log files in the console, tasks before launch); a *Django tests* configuration (a target: an app, a test case or one test; a custom settings file; options such as `--failfast`; variables; results in the test tree). Today the Django tab has Run server, Debug server and `test` buttons without settings, and the test output is plain text.
+- Run configurations: ~~a *Django server* configuration (host, port, extra options, working folder, environment variables, `.env` files, open the browser, test server, no reload, debug only my code, log files in the console, tasks before launch); a *Django tests* configuration (a target: an app, a test case or one test; a custom settings file; options such as `--failfast`; variables; results in the test tree)~~ (done, items 170 and 173). The task before launch is another configuration; the Django tab's own `test` buttons still give plain text.
 - manage.py: a console for it (Ctrl+Alt+R) with command history, completion of commands and their options, and quick documentation; a *Django console*, a Python console with Django set up. Today there are buttons and one line for other arguments, and `shell` runs as a plain command.
 - Settings: a Django settings page (Django support on or off, project root, settings file, manage.py script, environment variables, not using Django's test runner); *Mark Directory As → Template folder* and resources, folders in `TEMPLATES['DIRS']` marked by themselves, template languages per file type.
 - New Django project: location, Git, environment, template language, templates folder, first app's name, admin on or off.
@@ -147,4 +147,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 172 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 173 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

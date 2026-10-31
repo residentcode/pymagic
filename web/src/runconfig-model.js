@@ -2,12 +2,15 @@
 import { splitArguments } from './django-model.js';
 
 /** The kinds of configuration, as PyCharm's: [kind, label]. */
-export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m)'], ['django', 'Django server'], ['fastapi', 'FastAPI (uvicorn)'], ['flask', 'Flask server'], ['pytest', 'pytest']];
+export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m)'], ['django', 'Django server'], ['djangoTests', 'Django tests'], ['fastapi', 'FastAPI (uvicorn)'], ['flask', 'Flask server'], ['pytest', 'pytest']];
 
 /** The settings beside name, script, args, cwd and env, with their defaults (strings and switches). */
 const DEFAULTS = {
     kind: 'script', module: '', app: '', host: '127.0.0.1', port: '', target: '', reload: true,
     envFiles: '', uv: false, uvPath: '', contentRoots: true, sourceRoots: true, shared: false, openPanel: true,
+    // Django: the settings module, a test server with fixtures, the browser opened once the server is up, debugging only the project's code,
+    // log files shown in the console, another configuration run first, and --failfast for the tests
+    settings: '', testServer: false, fixtures: '', openBrowser: false, justMyCode: true, logFiles: '', before: '', failfast: false,
 };
 
 /** A configuration: { name, kind, script (a file of the project), module, app, host, port, target, reload, args (as typed), cwd (a folder of the project,
@@ -46,13 +49,22 @@ export function startOf(c) {
     let start;
     switch (c.kind) {
         case 'module': start = { module: c.module, args: extra }; break;
-        case 'django': start = { file: c.script || 'manage.py', args: ['runserver', c.port ? `${host}:${c.port}` : host === '127.0.0.1' ? '8000' : `${host}:8000`, ...(c.reload === false ? ['--noreload'] : []), ...extra] }; break;
+        case 'django': {
+            const address = c.port ? `${host}:${c.port}` : host === '127.0.0.1' ? '8000' : `${host}:8000`;
+            const fixtures = (c.fixtures ?? '').split(/[\s,]+/).filter(Boolean);
+            start = c.testServer
+                ? { file: c.script || 'manage.py', args: ['testserver', ...fixtures, '--addrport', address, '--noinput', ...extra] }
+                : { file: c.script || 'manage.py', args: ['runserver', address, ...(c.reload === false ? ['--noreload'] : []), ...extra] };
+            break;
+        }
+        case 'djangoTests': start = { tests: { ids: c.target ? [c.target] : [], framework: 'django', settings: c.settings || undefined, failfast: !!c.failfast } }; break;
         case 'fastapi': start = { module: 'uvicorn', args: [c.app || 'main:app', '--host', host, '--port', c.port || '8000', ...(c.reload !== false ? ['--reload'] : []), ...extra] }; break;
         case 'flask': start = { module: 'flask', args: ['--app', c.app || 'app', 'run', '--host', host, '--port', c.port || '5000', ...(c.reload !== false ? ['--debug'] : []), ...extra] }; break;
         case 'pytest': start = { module: 'pytest', args: [...(c.target ? [c.target] : []), ...extra] }; break;
         default: start = { file: c.script, args: extra };
     }
-    const out = { ...start, env: { ...c.env }, cwd: c.cwd };
+    const out = { ...start, env: { ...c.env, ...(c.settings && (c.kind === 'django' || c.kind === 'djangoTests') ? { DJANGO_SETTINGS_MODULE: c.settings } : {}) }, cwd: c.cwd };
+    if (c.justMyCode === false) out.allCode = true;
     const envFiles = (c.envFiles ?? '').split(',').map((s) => s.trim()).filter(Boolean);
     if (envFiles.length) out.envFiles = envFiles;
     if (c.uv) {

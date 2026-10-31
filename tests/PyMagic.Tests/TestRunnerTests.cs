@@ -282,6 +282,36 @@ public class TestRunnerTests
     }
 
     [Fact]
+    public void RunsDjangosTestsWithItsRunnerAndATestDatabase()
+    {
+        // needs a Python with Django: PYMAGIC_TEST_DJANGO names it
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_DJANGO") is not { Length: > 0 } python) return;
+        using var p = new Project();
+        p.File("manage.py", "import os, sys\n\nif __name__ == '__main__':\n    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'cfg.settings')\n    from django.core.management import execute_from_command_line\n    execute_from_command_line(sys.argv)\n");
+        p.File("cfg/__init__.py", "");
+        p.File("cfg/settings.py", "SECRET_KEY = 'x'\nINSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'shop']\nDATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': 'db.sqlite3'}}\nUSE_TZ = True\n");
+        p.File("shop/__init__.py", "");
+        p.File("shop/models.py", "from django.db import models\n\n\nclass Item(models.Model):\n    name = models.CharField(max_length=20)\n");
+        p.File("shop/migrations/__init__.py", "");
+        p.File("shop/migrations/0001_initial.py", "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    initial = True\n    dependencies = []\n    operations = [migrations.CreateModel(name='Item', fields=[('id', models.BigAutoField(primary_key=True)), ('name', models.CharField(max_length=20))])]\n");
+        p.File("shop/tests.py", "from django.test import TestCase\n\nfrom .models import Item\n\n\nclass ItemTests(TestCase):\n    def test_create(self):\n        Item.objects.create(name='pen')\n        self.assertEqual(Item.objects.count(), 1)\n\n    def test_wrong(self):\n        self.assertEqual(Item.objects.count(), 5)\n");
+        var events = new BlockingCollection<JsonNode>();
+        using var session = new RunSession(events.Add) { Python = python };
+        session.StartTests(p.Root, new List<string>(), "django");
+        var all = new List<JsonNode>();
+        while (true)
+        {
+            if (!events.TryTake(out var e, TimeSpan.FromSeconds(90))) throw new AssertionException("timed out: " + string.Join(" ", all.Select(x => x.ToJsonString())));
+            all.Add(e);
+            if (e["type"]!.GetValue<string>() is "exited" or "error") break;
+        }
+        var r = Results(all);
+        Assert.Equal("passed", Outcome(r, "shop/tests.py::ItemTests::test_create"));
+        Assert.Equal("failed", Outcome(r, "shop/tests.py::ItemTests::test_wrong"));
+        Assert.True(!File.Exists(Path.Combine(p.Root, "db.sqlite3")) || new FileInfo(Path.Combine(p.Root, "db.sqlite3")).Length == 0, "the tests ran on a test database");
+    }
+
+    [Fact]
     public void RunsTheDoctestsOfTheModules()
     {
         if (!HavePython) return;

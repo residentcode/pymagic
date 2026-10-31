@@ -187,7 +187,14 @@ export function setupRunConfigurations({ currentFile }) {
             const what = {
                 script: [field('Script', script)],
                 module: [field('Module', text('module', 'http.server'), 'Started as python -m module.')],
-                django: [field('manage.py', script), field('Host', text('host', '127.0.0.1')), field('Port', text('port', '8000')), check('Reload on changes', 'reload', 'Off adds --noreload.')],
+                django: [field('manage.py', script), field('Host', text('host', '127.0.0.1')), field('Port', text('port', '8000')), check('Reload on changes', 'reload', 'Off adds --noreload.'),
+                    field('Settings', text('settings', 'site_cfg.settings'), 'DJANGO_SETTINGS_MODULE; empty for the one manage.py names.'),
+                    check('Test server', 'testServer', 'manage.py testserver: a server on a test database filled from the fixtures below.'), field('Fixtures', text('fixtures', 'users.json items.json')),
+                    check('Open the browser when the server is up', 'openBrowser'), check('Debug only my code', 'justMyCode', 'Off lets the debugger stop in Django and the libraries too.'),
+                    field('Log files', text('logFiles', 'logs/debug.log'), 'Files of the project whose new lines show in the console while it runs, comma separated.'),
+                    field('Before launch', text('before', 'the name of another configuration'), 'Run that configuration first (migrate, say) and start this one when it has finished.')],
+                djangoTests: [field('Target', text('target', 'shop, shop.tests or shop.tests.ItemTests.test_create'), 'An app, a module, a class or one test; empty for all.'),
+                    field('Settings', text('settings', 'site_cfg.settings'), 'Empty for the one manage.py names.'), check('Stop at the first failure', 'failfast', '--failfast.')],
                 fastapi: [field('Application', text('app', 'main:app'), 'module:variable, given to uvicorn.'), field('Host', text('host', '127.0.0.1')), field('Port', text('port', '8000')), check('Reload on changes', 'reload', 'uvicorn --reload.')],
                 flask: [field('Application', text('app', 'app'), 'The module or file of the Flask app (flask --app).'), field('Host', text('host', '127.0.0.1')), field('Port', text('port', '5000')), check('Debug mode', 'reload', 'flask run --debug: the reloader and the debugger page.')],
                 pytest: [field('Target', text('target', 'tests/ or tests/test_a.py::test_x'), 'A folder, a file or one test; empty for all.')],
@@ -242,5 +249,5 @@ export function setupRunConfigurations({ currentFile }) {
         (form.querySelector('input') ?? add).focus();
     }
 
-    return { current, menu, edit, choose, onChange: (fn) => { listeners.add(fn); return () => listeners.delete(fn); }, names: () => list.map((c) => c.name), selectedName: () => selected };
+    return { current, byName: (name) => list.find((c) => c.name === name) ?? null, menu, edit, choose, onChange: (fn) => { listeners.add(fn); return () => listeners.delete(fn); }, names: () => list.map((c) => c.name), selectedName: () => selected };
 }

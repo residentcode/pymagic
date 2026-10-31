@@ -746,6 +746,14 @@ export function setupRun(deps) {
                 break;
             case 'output':
                 append(m.text, m.stream === 'stderr' ? 'err' : '');
+                if (openBrowser) {
+                    // Django, uvicorn and Flask say where they listen
+                    const at = /(?:development server at|running on|Uvicorn running on)\s+(https?:\/\/[^\s/]+\/?)/i.exec(m.text);
+                    if (at) {
+                        openBrowser = false;
+                        window.open(at[1].replace('0.0.0.0', '127.0.0.1'), '_blank');
+                    }
+                }
                 break;
             case 'error':
                 append(m.message + '\n', 'err');
@@ -772,6 +780,13 @@ export function setupRun(deps) {
                 break;
             case 'exited':
                 append(m.detached ? '\nDetached; the program goes on running.\n' : `\nProcess finished with exit code ${m.code}\n`, 'info');
+                clearInterval(logTimer);
+                openBrowser = false;
+                if (afterExit) {
+                    const next = afterExit;
+                    afterExit = null;
+                    window.setTimeout(next, 0);
+                }
                 if (profiling) {
                     profiling = false;
                     window.dispatchEvent(new CustomEvent('pymagic:profile'));
@@ -792,18 +807,55 @@ export function setupRun(deps) {
     }
     // ------------------------------------------------------------ commands
     let profiling = false;
+    let afterExit = null, beforeDone = false, stoppedByUser = false;
+    // what a configuration adds while it runs: the browser opened at the server's address, log files followed in the console
+    let openBrowser = false, logTimer = 0;
+    const logSizes = new Map();
+    function followLogs(files) {
+        clearInterval(logTimer);
+        logSizes.clear();
+        if (!files.length) return;
+        const poll = async () => {
+            for (const f of files) {
+                const text = await fetch('/api/file?path=' + encodeURIComponent(f)).then((r) => (r.ok ? r.text() : null)).catch(() => null);
+                if (text === null) continue;
+                const seen = logSizes.get(f);
+                if (seen !== undefined && text.length > seen) append(text.slice(seen).replace(/^/gm, `[${f}] `).replace(/\[[^\]]*\] $/, ''), 'info');
+                logSizes.set(f, text.length);
+            }
+        };
+        void poll();
+        logTimer = window.setInterval(() => void poll(), 1000);
+    }
     async function start(debug, profile = false) {
         if (run)
             return;
         const chosen = deps.runConfig?.();
         if (chosen) {
             const s = startOf(chosen);
+            // Django tests (and the like) go to the Tests panel and its tree
+            if (s.tests) {
+                window.dispatchEvent(new CustomEvent('pymagic:runTests', { detail: { ...s.tests, debug } }));
+                return;
+            }
+            // Before launch: another configuration first, and this one when it has finished
+            if (chosen.before && deps.runConfigByName?.(chosen.before) && !beforeDone) {
+                const first = startOf(deps.runConfigByName(chosen.before));
+                append(`Before launch: ${chosen.before}\n`, 'info');
+                const finished = new Promise((resolve) => { afterExit = resolve; });
+                await launch(first.file ?? null, false, false, first.args, { ...first });
+                await finished;
+                if (stoppedByUser) { stoppedByUser = false; return; }
+                beforeDone = true;
+                try { await start(debug, profile); } finally { beforeDone = false; }
+                return;
+            }
             if (s.module && profile) {
                 append('The profiler runs a script; this configuration starts a module.\n', 'err');
                 showTab('output');
                 return;
             }
-            await launch(s.file ?? null, debug, profile, s.args, { ...s, openPanel: chosen.openPanel });
+            await launch(s.file ?? null, debug, profile, s.args, { ...s, openPanel: chosen.openPanel, openBrowser: chosen.kind === 'django' && chosen.openBrowser, logFiles: chosen.logFiles });
             return;
         }
         const model = editor.getModel();
@@ -860,7 +912,9 @@ export function setupRun(deps) {
         showTab('output');
         run = new RunClient({ type: 'attach', pid, breakpoints });
         run.onMessage = handle;
-        run.onClose = () => { if (run) {
+        // only this run's connection counts: an earlier one closing late (Before launch) must not end the next run
+        const mine = run;
+        run.onClose = () => { if (run && run === mine) {
             append('\nConnection to the host lost.\n', 'err');
             finish();
         } };
@@ -885,11 +939,15 @@ export function setupRun(deps) {
         // a configuration may leave the panel where it is (Open the Run panel when started: off)
         if (extra.openPanel !== false)
             showTab('output');
-        run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
+        openBrowser = !!extra.openBrowser;
+        followLogs((extra.logFiles ?? '').split(',').map((s) => s.trim()).filter(Boolean));
+        run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
             exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value,
             envFiles: extra.envFiles, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots });
         run.onMessage = handle;
-        run.onClose = () => { if (run) {
+        // only this run's connection counts: an earlier one closing late (Before launch) must not end the next run
+        const mine = run;
+        run.onClose = () => { if (run && run === mine) {
             append('\nConnection to the host lost.\n', 'err');
             finish();
         } };
@@ -1121,7 +1179,7 @@ export function setupRun(deps) {
     $('b-run').onclick = () => void start(false);
     $('b-profile').onclick = () => void start(false, true);
     $('b-debug').onclick = () => (paused ? resume('continue') : void start(true));
-    $('b-stop').onclick = () => run?.send({ type: 'stop' });
+    $('b-stop').onclick = () => { if (afterExit) stoppedByUser = true; run?.send({ type: 'stop' }); };
     $('b-over').onclick = () => resume('next');
     $('b-into').onclick = () => resume('stepIn');
     $('b-out').onclick = () => resume('stepOut');

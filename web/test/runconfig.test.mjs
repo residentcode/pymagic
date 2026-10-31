@@ -65,3 +65,11 @@ test("the run's settings: .env files, uv run, the roots on PYTHONPATH; the new f
     assert.equal(configurations[2].kind, 'script');
     assert.deepEqual(splitShared(configurations).shared.map((c) => c.name), ['srv']);
 });
+
+test('a Django server: its settings, a test server with fixtures, all the code debugged; Django tests go to the test tree', () => {
+    const s = startOf({ ...blank('d', 'django'), settings: 'cfg.dev', testServer: true, fixtures: 'users.json, items.json', justMyCode: false });
+    assert.deepEqual(s, { file: 'manage.py', args: ['testserver', 'users.json', 'items.json', '--addrport', '127.0.0.1:8000', '--noinput'], env: { DJANGO_SETTINGS_MODULE: 'cfg.dev' }, cwd: '', allCode: true });
+    const t = startOf({ ...blank('t', 'djangoTests'), target: 'shop.tests.ItemTests', failfast: true });
+    assert.deepEqual(t.tests, { ids: ['shop.tests.ItemTests'], framework: 'django', settings: undefined, failfast: true });
+    assert.equal(read({ configurations: [{ name: 'x', kind: 'djangoTests', failfast: true, before: 'migrate' }] }).configurations[0].before, 'migrate');
+});

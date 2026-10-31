@@ -968,6 +968,7 @@ app.Map("/run", async (HttpContext ctx) =>
                 bool content = msg["contentRoots"]?.GetValue<bool>() ?? true, sources = msg["sourceRoots"]?.GetValue<bool>() ?? true;
                 session.PythonPath = content && sources ? null
                     : (content ? new[] { root } : Array.Empty<string>()).Concat(sources ? ProjectFolders.Load(root).Sources.Select(s => Path.Combine(root, s)) : Array.Empty<string>()).ToList();
+                session.AllCode = msg["allCode"]?.GetValue<bool>() == true;
                 session.UvProgram = msg["uv"]?.GetValue<bool>() == true ? (msg["uvPath"]?.GetValue<string>() is { Length: > 0 } uvPath ? uvPath : "uv") : null;
                 if (msg["profile"]?.GetValue<bool>() == true && module == null) session.StartProfile(root, file0, args);
                 else if (module != null) session.StartModule(root, module, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
@@ -1001,7 +1002,8 @@ app.Map("/run", async (HttpContext ctx) =>
             {
                 var ids = (msg["ids"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
-                session.StartTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto", msg["coverage"]?.GetValue<bool>() == true);
+                session.StartTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto", msg["coverage"]?.GetValue<bool>() == true,
+                    msg["settings"]?.GetValue<string>() is { Length: > 0 } djangoSettings ? djangoSettings : null, msg["failfast"]?.GetValue<bool>() == true);
             }
             else if (msg["type"]?.GetValue<string>() == "startPip")
             {

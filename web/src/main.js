@@ -898,7 +898,7 @@ async function main() {
         },
     };
     runConfigs = setupRunConfigurations({ currentFile: () => currentRel });
-    runHooks = setupRun({ ...common, root: info.root, runConfig: () => runConfigs.current(), showDiff: (...a) => git.showDiff(...a), askText: (...a) => explorer.askText(...a) });
+    runHooks = setupRun({ ...common, root: info.root, runConfig: () => runConfigs.current(), runConfigByName: (name) => runConfigs.byName(name), showDiff: (...a) => git.showDiff(...a), askText: (...a) => explorer.askText(...a) });
     const tests = setupTests(common);
     setupInterpreters();
     setupPackages();

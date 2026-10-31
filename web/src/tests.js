@@ -439,7 +439,7 @@ export function setupTests(deps) {
     }
     // ------------------------------------------------------------ running
     let coverageRun = false;
-    async function run(ids, coverage = false) {
+    async function run(ids, coverage = false, extra = {}) {
         if (client)
             return;
         coverageRun = coverage;
@@ -467,7 +467,7 @@ export function setupTests(deps) {
         started = performance.now();
         lastIds = ids;
         const framework = $('tests-fw').value;
-        client = new RunClient({ type: 'startTests', ids, framework, coverage });
+        client = new RunClient({ type: 'startTests', ids, framework, coverage, ...extra });
         client.onMessage = handle;
         client.onClose = () => { if (client) {
             appendConsole('\nConnection to the host lost.\n', 'err');
@@ -505,6 +505,12 @@ export function setupTests(deps) {
     $('tests-sel').onclick = () => { if (selected)
         void run([selected.id]); };
     $('tests-here').onclick = runAtCursor;
+    // a run configuration of tests (Django tests): its framework and settings, its results in the tree
+    window.addEventListener('pymagic:runTests', (e) => {
+        const { ids, framework, settings, failfast } = e.detail;
+        $('tests-fw').value = framework;
+        void run(ids, false, { settings, failfast });
+    });
     /** Debugging tests: the test runner itself started under the debugger (Run panel), so the tests' breakpoints stop. */
     function debugTests(ids) {
         window.dispatchEvent(new CustomEvent('pymagic:debugTests', { detail: { ids, framework: $('tests-fw').value } }));

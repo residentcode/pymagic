@@ -48,6 +48,9 @@ public sealed class RunSession : IDisposable
 
     /// <summary>Run through `uv run` (this program, uv) instead of the interpreter itself: uv picks the project's environment and syncs it first.</summary>
     public string? UvProgram { get; set; }
+
+    /// <summary>Debug the libraries' code too (a configuration's "Debug only my code" off): the helper steps and stops anywhere.</summary>
+    public bool AllCode { get; set; }
     public bool IsDebug { get; private set; }
 
     public RunSession(Action<JsonNode> emit) { _emit = emit; }
@@ -81,7 +84,7 @@ public sealed class RunSession : IDisposable
         _root = root;
         if (!RunConfigurations.IsModuleName(module)) { Error($"'{module}' is not a module name"); return; }
         IsDebug = debug;
-        if (debug) Launch(root, true, new[] { "--module", module, "--" }, args, breakpoints);
+        if (debug) Launch(root, true, AllCode ? new[] { "--all-code", "--module", module, "--" } : new[] { "--module", module, "--" }, args, breakpoints);
         else Launch(root, false, new[] { "-m", module }, args, null);
     }
 
@@ -94,7 +97,7 @@ public sealed class RunSession : IDisposable
         if (!File.Exists(scriptPath)) { Error($"script not found: {script}"); return; }
         IsDebug = debug;
 
-        if (debug) Launch(root, true, new[] { "--script", scriptPath, "--" }, args, breakpoints);
+        if (debug) Launch(root, true, AllCode ? new[] { "--all-code", "--script", scriptPath, "--" } : new[] { "--script", scriptPath, "--" }, args, breakpoints);
         else Launch(root, false, new[] { scriptPath }, args, null);
     }
 
@@ -105,9 +108,11 @@ public sealed class RunSession : IDisposable
     /// <summary>Where a coverage run leaves the lines that ran.</summary>
     public static string CoveragePath(string root) => Path.Combine(root, ".pymagic", "coverage.json");
 
-    public void StartTests(string root, IReadOnlyList<string> ids, string framework = "auto", bool coverage = false)
+    public void StartTests(string root, IReadOnlyList<string> ids, string framework = "auto", bool coverage = false, string? djangoSettings = null, bool failfast = false)
     {
         var helperArgs = new List<string> { "--framework", framework };
+        if (djangoSettings != null && RunConfigurations.IsModuleName(djangoSettings)) { helperArgs.Add("--django-settings"); helperArgs.Add(djangoSettings); }
+        if (failfast) helperArgs.Add("--failfast");
         if (coverage)
         {
             helperArgs.Add("--coverage"); helperArgs.Add(CoveragePath(root));

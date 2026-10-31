@@ -145,8 +145,35 @@ def run_pytest(channel, root, ids):
 
 # ------------------------------------------------------------------------------------------------ unittest
 
-def run_unittest(channel, root, ids, flavor="unittest"):
+def django_runner(root, settings_module, failfast):
+    """Django's own test runner (the project's TEST_RUNNER), set up as manage.py test does: the settings, django.setup(), the test environment."""
+    import re
+    if not settings_module and not os.environ.get("DJANGO_SETTINGS_MODULE"):
+        # the module manage.py names, as Django's own command line reads it
+        for folder, dirs, names in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+            if "manage.py" in names:
+                with open(os.path.join(folder, "manage.py"), encoding="utf-8", errors="replace") as f:
+                    found = re.search(r"DJANGO_SETTINGS_MODULE['\"]\s*,\s*['\"]([\w.]+)", f.read())
+                if found:
+                    settings_module = found.group(1)
+                    if folder not in sys.path:
+                        sys.path.insert(0, folder)
+                break
+    if settings_module:
+        os.environ["DJANGO_SETTINGS_MODULE"] = settings_module
+    import django
+    from django.conf import settings
+    from django.test.utils import get_runner
+    django.setup()
+    runner = get_runner(settings)(verbosity=0, interactive=False, failfast=failfast)
+    runner.setup_test_environment()
+    return runner
+
+
+def run_unittest(channel, root, ids, flavor="unittest", settings_module=None, failfast=False):
     import unittest
+    runner = django_runner(root, settings_module, failfast) if flavor == "django" else None
     if flavor == "trial":
         import twisted.trial.unittest  # noqa: F401  (Trial's test cases run under unittest's runner through Twisted's adapter)
 
@@ -168,7 +195,12 @@ def run_unittest(channel, root, ids, flavor="unittest"):
         return "%s::%s::%s" % (file_part, cls.__name__, method) if method else "%s::%s" % (file_part, cls.__name__)
 
     loader = unittest.TestLoader()
-    if not ids:
+    if runner is not None:
+        # Django's labels: an app, a module, a class or a test, dotted (shop.tests.ItemTests.test_create); the tree's ids are turned into them
+        labels = [i if "::" not in i and "/" not in i and not i.endswith(".py") else ".".join([i.split("::")[0][:-3].replace("/", ".")] + i.split("::")[1:]) for i in ids]
+        suite = runner.build_suite(labels)
+        ids = []
+    elif not ids:
         # unittest's own discovery only enters packages; find test files the way the IDE's test tree does
         skipped = {".git", "__pycache__", "node_modules", ".venv", "venv", "env", ".tox", "site-packages", "build", "dist"}
         found = []
@@ -179,7 +211,8 @@ def run_unittest(channel, root, ids, flavor="unittest"):
                 if name.endswith(".py") and (stem.lower().startswith("test") or stem.endswith("_test")):
                     found.append(rel_path(root, os.path.join(folder, name)))
         ids = [f for f in found if f]
-    suite = unittest.TestSuite()
+    if runner is None:
+        suite = unittest.TestSuite()
     for item in ids:
         parts = item.split("::")
         dotted = ".".join([module_name(parts[0])] + parts[1:])
@@ -286,7 +319,15 @@ def run_unittest(channel, root, ids, flavor="unittest"):
             super().stopTest(test)
 
     result = Result()
-    unittest.TestSuite(real).run(result)
+    old_databases = runner.setup_databases() if runner is not None else None
+    try:
+        if runner is not None and failfast:
+            result.failfast = True
+        unittest.TestSuite(real).run(result)
+    finally:
+        if runner is not None:
+            runner.teardown_databases(old_databases)
+            runner.teardown_test_environment()
     print("Ran %d tests" % result.testsRun)
     sys.stdout.flush()
     return 0 if result.wasSuccessful() and not failed_loads else 1
@@ -479,7 +520,9 @@ def main():
     parser.add_argument("--host", default="127.0.0.1", help="where the host listens (WSL and Docker reach it by another address)")
     parser.add_argument("--token", required=True)
     parser.add_argument("--root", required=True)
-    parser.add_argument("--framework", default="auto", choices=["auto", "pytest", "unittest", "doctest", "nose", "trial"])
+    parser.add_argument("--framework", default="auto", choices=["auto", "pytest", "unittest", "doctest", "nose", "trial", "django"])
+    parser.add_argument("--django-settings", default=None, help="the settings module of Django's tests (else manage.py's)")
+    parser.add_argument("--failfast", action="store_true", help="stop at the first failure")
     parser.add_argument("--coverage", default=None, help="write the lines that ran to this JSON file")
     parser.add_argument("ids", nargs="*")
     options = parser.parse_args()
@@ -509,6 +552,8 @@ def main():
             code = run_pytest(channel, root, options.ids)
         elif framework == "doctest":
             code = run_doctest(channel, root, options.ids)
+        elif framework == "django":
+            code = run_unittest(channel, root, options.ids, "django", options.django_settings, options.failfast)
         else:
             code = run_unittest(channel, root, options.ids, framework)
     except ImportError as e:
