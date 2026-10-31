@@ -64,11 +64,13 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Unresolved imports: asking PyPI whether a suggested package exists, an install command for other LSP clients, remembering "ignore this import" (15).
 - Language server: ~~semantic tokens~~ (done, item 197: the colours of names by their meaning, compared with VS Code's); cancelling a request, UTF-8 position encoding (8).
 - Formatter: the import settings of ruff and isort not read yet: `lines-after-imports`, `section-order`, `force-wrap-aliases`, `from-first`, `relative-imports-order`, `split-on-trailing-comma` (44).
+- Black's last corner cases, still to be compared with Black itself (not installed here): parentheses in `print((1))`, `with` and `await`, `# type:` comment placement, blank lines inside brackets (22, 43, 75).
 
 **Run, debug and tests**
 - Debugger: pausing a running program, attaching to a running process, breakpoints added while a frame is already running (they only count in new calls) (10); the stacks of other threads (76); setting attributes and items of objects, watches that expand, exception filters by type, function and data breakpoints (21).
 - Test runner: debugging a test, stopping a test run, `unittest` subtests as their own nodes, tests in classes whose bases live in other files (11).
 - ~~Coverage: branch coverage, combining runs, exporting a report, running one test with coverage (52)~~ (done, item 191).
+- Automated tests of the page itself in a real browser; the checks in PyMagic.exe are scripted by hand for now, beside the page's Node tests of its pure modules (9).
 
 **Git, packages and interpreters**
 - Git: pushing tags (72); choosing lines from the editor's gutter, moving single lines between changelists (73); a merge result built from three editors, picking lines inside one side, conflicts of binary files (116); interactive rebase's *edit*, `--rebase-merges`, rebasing onto another branch, reordering by dragging (117).
@@ -93,6 +95,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - `TypeForm[T]` (PEP 747), which pydantic 2.14's `TypeAdapter` uses.
 - `mock.patch` used as a decorator: the parameters it injects are reported as not given, since decorators that are instances are skipped.
 - The library scan's remaining reports (issue #8), about 600 over click, rich, jinja2, httpx, requests, urllib3, h11, pydantic, attrs, PyYAML and starlette; root causes 17 and 22 and `rich/traceback.py:349` were judged to match PyCharm.
+- A cache of parsed stubs on disk (7): each start parses typeshed's builtins and the stubs a project uses again (the cache is in memory only).
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
 - New project: ~~a *New Project* dialog with a location and project types (pure Python, FastAPI, Flask, Django, Jupyter, each with its starting files), *Create Git repository*, *Create a welcome script*, and the interpreter made with it: a project venv, uv (with the path to uv), base conda or a custom environment, and a Python version~~ (done, item 169). Unlike PyCharm, the packages a kind needs are listed in requirements.txt, not installed while the project is made.
@@ -146,12 +149,11 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Python inspections that PyCharm has and PyMagic does not: ~~a class without `__init__`; a decorator meant for classes used outside one; a problematic nesting of decorators; suspicious relative imports; a missing or empty docstring and a single-quoted one; a missing type hint; a file without an encoding given to `open`~~ (done, item 192); ~~`ClassVar`, `NewType` and `Final` misused; a redeclared type alias; a cast between unrelated types and an unnecessary cast; `typing.assert_type`; a string conversion without a dunder method~~ (done, item 193); ~~a fixture not requested by any test; wrong arguments in `@pytest.mark.parametrize`; the parameter count of a function decorated with `@patch`~~ (done, item 194); ~~incorrect variance; inheritance from classes with disjoint bases; new-style type parameters misused; protocols defined or used wrongly; an invalid `match` pattern; a redundant boolean check; a suspicious boolean condition~~ (done, item 195); ~~code incompatible with chosen Python versions; deprecated functions, classes and modules; a type in a docstring that does not fit the inferred one; requirements not installed and outdated Poetry versions; stub packages that do not fit~~ (done, item 196). Left on purpose: advertising stub packages that could be installed, since PyMagic ships typeshed's third-party stubs and already has those types.
 - Not compared yet: Database tools and SQL, the HTTP client, deployment, remote interpreters over SSH and Docker in depth, the profiler, the inspection list beyond Python and Django, intention actions one by one, Local History, scratch files, language injections, spelling and grammar, Markdown and reStructuredText, macros, Run Anything and the Services window.
 
-**To check** (old notes that later work may have covered; each needs a look before it is counted as open or done)
-- Parser: store-context validation and finer error messages (2). Scopes: `__all__`, `try/except ImportError` fallbacks, definitions under conditions (3).
-- Typeshed: `__init__.pyi` re-exports of `import a as a`, `__all__ +=`, overloads with an explicit `self`, a cache of parsed stubs on disk (7).
-- Black's last corner cases: parentheses in `print((1))`, `with` and `await`, `# type:` comment placement, blank lines inside brackets (22, 43, 75).
-- Automated tests of the page itself (the checks in a real browser are scripted by hand for now) (9).
+**Checked** (the old notes of a To check list, looked at again on 31 October 2026; what is still open is in the lists above)
+- Parser: ~~store-context validation and finer error messages (2)~~ (done, item 198: targets Python refuses, brackets never closed or mismatched, in Python's words). Scopes: ~~`__all__`, `try/except ImportError` fallbacks, definitions under conditions (3)~~ (done, item 198: star imports follow `__all__`, a name `__all__` lists must exist, a failed import beside its fallback takes the fallback's type, a class defined two ways under a condition only misses what neither has; functions under conditions were already right).
+- Typeshed: ~~`__init__.pyi` re-exports of `import a as a`, `__all__ +=`, overloads with an explicit `self`~~ (done, item 198); a cache of parsed stubs on disk (7) is in *Type engine* above.
+- Black's last corner cases (22, 43, 75) and automated tests of the page in a real browser (9) are open, in *Editor* and *Run, debug and tests* above.
 
 ## Work done
 
-The 197 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 198 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

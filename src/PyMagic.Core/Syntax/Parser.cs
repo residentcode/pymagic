@@ -26,7 +26,40 @@ public sealed class Parser
             if (t.Kind != TokenKind.Comment) toks.Add(t);
         var p = new Parser(source, toks);
         var module = p.ParseModule();
+        p.BracketErrors(toks);
         return new ParseResult(module, p._diags, all);
+    }
+
+    /// <summary>
+    /// A bracket never closed, or closed by another kind, said where Python says it: at the bracket ("'(' was never closed", "closing
+    /// parenthesis ']' does not match opening parenthesis '('"). The parser's errors after it only follow from it and are dropped.
+    /// </summary>
+    void BracketErrors(List<Token> toks)
+    {
+        var open = new Stack<Token>();
+        Diagnostic? found = null;
+        foreach (var t in toks)
+        {
+            if (t.Kind != TokenKind.Operator || t.Length != 1) continue;
+            char c = _src[t.Start];
+            if (c is '(' or '[' or '{') { open.Push(t); continue; }
+            if (c is not (')' or ']' or '}')) continue;
+            if (open.Count == 0) { found = new Diagnostic(t.Start, 1, $"unmatched '{c}'"); break; }
+            char o = _src[open.Pop().Start];
+            if ((o, c) is not (('(', ')') or ('[', ']') or ('{', '}')))
+            {
+                found = new Diagnostic(t.Start, 1, $"closing parenthesis '{c}' does not match opening parenthesis '{o}'");
+                break;
+            }
+        }
+        if (found == null && open.Count > 0)
+        {
+            var first = open.Last();   // the outermost one left open
+            found = new Diagnostic(first.Start, 1, $"'{_src[first.Start]}' was never closed");
+        }
+        if (found == null) return;
+        _diags.RemoveAll(d => d.Start >= found.Value.Start);
+        _diags.Add(found.Value);
     }
 
     // ------------------------------------------------------------ token helpers
@@ -253,6 +286,7 @@ public sealed class Parser
                     Advance();
                     var targets = new List<Expr> { ParseStarTarget() };
                     while (AcceptOp(",")) { if (AtStmtEnd()) break; targets.Add(ParseStarTarget()); }
+                    foreach (var t in targets) CheckTarget(t, "delete");
                     return At(new DelStmt(targets), s);
                 }
                 case "assert":
@@ -289,6 +323,8 @@ public sealed class Parser
             var ann = ParseTest();
             Expr? val = null;
             if (AcceptOp("=")) val = ParseStarExpressionsOrYield();
+            if (first is TupleExpr or ListExpr) _diags.Add(new Diagnostic(first.Start, Math.Max(first.End - first.Start, 1), "only single target (not tuple) can be annotated"));
+            else CheckTarget(first, "assign to");
             return At(new AnnAssignStmt(first, ann, val), s);
         }
 
@@ -296,6 +332,8 @@ public sealed class Parser
         {
             Advance();
             var val = ParseStarExpressionsOrYield();
+            if (first is not (NameExpr or AttributeExpr or SubscriptExpr))
+                _diags.Add(new Diagnostic(first.Start, Math.Max(first.End - first.Start, 1), $"'{TargetKind(first)}' is an illegal expression for augmented assignment"));
             return At(new AugAssignStmt(first, op, val), s);
         }
 
@@ -310,10 +348,65 @@ public sealed class Parser
                 if (IsOp("=")) { targets.Add(value); continue; }
                 break;
             }
+            foreach (var t in targets) CheckTarget(t, "assign to", equalsHint: true);
             return At(new AssignStmt(targets, value), s);
         }
 
         return At(new ExprStmt(first), s);
+    }
+
+    /// <summary>What Python calls a target it refuses: "literal", "function call", "expression"...</summary>
+    static string TargetKind(Expr e) => e switch
+    {
+        ConstExpr { Kind: ConstKind.True } => "True",
+        ConstExpr { Kind: ConstKind.False } => "False",
+        ConstExpr { Kind: ConstKind.None } => "None",
+        ConstExpr { Kind: ConstKind.Ellipsis } => "ellipsis",
+        ConstExpr { IsFString: true } => "f-string expression",
+        ConstExpr => "literal",
+        CallExpr => "function call",
+        LambdaExpr => "lambda",
+        IfExpr => "conditional expression",
+        DictExpr => "dict literal",
+        SetExpr => "set display",
+        CompExpr { Kind: CompKind.Generator } => "generator expression",
+        CompExpr { Kind: CompKind.Dict } => "dict comprehension",
+        CompExpr { Kind: CompKind.Set } => "set comprehension",
+        CompExpr => "list comprehension",
+        AwaitExpr => "await expression",
+        YieldExpr => "yield expression",
+        NamedExpr => "named expression",
+        CompareExpr => "comparison",
+        TupleExpr => "tuple",
+        ListExpr => "list",
+        _ => "expression",
+    };
+
+    /// <summary>
+    /// A target Python refuses (`1 = x`, `f() = 3`, `del 1`, `for a + b in ...`): reported at the part that cannot be a target, with Python's
+    /// own words; names, attributes, subscripts, starred targets and tuples or lists of them are fine.
+    /// </summary>
+    void CheckTarget(Expr e, string verb, bool equalsHint = false)
+    {
+        switch (e)
+        {
+            case NameExpr or AttributeExpr or SubscriptExpr:
+                return;
+            // Python's "Maybe you meant '=='" is for a whole target only, not for a part of a tuple
+            case StarExpr star:
+                CheckTarget(star.Value, verb);
+                return;
+            case TupleExpr t:
+                foreach (var i in t.Items) CheckTarget(i, verb);
+                return;
+            case ListExpr l:
+                foreach (var i in l.Items) CheckTarget(i, verb);
+                return;
+            default:
+                string hint = equalsHint && e is not (ConstExpr { Kind: ConstKind.True or ConstKind.False or ConstKind.None }) ? " here. Maybe you meant '==' instead of '='?" : "";
+                _diags.Add(new Diagnostic(e.Start, Math.Max(e.End - e.Start, 1), $"cannot {verb} {TargetKind(e)}{hint}"));
+                return;
+        }
     }
 
     static bool IsAugAssign(string t, out string op)
@@ -414,6 +507,7 @@ public sealed class Parser
         var body = ParseBlock();
         var orelse = new List<Stmt>();
         if (AcceptKw("else")) orelse = ParseBlock();
+        CheckTarget(target, "assign to");
         return At(new ForStmt(target, iter, body, orelse, isAsync), start);
     }
 
@@ -522,6 +616,7 @@ public sealed class Parser
         int s = Cur.Start;
         var ctx = ParseTest();
         Expr? target = AcceptKw("as") ? ParseStarTarget() : null;
+        if (target != null) CheckTarget(target, "assign to");
         return At(new WithItem(ctx, target), s);
     }
 
@@ -1441,6 +1536,7 @@ public sealed class Parser
                 Advance();
                 ifs.Add(ParseOrNoCond());
             }
+            CheckTarget(target, "assign to");
             gens.Add(At(new Comprehension(target, iter, ifs, isAsync), s));
         }
         return gens;

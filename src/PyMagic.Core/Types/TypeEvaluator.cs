@@ -622,6 +622,49 @@ public sealed partial class TypeEvaluator
 
     PyType ImportType(ModuleInfo m, ImportAlias a)
     {
+        var t = ImportTypeOf(m, a);
+        // `try: import ujson as json` / `except ImportError: import json`: an import that cannot be found never binds the name
+        // there, so the fallback alone gives its type
+        return t is UnknownType && IsGuardedByFallback(m, a) ? PyType.Never : t;
+    }
+
+    /// <summary>An import in the body of a try whose ImportError handler binds the same name again.</summary>
+    static bool IsGuardedByFallback(ModuleInfo m, ImportAlias a)
+    {
+        string local = a.AsName ?? a.Name.Split('.')[0];
+        Node child = a;
+        for (var p = m.ParentOf(a); p != null; child = p, p = m.ParentOf(p))
+        {
+            if (p is FunctionDef or ClassDef or Module) return false;
+            if (p is not TryStmt t || !t.Body.Contains(child)) continue;
+            foreach (var h in t.Handlers)
+            {
+                bool catches = h.Type == null || HandlerNames(h.Type).Any(n => n is "ImportError" or "ModuleNotFoundError" or "Exception" or "BaseException");
+                if (catches && h.Body.Any(s => Binds(s, local))) return true;
+            }
+        }
+        return false;
+
+        static IEnumerable<string> HandlerNames(Expr e) => e switch
+        {
+            NameExpr n => new[] { n.Name },
+            AttributeExpr x => new[] { x.Attr },
+            TupleExpr tu => tu.Items.SelectMany(HandlerNames),
+            _ => Array.Empty<string>(),
+        };
+
+        static bool Binds(Stmt s, string name) => s switch
+        {
+            ImportStmt i => i.Names.Any(n => (n.AsName ?? n.Name.Split('.')[0]) == name),
+            ImportFromStmt f => f.Names.Any(n => (n.AsName ?? n.Name) == name),
+            AssignStmt asg => asg.Targets.Any(x => x is NameExpr nx && nx.Name == name),
+            AnnAssignStmt ann => ann.Target is NameExpr nx && nx.Name == name,
+            _ => false,
+        };
+    }
+
+    PyType ImportTypeOf(ModuleInfo m, ImportAlias a)
+    {
         switch (m.ParentOf(a))
         {
             case ImportStmt:

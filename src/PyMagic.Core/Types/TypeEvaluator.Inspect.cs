@@ -62,6 +62,10 @@ public sealed partial class TypeEvaluator
         if (recv.Members.Any(x => x is UnknownType)) return;
         var res = AttributeType(recv, attr.Attr);
         var missing = res.Missing.Where(x => IsReportableMiss(x, attr.Attr, includeNone)).ToList();
+        // one class defined two ways under a condition (`if os.name == "nt": class P: ... else: class P: ...`): as PyCharm, only what
+        // no definition has is reported, not what one of them lacks
+        var found = recv.Members.OfType<ClassType>().Where(x => !res.Missing.Contains(x)).ToList();
+        missing.RemoveAll(x => x is ClassType c && found.Any(f => f.Info.Name == c.Info.Name && ReferenceEquals(f.Info.Module, c.Info.Module) && f.IsInstance == c.IsInstance));
         if (missing.Count == 0) return;
         int start = attr.End - attr.Attr.Length;
         diags.Add(new Diagnostic(start, attr.Attr.Length,

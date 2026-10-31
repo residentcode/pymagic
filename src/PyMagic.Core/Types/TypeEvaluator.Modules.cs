@@ -36,6 +36,9 @@ public sealed partial class TypeEvaluator
         return all != null ? all.Contains(name) : !name.StartsWith('_');
     }
 
+    /// <summary>The names a module's <c>__all__</c> lists, or null if it has none.</summary>
+    public IReadOnlySet<string>? AllNamesOf(ModuleInfo m) => ExportedNames(m);
+
     /// <summary>The names listed in a module's <c>__all__</c>, or null if it has none.</summary>
     HashSet<string>? ExportedNames(ModuleInfo m)
     {

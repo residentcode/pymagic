@@ -543,6 +543,14 @@ public sealed partial class TypeEvaluator
         return parts.Count == 0 ? PyType.Unknown : PyType.Union(parts);
     }
 
+    /// <summary>An overload whose first parameter has no annotation, or one the receiver is assignable to.</summary>
+    bool SelfAccepts(FunctionType f, PyType receiver)
+    {
+        if (f.Info.Node is not FunctionDef { Params: [{ Annotation: { } ann }, ..] } || (f.Info.Flags & (FuncFlags.Static | FuncFlags.ClassMethod)) != 0) return true;
+        var declared = AnnotationType(f.Info.Module, ann);
+        return declared is not ClassType || IsAssignable(declared, receiver);
+    }
+
     PyType TypeOfTarget(ModuleInfo m, Expr target) =>
         Memo(_targetCache, target, PyType.CycleUnknown, () => InferTargetType(m, target));
 
@@ -570,7 +578,12 @@ public sealed partial class TypeEvaluator
             {
                 case FunctionType f: return BindFunction(f, subst, receiverIsInstance);
                 case OverloadedType o:
-                    return new OverloadedType(o.Overloads.Select(f => (FunctionType)BindFunction(f, subst, receiverIsInstance, allowProperty: false)).ToList());
+                {
+                    // overloads that pick by an explicit self (`def get(self: Box[int]) -> int`): those the receiver is not are left out
+                    var fitting = receiverIsInstance && receiver is ClassType ? o.Overloads.Where(f => SelfAccepts(f, receiver)).ToList() : o.Overloads.ToList();
+                    if (fitting.Count == 0) fitting = o.Overloads.ToList();
+                    return new OverloadedType(fitting.Select(f => (FunctionType)BindFunction(f, subst, receiverIsInstance, allowProperty: false)).ToList());
+                }
                 case SignatureType { Origin.BoundFirst: false } s: return BindSignature(s, subst, receiverIsInstance);
                 default: return Substitute(t, subst);
             }
