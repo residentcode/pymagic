@@ -25,6 +25,7 @@ public static class PythonFormatter
         if (parsed.Diagnostics.Count > 0) return null;
         // like black, a file that already needs Python 3.9 may have its context managers in parentheses
         if (!options.ParenthesizedWith && NeedsPython39(source, parsed.Module)) options = options with { ParenthesizedWith = true };
+        if (!options.CommaAfterStar && (options.ParenthesizedWith || NeedsPython36(source, tokens, parsed.Module))) options = options with { CommaAfterStar = true };
 
         string result;
         try { result = new Renderer(source, tokens, options, parsed.Module).Run(); }
@@ -63,6 +64,54 @@ public static class PythonFormatter
             CallExpr c => c.Func is NameExpr or AttributeExpr && DottedOrCall(c.Func),
             _ => false,
         };
+    }
+
+    /// <summary>
+    /// Syntax only Python 3.6 and later reads, which black takes to mean a trailing comma may follow `*args` and `**kwargs`: f-strings,
+    /// underscores in numbers, `:=`, a `/` among parameters, `from __future__ import annotations`, and such a comma already written.
+    /// </summary>
+    static bool NeedsPython36(string source, IReadOnlyList<Token> tokens, Module module)
+    {
+        for (int k = 0; k < tokens.Count; k++)
+        {
+            var t = tokens[k];
+            string text = t.Text(source);
+            switch (t.Kind)
+            {
+                case TokenKind.String:
+                    int quote = text.IndexOfAny(new[] { '"', '\'' });
+                    if (quote > 0 && text[..quote].IndexOfAny(new[] { 'f', 'F', 't', 'T' }) >= 0) return true;
+                    break;
+                case TokenKind.Number when text.Contains('_'):
+                    return true;
+                case TokenKind.Operator when text == ":=":
+                    return true;
+                case TokenKind.Operator when text == "/" && k > 0 && k + 1 < tokens.Count && tokens[k - 1].Text(source) is "(" or "," && tokens[k + 1].Text(source) is ")" or ",":
+                    return true;
+                case TokenKind.Operator when text == ")" && k > 1 && tokens[k - 1].Text(source) == "," && StarredArguments(k):
+                    return true;
+            }
+        }
+        return module.Body.OfType<ImportFromStmt>().Any(i => i.Module == "__future__" && i.Names.Any(n => n.Name == "annotations"));
+
+        // the arguments or parameters before this closing parenthesis include `*x` or `**x`
+        bool StarredArguments(int close)
+        {
+            int depth = 0;
+            for (int j = close - 1; j > 0; j--)
+            {
+                string x = tokens[j].Text(source);
+                if (tokens[j].Kind != TokenKind.Operator) continue;
+                if (x is ")" or "]" or "}") depth++;
+                else if (x is "(" or "[" or "{")
+                {
+                    if (depth == 0) return false;
+                    depth--;
+                }
+                else if (depth == 0 && x is "*" or "**" && tokens[j - 1].Text(source) is "(" or ",") return true;
+            }
+            return false;
+        }
     }
 
     /// <summary>The rest of what the options ask for: tabs for indentation, the line ending.</summary>
@@ -117,6 +166,7 @@ public static class PythonFormatter
         var parsed = Parser.Parse(source);
         if (parsed.Diagnostics.Count > 0) return null;
         if (!options.ParenthesizedWith && NeedsPython39(source, parsed.Module)) options = options with { ParenthesizedWith = true };
+        if (!options.CommaAfterStar && (options.ParenthesizedWith || NeedsPython36(source, tokens, parsed.Module))) options = options with { CommaAfterStar = true };
 
         string? Attempt(int a, int b)
         {
@@ -311,6 +361,8 @@ public static class PythonFormatter
         string body = suffix.Length > 0 ? lower[..^1] : lower;
         int e = body.IndexOf('e');
         string mantissa = e >= 0 ? body[..e] : body, exponent = e >= 0 ? body[e..] : "";
+        // an exponent's plus sign goes: 1e+05 is 1e05
+        if (exponent.StartsWith("e+", StringComparison.Ordinal)) exponent = "e" + exponent[2..];
         if (mantissa.Contains('.'))
         {
             if (mantissa.StartsWith('.')) mantissa = "0" + mantissa;
@@ -907,7 +959,8 @@ public static class PythonFormatter
             bool lastWasSliceColon = false;
 
             var pieces = new List<Piece>();     // the same line as tokens with their spaces, for the line wrapper
-            bool legacyOnly = false;            // backslashes and multi-line strings: keep the line breaks as they are
+            int row = 0;                        // the source line of the token, counted from the statement's first
+            bool legacyOnly = false;            // multi-line strings: keep the line breaks as they are (a backslash continuation is only a space, as in black)
 
             for (int k = 0; k < toks.Count; k++)
             {
@@ -938,27 +991,28 @@ public static class PythonFormatter
                 }
 
                 bool lineBreak = gap.Contains('\n') || gap.Contains('\r');
+                if (lineBreak) row += Math.Max(gap.Count(c => c == '\n'), 1);
                 bool backslash = gap.Contains('\\');
                 if (t.Kind == TokenKind.Comment)
                 {
                     // after a token on its line: it follows that token; on a line of its own inside brackets: a piece of its own
                     string comment = NormaliseComment(text, false);
-                    if (lineBreak || pieces.Count == 0) pieces.Add(new Piece { Text = comment, Kind = TokenKind.Comment, Standalone = true });
+                    if (lineBreak || pieces.Count == 0) pieces.Add(new Piece { Text = comment, Kind = TokenKind.Comment, Standalone = true, Row = row });
                     else pieces[^1].Comments.Add(comment);
                 }
-                if (backslash || (t.Kind == TokenKind.String && text.Contains('\n'))) legacyOnly = true;
+                if (t.Kind == TokenKind.String && text.Contains('\n')) legacyOnly = true;
 
                 bool sliceBefore = false, sliceAfter = false;
                 if (sliceColon) (sliceBefore, sliceAfter) = SliceSpacing(toks, k);
                 bool space = false;
-                if (k > 0 && t.Kind != TokenKind.Comment && !backslash && ps.HasValue)
+                if (k > 0 && t.Kind != TokenKind.Comment && ps.HasValue)
                     space = NeedSpace(t, text, ps.Value, psText, toks, k, frames, unary, kwargEq, hugPow, sliceColon, lambdaColon,
                         lastNoSpaceAfter, lastWasSliceColon, sliceSpaced, lineBreak ? " " : gap, startsWithFrom, ref inRelativeDots);
                 if (sliceColon && !backslash && !lineBreak) space = sliceBefore;
                 if (t.Kind != TokenKind.Comment)
                     pieces.Add(new Piece
                     {
-                        Text = Normalise(t, text, line), Space = space, Kind = t.Kind, Unary = unary, KwargEquals = kwargEq,
+                        Text = Normalise(t, text, line), Space = space, Kind = t.Kind, Unary = unary, KwargEquals = kwargEq, Break = lineBreak, Row = row,
                         IsOpen = t.Kind == TokenKind.Operator && text is "(" or "[" or "{",
                         IsClose = t.Kind == TokenKind.Operator && text is ")" or "]" or "}",
                     });

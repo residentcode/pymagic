@@ -65,7 +65,8 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Language server: ~~semantic tokens~~ (done, item 197: the colours of names by their meaning, compared with VS Code's); cancelling a request, UTF-8 position encoding (8).
 - Formatter: the import settings of ruff and isort not read yet: `lines-after-imports`, `section-order`, `force-wrap-aliases`, `from-first`, `relative-imports-order`, `split-on-trailing-comma` (44).
 - ~~Black's last corner cases: parentheses in `print((1))`, `with` and `await`, `# type:` comment placement, blank lines inside brackets (22, 43, 75)~~ (done, item 199, compared with black 26.10.1).
-- Black 24-26's style elsewhere: of 192 real files (Django, pandas, matplotlib) 109 come out as black writes them. The rest differ mostly by rules black made standard in 24: parentheses around a conditional expression or a long annotation that is split (`"key": (\n    a if b else c\n),`, `orient: (\n    Literal[...] | None\n) = None`), splitting before `%` after a string, implicitly joined strings one to a line when split, the parentheses of a tuple target (`(x, y) = ...`), no trailing comma after `*args` / `**kwargs` unless the code is for 3.6 and later, and a line too long only by its comment around an empty collection (`x = {}  # ...`).
+- ~~Black 24-26's style elsewhere: parentheses around a conditional expression or a long annotation that is split, splitting before `%` after a string, implicitly joined strings one to a line, tuple targets, no trailing comma after `*args` / `**kwargs` unless the code is for 3.6 and later, an empty collection too long by its comment~~ (done, item 200: black's right-hand split ported; of 192 real files 177 come out as black writes them).
+- Lines that hold a multi-line string (`"""..."""` as an argument, `"""...""".format(...)`, a docstring passed to a call) are left as written; black 24-26 splits them by its own rules (the call's closing bracket on a line of its own, a trailing comma after the string): the 15 of those 192 files that still differ, 274 lines, all of this kind.
 
 **Run, debug and tests**
 - Debugger: pausing a running program, attaching to a running process, breakpoints added while a frame is already running (they only count in new calls) (10); the stacks of other threads (76); setting attributes and items of objects, watches that expand, exception filters by type, function and data breakpoints (21).
@@ -157,4 +158,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 199 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 200 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
