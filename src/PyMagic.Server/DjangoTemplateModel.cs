@@ -28,7 +28,7 @@ internal static class DjangoTemplateParser
         ["if"] = "endif", ["for"] = "endfor", ["block"] = "endblock", ["with"] = "endwith", ["autoescape"] = "endautoescape",
         ["spaceless"] = "endspaceless", ["filter"] = "endfilter", ["blocktrans"] = "endblocktrans", ["blocktranslate"] = "endblocktranslate",
         ["language"] = "endlanguage", ["localtime"] = "endlocaltime", ["timezone"] = "endtimezone", ["cache"] = "endcache",
-        ["ifchanged"] = "endifchanged", ["localize"] = "endlocalize",
+        ["ifchanged"] = "endifchanged", ["localize"] = "endlocalize", ["partialdef"] = "endpartialdef",
     };
 
     static readonly HashSet<string> Opaque = new(StringComparer.Ordinal) { "comment", "verbatim" };
@@ -129,6 +129,13 @@ internal static class DjangoTemplateParser
                 if (depth < 0) { result.Problems.Add(new TemplateProblem(tag.Start, tag.End, $"'{name}' has no matching {{% {opener} %}}", "template-structure", true)); continue; }
                 for (int i = stack.Count - 1; i > depth; i--)
                     result.Problems.Add(new TemplateProblem(stack[i].Start, stack[i].End, $"Unclosed tag '{stack[i].Name}': add {{% {closers[stack[i].Name]} %}}", "template-structure", true));
+                // {% endblock content %} and {% endpartialdef card %} may repeat the name, which must be the opener's
+                if (name is "endblock" or "endpartialdef" && args.Length > 0)
+                {
+                    string opened = stack[depth].Args.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+                    string closed = args.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)[0];
+                    if (closed != opened) result.Problems.Add(new TemplateProblem(argsStart, argsStart + closed.Length, $"{{% {name} {closed} %}} closes the {opener} '{opened}': the names must match", "template-structure", true));
+                }
                 stack.RemoveRange(depth, stack.Count - depth);
                 continue;
             }

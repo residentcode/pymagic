@@ -44,6 +44,7 @@ public sealed partial class LanguageService
         "autoescape", "block", "comment", "csrf_token", "cycle", "debug", "extends", "filter", "firstof", "for", "if", "ifchanged", "include", "load", "lorem",
         "now", "regroup", "resetcycle", "spaceless", "templatetag", "url", "verbatim", "widthratio", "with", "elif", "else", "empty",
         "endautoescape", "endblock", "endcomment", "endfilter", "endfor", "endif", "endifchanged", "endspaceless", "endverbatim", "endwith",
+        "partialdef", "endpartialdef", "partial",
     };
 
     /// <summary>Libraries whose tags and filters are known: `{% load static %}`.</summary>
@@ -800,8 +801,11 @@ public sealed partial class LanguageService
             int qs = args[0].Offset + 1, qe = args[0].Offset + args[0].Text.Length - 1;
             switch (tag.Name)
             {
-                case "extends" or "include" when hasTemplates && !IsLibraryTemplate(quoted) && !Templates().Any(t => t.Name == quoted):
-                    Add(qs, qe, $"Template '{quoted}' is not in any templates folder of the project", Severity.Information, "django-template");
+                case "extends" or "include" when hasTemplates && !IsLibraryTemplate(TemplateWithoutPartial(quoted)) && !Templates().Any(t => t.Name == TemplateWithoutPartial(quoted)):
+                    Add(qs, qe, $"Template '{TemplateWithoutPartial(quoted)}' is not in any templates folder of the project", Severity.Information, "django-template");
+                    break;
+                case "include" when quoted.Contains('#') && MissingPartial(quoted) is { } missing:
+                    Add(qs + quoted.IndexOf('#') + 1, qe, missing, Severity.Warning, "django-partial");
                     break;
                 case "static" when hasStatic && !FilesBelowFolder("static").Any(f => f.Name == quoted):
                     Add(qs, qe, $"Static file '{quoted}' is not in any static folder of the project", Severity.Information, "template-static");
@@ -833,6 +837,24 @@ public sealed partial class LanguageService
                     Add(parts[0].Offset, parts[0].Offset + parts[0].Text.Length, $"No parent template has a block '{parts[0].Text}': its content is never shown", Severity.Information, "template-block");
             }
 
+        // {% partial card %}: a {% partialdef card %} of this template
+        var partials = PartialNamesIn(a.Parsed);
+        foreach (var tag in a.Parsed.Tags.Where(t => t.Name == "partial"))
+        {
+            var parts = DjangoTemplateParser.SplitArguments(tag.Args, tag.ArgsStart);
+            if (parts.Count > 0 && !partials.Contains(parts[0].Text))
+                Add(parts[0].Offset, parts[0].Offset + parts[0].Text.Length, $"No {{% partialdef {parts[0].Text} %}} in this template{(partials.Count > 0 ? ". Partials: " + string.Join(", ", partials.Order(StringComparer.Ordinal)) : "")}", Severity.Error, "django-partial");
+        }
+
+        // {# ... #} ends on its own line: a {# with no #} after it on the line is shown as text
+        foreach (var start in BrokenLineComments(a))
+            Add(start, start + 2, "This {# comment has no #} on its line, so Django shows it as text: a {# ... #} comment cannot span lines; use {% comment %} ... {% endcomment %}", Severity.Warning, "template-comment");
+
+        // {% if a==b %}: Django splits the condition at spaces, so an operator needs them on both sides
+        foreach (var tag in a.Parsed.Tags.Where(t => t.Name is "if" or "elif"))
+            foreach (var (at, op) in UnspacedComparisons(tag.Args))
+                Add(tag.ArgsStart + at, tag.ArgsStart + at + op.Length, $"Put spaces around '{op}': Django reads the words around it as one name and fails with \"Could not parse the remainder\"", Severity.Error, "template-if-spaces");
+
         // attributes that cannot exist on a class of the project
         foreach (var v in a.Parsed.Variables) CheckTemplateAttributes(a, v.Expression, v.ExprStart, Add);
         foreach (var tag in a.Parsed.Tags.Where(t => t.Name is "if" or "elif" or "for" or "with")) CheckTemplateAttributes(a, tag.Args, tag.ArgsStart, Add);
@@ -863,6 +885,61 @@ public sealed partial class LanguageService
                 offset += parts[i].Length;
             }
         }
+    }
+
+    /// <summary>`page.html#card` names the partial `card` of `page.html` (Django 6).</summary>
+    static string TemplateWithoutPartial(string name) => name.Contains('#') ? name[..name.IndexOf('#')] : name;
+
+    static HashSet<string> PartialNamesIn(ParsedTemplate parsed) =>
+        parsed.Tags.Where(t => t.Name == "partialdef").Select(t => t.Args.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault())
+            .OfType<string>().ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>The message for `page.html#card` when `page.html` is found and has no partial `card`; null when it has one or cannot be read.</summary>
+    string? MissingPartial(string name)
+    {
+        string template = TemplateWithoutPartial(name), partial = name[(name.IndexOf('#') + 1)..];
+        var file = Templates().FirstOrDefault(t => t.Name == template);
+        if (file.Path == null || TemplateTextOf(file.Path) is not { } text) return null;
+        var names = PartialNamesIn(DjangoTemplateParser.Parse(text));
+        return names.Contains(partial) ? null : $"'{template}' has no {{% partialdef {partial} %}}{(names.Count > 0 ? ". Partials: " + string.Join(", ", names.Order(StringComparer.Ordinal)) : "")}";
+    }
+
+    /// <summary>Where a `{#` starts that has no `#}` after it on its line, outside tags, variables and {% comment %} / {% verbatim %} blocks.</summary>
+    static IEnumerable<int> BrokenLineComments(TemplateAnalysis a)
+    {
+        string text = a.Text;
+        var skipped = a.Parsed.Tags.Select(t => (t.Start, t.End)).Concat(a.Parsed.Variables.Select(v => (v.Start, v.End))).ToList();
+        foreach (var open in a.Parsed.Tags.Where(t => t.Name is "comment" or "verbatim"))
+            if (a.Parsed.Tags.FirstOrDefault(t => t.Name == "end" + open.Name && t.Start > open.Start) is { } close) skipped.Add((open.End, close.Start));
+        for (int at = text.IndexOf("{#", StringComparison.Ordinal); at >= 0; at = text.IndexOf("{#", at + 2, StringComparison.Ordinal))
+        {
+            int lineEnd = text.IndexOf('\n', at);
+            if (lineEnd < 0) lineEnd = text.Length;
+            if (text.IndexOf("#}", at + 2, lineEnd - at - 2, StringComparison.Ordinal) >= 0) { at = text.IndexOf("#}", at + 2, StringComparison.Ordinal); continue; }
+            int here = at;
+            if (!skipped.Any(r => here >= r.Item1 && here < r.Item2)) yield return at;
+        }
+    }
+
+    static readonly string[] ComparisonOperators = { "==", "!=", "<=", ">=", "<", ">" };
+
+    /// <summary>The comparison operators of an {% if %} condition that touch a word: `a==b`, `a ==b`; quoted text is left alone.</summary>
+    static List<(int At, string Op)> UnspacedComparisons(string args)
+    {
+        var found = new List<(int, string)>();
+        char quote = '\0';
+        for (int i = 0; i < args.Length; i++)
+        {
+            char c = args[i];
+            if (quote != '\0') { if (c == quote) quote = '\0'; continue; }
+            if (c is '"' or '\'') { quote = c; continue; }
+            var op = ComparisonOperators.FirstOrDefault(o => string.CompareOrdinal(args, i, o, 0, o.Length) == 0);
+            if (op == null) continue;
+            bool before = i > 0 && !char.IsWhiteSpace(args[i - 1]), after = i + op.Length < args.Length && !char.IsWhiteSpace(args[i + op.Length]);
+            if (before || after) found.Add((i, op));
+            i += op.Length - 1;
+        }
+        return found;
     }
 
     bool IsProjectClass(Snapshot snap, ClassInfo c) => snap.Project.Any(m => ReferenceEquals(m, c.Module)) || snap.Workspace.UserModules.Any(m => ReferenceEquals(m, c.Module));

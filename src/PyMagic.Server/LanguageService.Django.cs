@@ -471,8 +471,11 @@ public sealed partial class LanguageService
                 case DjangoNamed.UrlName when hasUrls && !UrlDefsFor(index, s.Value).Any():
                     finding = new Finding(s.Start, s.End - s.Start, $"No URL is named '{s.Value}'", "django-url-name", FindingLevel.Weak);
                     break;
-                case DjangoNamed.Template when hasTemplates && !IsLibraryTemplate(s.Value) && !Templates().Any(t => t.Name == s.Value):
-                    finding = new Finding(s.Start, s.End - s.Start, $"Template '{s.Value}' is not in any templates folder of the project", "django-template", FindingLevel.Weak);
+                case DjangoNamed.Template when hasTemplates && !IsLibraryTemplate(TemplateWithoutPartial(s.Value)) && !Templates().Any(t => t.Name == TemplateWithoutPartial(s.Value)):
+                    finding = new Finding(s.Start, s.End - s.Start, $"Template '{TemplateWithoutPartial(s.Value)}' is not in any templates folder of the project", "django-template", FindingLevel.Weak);
+                    break;
+                case DjangoNamed.Template when s.Value.Contains('#') && MissingPartial(s.Value) is { } missing:
+                    finding = new Finding(s.Start, s.End - s.Start, missing, "django-partial", FindingLevel.Warning);
                     break;
                 case DjangoNamed.QueryField when s.Call != null && QueryModelOf(snap, fullModule, s.Call) is { } model && s.Call.Func is AttributeExpr { Attr: "order_by" or "values" or "values_list" or "only" or "defer" or "select_related" or "prefetch_related" }:
                 {

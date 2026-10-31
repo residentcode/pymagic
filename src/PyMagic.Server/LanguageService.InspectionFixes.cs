@@ -21,6 +21,8 @@ public sealed partial class LanguageService
         foreach (var d in FixtureDiagnostics(m, ev)) yield return d;
         foreach (var d in FixtureScopeDiagnostics(m, ev)) yield return d;
         foreach (var d in DjangoDiagnostics(m, ev)) yield return d;
+        foreach (var d in DjangoOrmDiagnostics(m, ev)) yield return d;
+        foreach (var d in ConstanceDiagnostics(m, ev)) yield return d;
         foreach (var d in WebRouteDiagnostics(m, ev)) yield return d;
         foreach (var d in FastApiDiagnostics(m, ev)) yield return d;
         foreach (var d in MetaDiagnostics(m, ev, Current())) yield return d;

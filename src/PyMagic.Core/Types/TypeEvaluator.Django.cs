@@ -329,6 +329,10 @@ public sealed partial class TypeEvaluator
                 foreach (var item in list) yield return item;
     }
 
+    /// <summary>The relation field behind a reverse accessor of a model (`author.book_set` gives `Book.author`); null when the name is not one.</summary>
+    public DjangoField? DjangoReverseSource(ClassInfo model, string name) =>
+        DjangoReverseOf(model).Where(r => r.Name == name).Select(r => r.Source).FirstOrDefault();
+
     // ------------------------------------------------------------ what the model gets that its class body does not say
 
     /// <summary>The attributes Django adds to a model class and its instances; null when the name is not one of them.</summary>

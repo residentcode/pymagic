@@ -380,4 +380,55 @@ public class DjangoTemplateTests
         var r = Make("{% if %}{{ \n");
         Assert.Equal(0, r.Svc.Diagnostics("file:///c:/proj/shop/views.py").Count(d => d.Severity == Severity.Error));
     }
+
+    // ------------------------------------------------------------ inspections of item 183
+
+    [Fact]
+    public void AnEndblockNameMustBeItsBlocks()
+    {
+        var d = DiagnosticsOf(Make("{% block content %}x{% endblock contnet %}\n{% block side %}y{% endblock side %}\n{% block a %}{% endblock %}\n"));
+        var wrong = d.Single(x => x.Code == "template-structure");
+        Assert.Equal("{% endblock contnet %} closes the block 'content': the names must match", wrong.Message);
+        Assert.Equal(32, wrong.Range.Start.Character);
+    }
+
+    [Fact]
+    public void ACommentThatRunsOntoTheNextLineIsShownAsText()
+    {
+        var d = DiagnosticsOf(Make("{# fine #}\n{# not closed here\n   still text #}\n{% verbatim %}{# kept {% endverbatim %}\n"));
+        var broken = d.Single(x => x.Code == "template-comment");
+        Assert.Equal(1, broken.Range.Start.Line);
+        Assert.Equal(0, broken.Range.Start.Character);
+    }
+
+    [Fact]
+    public void AComparisonInIfNeedsSpaces()
+    {
+        var d = DiagnosticsOf(Make("{% if count==3 %}a{% elif count >=4 %}b{% elif count != 2 and \"a==b\" %}c{% endif %}\n")).Where(x => x.Code == "template-if-spaces").ToList();
+        Assert.Equal(2, d.Count);
+        Assert.Contains("'=='", d[0].Message);
+        Assert.Equal(11, d[0].Range.Start.Character);
+        Assert.Contains("'>='", d[1].Message);
+    }
+
+    [Fact]
+    public void APartialMustBeDefined()
+    {
+        string page = "{% partialdef card inline %}<p>{{ count }}</p>{% endpartialdef card %}\n{% partial card %}{% partial crad %}\n{% include \"shop/parts.html#row\" %}{% include \"shop/parts.html#rwo\" %}\n";
+        var d = DiagnosticsOf(Make(page, templates: new[] { ("shop/parts.html", "{% partialdef row %}r{% endpartialdef %}\n") }));
+        Assert.True(!d.Any(x => x.Code is "template-tag" or "template-structure" or "django-template"));
+        var partial = d.Where(x => x.Code == "django-partial").Select(x => x.Message).ToList();
+        Assert.Equal(2, partial.Count);
+        Assert.True(partial.Contains("No {% partialdef crad %} in this template. Partials: card"));
+        Assert.True(partial.Contains("'shop/parts.html' has no {% partialdef rwo %}. Partials: row"));
+    }
+
+    [Fact]
+    public void APartialNamedInRenderIsChecked()
+    {
+        string views = "from django.shortcuts import render\n\n\ndef index(request):\n    render(request, \"shop/page.html#card\")\n    return render(request, \"shop/page.html#cart\")\n";
+        var r = Make("{% partialdef card %}c{% endpartialdef %}\n", views: views);
+        var d = r.Svc.Diagnostics("file:///c:/proj/shop/views.py").Where(x => x.Code is "django-partial" or "django-template").ToList();
+        Assert.Equal("'shop/page.html' has no {% partialdef cart %}. Partials: card", d.Single().Message);
+    }
 }
