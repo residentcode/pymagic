@@ -23,6 +23,7 @@ import { setupDjango } from './django';
 import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
+import { setupRequirementsCheck } from './requirements-check';
 import { setupProfiler } from './profiler';
 import { setupNotebook } from './notebook';
 import { buildInfo, buildLabel } from './build-info.js';
@@ -647,7 +648,7 @@ lsp.on('textDocument/publishDiagnostics', (p) => {
         severity: markerSeverity(d.severity),
         message: d.message,
         source: d.source,
-        tags: d.tags?.includes(1) ? [monaco.MarkerTag.Unnecessary] : undefined,
+        tags: markerTags(d.tags),
     }))) {
         updateProblems();
         return;
@@ -660,10 +661,19 @@ lsp.on('textDocument/publishDiagnostics', (p) => {
         severity: markerSeverity(d.severity),
         message: d.message,
         source: d.source,
-        tags: d.tags?.includes(1) ? [monaco.MarkerTag.Unnecessary] : undefined,
+        tags: markerTags(d.tags),
     })));
     updateProblems();
 });
+/** The marker tags of a diagnostic: greyed out (unnecessary) or struck through (deprecated). */
+function markerTags(tags) {
+    const out = [];
+    if (tags?.includes(1))
+        out.push(monaco.MarkerTag.Unnecessary);
+    if (tags?.includes(2))
+        out.push(monaco.MarkerTag.Deprecated);
+    return out.length ? out : undefined;
+}
 // ---------------------------------------------------------------- UI
 let editor;
 let runHooks = null;
@@ -1073,6 +1083,7 @@ async function main() {
     });
     fileActions.attachEditor(editor, monaco, () => refactorMenu(editor, refactor));
     const coverage = setupCoverage(common);
+    setupRequirementsCheck(common);
     setupProfiler(common);
     // code actions that need the page (not just a text edit) arrive as commands
     monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name) => {

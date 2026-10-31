@@ -7,7 +7,7 @@ public sealed record Range(Position Start, Position End);
 public sealed record Location(string Uri, Range Range);
 
 public static class Severity { public const int Error = 1, Warning = 2, Information = 3, Hint = 4; }
-public static class DiagnosticTag { public const int Unnecessary = 1; }
+public static class DiagnosticTag { public const int Unnecessary = 1; public const int Deprecated = 2; }
 
 public sealed record LspDiagnostic(Range Range, int Severity, string Message, string Source = "pymagic", int[]? Tags = null, string? Code = null);
 

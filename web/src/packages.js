@@ -204,7 +204,7 @@ export function setupPackages() {
         const user = $('pk-user').checked;
         client = new RunClient({ type: 'startPip', op, packages: names, user, ...extra });
         setBusy(true);
-        const done = () => { client?.close(); client = null; setBusy(false); void load(); };
+        const done = () => { client?.close(); client = null; setBusy(false); void load(); window.dispatchEvent(new CustomEvent('pymagic:packagesChanged')); };
         client.onMessage = (m) => {
             if (m.type === 'output')
                 append(m.text, m.stream === 'stderr' ? 'err' : '');
