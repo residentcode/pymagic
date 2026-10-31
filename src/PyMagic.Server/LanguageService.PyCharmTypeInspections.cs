@@ -141,7 +141,7 @@ public sealed partial class LanguageService
 
     /// <summary>The first ClassVar or Final anywhere in an annotation, or null.</summary>
     static string? QualifierIn(Expr annotation) =>
-        new[] { annotation }.Concat(AstChildren.Descendants(annotation).OfType<Expr>())
+        AstChildren.Descendants(annotation).OfType<Expr>()
             .Select(e => e is SubscriptExpr s ? TypingName(s.Value) : TypingName(e)).FirstOrDefault(n => n is "ClassVar" or "Final");
 
     static bool IsNewTypeName(ModuleInfo m, NameExpr name) =>

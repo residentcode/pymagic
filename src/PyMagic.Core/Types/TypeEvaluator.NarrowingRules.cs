@@ -633,6 +633,10 @@ public sealed partial class TypeEvaluator
     /// The attribute names a class pattern's positional sub-patterns stand for: a `__match_args__ = ("x", "y")` in the
     /// class or a base, else the fields of a named tuple, else the init fields of a dataclass that are not keyword-only.
     /// </summary>
+    /// <summary>The attribute names of a class pattern's positional sub-patterns (null when the class says none), and whether the class matches itself with one (int(x)).</summary>
+    public (IReadOnlyList<string>? Names, bool SelfMatching) MatchArgsOf(ClassType c) =>
+        (MatchArgs(c), Mro(c.Info).Any(e => e is ClassType b && b.Info.Module.Name == "builtins" && SelfMatching.Contains(b.Info.Name)));
+
     IReadOnlyList<string>? MatchArgs(ClassType c)
     {
         if (FindMember(c, "__match_args__", false, null, out _) is { ClassSymbol: { } sym } hit)
