@@ -33,6 +33,7 @@ public sealed partial class LanguageService
         foreach (var d in StarImportDiagnostics(m, ev)) yield return d;
         foreach (var d in WebRouteDiagnostics(m, ev)) yield return d;
         foreach (var d in FastApiDiagnostics(m, ev)) yield return d;
+        foreach (var d in FastApiRequestDiagnostics(m, ev)) yield return d;
         foreach (var d in MetaDiagnostics(m, ev, Current())) yield return d;
         foreach (var d in ViewDiagnostics(m, ev)) yield return d;
         foreach (var d in SerializerDiagnostics(m, ev)) yield return d;

@@ -154,6 +154,8 @@ public sealed partial class LanguageService
         ("route-unknown-parameter", "Web routes", "Flask view parameter the route never gives", "A parameter Flask cannot fill from the path.", "warning"),
         ("duplicate-route", "Web routes", "Route declared twice", "The same method and path handled by two functions.", "warning"),
         ("route-shadowed", "Web routes", "Route no request reaches", "A fixed path declared after a route with a parameter that already matches it (/items/{id} before /items/me).", "warning"),
+        ("fastapi-request-body", "Web routes", "Request body FastAPI cannot get", "A body on a GET or HEAD route, or a JSON body beside Form or File fields (FastAPI then reads them all from the form).", "warning"),
+        ("fastapi-security-scopes", "Web routes", "Scope the OAuth2 scheme does not declare", "Security(..., scopes=[...]) with a scope none of the project's OAuth2 schemes lists: no token carries it.", "warning"),
         ("fastapi-response-model", "Web routes", "FastAPI answer that does not fit the response model", "A dict without a field the model requires, another model without it, a str or None where a model is wanted, a single one where a list is wanted: the request fails with ResponseValidationError (500).", "error"),
         ("depends-called", "Web routes", "Dependency called instead of passed", "Depends(get_db()) hands over what the function returned, not the function.", "warning"),
         ("async-blocking-call", "Python", "Blocking call in an async function", "time.sleep, requests.get, subprocess.run and the like in an async def stop every other request until they return.", "warning"),

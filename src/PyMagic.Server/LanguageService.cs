@@ -645,6 +645,7 @@ public sealed partial class LanguageService
 
         if (FixtureDefinition(uri, pos) is { Count: > 0 } fixtureLocations) return fixtureLocations;
         if (DjangoDefinition(uri, pos) is { Count: > 0 } djangoLocations) return djangoLocations;
+        if (FastApiDependencyDefinition(m, ev, offset) is { Count: > 0 } dependencyLocations) return dependencyLocations;
 
         void AddNode(ModuleInfo? module, Node node)
         {
