@@ -365,7 +365,9 @@ public sealed partial class LanguageService
         // manager of a model instance (author.book_set, book.tags: always the related model's plain queryset), are checked
         Expr root = access.Value;
         while (root is CallExpr rc && rc.Func is AttributeExpr ra) root = ra.Value;
-        bool fromManager = root is AttributeExpr { Attr: "objects" or "_default_manager" };
+        // `Book.objects`, or another manager of the model class (`published = PublishedManager()`, `TagQuerySet.as_manager()`)
+        bool fromManager = root is AttributeExpr { Attr: "objects" or "_default_manager" }
+            || root is AttributeExpr other && ev.TypeOf(m, other.Value) is ClassType { IsInstance: false } modelClass && ev.IsDjangoModel(modelClass.Info) && ev.DjangoModelOfQuery(ev.TypeOf(m, other)) != null;
         bool fromRelated = !fromManager && root is AttributeExpr related && ev.TypeOf(m, related.Value) is ClassType { IsInstance: true } owner && ev.IsDjangoModel(owner.Info)
             && ev.DjangoModelOfQuery(ev.TypeOf(m, related)) != null;
         if (!fromManager && !fromRelated) return null;
@@ -457,7 +459,7 @@ public sealed partial class LanguageService
         if (m.IsStub || m.Source.IndexOf("django", StringComparison.OrdinalIgnoreCase) < 0 && m.Source.IndexOf("objects", StringComparison.Ordinal) < 0
             && m.Source.IndexOf("render_template", StringComparison.Ordinal) < 0 && m.Source.IndexOf("TemplateResponse", StringComparison.Ordinal) < 0) yield break;
         // the open buffers are the project here (the page opens every file): rebuilding the whole project after each keystroke would be too much
-        var snap = Current();
+        var snap = ReferenceEquals(Current().Workspace.Evaluator, ev) ? Current() : Full();   // the project scan works on the full snapshot
         var fullModule = m;
         var fev = ev;
         var index = DjangoIndexOf(snap);

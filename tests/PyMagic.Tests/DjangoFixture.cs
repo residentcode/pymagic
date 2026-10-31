@@ -40,8 +40,8 @@ internal static class DjangoFixture
             "from django.db.models.fields import Field\n\n\nclass ForeignKey(Field):\n    def __init__(self, to, on_delete=None, related_name=None, related_query_name=None, **kwargs): ...\n\n\n" +
             "class OneToOneField(ForeignKey): ...\n\n\nclass ManyToManyField(Field):\n    def __init__(self, to, related_name=None, **kwargs): ...\n"),
         ("django/db/models/fields/json.py", "from django.db.models.fields import Field\n\n\nclass JSONField(Field): ...\n"),
-        ("django/db/models/manager.py", "class BaseManager:\n    def get_queryset(self): ...\n\n\nclass Manager(BaseManager): ...\n"),
-        ("django/db/models/query.py", "class QuerySet:\n    def __init__(self, model=None): ...\n"),
+        ("django/db/models/manager.py", "class BaseManager:\n    def get_queryset(self): ...\n\n    @classmethod\n    def from_queryset(cls, queryset_class, class_name=None): ...\n\n\nclass Manager(BaseManager): ...\n"),
+        ("django/db/models/query.py", "class QuerySet:\n    def __init__(self, model=None): ...\n\n    @classmethod\n    def as_manager(cls): ...\n"),
         ("django/db/models/deletion.py", "CASCADE = object()\nSET_NULL = object()\nPROTECT = object()\n"),
         ("django/core/__init__.py", ""),
         ("django/core/exceptions.py", "class ObjectDoesNotExist(Exception): ...\n\n\nclass MultipleObjectsReturned(Exception): ...\n"),

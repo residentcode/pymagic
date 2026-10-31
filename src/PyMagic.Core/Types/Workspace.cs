@@ -33,6 +33,11 @@ public sealed class WorkspaceOptions
     /// called with the workspace, the module and the parameter; null leaves the type to the usual rules.
     /// </summary>
     public Func<Workspace, ModuleInfo, Parameter, PyType?>? ParameterTypes { get; init; }
+    /// <summary>
+    /// The modules of the user's code that hold Django models (`books.models`), read when the models of the project are looked for even if nothing
+    /// imports them: the reverse relations they add (`related_name="books"`) belong to models elsewhere.
+    /// </summary>
+    public IReadOnlyList<string> ModelModules { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>One parsed module with its semantic and flow models.</summary>

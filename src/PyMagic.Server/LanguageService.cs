@@ -289,7 +289,28 @@ public sealed partial class LanguageService
         TypeshedPath = TypeshedPath,
         Environment = Environment,
         ParameterTypes = parameterTypes,
+        ModelModules = ModelModuleNames(),
     };
+
+    (DateTime At, string Roots, List<string> Names)? _modelModules;
+
+    /// <summary>The project's Django models files (`models.py`, and the modules of a `models` package), as module names; looked for again after a few seconds.</summary>
+    List<string> ModelModuleNames()
+    {
+        string roots = string.Join("|", SourceRootsNow());
+        if (_modelModules is { } cached && cached.Roots == roots && DateTime.UtcNow - cached.At < TimeSpan.FromSeconds(5)) return cached.Names;
+        var names = new List<string>();
+        foreach (var path in ProjectFiles())
+        {
+            string file = System.IO.Path.GetFileName(path);
+            string? folder = System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(path));
+            if (file != "models.py" && folder != "models") continue;
+            var (name, _) = ModuleNameOf(path);
+            if (!name.StartsWith("__", StringComparison.Ordinal)) names.Add(name);
+        }
+        _modelModules = (DateTime.UtcNow, roots, names);
+        return names;
+    }
 
     Snapshot BuildSnapshot(bool includeProject, string? needle = null)
     {

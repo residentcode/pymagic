@@ -121,10 +121,18 @@ export function setupDjango(deps) {
             focus(30);
         }
     });
+    // the settings module commands run with: manage.py's own, or another one of the project's (kept per project)
+    const settingsKey = () => `pymagic.djangoSettings.${project?.manage ?? ''}`;
+    function chosenSettings() {
+        try { return localStorage.getItem(settingsKey()) || ''; }
+        catch { return ''; }
+    }
     async function runManage(args, debug = false) {
         if (!project?.manage)
             return;
-        const started = await deps.run.runScript(project.manage, args, debug);
+        const settings = chosenSettings();
+        const withSettings = settings && settings !== project.settingsModule && !args.some((a) => a.startsWith('--settings')) ? [...args, `--settings=${settings}`] : args;
+        const started = await deps.run.runScript(project.manage, withSettings, debug);
         if (started === false)
             toast('A program is running: stop it first.', true);
     }
@@ -146,6 +154,16 @@ export function setupDjango(deps) {
             return;
         }
         summary.textContent = `${project.manage}` + (project.settingsModule ? `  ·  settings ${project.settingsModule}` : '') + `  ·  ${project.apps.length} apps`;
+        const choices = project.settingsChoices ?? [];
+        if (choices.length > 1) {
+            const pick = el('select', 'dj-settings');
+            pick.title = 'The settings module manage.py commands run with (--settings)';
+            for (const module of choices)
+                pick.append(new Option(module === project.settingsModule ? `${module} (manage.py)` : module, module));
+            pick.value = chosenSettings() || project.settingsModule || choices[0];
+            pick.onchange = () => { try { localStorage.setItem(settingsKey(), pick.value); } catch { /* not kept */ } };
+            summary.append('  ·  run with ', pick);
+        }
         const commands = section('manage.py');
         const row = el('div', 'dj-row');
         for (const [label, args, debug, hint] of COMMANDS)
@@ -237,6 +255,11 @@ export function setupDjango(deps) {
             const twisty = el('span', 'dj-twisty', opened.has(app.path) ? '▾' : '▸');
             const title = el('span', 'dj-appname', app.name);
             const detail = el('span', 'detail', `${app.path}  ·  ${app.hasModels ? 'models' : 'no models'}  ·  ${app.migrations.length} migrations`);
+            if (app.installed === false) {
+                const missing = el('span', 'dj-warn', '  ·  not in INSTALLED_APPS');
+                missing.title = `INSTALLED_APPS does not list ${app.module}: Django does not load its models, migrations or templates`;
+                detail.append(missing);
+            }
             const actions = el('span', 'dj-actions');
             const label = app.name.split('.').pop();
             actions.append(button('makemigrations', `manage.py makemigrations ${label}`, (e) => { e.stopPropagation(); void runManage(['makemigrations', label]); }), button('migrate', `manage.py migrate ${label}`, (e) => { e.stopPropagation(); void runManage(['migrate', label]); }), button('test', `manage.py test ${label}`, (e) => { e.stopPropagation(); void runManage(['test', label]); }));

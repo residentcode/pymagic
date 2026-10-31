@@ -112,6 +112,8 @@
 .dj-app:hover, .dj-migration:hover { background: var(--hover); }
 .dj-twisty { width: 10px; color: var(--dim); }
 .dj-appname { font-weight: 600; }
+.dj-warn { color: var(--warn, #e5c07b); }
+.dj-settings { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; font: inherit; padding: 0 4px; }
 .dj-actions { margin-left: auto; display: flex; gap: 4px; }
 .dj-migration { padding: 1px 4px 1px 30px; cursor: pointer; font-family: var(--mono, monospace); }
 .dj-migration.dim { color: var(--dim); cursor: default; }

@@ -69,6 +69,8 @@ public sealed partial class TypeEvaluator
         if (_djangoProjectModels != null) return _djangoProjectModels;
         var list = new List<ClassInfo>();
         _djangoProjectModels = list;   // a lookup made while scanning sees what has been found so far
+        // the models files nothing imported yet: their relations add reverse accessors to models of other apps
+        foreach (var name in _ws.Options.ModelModules) _ws.GetModule(name);
         foreach (var module in _ws.UserModules.ToList())
         {
             if (module.IsStub) continue;
@@ -263,7 +265,9 @@ public sealed partial class TypeEvaluator
         var key = (model, baseManager, related);
         if (_djangoManagers.TryGetValue(key, out var existing)) return existing;
         ClassType? baseType = baseManager == null ? null : new ClassType(baseManager, false);
-        var manager = NewSyntheticClass(model.Module, baseManager?.Name ?? (related ? "RelatedManager" : "Manager"), baseType);
+        // a manager made from a QuerySet class is called as Django calls it: ManagerFromTagQuerySet
+        string managerName = baseManager == null ? (related ? "RelatedManager" : "Manager") : IsDjangoQuerySetClass(baseManager) ? "ManagerFrom" + baseManager.Name : baseManager.Name;
+        var manager = NewSyntheticClass(model.Module, managerName, baseType);
         _djangoManagers[key] = manager;
         _djangoSyntheticModel[manager] = model;
         AddQuerySetMembers(manager, model, InstanceOfClass(manager));
@@ -398,6 +402,9 @@ public sealed partial class TypeEvaluator
     {
         if (hit.ClassSymbol == null || !IsDjangoModel(receiver.Info) || hit.Owner.Info.Name == "Model" && IsDjangoInternal(hit.Owner.Info)) return null;
         if (receiverIsInstance && DjangoFieldOf(hit.Owner.Info, hit.ClassSymbol) is { } field) return DjangoValueType(field);
+        // `popular = TagQuerySet.as_manager()`: a manager of this model with the QuerySet's own methods
+        if (!receiverIsInstance && TypeOfSymbol(hit.ClassSymbol) is ClassType { IsInstance: true } made && DjangoQuerySetOfManager(made.Info) is { } querySet)
+            return InstanceOfClass(DjangoManagerOf(receiver.Info, querySet));
         if (!receiverIsInstance && TypeOfSymbol(hit.ClassSymbol) is ClassType { IsInstance: true } manager && IsDjangoManagerClass(manager.Info))
         {
             // `objects = BookManager()`: the manager of this model, with the custom methods still in reach
