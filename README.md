@@ -53,7 +53,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - ~~FastAPI: `Security` scopes checked against the OAuth2 scheme, `Annotated[X, Depends(...)]` navigation from the annotation, request-body rules (a body on a `GET`), OpenAPI output, sending a request to a running server from the Endpoints detail (34, 126)~~ (done: OpenAPI output and sending a request in item 180, the rest in item 206).
 - ~~Flask: the `request.args` names a view reads, checked against its template (128)~~ (done, item 207: with `request.form` and `request.files`, against the forms that submit to the view).
 - ~~Jinja: `{% include %}` of a list or a variable, line statements (`# for x in y`), the expressions beyond brackets and strings (`{{ a b }}`) (129)~~ (done, item 208).
-- pytest: `request.param` of `parametrize(..., indirect=True)` (151), fixtures registered by hooks at run time (134), a fixtures panel and a run icon in the gutter (29).
+- ~~pytest: `request.param` of `parametrize(..., indirect=True)` (151), fixtures registered by hooks at run time (134), a fixtures panel and a run icon in the gutter (29)~~ (done, item 209).
 
 **Editor**
 - Hover and signature help: a parameter's documentation in hover and in completion's `name=` items, the class docstring for a constructor call, `name=` after a `*`, documentation of methods of library base classes (119, 121); signature help inside decorators and class bases (118).
@@ -158,4 +158,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 208 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 209 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

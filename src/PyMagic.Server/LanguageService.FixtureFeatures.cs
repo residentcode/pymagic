@@ -317,7 +317,11 @@ public sealed partial class LanguageService
         bool pluginsKnown = new[] { m }.Concat(ctx.ConftestsOf(ws, m))
             .All(src => FixtureModel.PytestPluginsReadable(src) && (FixtureModel.PytestPluginsOf(src) ?? new List<string>()).All(n => ws.GetModule(n) != null))
             && PytestPluginOptions().Enabled.All(n => ws.GetModule(n) != null);   // a -p plugin that cannot be read may bring any fixture
-        if (!pytestAround || !pluginsKnown || dynamic("pytest_generate_tests")) yield break;
+        if (!pytestAround || !pluginsKnown) yield break;
+        // pytest_generate_tests gives the arguments its metafunc.parametrize names; one whose names are not written out may give any
+        var generated = new[] { m }.Concat(ctx.ConftestsOf(ws, m)).Select(FixtureHooks.GeneratedArguments).ToList();
+        if (dynamic("pytest_generate_tests") && generated.Any(g => !g.Complete)) yield break;
+        var generatedNames = generated.SelectMany(g => g.Names.Select(n => n.Name)).ToHashSet(StringComparer.Ordinal);
         var parametrized = FixtureModel.AllParametrizedNames(m);
 
         foreach (var f in AstChildren.Descendants(m.Ast).OfType<FunctionDef>())
@@ -325,7 +329,7 @@ public sealed partial class LanguageService
             if (FixtureModel.HasArgumentSupplyingDecorator(m, f) || !ctx.Resolver.IsClosedWorld(ws, m, f)) continue;
             foreach (var p in FixtureModel.RequestedParameters(m, f))
             {
-                if (FixtureModel.IsPluginFixture(p.Name) || FixtureModel.IsFixture(f) && parametrized.Contains(p.Name)) continue;
+                if (FixtureModel.IsPluginFixture(p.Name) || FixtureModel.IsFixture(f) && parametrized.Contains(p.Name) || generatedNames.Contains(p.Name)) continue;
                 var res = ctx.Resolver.Resolve(ws, m, f, p.Name, FixtureModel.IsFixture(f) ? f : null);
                 if (res.Found) continue;
                 var (s, e) = ParamNameSpan(m, p);

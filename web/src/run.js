@@ -132,9 +132,11 @@ export function setupRun(deps) {
     }
     /** Clicks in the margin of an editor: a click toggles, a right click edits, a drag moves a breakpoint. */
     function glyphMouse(ed) {
+        const testMark = (e) => e.target.detail?.glyphMarginLane === monaco.editor.GlyphMarginLane.Left
+            && ed.getModel()?.getLineDecorations(e.target.position.lineNumber).some((d) => d.options.glyphMarginClassName?.startsWith('test-run'));
         const glyphLine = (e) => (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position
-            // the right lane holds the override marks (hierarchy.js)
-            && e.target.detail?.glyphMarginLane !== monaco.editor.GlyphMarginLane.Right ? e.target.position.lineNumber : null);
+            // the right lane holds the override marks (hierarchy.js), the left one a test's run mark (tests.js)
+            && e.target.detail?.glyphMarginLane !== monaco.editor.GlyphMarginLane.Right && !testMark(e) ? e.target.position.lineNumber : null);
         ed.onMouseDown((e) => {
             const line = glyphLine(e), model = ed.getModel();
             if (line === null || !model)

@@ -76,6 +76,9 @@ export function setupTests(deps) {
     }
     // ------------------------------------------------------------ rendering
     function render() {
+        paintRunMarks();
+        if (showingFixtures)
+            return;   // the Fixtures view is shown instead of the tree
         tree.textContent = '';
         if (roots.length === 0) {
             tree.innerHTML = '<div class="empty">No tests found. Test files are named test*.py or *_test.py.</div>';
@@ -219,6 +222,12 @@ export function setupTests(deps) {
     function setStatus(n, s) {
         n.status = s;
         paint(n);
+        schedulePaintMarks();
+    }
+    let marksTimer = 0;
+    function schedulePaintMarks() {
+        clearTimeout(marksTimer);
+        marksTimer = window.setTimeout(() => paintRunMarks(), 150);
     }
     async function updateMarkers() {
         const perFile = new Map();
@@ -545,6 +554,117 @@ export function setupTests(deps) {
             void run(failed);
     };
     $('tests-refresh').onclick = () => void load();
+    // ------------------------------------------------------------ run marks in the gutter: each test and test class, with its last result
+    const runMarks = editor.createDecorationsCollection();
+    function markedNodes(rel) {
+        return [...byId.values()].filter((n) => n.file === rel && n.line && n.kind !== 'file' && n.kind !== 'case');
+    }
+    function paintRunMarks() {
+        const model = editor.getModel();
+        const rel = model && deps.relOf(model);
+        if (!rel || model.getLanguageId() !== 'python') {
+            runMarks.clear();
+            return;
+        }
+        runMarks.set(markedNodes(rel).map((n) => ({
+            range: new monaco.Range(n.line, 1, n.line, 1),
+            options: {
+                glyphMarginClassName: `test-run test-run-${n.status}`,
+                glyphMarginHoverMessage: { value: `${n.kind === 'class' ? 'Tests' : 'Test'} **${n.name}**: ${n.status === 'idle' ? 'not run yet' : n.status}. Click to run or debug it.` },
+                glyphMargin: { position: monaco.editor.GlyphMarginLane.Left },
+                stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+            },
+        })));
+    }
+    editor.onDidChangeModel(() => paintRunMarks());
+    editor.onMouseDown((e) => {
+        if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN || !e.target.position || e.target.detail?.glyphMarginLane !== monaco.editor.GlyphMarginLane.Left)
+            return;
+        const model = editor.getModel();
+        const line = e.target.position.lineNumber;
+        if (!model || !model.getLineDecorations(line).some((d) => d.options.glyphMarginClassName?.startsWith('test-run')))
+            return;
+        // the test whose mark it is: decorations follow the edits, so the line of the node may be old
+        const at = runMarks.getRanges().findIndex((r) => r.startLineNumber === line);
+        const nodes = markedNodes(deps.relOf(model));
+        const n = at >= 0 && nodes[at] ? nodes[at] : nodes.find((x) => x.line === line);
+        if (!n)
+            return;
+        const where = { x: e.event.browserEvent.clientX, y: e.event.browserEvent.clientY };
+        openMenu(where, [
+            { label: `Run '${n.name}'`, run: () => void run([n.id]) },
+            { label: `Debug '${n.name}'`, run: () => debugTests([n.id]) },
+            { label: `Run '${n.name}' with coverage`, run: () => void run([n.id], true) },
+        ]);
+    });
+    // ------------------------------------------------------------ fixtures: every one the tests can use, where it is, its scope and its users
+    const fixturesButton = document.createElement('button');
+    fixturesButton.id = 'tests-fixtures';
+    fixturesButton.title = 'The fixtures the tests can use: where each is defined, its scope, what it gives and how many ask for it';
+    fixturesButton.textContent = 'Fixtures';
+    $('tests-refresh').after(fixturesButton);
+    let showingFixtures = false;
+    async function showFixtures() {
+        const list = (await deps.lsp.request('pymagic/fixtures', {}).catch(() => null)) ?? [];
+        tree.replaceChildren();
+        const filter = document.createElement('input');
+        filter.className = 'fx-filter';
+        filter.placeholder = 'Filter fixtures';
+        tree.append(filter);
+        const body = document.createElement('div');
+        tree.append(body);
+        const paintList = () => {
+            body.replaceChildren();
+            const words = filter.value.trim().toLowerCase();
+            const groups = new Map();
+            for (const f of list.filter((x) => !words || x.name.toLowerCase().includes(words) || (x.origin ?? '').toLowerCase().includes(words))) {
+                const key = f.where === 'pytest' ? 'pytest' : `${f.where} · ${f.origin}`;
+                if (!groups.has(key))
+                    groups.set(key, []);
+                groups.get(key).push(f);
+            }
+            for (const [key, items] of groups) {
+                const head = document.createElement('div');
+                head.className = 'fx-group';
+                head.textContent = key;
+                body.append(head);
+                for (const f of items) {
+                    const row = document.createElement('div');
+                    row.className = 'fx-row' + (f.uses === 0 && f.where !== 'pytest' && !f.autouse ? ' fx-unused' : '');
+                    const name = document.createElement('span');
+                    name.className = 'fx-name';
+                    name.textContent = f.name;
+                    const meta = document.createElement('span');
+                    meta.className = 'fx-meta';
+                    meta.textContent = [f.scope, f.autouse ? 'autouse' : null, f.type, `${f.uses} use${f.uses === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+                    row.append(name, meta);
+                    row.title = f.doc ?? '';
+                    if (f.uri) {
+                        row.onclick = () => {
+                            const rel = deps.relOfUri(f.uri);
+                            if (rel)
+                                void deps.openFile(rel, new monaco.Range(f.line + 1, 1, f.line + 1, 1));
+                        };
+                    }
+                    body.append(row);
+                }
+            }
+            if (!body.children.length)
+                body.append(Object.assign(document.createElement('div'), { className: 'dim', textContent: 'No fixture.' }));
+        };
+        filter.oninput = paintList;
+        paintList();
+        $('detail-title').textContent = 'Fixtures';
+        detail.textContent = `${list.filter((f) => f.where !== 'pytest').length} fixtures of the project and its plugins, ${list.filter((f) => f.where === 'pytest').length} of pytest. A dimmed one is asked for by nothing.`;
+    }
+    fixturesButton.onclick = () => {
+        showingFixtures = !showingFixtures;
+        fixturesButton.classList.toggle('active', showingFixtures);
+        if (showingFixtures)
+            void showFixtures();
+        else
+            render();
+    };
     $('t-tests').onclick = () => { showTab('tests'); if (roots.length === 0)
         void load(); };
     $('b-tests').onclick = () => { showTab('tests'); void load(); };

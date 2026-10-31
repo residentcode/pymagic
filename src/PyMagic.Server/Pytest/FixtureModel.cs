@@ -322,6 +322,9 @@ internal static class FixtureModel
         var result = new List<Parameter>();
         if (!RequestsFixtures(m, f)) return result;
         var parametrized = ParametrizedNames(m, f);
+        // `parametrize("db", [...], indirect=True)` hands the values to the fixture db: the test still asks for that fixture
+        parametrized.ExceptWith(f.Decorators.Concat(ClassesAround(m, f).SelectMany(c => c.Decorators)).OfType<CallExpr>()
+            .Where(c => CalleeText(m, c.Func).EndsWith("parametrize")).SelectMany(FixtureHooks.IndirectNames));
         int skip = PatchInjected(m, f);
         bool isMethod = EnclosingClass(m, f) != null && !f.Decorators.Any(d => d is NameExpr { Name: "staticmethod" });
         bool first = true;

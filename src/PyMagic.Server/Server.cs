@@ -232,6 +232,8 @@ public sealed class Server
                 return _service.Supertypes(HierarchyItemOf(p!["item"]));
             case "typeHierarchy/subtypes":
                 return _service.Subtypes(HierarchyItemOf(p!["item"]));
+            case "pymagic/fixtures":
+                return _service.Fixtures();
             case "pymagic/routes":
                 return _service.Routes();
             case "pymagic/problems":

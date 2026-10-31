@@ -465,3 +465,18 @@
 #tp-bar { gap: 4px; }
 #tp-base { width: 170px; } #tp-path { flex: 1; min-width: 120px; }
 #tp-frame { flex: 1; border: 0; background: #fff; width: 100%; }
+/* a test's run mark in the gutter, its colour the last result (tests.js) */
+.test-run { cursor: pointer; }
+.test-run::before { content: ''; display: block; width: 0; height: 0; margin: 4px 0 0 5px; border-left: 8px solid var(--green); border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
+.test-run-failed::before, .test-run-error::before { border-left-color: var(--red); }
+.test-run-skipped::before, .test-run-xfailed::before { border-left-color: var(--dim); }
+.test-run-running::before, .test-run-queued::before, .test-run-xpassed::before { border-left-color: var(--amber); }
+.test-run-idle::before { opacity: .75; }
+#tests-fixtures.active { color: var(--fg); border-color: var(--accent, var(--dim)); }
+.fx-filter { width: calc(100% - 12px); margin: 4px 6px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; font: inherit; }
+.fx-group { padding: 6px 8px 2px; color: var(--dim); font-size: 11px; text-transform: none; }
+.fx-row { display: flex; gap: 10px; padding: 1px 8px 1px 18px; cursor: pointer; white-space: nowrap; }
+.fx-row:hover { background: var(--hover, rgba(127, 127, 127, .12)); }
+.fx-name { font-family: var(--mono, monospace); }
+.fx-meta { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.fx-unused .fx-name { opacity: .55; }

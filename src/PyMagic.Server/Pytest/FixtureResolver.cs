@@ -71,6 +71,9 @@ internal sealed class FixtureResolver
             foreach (var (module, c) in Lineage(ws, m, cls).Classes) yield return DefinedIn(ws, module, c);
         yield return DefinedIn(ws, m, null);
         foreach (var conf in _conftests(ws, m)) yield return DefinedIn(ws, conf, null);
+        // objects the module or a conftest registers as plugins at run time: config.pluginmanager.register(Helpers())
+        foreach (var source in new[] { m }.Concat(_conftests(ws, m)))
+            foreach (var (module, cls) in FixtureHooks.RegisteredPluginClasses(ws, source)) yield return DefinedIn(ws, module, cls);
         foreach (var plugin in _plugins(ws, m)) yield return DefinedIn(ws, plugin, null);
     }
 
@@ -199,13 +202,26 @@ internal sealed class FixtureResolver
         if (res.Builtin is { Module: not null, Class: not null } b)
         {
             var t = ev.InstanceOf(b.Module, b.Class, b.StrArgument ? new[] { ev.BuiltinInstance("str") } : Array.Empty<PyType>());
-            // request in a fixture with params=[...]: request.param is one of those values
-            if (b.Name == "request" && t is ClassType request && FixtureModel.IsFixture(f) && ParamsOf(f) is { } values)
+            // request in a fixture with params=[...], or that tests parametrize with indirect=True: request.param is one of those values
+            if (b.Name == "request" && t is ClassType request && FixtureModel.IsFixture(f))
             {
-                var param = PyType.Union(values.Select(v => ev.TypeOf(m, v)).Select(x => x is ClassType { LiteralValue: not null } lit ? lit.Widened() : x));
-                if (!param.Members.Any(x => x is UnknownType)) return ev.WithAttributes(m, f, request, new[] { ("param", param) });
+                var values = (ParamsOf(f) ?? Array.Empty<Expr>()).Select(v => (m, v)).ToList();
+                if (FixtureModel.Parse(m, f) is { } self) values.AddRange(FixtureHooks.IndirectValues(ws.UserModules, self.Name));
+                if (values.Count > 0)
+                {
+                    var param = PyType.Union(values.Select(v => ev.TypeOf(v.Item1, v.Item2)).Select(x => x is ClassType { LiteralValue: not null } lit ? lit.Widened() : x));
+                    if (!param.Members.Any(x => x is UnknownType)) return ev.WithAttributes(m, f, request, new[] { ("param", param) });
+                }
             }
             return t;
+        }
+        // an argument pytest_generate_tests gives: the values of its metafunc.parametrize
+        if (FixtureModel.IsTestFunction(m, f))
+        {
+            var given = new[] { m }.Concat(_conftests(ws, m)).SelectMany(x => FixtureHooks.GeneratedArguments(x).Names.Select(n => (Module: x, n.Name, n.Call, n.Index, n.Count)))
+                .Where(n => n.Name == p.Name).ToList();
+            var types = given.SelectMany(g => FixtureHooks.ValuesFor(g.Call, g.Index, g.Count).Select(v => ev.TypeOf(g.Module, v))).Select(x => x is ClassType { LiteralValue: not null } lit ? lit.Widened() : x).ToList();
+            if (types.Count > 0 && !types.Any(x => x is UnknownType)) return PyType.Union(types);
         }
         return null;
     }
