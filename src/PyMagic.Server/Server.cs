@@ -311,6 +311,18 @@ public sealed class Server
                 return new { text = _service.FormatText(p!["text"]!.GetValue<string>(), UriOf(p), EngineOf(p), p["range"] != null ? RangeOf(p) : null) };
             case "pymagic/organizeImports":
                 return _service.OrganizeImports(UriOf(p));
+            case "workspace/executeCommand":
+            {
+                string command = p?["command"]?.GetValue<string>() ?? "";
+                var args = (p?["arguments"] as JsonArray)?.Select(a => a is JsonValue v && v.TryGetValue<string>(out var s) ? s : a?.ToJsonString() ?? "").ToList() ?? new List<string>();
+                string said = _service.ExecuteCommand(command, args);
+                // pip changed what the interpreter has: read it again; either way every open file is checked again
+                if (command == "pymagic.installPackage") ApplyInterpreter(_service.Interpreter?.Path);
+                RepublishAll();
+                if (!Deferred) FlushDiagnostics();
+                _send(new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "window/showMessage", ["params"] = new JsonObject { ["type"] = 3, ["message"] = said } });
+                return null;
+            }
             case "workspace/symbol":
                 return _service.WorkspaceSymbols(p?["query"]?.GetValue<string>() ?? "");
             case "textDocument/documentSymbol":
@@ -359,6 +371,8 @@ public sealed class Server
                 codeActionProvider = new { codeActionKinds = new[] { LanguageService.QuickFixKind, LanguageService.OrganizeImportsKind, LanguageService.RefactorKind, LanguageService.RefactorExtractKind, LanguageService.RefactorInlineKind } },
                 referencesProvider = true,
                 renameProvider = new { prepareProvider = true },
+                // the commands of the import quick fixes, for clients that send them back (the PyMagic page runs the install itself)
+                executeCommandProvider = new { commands = new[] { "pymagic.ignoreImport", "pymagic.installPackage" } },
             },
             serverInfo = new { name = "PyMagic", version = "0.1" },
         };

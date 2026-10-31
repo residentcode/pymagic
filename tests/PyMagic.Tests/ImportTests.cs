@@ -308,4 +308,67 @@ public class ImportTests
         Assert.Equal("definitely_not_here", install["command"]!["arguments"]![0]!.GetValue<string>());
         Assert.True(install["edit"] == null);
     }
+
+    // ------------------------------------------------------------ item 215: PyPI, ignoring an import, the commands for any client
+
+    [Fact]
+    public void AGuessedPackageIsOfferedOnlyWhenPyPIHasIt()
+    {
+        if (RealPython == null) return;
+        using var p = new Project();
+        var asked = new List<string>();
+        p.Service.PackageIndexLookup = name => { asked.Add(name); return name == "requests_toolbelt"; };
+        p.Check("import requests_toolbelt\n");
+        Assert.True(Fix(p, "Install package") != null);
+        p.Check("import surely_no_such_package_here\n");
+        Assert.True(Fix(p, "Install package") == null, "PyPI has no such package");
+        Assert.True(Fix(p, "Ignore unresolved imports of 'surely_no_such_package_here'") != null);
+        // PyPI that cannot be asked (offline) changes nothing
+        p.Service.PackageIndexLookup = _ => null;
+        p.Check("import another_unknown_one\n");
+        Assert.True(Fix(p, "Install package") != null);
+        // each name is asked once
+        p.Service.PackageIndexLookup = name => { asked.Add(name); return name == "requests_toolbelt"; };
+        p.Check("import requests_toolbelt\n");
+        Fix(p, "Install package");
+        Assert.Equal(1, asked.Count(n => n == "requests_toolbelt"));
+    }
+
+    [Fact]
+    public void AnIgnoredImportIsNoLongerReported()
+    {
+        if (RealPython == null) return;
+        using var p = new Project();
+        Assert.Equal(2, p.Check("import vendored_tool\nimport vendored_tool.part\nimport other_missing\n").Count(m => m.Contains("vendored_tool")));
+        var fix = Fix(p, "Ignore unresolved imports of 'vendored_tool'")!;
+        Assert.Equal("pymagic.ignoreImport", fix.Command!.Command);
+        p.Service.ExecuteCommand("pymagic.ignoreImport", new[] { "vendored_tool" });
+        var left = p.Check("import vendored_tool\nimport vendored_tool.part\nimport other_missing\n");
+        Assert.True(left.All(m => !m.Contains("vendored_tool")), "the module and its submodules");
+        Assert.True(left.Any(m => m.Contains("other_missing")));
+        Assert.Equal("[\n  \"vendored_tool\"\n]\n", File.ReadAllText(Path.Combine(p.Root, ".pymagic", "ignored-imports.json")).Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void TheCommandsOfTheFixesComeBackThroughExecuteCommand()
+    {
+        if (RealPython == null) return;
+        using var p = new Project();
+        var sent = new List<System.Text.Json.Nodes.JsonNode>();
+        var server = new PyMagic.Server.Server(p.Service, sent.Add);
+        server.Handle(System.Text.Json.Nodes.JsonNode.Parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}")!);
+        var commands = sent.Last(m => m["id"]?.GetValue<int>() == 1)["result"]!["capabilities"]!["executeCommandProvider"]!["commands"]!.AsArray().Select(c => c!.GetValue<string>());
+        Assert.True(commands.SequenceEqual(new[] { "pymagic.ignoreImport", "pymagic.installPackage" }));
+        string uri = LanguageService.UriOfPath(Path.Combine(p.Root, "main.py"));
+        server.Handle(System.Text.Json.Nodes.JsonNode.Parse("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":" + System.Text.Json.Nodes.JsonValue.Create(uri)!.ToJsonString() +
+            ",\"languageId\":\"python\",\"version\":1,\"text\":\"import not_here_at_all\\n\"}}}")!);
+        int Problems() => sent.Last(m => m["method"]?.GetValue<string>() == "textDocument/publishDiagnostics")["params"]!["diagnostics"]!.AsArray().Count(d => d!["code"]?.GetValue<string>() == "unresolved-import");
+        Assert.Equal(1, Problems());
+        server.Handle(System.Text.Json.Nodes.JsonNode.Parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"workspace/executeCommand\",\"params\":{\"command\":\"pymagic.ignoreImport\",\"arguments\":[\"not_here_at_all\"]}}")!);
+        Assert.Equal(0, Problems());
+        Assert.True(sent.Any(m => m["method"]?.GetValue<string>() == "window/showMessage"));
+        // an unknown command is an error answer
+        server.Handle(System.Text.Json.Nodes.JsonNode.Parse("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"workspace/executeCommand\",\"params\":{\"command\":\"nope\",\"arguments\":[]}}")!);
+        Assert.True(sent.Last(m => m["id"]?.GetValue<int>() == 3)["error"] != null);
+    }
 }

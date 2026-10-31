@@ -246,7 +246,7 @@ public sealed partial class LanguageService
         // the settings, and what Django's checks look for in any file: the URL names of the open files and the project's templates
         string settings = string.Join("\n", ReportTypeMismatches, ReportUnresolvedImports, Interpreter?.Path, Interpreter?.Version, Interpreter?.Platform, Environment,
             TypeshedPath, string.Join("|", SourceRoots.Concat(ImplicitSourceRoots())), string.Join("|", EffectiveLibraryRoots()),
-            string.Join("|", InspectionProfile().OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key + "=" + p.Value)),
+            string.Join("|", InspectionProfile().OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key + "=" + p.Value)), string.Join("|", IgnoredImports()),
             string.Join("|", DjangoIndexOf(Current()).Urls.Select(u => u.Qualified).Order(StringComparer.Ordinal)),
             string.Join("|", Templates().Select(t => t.Name).Order(StringComparer.Ordinal)));
         // what every file rests on: the settings and the parts of the modules the evaluator asks for by name (a name not found counts by its name)

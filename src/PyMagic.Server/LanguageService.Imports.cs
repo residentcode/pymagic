@@ -82,6 +82,8 @@ public sealed partial class LanguageService
                     break;
             }
         }
+        // the modules the person chose to ignore in this project
+        if (IgnoredImports().Count > 0) result.RemoveAll(p => IsIgnoredImport(p.Module));
         return result;
     }
 
@@ -269,9 +271,15 @@ public sealed partial class LanguageService
         if (problem.Kind == ImportProblemKind.NotInstalled || (problem.Kind == ImportProblemKind.MissingModule && !problem.Module.Contains('.')))
         {
             string package = SuggestPackage(problem, out bool declared);
-            actions.Add(new CodeAction($"Install package '{package}'" + (declared ? " (listed in the project's requirements)" : ""), QuickFixKind, null,
-                IsPreferred: true, Command: new LspCommand($"Install {package}", "pymagic.installPackage", new object[] { package })));
+            // a name only guessed from the import is offered when PyPI has it (or cannot be asked); the project's own requirements are trusted
+            if (declared || problem.StubsDistribution != null || PackageOnIndex(package) != false)
+                actions.Add(new CodeAction($"Install package '{package}'" + (declared ? " (listed in the project's requirements)" : ""), QuickFixKind, null,
+                    IsPreferred: true, Command: new LspCommand($"Install {package}", "pymagic.installPackage", new object[] { package })));
         }
+        // the person knows better: this module is not to be reported in the project
+        string ignored = problem.Kind == ImportProblemKind.MissingName ? problem.Module : problem.TopLevel;
+        actions.Add(new CodeAction($"Ignore unresolved imports of '{ignored}' in this project", QuickFixKind, null,
+            Command: new LspCommand($"Ignore {ignored}", "pymagic.ignoreImport", new object[] { ignored })));
 
         // a likely typo
         if (problem.Kind == ImportProblemKind.MissingModule && !problem.Module.Contains('.'))

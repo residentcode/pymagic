@@ -1106,6 +1106,16 @@ async function main() {
     monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name) => {
         window.dispatchEvent(new CustomEvent('pymagic:install', { detail: name }));
     });
+    // "ignore this import": the engine keeps it in the project's .pymagic/ignored-imports.json and checks the open files again
+    monaco.editor.registerCommand('pymagic.ignoreImport', async (_accessor, module) => {
+        try {
+            await lsp.request('workspace/executeCommand', { command: 'pymagic.ignoreImport', arguments: [module] });
+            toast(`Imports of '${module}' are no longer reported in this project (.pymagic/ignored-imports.json)`);
+        }
+        catch (e) {
+            toast(e.message ?? 'The import cannot be ignored.', true);
+        }
+    });
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void save());
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyL, () => void formatCurrent());
     editor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyO, () => void organizeImports());

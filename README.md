@@ -61,7 +61,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - ~~Find in files: replacing in the selected results only, multi-line patterns, searching library files, a list of recent searches, filtering symbols by kind (20)~~ (done, item 212). Library files open read only in a window of their own; go to definition into a library (F12 on `json.dumps`) still opens nothing, and could use that window too.
 - ~~Notebooks: formatting a selection of a cell, formatting on save, cells with magics (120)~~ (done, item 213). A cell's selection is laid out by the built-in formatter whichever is chosen in the toolbar.
 - ~~Refactoring: choosing which files or hunks of a preview to apply, word-level highlighting in the diff (19); a module reached through `from pkg import *` and imports written over lines with backslashes are not followed by a move (143)~~ (done, item 214).
-- Unresolved imports: asking PyPI whether a suggested package exists, an install command for other LSP clients, remembering "ignore this import" (15).
+- ~~Unresolved imports: asking PyPI whether a suggested package exists, an install command for other LSP clients, remembering "ignore this import" (15)~~ (done, item 215). The ignored modules are taken back out of `.pymagic/ignored-imports.json` by hand; there is no list of them in the page yet.
 - Language server: ~~semantic tokens~~ (done, item 197: the colours of names by their meaning, compared with VS Code's); cancelling a request, UTF-8 position encoding (8).
 - Formatter: the import settings of ruff and isort not read yet: `lines-after-imports`, `section-order`, `force-wrap-aliases`, `from-first`, `relative-imports-order`, `split-on-trailing-comma` (44).
 - ~~Black's last corner cases: parentheses in `print((1))`, `with` and `await`, `# type:` comment placement, blank lines inside brackets (22, 43, 75)~~ (done, item 199, compared with black 26.10.1).
@@ -158,4 +158,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 214 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 215 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

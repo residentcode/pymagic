@@ -543,7 +543,7 @@ app.Map("/lsp", async (HttpContext ctx) =>
     if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
     using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
 
-    var service = new LanguageService { TypeshedPath = typeshed };
+    var service = new LanguageService { TypeshedPath = typeshed, PackageIndexLookup = LanguageService.AskPyPI };   // an Install package fix is offered for a guessed name only when PyPI has it
     service.AddSourceRoot(root);
     // the folders marked as sources roots (Mark Directory As), read again for each page
     ProjectFolders.Load(root);
