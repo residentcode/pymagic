@@ -204,7 +204,8 @@ public sealed partial class LanguageService
     IEnumerable<Diag> MetaDiagnostics(ModuleInfo m, TypeEvaluator ev, Snapshot snap)
     {
         if (m.IsStub || m.Source.IndexOf("Meta", StringComparison.Ordinal) < 0 && m.Source.IndexOf("list_display", StringComparison.Ordinal) < 0 && m.Source.IndexOf("search_fields", StringComparison.Ordinal) < 0
-            && m.Source.IndexOf("fields", StringComparison.Ordinal) < 0 && m.Source.IndexOf("queryset", StringComparison.Ordinal) < 0 && m.Source.IndexOf("db_field", StringComparison.Ordinal) < 0) yield break;
+            && m.Source.IndexOf("fields", StringComparison.Ordinal) < 0 && m.Source.IndexOf("queryset", StringComparison.Ordinal) < 0 && m.Source.IndexOf("db_field", StringComparison.Ordinal) < 0
+            && m.Source.IndexOf("clean_", StringComparison.Ordinal) < 0) yield break;
         if (m.Source.IndexOf("django", StringComparison.OrdinalIgnoreCase) < 0 && m.Source.IndexOf("rest_framework", StringComparison.Ordinal) < 0) yield break;
         var admins = AdminModelsOf(snap);
         foreach (var literal in AstChildren.Descendants(m.Ast).OfType<ConstExpr>())
@@ -235,6 +236,22 @@ public sealed partial class LanguageService
             var finding = new Finding(span.Start, span.End - span.Start, message, "django-meta-field", FindingLevel.Warning);
             if (!Suppressed(m.Source, finding)) yield return AsDiag(finding);
         }
+
+        // a form's clean_<field> methods clean one of its fields
+        if (m.Source.Contains("clean_", StringComparison.Ordinal))
+            foreach (var cd in AstChildren.Descendants(m.Ast).OfType<ClassDef>().ToList())
+            {
+                if (ClassInfoOf(m, cd, ev) is not { } form || ev.DjangoFormFields(form) is not { } fields) continue;
+                foreach (var method in cd.Body.OfType<FunctionDef>())
+                {
+                    if (!method.Name.StartsWith("clean_", StringComparison.Ordinal) || method.Name.Length <= 6) continue;
+                    string field = method.Name[6..];
+                    if (fields.Any(f => f.Name == field)) continue;
+                    var finding = new Finding(method.NameStart, method.Name.Length,
+                        $"{method.Name} is never called: {form.Name} has no field '{field}'. Its fields are: {string.Join(", ", fields.Select(f => f.Name).Take(12))}", "django-meta-field", FindingLevel.Warning);
+                    if (!Suppressed(m.Source, finding)) yield return AsDiag(finding);
+                }
+            }
 
         // the functions list_display calls with each object take that one argument
         foreach (var cd in AstChildren.Descendants(m.Ast).OfType<ClassDef>().ToList())
@@ -320,6 +337,28 @@ public sealed partial class LanguageService
     }
 
     // ------------------------------------------------------------ completion
+
+    /// <summary>The keys of a TypedDict (a Django form's cleaned_data among them) in `d["` and `d.get("`.</summary>
+    IReadOnlyList<CompletionItem>? TypedDictKeyCompletion(Doc doc, int start, int offset)
+    {
+        string text = doc.Text;
+        string before = text[LineStart(text, offset)..offset];
+        if (!System.Text.RegularExpressions.Regex.IsMatch(before, @"(\[|\.(get|pop|setdefault)\()\s*[""']\w*$")) return null;
+        var (ws, patched) = PatchedModule(doc, start, offset);
+        var ev = ws.Evaluator;
+        var literal = AstChildren.Descendants(patched.Ast).OfType<ConstExpr>().FirstOrDefault(c => c.Kind == ConstKind.Str && c.Text.Contains(CursorMark));
+        if (literal == null) return null;
+        Expr? receiver = null;
+        var parent = patched.ParentOf(literal);
+        if (parent is SubscriptExpr sub && ReferenceEquals(sub.Index, literal)) receiver = sub.Value;
+        else
+        {
+            if (parent is Argument) parent = patched.ParentOf(parent);
+            if (parent is CallExpr { Func: AttributeExpr { Attr: "get" or "pop" or "setdefault" } get } call && call.Args.Count > 0 && ReferenceEquals(call.Args[0].Value, literal)) receiver = get.Value;
+        }
+        if (receiver == null || ev.TypeOf(patched, receiver) is not ClassType { IsInstance: true } ct || ev.TypedDictFieldsOf(ct.Info) is not { } fields) return null;
+        return fields.Select(f => new CompletionItem(f.Field.Name, CompletionKind.Field, f.Field.Type.Display(), "0" + f.Field.Name)).ToList();
+    }
 
     IReadOnlyList<CompletionItem>? MetaStringCompletion(Doc doc, int start, int offset)
     {

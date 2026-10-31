@@ -15,6 +15,8 @@ public sealed partial class LanguageService
             IEnumerable<Finding> findings = node switch
             {
                 ClassDef cd => ClassStructure(m, cd, ev).Concat(OverloadStructure(cd.Body, cd.Bases.Any(b => b.Name == null && m.Source[b.Value.Start..b.Value.End].EndsWith("Protocol")) || IsAbstractClassDef(cd))),
+                CallExpr { Func: AttributeExpr { Attr: "get" or "pop" or "setdefault" } get, Args: [{ Name: null, Stars: 0, Value: ConstExpr { Kind: ConstKind.Str, IsFString: false } key }, ..] } call
+                    => CallStructure(m, call, ev).Concat(CleanedDataGet(m, get.Value, key, ev)),
                 CallExpr call => CallStructure(m, call, ev),
                 SubscriptExpr sub => TypedDictSubscript(m, sub, ev),
                 _ => Array.Empty<Finding>(),
@@ -219,10 +221,22 @@ public sealed partial class LanguageService
         return result;
     }
 
+    /// <summary>`form.cleaned_data.get("titel")`: a Django form's cleaned_data read with a key no field gives (a TypedDict's own get may take any key).</summary>
+    IEnumerable<Finding> CleanedDataGet(ModuleInfo m, Expr receiver, ConstExpr key, TypeEvaluator ev)
+    {
+        if (ev.TypeOf(m, receiver) is not ClassType { IsInstance: true } ct || !ct.Info.Name.StartsWith("cleaned_data of ", StringComparison.Ordinal)) return Array.Empty<Finding>();
+        return TypedDictKey(m, ct, key, ev);
+    }
+
     IEnumerable<Finding> TypedDictSubscript(ModuleInfo m, SubscriptExpr sub, TypeEvaluator ev)
     {
-        if (sub.Index is not ConstExpr { Kind: ConstKind.Str, IsFString: false } key) yield break;
-        if (ev.TypeOf(m, sub.Value) is not ClassType { IsInstance: true } ct || ct.Info.Module.IsStub) yield break;
+        if (sub.Index is not ConstExpr { Kind: ConstKind.Str, IsFString: false } key) return Array.Empty<Finding>();
+        if (ev.TypeOf(m, sub.Value) is not ClassType { IsInstance: true } ct || ct.Info.Module.IsStub) return Array.Empty<Finding>();
+        return TypedDictKey(m, ct, key, ev);
+    }
+
+    IEnumerable<Finding> TypedDictKey(ModuleInfo m, ClassType ct, ConstExpr key, TypeEvaluator ev)
+    {
         if (ev.TypedDictFieldsOf(ct.Info) is not { } fields) yield break;
         string text = key.Text;
         int q = 0;
@@ -230,7 +244,11 @@ public sealed partial class LanguageService
         if (q >= text.Length || text.Length - q < 2) yield break;
         string name = text[(q + 1)..^1];
         if (fields.Any(f => f.Field.Name == name)) yield break;
-        yield return new Finding(key.Start, Math.Max(key.End - key.Start, 1), $"TypedDict '{ct.Info.Name}' has no key '{name}'", "typeddict-keys", FindingLevel.Warning);
+        // a Django form's cleaned_data has a key for each of the form's fields
+        string message = ct.Info.Name.StartsWith("cleaned_data of ", StringComparison.Ordinal)
+            ? $"{ct.Info.Name["cleaned_data of ".Length..]} has no field '{name}', so cleaned_data has no such key. Its fields are: {string.Join(", ", fields.Select(f => f.Field.Name).Take(12))}"
+            : $"TypedDict '{ct.Info.Name}' has no key '{name}'";
+        yield return new Finding(key.Start, Math.Max(key.End - key.Start, 1), message, "typeddict-keys", FindingLevel.Warning);
     }
 
     // ------------------------------------------------------------ overloads

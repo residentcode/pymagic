@@ -8,7 +8,7 @@ public class DjangoMetaTests
 
     static readonly (string Path, string Text)[] Libraries =
     {
-        ("django/forms/__init__.py", "class BaseForm:\n    def __init__(self, *args, **kwargs): ...\n\n\nclass BaseModelForm(BaseForm):\n    def save(self, commit=True): ...\n\n\nclass ModelForm(BaseModelForm): ...\n\n\nclass CharField: ...\n"),
+        ("django/forms/__init__.py", "class BaseForm:\n    def __init__(self, *args, **kwargs): ...\n\n\nclass BaseModelForm(BaseForm):\n    def save(self, commit=True): ...\n\n\nclass ModelForm(BaseModelForm): ...\n\n\nclass Form(BaseForm): ...\n\n\nclass Field: ...\n\n\nclass CharField(Field): ...\n\n\nclass IntegerField(Field): ...\n"),
         ("django/contrib/__init__.py", ""),
         ("django/contrib/admin/__init__.py",
             "class BaseModelAdmin: ...\n\n\nclass ModelAdmin(BaseModelAdmin):\n    def save_model(self, request, obj, form, change): ...\n\n    def get_queryset(self, request): ...\n\n    def formfield_for_foreignkey(self, db_field, request, **kwargs): ...\n\n\nclass InlineModelAdmin(BaseModelAdmin): ...\n\n\nclass TabularInline(InlineModelAdmin): ...\n\n\n" +
@@ -234,5 +234,40 @@ public class DjangoMetaTests
         var found = svc.Diagnostics(Shop + "admin.py").Where(d => d.Code == "django-meta-field").Select(d => d.Message).ToList();
         Assert.Equal(1, found.Count);
         Assert.Contains("calls both with each Book", found[0]);
+    }
+
+    // ------------------------------------------------------------ clean_<field> and cleaned_data (item 202)
+
+    const string Contact = "from django import forms\n\n\nclass ContactForm(forms.Form):\n    name = forms.CharField()\n    age = forms.IntegerField()\n\n";
+
+    [Fact]
+    public void ACleanMethodNamesAFieldOfTheForm()
+    {
+        var found = Problems("forms.py", Contact + "    def clean_nmae(self):\n        return 1\n\n    def clean_age(self):\n        return 2\n\n    def clean(self):\n        return 3\n").Select(d => d.Message).ToList();
+        Assert.Equal(1, found.Count);
+        Assert.Contains("clean_nmae is never called: ContactForm has no field 'nmae'. Its fields are: name, age", found[0]);
+    }
+
+    [Fact]
+    public void CleanedDataHoldsTheValueOfEachField()
+    {
+        var (svc, uri, pos) = Open("forms.py", Contact + "    def clean_age(self):\n        years = self.cleaned_data[\"age\"]\n        yea§rs\n");
+        Assert.Contains("int", svc.Hover(uri, pos)!.Contents.Value);
+    }
+
+    [Fact]
+    public void AModelFormsCleanedDataHasTheFieldsItsMetaTakes()
+    {
+        string code = "from django import forms\nfrom shop.models import Book\n\n\nclass BookForm(forms.ModelForm):\n    note = forms.CharField()\n\n    class Meta:\n        model = Book\n        fields = [\"title\", \"pages\"]\n\n" +
+            "    def clean_author(self):\n        return 1\n\n    def clean_title(self):\n        a = self.cleaned_data[\"titel\"]\n        b = self.cleaned_data.get(\"note\")\n        c = self.cleaned_data.get(\"nope\")\n        return self.cleaned_data[\"title\"]\n";
+        var (svc, uri, _) = Open("forms.py", code);
+        var found = svc.Diagnostics(uri).Where(d => d.Code is "django-meta-field" or "typeddict-keys").Select(d => d.Message).ToList();
+        Assert.Equal(3, found.Count);
+        Assert.True(found.Any(m => m.Contains("clean_author is never called") && m.Contains("note, title, pages")), string.Join(" | ", found));
+        Assert.True(found.Any(m => m.Contains("BookForm has no field 'titel'")), string.Join(" | ", found));
+        Assert.True(found.Any(m => m.Contains("BookForm has no field 'nope'")), string.Join(" | ", found));
+        var (svc2, uri2, pos2) = Open("forms.py", code.Replace("cleaned_data[\"titel\"]", "cleaned_data[\"§\"]"));
+        var labels = svc2.Completion(uri2, pos2).Select(i => i.Label).ToList();
+        Assert.True(labels.Contains("title") && labels.Contains("pages") && labels.Contains("note") && !labels.Contains("author"), string.Join(", ", labels));
     }
 }

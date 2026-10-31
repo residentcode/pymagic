@@ -691,6 +691,7 @@ public sealed partial class TypeEvaluator
             return;
         }
         if (name is "instance" or "save" or "get_object" or "get_serializer" && DjangoMetaMember(c, name, instance) is { } formMember) { types.Add(formMember); return; }
+        if (name == "cleaned_data" && DjangoCleanedData(c, instance) is { } cleaned) { types.Add(cleaned); return; }
         var hit = FindMember(c, name, instance, null, out bool unknownBase);
         if (hit != null)
         {

@@ -46,7 +46,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 **Frameworks**
 - ~~Django admin: `list_display` entries that are callables from other modules, and `get_queryset` / `formfield_for_*` overrides (37)~~ (done, item 201).
-- Django forms: `clean_<field>` methods and `cleaned_data` keys (37).
+- ~~Django forms: `clean_<field>` methods and `cleaned_data` keys (37)~~ (done, item 202).
 - Django templates: the context `{% include ... with a=b %}` gives the included file, the project's context processors, `{% blocktrans %}` bodies, the tags of third-party libraries (`crispy`), and the HTML itself (35).
 - Django project: reading `INSTALLED_APPS` (an app is a folder that looks like one), choosing the settings module for commands that need a database (76); the custom managers of other installed apps (125); reverse relations in the project-wide Problems scan, which therefore skips some prefetch names (154).
 - REST framework: `DEFAULT_ROUTER` extras (`.json` suffixes, the API root), the routes of other installed apps' urls (`allauth`, `rest_framework.authtoken`) (127); `to_representation` overrides, writable nested serializers without `create()`, the serializer per method in the detail of `@action` routes (130).
@@ -158,4 +158,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 201 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 202 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
