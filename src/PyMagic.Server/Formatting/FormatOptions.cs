@@ -18,20 +18,22 @@ public enum LineEnding { Auto, Lf, Crlf }
 /// <param name="UseTabs">One tab per level (ruff's <c>indent-style = "tab"</c>, editorconfig's <c>indent_style = tab</c>).</param>
 /// <param name="Endings">ruff's <c>line-ending</c>, editorconfig's <c>end_of_line</c>.</param>
 /// <param name="Imports">isort's and ruff's import settings (<c>known-first-party</c>, <c>force-sort-within-sections</c>, ...).</param>
+/// <param name="ParenthesizedWith">Several context managers may be put in parentheses when a with is split: the Pythons the code is for
+/// are 3.9 and later (black's and ruff's <c>target-version</c>, or syntax of the file that needs 3.9).</param>
 public sealed record FormatOptions(int LineLength = 88, QuoteStyle Quotes = QuoteStyle.Double, bool MagicTrailingComma = true, int IndentWidth = 4, string? Source = null,
-    bool UseTabs = false, LineEnding Endings = LineEnding.Auto, ImportOptions? Imports = null)
+    bool UseTabs = false, LineEnding Endings = LineEnding.Auto, ImportOptions? Imports = null, bool ParenthesizedWith = false)
 {
     public static readonly FormatOptions Default = new();
 }
 
 /// <summary>The settings a configuration file states, each null when it says nothing (so another source can fill it in).</summary>
-public sealed record FormatSettings(int? LineLength = null, QuoteStyle? Quotes = null, bool? MagicTrailingComma = null, int? IndentWidth = null, bool? UseTabs = null, LineEnding? Endings = null, ImportOptions? Imports = null)
+public sealed record FormatSettings(int? LineLength = null, QuoteStyle? Quotes = null, bool? MagicTrailingComma = null, int? IndentWidth = null, bool? UseTabs = null, LineEnding? Endings = null, ImportOptions? Imports = null, bool? ParenthesizedWith = null)
 {
     /// <summary>The options these settings give, the defaults filling what is left.</summary>
     public FormatOptions ToOptions(string? source = null, FormatOptions? baseline = null)
     {
         var d = baseline ?? FormatOptions.Default;
-        return new FormatOptions(LineLength ?? d.LineLength, Quotes ?? d.Quotes, MagicTrailingComma ?? d.MagicTrailingComma, IndentWidth ?? d.IndentWidth, source ?? d.Source, UseTabs ?? d.UseTabs, Endings ?? d.Endings, Imports ?? d.Imports);
+        return new FormatOptions(LineLength ?? d.LineLength, Quotes ?? d.Quotes, MagicTrailingComma ?? d.MagicTrailingComma, IndentWidth ?? d.IndentWidth, source ?? d.Source, UseTabs ?? d.UseTabs, Endings ?? d.Endings, Imports ?? d.Imports, ParenthesizedWith ?? d.ParenthesizedWith);
     }
 }
 
@@ -51,7 +53,7 @@ public static class FormatConfig
         var fromProject = ProjectSettings(filePath, out string? source);
         var merged = new FormatSettings(
             fromProject.LineLength ?? fromEditor.LineLength, fromProject.Quotes ?? fromEditor.Quotes, fromProject.MagicTrailingComma ?? fromEditor.MagicTrailingComma,
-            fromProject.IndentWidth ?? fromEditor.IndentWidth, fromProject.UseTabs ?? fromEditor.UseTabs, fromProject.Endings ?? fromEditor.Endings, fromProject.Imports);
+            fromProject.IndentWidth ?? fromEditor.IndentWidth, fromProject.UseTabs ?? fromEditor.UseTabs, fromProject.Endings ?? fromEditor.Endings, fromProject.Imports, fromProject.ParenthesizedWith);
         return merged.ToOptions(source);
     }
 
@@ -150,6 +152,13 @@ public static class FormatConfig
         bool? magic = Bool(black, "skip-magic-trailing-comma") == true || Bool(ruffFormat, "skip-magic-trailing-comma") == true ? false : null;
         bool? tabs = Str(ruffFormat, "indent-style") switch { "tab" => true, "space" => false, _ => null };
         LineEnding? ending = Str(ruffFormat, "line-ending") switch { "lf" => LineEnding.Lf, "cr-lf" or "crlf" => LineEnding.Crlf, "auto" => LineEnding.Auto, _ => null };
-        return new FormatSettings(lineLength, quotes, magic, indent, tabs, ending, ImportsFromToml(root, isRuffFile));
+        // target-version: black's list (every one 3.9 or later), ruff's single version
+        int? Minor(string v) => System.Text.RegularExpressions.Regex.Match(v, @"^py3(\d+)$") is { Success: true } m ? int.Parse(m.Groups[1].Value) : null;
+        bool? parenthesizedWith = null;
+        if (black != null && black.TryGetValue("target-version", out var tv) && tv is List<object?> versions && versions.Count > 0)
+            parenthesizedWith = versions.All(v => v is string s && Minor(s) >= 9);
+        else if (Str(ruff, "target-version") is { } rv && Minor(rv) is { } rm)
+            parenthesizedWith = rm >= 9;
+        return new FormatSettings(lineLength, quotes, magic, indent, tabs, ending, ImportsFromToml(root, isRuffFile), parenthesizedWith);
     }
 }

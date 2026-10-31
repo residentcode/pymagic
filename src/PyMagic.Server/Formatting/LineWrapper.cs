@@ -40,12 +40,15 @@ internal sealed class LineWrapper
     int[] _before = Array.Empty<int>();      // priority of the delimiter that starts a new item at piece i (0: none)
     bool[] _magic = Array.Empty<bool>();     // an opening bracket whose group must be exploded (trailing comma, comment inside)
     bool[] _atom = Array.Empty<bool>();      // an opening bracket that is not a call, subscript or parameter list
+    bool[] _lambdaComma = Array.Empty<bool>();   // a comma between a lambda and its colon
     int _preferred = -1;                     // a bracket pair chosen by the invisible-parenthesis logic for the next right-hand split
+    Piece? _statementEnd;                    // the last token as the source has the statement: its comment ends the statement
 
     public LineWrapper(List<Piece> pieces, FormatOptions options)
     {
         _p = pieces;
         _options = options;
+        _statementEnd = pieces.Count > 0 ? pieces[^1] : null;
         if (!options.MagicTrailingComma) RemoveTrailingCommas();
         RemoveRedundantParentheses();
         ParenthesiseSingleTuples();
@@ -54,6 +57,7 @@ internal sealed class LineWrapper
         _before = new int[n];
         _magic = new bool[n];
         _atom = new bool[n];
+        _lambdaComma = new bool[n];
         Analyse();
     }
 
@@ -137,8 +141,107 @@ internal sealed class LineWrapper
                 else if (_p[i].IsClose) depth--;
                 else if (depth == 0 && _p[i].Kind == TokenKind.Operator && !_p[i].KwargEquals && IsAssignOperator(_p[i].Text)) assign = i;
             }
-            if (assign > 0) StripRange(assign + 1, _p.Count, allowTuple: false);
+            // `x = (yield)` is `x = yield`: as the whole value of an assignment a yield needs no parentheses
+            if (assign > 0) StripRange(assign + 1, _p.Count, allowTuple: false, allowYield: true);
         }
+        if (first == "with" || first == "async" && _p.Count > 1 && _p[1].Text == "with") StripWithItems(first == "with" ? 1 : 2);
+        StripAwaitOperands();
+    }
+
+    /// <summary>
+    /// `await (x.y())` is `await x.y()`: the parentheses go around a name, an attribute, a call or a subscript; they stay around anything
+    /// with an operator, a unary sign, `not`, a conditional, a lambda or another await, as in black.
+    /// </summary>
+    void StripAwaitOperands()
+    {
+        for (int i = _p.Count - 3; i >= 0; i--)
+        {
+            if (_p[i].Kind != TokenKind.Keyword || _p[i].Text != "await" || !_p[i + 1].IsOpen || _p[i + 1].Text != "(") continue;
+            int open = i + 1, close = Closer(open);
+            if (close < 0 || close - open < 2 || !PlainOperand(open + 1, close)) continue;
+            _p[open + 1].Space = true;
+            _p[open + 1].Comments.InsertRange(0, _p[open].Comments);
+            _p[close - 1].Comments.AddRange(_p[close].Comments);
+            _p.RemoveAt(close);
+            _p.RemoveAt(open);
+        }
+    }
+
+    /// <summary>A name or literal followed only by trailers: `.attr`, `(args)`, `[index]`.</summary>
+    bool PlainOperand(int start, int end)
+    {
+        var head = _p[start];
+        if (head.Standalone || head.Kind is not (TokenKind.Name or TokenKind.Number or TokenKind.String)) return false;
+        int depth = 0;
+        for (int i = start + 1; i < end; i++)
+        {
+            var t = _p[i];
+            if (t.Standalone) return false;
+            if (t.IsOpen) { if (depth == 0 && t.Text == "{") return false; depth++; continue; }
+            if (t.IsClose) { depth--; continue; }
+            if (depth > 0) continue;
+            if (t.Kind == TokenKind.Operator && t.Text == ".") continue;
+            if (t.Kind == TokenKind.Name && _p[i - 1].Text == ".") continue;
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// `with (open(a)) as f:` is `with open(a) as f:`, and `with (a as f, b as g):` loses its parentheses too; a with that is too long
+    /// gets them back from the wrapping when the Pythons the file is for allow them (<see cref="WrapWith"/>).
+    /// </summary>
+    void StripWithItems(int start)
+    {
+        int end = _p.Count - 1;
+        if (end <= start || _p[end].Kind != TokenKind.Operator || _p[end].Text != ":") return;
+        // the parentheses around all the items
+        if (_p[start].IsOpen && _p[start].Text == "(" && Closer(start) == end - 1 && ParenthesisedItems(start, end - 1))
+        {
+            _p[start + 1].Space = _p[start].Space;
+            _p[start + 1].Comments.InsertRange(0, _p[start].Comments);
+            int close = end - 1;
+            // a trailing comma inside goes with them
+            if (_p[close - 1].Kind == TokenKind.Operator && _p[close - 1].Text == ",") { _p[close - 2].Comments.AddRange(_p[close - 1].Comments); _p.RemoveAt(close - 1); close--; }
+            _p[close - 1].Comments.AddRange(_p[close].Comments);
+            _p.RemoveAt(close);
+            _p.RemoveAt(start);
+            end = _p.Count - 1;
+        }
+        // then each item's own: `(open(a)) as f`
+        var items = new List<int> { start };
+        int depth = 0;
+        for (int i = start; i < end; i++)
+        {
+            if (_p[i].IsOpen) depth++;
+            else if (_p[i].IsClose) depth--;
+            else if (depth == 0 && _p[i].Kind == TokenKind.Operator && _p[i].Text == ",") items.Add(i + 1);
+        }
+        for (int k = items.Count - 1; k >= 0; k--)
+        {
+            int s = items[k];
+            if (!_p[s].IsOpen || _p[s].Text != "(") continue;
+            int close = Closer(s);
+            int itemEnd = k + 1 < items.Count ? items[k + 1] - 1 : end;
+            int asAt = -1;
+            for (int i = close + 1; i < itemEnd; i++) if (_p[i].Kind == TokenKind.Keyword && _p[i].Text == "as") { asAt = i; break; }
+            if (close < 0 || !(close + 1 == itemEnd || close + 1 == asAt)) continue;
+            StripRange(s, close + 1, allowTuple: false);
+        }
+    }
+
+    /// <summary>Parentheses that hold with-items (`a as f, b as g`, or several managers), not one parenthesised expression.</summary>
+    bool ParenthesisedItems(int open, int close)
+    {
+        int depth = 0;
+        for (int i = open + 1; i < close; i++)
+        {
+            if (_p[i].Standalone) return false;
+            if (_p[i].IsOpen) depth++;
+            else if (_p[i].IsClose) depth--;
+            else if (depth == 0 && (_p[i].Kind == TokenKind.Keyword && _p[i].Text == "as" || _p[i].Kind == TokenKind.Operator && _p[i].Text == ",")) return true;
+        }
+        return false;
     }
 
     // ------------------------------------------------------------ one-element tuples
@@ -210,13 +313,15 @@ internal sealed class LineWrapper
     }
 
     /// <summary>Removes the parentheses that enclose [start, end) as a whole, as often as they do.</summary>
-    void StripRange(int start, int end, bool allowTuple)
+    void StripRange(int start, int end, bool allowTuple, bool allowYield = false)
     {
-        while (end - start >= 3 && _p[start].IsOpen && _p[start].Text == "(" && Closer(start) == end - 1 && Removable(start, end - 1, allowTuple))
+        while (end - start >= 3 && _p[start].IsOpen && _p[start].Text == "(" && Closer(start) == end - 1 && Removable(start, end - 1, allowTuple, allowYield))
         {
             _p[start + 1].Space = _p[start].Space;
             // the comments of the brackets stay, on the tokens next to them
             _p[start + 1].Comments.InsertRange(0, _p[start].Comments);
+            // the comment that ended the statement after these parentheses still ends it (so a second run writes what the first did)
+            if (ReferenceEquals(_p[end - 1], _statementEnd) && _p[end - 1].Comments.Count > 0) _statementEnd = _p[end - 2];
             _p[end - 2].Comments.AddRange(_p[end - 1].Comments);
             _p.RemoveAt(end - 1);
             _p.RemoveAt(start);
@@ -235,7 +340,7 @@ internal sealed class LineWrapper
         return -1;
     }
 
-    bool Removable(int open, int close, bool allowTuple)
+    bool Removable(int open, int close, bool allowTuple, bool allowYield = false)
     {
         int depth = 0;
         for (int i = open + 1; i < close; i++)
@@ -247,11 +352,13 @@ internal sealed class LineWrapper
             if (depth != 0) continue;
             if (t.Kind == TokenKind.Operator && t.Text is "," && !allowTuple) return false;
             if (t.Kind == TokenKind.Operator && t.Text == ":=") return false;
-            if (t.Kind == TokenKind.Keyword && t.Text is "yield" or "for" && i > open) return false;   // generators and yield need their parentheses
+            // generators and yield need their parentheses, but the whole value of an assignment may be a yield
+            if (t.Kind == TokenKind.Keyword && t.Text == "for") return false;
+            if (t.Kind == TokenKind.Keyword && t.Text == "yield" && !(allowYield && i == open + 1)) return false;
             if (t.Kind == TokenKind.Keyword && t.Text == "async") return false;
         }
         var firstInner = _p[open + 1];
-        if (firstInner.Kind == TokenKind.Keyword && firstInner.Text == "yield") return false;
+        if (firstInner.Kind == TokenKind.Keyword && firstInner.Text == "yield" && !allowYield) return false;
         if (firstInner.Kind == TokenKind.Operator && firstInner.Text is "*" or "**") return false;
         return true;
     }
@@ -308,7 +415,8 @@ internal sealed class LineWrapper
             if (t.IsOpen) { sawFor[dep + 1] = false; afterFor[dep + 1] = false; inLambda[dep + 1] = false; continue; }
             if (t.IsClose) continue;
             if (inLambda.GetValueOrDefault(dep) && op && x == ":") { inLambda[dep] = false; continue; }
-            if (inLambda.GetValueOrDefault(dep)) continue;
+            // the commas of a lambda's parameters are not items: `return lambda a, b: (...)` split there would be a tuple
+            if (inLambda.GetValueOrDefault(dep)) { if (op && x == ",") _lambdaComma[i] = true; continue; }
             if (kw && x == "lambda") { inLambda[dep] = true; continue; }
             int prev = PreviousReal(i);
             if (prev < 0) continue;
@@ -375,7 +483,7 @@ internal sealed class LineWrapper
         || (p.Kind == TokenKind.Keyword && p.Text is "True" or "False" or "None")
         || (p.Kind == TokenKind.Operator && (p.IsClose || p.Text == "..."));
 
-    bool IsComma(int i) => !_p[i].Standalone && _p[i].Kind == TokenKind.Operator && _p[i].Text == ",";
+    bool IsComma(int i) => !_p[i].Standalone && _p[i].Kind == TokenKind.Operator && _p[i].Text == "," && !_lambdaComma[i];
 
     // ------------------------------------------------------------ text of a range
 
@@ -416,8 +524,52 @@ internal sealed class LineWrapper
 
     // ------------------------------------------------------------ output
 
-    public List<OutLine> Wrap(int indent) =>
-        ImportLine(0, _p.Count, indent) ?? SplitLine(0, _p.Count, indent, inside: false, forced: false);
+    public List<OutLine> Wrap(int indent)
+    {
+        if (TypeIgnoreKeepsLine(indent)) return Single(indent, 0, _p.Count);
+        ParenthesiseWithItems(indent);
+        return ImportLine(0, _p.Count, indent) ?? SplitLine(0, _p.Count, indent, inside: false, forced: false);
+    }
+
+    /// <summary>
+    /// A with of several context managers that does not fit, in code for Python 3.9 and later: the managers go in parentheses, which
+    /// are then split as any brackets are (one manager to a line, a trailing comma after the last), as black does. One manager is
+    /// split at its own brackets instead.
+    /// </summary>
+    void ParenthesiseWithItems(int indent)
+    {
+        if (!_options.ParenthesizedWith || _p.Count < 4 || _p.Any(p => p.Standalone)) return;
+        int start = _p[0].Text == "with" ? 1 : _p[0].Text == "async" && _p[1].Text == "with" ? 2 : -1;
+        int colon = _p.Count - 1;
+        if (start < 0 || _p[colon].Kind != TokenKind.Operator || _p[colon].Text != ":" || FitsRange(indent, 0, _p.Count)) return;
+        int commas = 0;
+        for (int i = start; i < colon; i++) if (_depth[i] == 0 && IsComma(i)) commas++;
+        if (commas == 0) return;
+        _p.Insert(colon, new Piece { Text = ")", Kind = TokenKind.Operator, IsClose = true });
+        var open = new Piece { Text = "(", Kind = TokenKind.Operator, IsOpen = true, Space = true };
+        _p[start].Space = false;
+        _p.Insert(start, open);
+        int n = _p.Count;
+        _depth = new int[n];
+        _before = new int[n];
+        _magic = new bool[n];
+        _atom = new bool[n];
+        _lambdaComma = new bool[n];
+        Analyse();
+    }
+
+    /// <summary>
+    /// Black leaves a line alone whose code fits and only its trailing `# type: ignore` (or `# type: ignore[...]`) makes it too long:
+    /// splitting it would move the comment away from the code it silences. Other comments, `# type: int` and `# noqa` among them, count.
+    /// </summary>
+    bool TypeIgnoreKeepsLine(int indent)
+    {
+        int last = LastReal(_p.Count - 1, -1);
+        if (last < 0 || _p[last].Comments.Count == 0 || !_p[last].Comments[^1].StartsWith("# type: ignore", StringComparison.Ordinal)) return false;
+        for (int i = 0; i < _p.Count; i++)
+            if (_p[i].Standalone || i != last && _p[i].Comments.Count > 0 || _p[i].IsOpen && HasMagic(i, _p.Count)) return false;
+        return FitsText(indent, Join(0, _p.Count));
+    }
 
     int BaseDepth(int a, int b)
     {
@@ -717,14 +869,32 @@ internal sealed class LineWrapper
         }
 
         // wrapping only helps when the value fits in the parentheses or can be split further
+        // the comment that ends the statement ends it after the closing parenthesis, as black has it (its last leaf is that parenthesis):
+        // not when the parentheses wrap one token (`x = False  # ...` keeps the comment on False, a type comment aside), nor when it was
+        // inside parentheses the source had (`(a +  # x` ... `)`); measured without it, the value may now fit inside
+        string tail = "";
+        int last = LastReal(e - 1, s - 1);
+        bool oneToken = FirstReal(s, e) == last;
+        if (e == b && last >= s && _p[last].Comments.Count > 0 && ReferenceEquals(_p[last], _statementEnd)
+            && (!oneToken || _p[last].Comments[^1].StartsWith("# type:", StringComparison.Ordinal)))
+        {
+            tail = string.Join("  ", _p[last].Comments);
+            _p[last].Comments.Clear();
+        }
+
         bool fitsInside = FitsRange(indent + Indent, s, e);
         bool canSplit = groups.Count > 0 || delimiters > 0;
-        if (!fitsInside && !canSplit) return (null, true);
+        if (!fitsInside && !canSplit)
+        {
+            if (tail.Length > 0) _p[last].Comments.Add(tail);
+            return (null, true);
+        }
 
         var lines = new List<OutLine> { new(indent, Join(a, s) + " (", CommentsOf(a, s)) };
         bool forced = delimiters > 0 && MaxIsComma(s, e, baseDepth);
         lines.AddRange(SplitLine(s, e, indent + Indent, inside: true, forced));
-        lines.Add(new OutLine(indent, ")" + (e < b ? (FirstReal(e, b) is int f && _p[f].Space ? " " : "") + Join(e, b) : ""), CommentsOf(e, b)));
+        string closing = CommentsOf(e, b);
+        lines.Add(new OutLine(indent, ")" + (e < b ? (FirstReal(e, b) is int f && _p[f].Space ? " " : "") + Join(e, b) : ""), closing.Length > 0 && tail.Length > 0 ? closing + "  " + tail : closing + tail));
         return (lines, false);
     }
 

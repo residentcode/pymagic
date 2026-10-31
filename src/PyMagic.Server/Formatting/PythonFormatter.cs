@@ -21,14 +21,48 @@ public static class PythonFormatter
         if (source.Length == 0) return source;
         var tokens = Lexer.Tokenize(source);
         if (tokens.Any(t => t.Kind == TokenKind.Error)) return null;
-        if (Parser.Parse(source).Diagnostics.Count > 0) return null;
+        var parsed = Parser.Parse(source);
+        if (parsed.Diagnostics.Count > 0) return null;
+        // like black, a file that already needs Python 3.9 may have its context managers in parentheses
+        if (!options.ParenthesizedWith && NeedsPython39(source, parsed.Module)) options = options with { ParenthesizedWith = true };
 
         string result;
-        try { result = new Renderer(source, tokens, options).Run(); }
+        try { result = new Renderer(source, tokens, options, parsed.Module).Run(); }
         catch (ArgumentException) { return null; }
         catch (InvalidOperationException) { return null; }
 
         return SameCode(source, result) ? Finish(result, options) : null;
+    }
+
+    /// <summary>
+    /// Syntax only Python 3.9 and later reads, which black takes to mean the code is for those (its target versions inferred from the
+    /// file): with-items in parentheses, a decorator that is any expression, match, except*, type parameters and the type statement.
+    /// </summary>
+    static bool NeedsPython39(string source, Module module)
+    {
+        foreach (var node in AstChildren.Descendants(module))
+        {
+            switch (node)
+            {
+                case MatchStmt or TypeAliasStmt or TryStmt { IsStar: true }:
+                case ClassDef { TypeParams.Count: > 0 } or FunctionDef { TypeParams.Count: > 0 }:
+                    return true;
+                case WithStmt w when w.Items.Count > 0 && Regex.IsMatch(source[w.Start..w.Items[0].Start], @"\(\s*$") && (w.Items.Count > 1 || w.Items[0].Target != null)
+                                     && source.IndexOf(':', w.Items[^1].End) is var colon && colon > 0 && Regex.IsMatch(source[w.Items[^1].End..colon], @"^\s*,?\s*\)\s*$"):
+                    return true;
+            }
+            var decorators = node switch { FunctionDef f => f.Decorators, ClassDef c => c.Decorators, _ => null };
+            if (decorators != null && decorators.Any(d => !DottedOrCall(d))) return true;
+        }
+        return false;
+
+        static bool DottedOrCall(Expr e) => e switch
+        {
+            NameExpr => true,
+            AttributeExpr a => DottedOrCall(a.Value) && a.Value is not CallExpr,
+            CallExpr c => c.Func is NameExpr or AttributeExpr && DottedOrCall(c.Func),
+            _ => false,
+        };
     }
 
     /// <summary>The rest of what the options ask for: tabs for indentation, the line ending.</summary>
@@ -82,11 +116,12 @@ public static class PythonFormatter
         if (tokens.Any(t => t.Kind == TokenKind.Error)) return null;
         var parsed = Parser.Parse(source);
         if (parsed.Diagnostics.Count > 0) return null;
+        if (!options.ParenthesizedWith && NeedsPython39(source, parsed.Module)) options = options with { ParenthesizedWith = true };
 
         string? Attempt(int a, int b)
         {
             string result;
-            try { result = new Renderer(source, tokens, options).RunRange(a, b); }
+            try { result = new Renderer(source, tokens, options, parsed.Module).RunRange(a, b); }
             catch (ArgumentException) { return null; }
             catch (InvalidOperationException) { return null; }
             return SameCode(source, result) ? result : null;
@@ -399,11 +434,34 @@ public static class PythonFormatter
         readonly FormatOptions _o;
         int IndentWidth => _o.IndentWidth;
 
-        public Renderer(string source, List<Token> tokens, FormatOptions options)
+        public Renderer(string source, List<Token> tokens, FormatOptions options, Module? module = null)
         {
             _o = options;
             _s = source; _t = tokens;
             _nl = source.Contains("\r\n") ? "\r\n" : "\n";
+            if (module != null) _softKeywords = SoftKeywordStarts(source, module);
+        }
+
+        /// <summary>Where `match`, `case` and `type` are keywords: a bracket after them is a pattern or a subject, not a call or a subscript (`case ["x"]:`).</summary>
+        readonly HashSet<int> _softKeywords = new();
+
+        static HashSet<int> SoftKeywordStarts(string source, Module module)
+        {
+            var starts = new HashSet<int>();
+            foreach (var node in AstChildren.Descendants(module))
+            {
+                if (node is MatchStmt ms)
+                {
+                    starts.Add(ms.Start);
+                    foreach (var c in ms.Cases)
+                    {
+                        int at = source.LastIndexOf("case", c.Pattern.Start, Math.Min(c.Pattern.Start + 1, 200), StringComparison.Ordinal);
+                        if (at >= 0) starts.Add(at);
+                    }
+                }
+                else if (node is TypeAliasStmt ta) starts.Add(ta.Start);
+            }
+            return starts;
         }
 
         public string Run()
@@ -412,6 +470,7 @@ public static class PythonFormatter
             if (lines.Count == 0) return "";
             MarkVerbatim(lines);
             lines = SplitStatements(lines);
+            lines = JoinDummyBodies(lines);
             for (int i = 0; i < lines.Count; i++)
             {
                 var l = lines[i];
@@ -534,6 +593,40 @@ public static class PythonFormatter
                     else if (trailing.Contains("fmt: off") || trailing.Contains("fmt:off")) throw new InvalidOperationException("a trailing fmt: off");   // black reads it in ways we do not follow
                 }
             }
+        }
+
+        /// <summary>
+        /// A def or class whose whole body is `...` (a dummy implementation: an overload, a protocol) has it on its own line, as black does
+        /// since 24: `def f(x: int) -> int: ...`, a comment after the `...` going along. A docstring before it, a comment line or a
+        /// comment after the header keep the body where it is; if, for, while and the other blocks are left alone.
+        /// </summary>
+        List<Line> JoinDummyBodies(List<Line> lines)
+        {
+            var result = new List<Line>(lines.Count);
+            for (int i = 0; i < lines.Count; i++)
+            {
+                var l = lines[i];
+                if (i + 1 < lines.Count && !l.IsComment && !l.Verbatim && IsDef(l) && l.Tokens[^1].Kind == TokenKind.Operator && l.Tokens[^1].Text(_s) == ":")
+                {
+                    var body = lines[i + 1];
+                    bool dummy = !body.IsComment && !body.Verbatim && body.Level == l.Level + 1 && body.Tokens.Count >= 1
+                        && body.Tokens[0].Kind == TokenKind.Operator && body.Tokens[0].Text(_s) == "..."
+                        && body.Tokens.Skip(1).All(t => t.Kind == TokenKind.Comment)
+                        && (i + 2 >= lines.Count || lines[i + 2].Level <= l.Level);
+                    if (dummy)
+                    {
+                        result.Add(new Line
+                        {
+                            Level = l.Level, Tokens = l.Tokens.Concat(body.Tokens).ToList(), Start = l.Start, OriginalColumn = l.OriginalColumn,
+                            BlankBefore = l.BlankBefore, PrevEnd = l.PrevEnd, EndPos = body.EndPos, OrigBlank = l.OrigBlank,
+                        });
+                        i++;
+                        continue;
+                    }
+                }
+                result.Add(l);
+            }
+            return result;
         }
 
         static readonly HashSet<string> CompoundKeywords = new() { "if", "elif", "else", "for", "while", "try", "except", "finally", "with", "class", "def" };
@@ -772,7 +865,8 @@ public static class PythonFormatter
                 else if (startsDefinition)
                 {
                     if (attachedToComment) blank = 0;
-                    else if (IsDef(l) && IsStubDef(prev) && prev.Level == l.Level && l.BlankBefore == 0) blank = 0;   // overload stubs stay together
+                    // overload stubs stay together: the next def, or the decorator of the next one, as the source has it
+                    else if ((IsDef(l) || IsDecorator(l) && !l.IsComment) && IsStubDef(prev) && prev.Level == l.Level && l.BlankBefore == 0) blank = 0;
                     else blank = l.Level == 0 ? 2 : 1;
                 }
                 else if (IsClassDocstring(lines, i - 1) && prev.Level == l.Level) blank = 1;
@@ -1025,7 +1119,7 @@ public static class PythonFormatter
                 {
                     case ".": return p.Kind == TokenKind.Keyword && pText is not ("True" or "False" or "None") ? true : false;
                     case "(" or "[":
-                        if (IsValueEnd(p, pText)) return false;
+                        if (IsValueEnd(p, pText) && !_softKeywords.Contains(p.Start)) return false;
                         return true;
                     case ":":
                         if (sliceColon) return gap.Length > 0 && SpacedAfter(toks, k);
