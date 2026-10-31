@@ -414,26 +414,32 @@ public sealed partial class TypeEvaluator
         }
     }
 
-    /// <summary>self.attr targets assigned anywhere in a method body (not in nested defs/classes).</summary>
-    static IEnumerable<AttributeExpr> AssignedAttributes(IEnumerable<Node> nodes, string self)
+    /// <summary>self.attr targets assigned anywhere in a method body (not in nested defs/classes), in the order of the source.</summary>
+    static List<AttributeExpr> AssignedAttributes(IEnumerable<Node> nodes, string self)
     {
-        foreach (var n in nodes)
+        var found = new List<AttributeExpr>();
+        foreach (var n in nodes) AddAssignedAttributes(n, self, found);
+        return found;
+    }
+
+    static void AddAssignedAttributes(Node n, string self, List<AttributeExpr> into)
+    {
+        if (n is FunctionDef or LambdaExpr or ClassDef) return;
+        switch (n)
         {
-            if (n is FunctionDef or LambdaExpr or ClassDef) continue;
-            IEnumerable<Expr> targets = n switch
-            {
-                AssignStmt a => a.Targets,
-                AugAssignStmt a => new[] { a.Target },
-                AnnAssignStmt a => new[] { a.Target },
-                ForStmt f => new[] { f.Target },
-                WithItem w when w.Target != null => new[] { w.Target },
-                _ => Array.Empty<Expr>(),
-            };
-            foreach (var t in targets)
-                foreach (var attr in FlattenTargets(t))
-                    if (attr is AttributeExpr { Value: NameExpr v } ae && v.Name == self) yield return ae;
-            foreach (var inner in AssignedAttributes(AstChildren.Of(n), self)) yield return inner;
+            case AssignStmt a: foreach (var t in a.Targets) AddSelfAttributes(t, self, into); break;
+            case AugAssignStmt a: AddSelfAttributes(a.Target, self, into); break;
+            case AnnAssignStmt a: AddSelfAttributes(a.Target, self, into); break;
+            case ForStmt f: AddSelfAttributes(f.Target, self, into); break;
+            case WithItem { Target: { } target }: AddSelfAttributes(target, self, into); break;
         }
+        foreach (var child in AstChildren.Of(n)) AddAssignedAttributes(child, self, into);
+    }
+
+    static void AddSelfAttributes(Expr target, string self, List<AttributeExpr> into)
+    {
+        foreach (var attr in FlattenTargets(target))
+            if (attr is AttributeExpr { Value: NameExpr v } ae && v.Name == self) into.Add(ae);
     }
 
     static IEnumerable<Expr> FlattenTargets(Expr t)

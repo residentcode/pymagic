@@ -180,9 +180,19 @@ public sealed class Workspace
         if (_modules.TryGetValue(name, out var m)) return m;
         m = Load(name);
         _modules[name] = m;
+        _resolved.Add((name, m));
         if (m != null) _byRootScope[m.Semantics.ModuleScope] = m;
         return m;
     }
+
+    readonly List<(string Name, ModuleInfo? Module)> _resolved = new();
+
+    /// <summary>
+    /// The modules this workspace looked up by name (libraries, stubs, project files nobody added), each with what was found (null: nothing), in the order
+    /// they were asked for; modules added with <see cref="AddModule"/> or <see cref="AddDiskModule"/> are not among them. What an analysis rests on beyond the
+    /// files it was given.
+    /// </summary>
+    public IReadOnlyList<(string Name, ModuleInfo? Module)> ResolvedModules => _resolved;
 
     ModuleInfo? Load(string name)
     {

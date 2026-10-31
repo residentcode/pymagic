@@ -401,40 +401,56 @@ public sealed partial class LanguageService
     }
 
     /// <summary>
-    /// Searches the modules on several workers: this thread takes the first share, the others each work in a copy of this service (an evaluator of its own,
-    /// the same parsed modules, so the declarations the target holds are the very same objects). False when a worker failed; the caller then does it all itself.
+    /// Searches the modules on several workers: this thread and copies of this service (each with an evaluator of its own and the same parsed modules, so the
+    /// declarations the target holds are the very same objects) take the modules a few at a time from one queue, so a worker that meets slow files does not hold
+    /// the others up. What each module gives is kept by its place in the project and handed on in that order, the order one thread gives (a module a copy
+    /// does not have is done here at the end). False when a worker failed, before anything was handed on; the caller then does it all itself.
     /// </summary>
     bool UsagesInParallel(Snapshot snap, Target target, bool forRename, bool memberLike, int workers, Action<ModuleInfo, (int Start, int End), bool> add)
     {
         var modules = snap.Project;
-        var uriOf = modules.ToDictionary(m => m, m => UriOfModule(m) ?? "", ReferenceEqualityComparer.Instance as IEqualityComparer<ModuleInfo>);
-        var byUri = new Dictionary<string, ModuleInfo>(StringComparer.Ordinal);
-        foreach (var (m, uri) in uriOf) if (uri.Length > 0) byUri[uri] = m;
+        var uris = modules.Select(m => UriOfModule(m) ?? "").ToArray();
         var files = modules.Select(m => m.Path).Where(p => p != null).Select(p => p!).ToList();
-        int per = (modules.Count + workers - 1) / workers;
-        var shares = Enumerable.Range(0, workers).Select(i => modules.Skip(i * per).Take(per).ToList()).Where(l => l.Count > 0).ToList();
+        var found = new List<((int Start, int End) Span, bool Decl)>[modules.Count];
+        int next = 0;
+        const int Batch = 4;
+        bool failed = false;
 
-        var tasks = shares.Skip(1).Select(share => Task.Run(() =>
+        // takes batches until the queue is empty; moduleAt gives this searcher's own module for a place in the project (null: it has none)
+        void Drain(LanguageService svc, Snapshot s, Func<int, ModuleInfo?> moduleAt)
         {
-            var worker = Fork(files);
-            var wsnap = worker.Full();
-            var mine = new HashSet<string>(share.Select(m => uriOf[m]), StringComparer.Ordinal);
-            var found = new List<(string Uri, (int Start, int End) Span, bool Decl)>();
-            foreach (var wm in wsnap.Project)
+            for (int from; !Volatile.Read(ref failed) && (from = Interlocked.Add(ref next, Batch) - Batch) < modules.Count;)
+                for (int i = from; i < Math.Min(from + Batch, modules.Count); i++)
+                    if (moduleAt(i) is { } m)
+                    {
+                        var list = new List<((int Start, int End) Span, bool Decl)>();
+                        svc.UsagesIn(s, target, m, forRename, memberLike, (span, decl) => list.Add((span, decl)));
+                        found[i] = list;
+                    }
+        }
+
+        var tasks = Enumerable.Range(1, workers - 1).Select(_ => Task.Run(() =>
+        {
+            try
             {
-                if (worker.UriOfModule(wm) is not { } uri || !mine.Contains(uri)) continue;
-                worker.UsagesIn(wsnap, target, wm, forRename, memberLike, (span, decl) => found.Add((uri, span, decl)));
+                var worker = Fork(files);
+                var wsnap = worker.Full();
+                var byUri = new Dictionary<string, ModuleInfo>(StringComparer.Ordinal);
+                foreach (var wm in wsnap.Project) if (worker.UriOfModule(wm) is { } u) byUri[u] = wm;
+                Drain(worker, wsnap, i => byUri.GetValueOrDefault(uris[i]));
             }
-            return found;
+            catch { Volatile.Write(ref failed, true); throw; }
         })).ToArray();
 
-        foreach (var m in shares[0])
-            UsagesIn(snap, target, m, forRename, memberLike, (span, decl) => add(m, span, decl));
+        try { Drain(this, snap, i => modules[i]); }
+        catch { Volatile.Write(ref failed, true); try { Task.WaitAll(tasks); } catch (AggregateException) { } throw; }
         try { Task.WaitAll(tasks); }
         catch (AggregateException) { return false; }
-        foreach (var t in tasks)
-            foreach (var (uri, span, decl) in t.Result)
-                if (byUri.TryGetValue(uri, out var m)) add(m, span, decl);
+        for (int i = 0; i < modules.Count; i++)
+        {
+            if (found[i] == null) { UsagesIn(snap, target, modules[i], forRename, memberLike, (span, decl) => add(modules[i], span, decl)); continue; }
+            foreach (var (span, decl) in found[i]) add(modules[i], span, decl);
+        }
         return true;
     }
 

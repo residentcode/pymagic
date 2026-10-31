@@ -194,16 +194,27 @@ public sealed partial class LanguageService
     }
 
     /// <summary>The file can hold a usage of the name: the name is written in it somewhere other than a comment or a docstring.</summary>
-    static bool FileMentions(string path, string needle)
+    /// <remarks>
+    /// The answer is kept for the last name asked of each file, with the file's modification time and length taken before it was read, so the next query
+    /// for the same name (each pause in typing starts a new one) does not read and lex every file of the project again.
+    /// </remarks>
+    bool FileMentions(string path, string needle)
     {
         try
         {
+            var info = new FileInfo(path);
+            (long Ticks, long Length) stamp = (info.LastWriteTimeUtc.Ticks, info.Length);
+            if (_mentions.TryGetValue(path, out var known) && known.Stamp == stamp && known.Needle == needle) return known.Mentions;
             string text = File.ReadAllText(path);
-            return text.Contains(needle, StringComparison.Ordinal) && MentionsOutsideProse(text, needle);
+            bool mentions = text.Contains(needle, StringComparison.Ordinal) && MentionsOutsideProse(text, needle);
+            if (info.Exists) _mentions[path] = (stamp, needle, mentions);
+            return mentions;
         }
         catch (IOException) { return true; }
         catch (UnauthorizedAccessException) { return true; }
     }
+
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, ((long Ticks, long Length) Stamp, string Needle, bool Mentions)> _mentions = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// False when every place the text holds the name is a comment or a string that stands alone as a statement (a docstring, as in the
