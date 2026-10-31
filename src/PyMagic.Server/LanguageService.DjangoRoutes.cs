@@ -96,6 +96,7 @@ public sealed partial class LanguageService
     {
         var snap = Full();
         var ev = snap.Workspace.Evaluator;
+        _routesWorkspace = snap.Workspace;
         var modules = snap.Project.Where(x => !x.IsStub).ToList();
         var urlModules = modules.Where(x => x.Source.Contains("urlpatterns", StringComparison.Ordinal) && PatternsOf(x).Any()).ToList();
         if (urlModules.Count == 0) return Array.Empty<RouteEntry>();
@@ -152,6 +153,10 @@ public sealed partial class LanguageService
                     case AttributeExpr { Attr: "urls", Value: var r }:
                         ExpandRouter(modules, ev, m, r, joined, found);
                         break;
+                    case ConstExpr lit when FixtureModel.StringValue(lit) is { } installed && LibraryUrls(installed) is { } libraryUrls:
+                        // the urls module of an installed app (allauth.urls): its routes, read as the project's are
+                        WalkUrls(modules, ev, libraryUrls, joined, depth + 1, stack, found);
+                        break;
                     case ConstExpr lit when FixtureModel.StringValue(lit) is { } library:
                         // the URLs of an app that is not the project's (a library): one entry for all of them
                         found.Add(EntryOf("ANY", joined + "…", library, "library", m, call.Start, new()));
@@ -181,6 +186,10 @@ public sealed partial class LanguageService
                     break;
                 case ClassType { IsInstance: false } direct when !direct.Info.Module.IsStub:
                     found.Add(DescribeClassView(ev, direct.Info, joined, null));
+                    break;
+                default:
+                    // a name given the as_view() of a class, here or where it is imported from (rest_framework.authtoken's obtain_auth_token)
+                    if (AsViewClassOf(ev, m, view) is { } named && !named.Class.Module.IsStub) found.Add(DescribeClassView(ev, named.Class, joined, null));
                     break;
             }
         }
@@ -245,13 +254,22 @@ public sealed partial class LanguageService
         var methods = new List<string>();
         foreach (var name in BaseNamesOf(ev, cls))
             if (GenericMethods.TryGetValue(name, out var generic)) methods.AddRange(generic);
+        string[]? allowed = null;
         foreach (var t in ev.MroOf(cls).OfType<ClassType>())
         {
-            if (t.Info.Module.IsStub || t.Info.Module.Name.StartsWith("rest_framework", StringComparison.Ordinal) || t.Info.Module.Name.StartsWith("django.", StringComparison.Ordinal)) continue;
+            // the views of installed apps count (rest_framework.authtoken's ObtainAuthToken.post); the framework's own base views do not
+            if (t.Info.Module.IsStub || IsFrameworkBaseView(t.Info.Module.Name)) continue;
             methods.AddRange(t.Info.Node.Body.OfType<FunctionDef>().Where(f => HandlerVerbs.Contains(f.Name)).Select(f => f.Name.ToUpperInvariant()));
+            // `http_method_names = ["post", "options"]` (Django's LogoutView): only those are answered
+            allowed ??= t.Info.Node.Body.OfType<AssignStmt>().Where(a => a.Targets is [NameExpr { Name: "http_method_names" }] && a.Value is ListExpr or TupleExpr)
+                .Select(a => (a.Value is ListExpr l ? l.Items : ((TupleExpr)a.Value).Items).Select(i => FixtureModel.StringValue(i)?.ToUpperInvariant()).OfType<string>().ToArray()).FirstOrDefault();
         }
-        return methods.Distinct().OrderBy(x => Array.IndexOf(new[] { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS" }, x)).ToList();
+        return methods.Distinct().Where(x => allowed == null || allowed.Contains(x)).OrderBy(x => Array.IndexOf(new[] { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS" }, x)).ToList();
     }
+
+    /// <summary>The modules of the base views Django and REST framework build views on (their handlers are what GenericMethods tells).</summary>
+    static bool IsFrameworkBaseView(string module) =>
+        module is "rest_framework.views" or "rest_framework.generics" or "rest_framework.viewsets" or "rest_framework.mixins" || module.StartsWith("django.views", StringComparison.Ordinal);
 
     static bool IsRestFramework(TypeEvaluator ev, ClassInfo cls) =>
         ev.MroOf(cls).OfType<ClassType>().Any(t => t.Info.Module.Name.StartsWith("rest_framework", StringComparison.Ordinal))
@@ -316,26 +334,34 @@ public sealed partial class LanguageService
         foreach (var module in new[] { at }.Concat(modules.Where(x => !ReferenceEquals(x, at))))
         {
             if (!module.Ast.Body.OfType<AssignStmt>().Any(a => a.Targets.Count == 1 && a.Targets[0] is NameExpr t && t.Name == name && a.Value is CallExpr c && CalleeName(c) is { } cn && cn.EndsWith("Router", StringComparison.Ordinal))) continue;
+            var kind = RouterKindOf(module, name) ?? new RouterKind(false, true, false, false, module, 0);
+            // a DefaultRouter answers at its own prefix too: the API root, a list of the registered routes
+            if (kind.RootView)
+                found.Add(EntryOf("GET", prefix, "api-root (DefaultRouter)", "drf", module, kind.At, PathParamsOf(prefix).ToList(), "the URL of each registered route", null,
+                    kind.FormatSuffixes ? new List<string> { "also with a .{format} suffix (.json, .api)" } : null));
             foreach (var reg in AstChildren.Descendants(module.Ast).OfType<CallExpr>().Where(c => c.Func is AttributeExpr { Attr: "register", Value: NameExpr rv } && rv.Name == name))
             {
                 var args = reg.Args.Where(a => a.Name == null && a.Stars == 0).ToList();
                 string route = (args.Count > 0 ? FixtureModel.StringValue(args[0].Value) : reg.Args.FirstOrDefault(a => a.Name == "prefix") is { } pa ? FixtureModel.StringValue(pa.Value) : null) ?? "";
                 var viewExpr = args.Count > 1 ? args[1].Value : reg.Args.FirstOrDefault(a => a.Name == "viewset")?.Value;
                 if (viewExpr == null || ev.TypeOf(module, viewExpr) is not ClassType { IsInstance: false } vs) continue;
-                ExpandViewSet(ev, vs.Info, prefix + route.TrimStart('^').TrimEnd('$'), found);
+                ExpandViewSet(ev, vs.Info, prefix + route.TrimStart('^').TrimEnd('$'), found, kind);
             }
             return;
         }
     }
 
-    void ExpandViewSet(TypeEvaluator ev, ClassInfo vs, string rawPrefix, List<RouteEntry> found)
+    void ExpandViewSet(TypeEvaluator ev, ClassInfo vs, string rawPrefix, List<RouteEntry> found, RouterKind? router = null)
     {
+        // `trailing_slash=False` leaves the slash off; a DefaultRouter also answers each route with a format suffix (/books.json)
+        string slash = router is { TrailingSlash: false } ? "" : "/";
         var mro = ev.MroOf(vs).OfType<ClassType>().ToList();
         var names = BaseNamesOf(ev, vs);
         var own = mro.Where(t => !t.Info.Module.IsStub && !t.Info.Module.Name.StartsWith("rest_framework", StringComparison.Ordinal)).SelectMany(t => t.Info.Node.Body.OfType<FunctionDef>()).ToList();
         string lookup = ClassAttribute(ev, vs, "lookup_url_kwarg") is { } kw && FixtureModel.StringValue(kw.Value) is { } k1 ? k1
             : ClassAttribute(ev, vs, "lookup_field") is { } lf && FixtureModel.StringValue(lf.Value) is { } k2 ? k2 : "pk";
         var (query, serializers, permissions) = DrfFacts(ev, vs);
+        if (router is { FormatSuffixes: true }) permissions = permissions.Append("also with a .{format} suffix (.json, .api)").ToList();
         bool model = names.Contains("ModelViewSet");
         bool readOnly = names.Contains("ReadOnlyModelViewSet");
         string basePath = rawPrefix.TrimEnd('/');
@@ -349,11 +375,11 @@ public sealed partial class LanguageService
             if (action == "list") parameters.AddRange(query);
             string? serializer = serializers.For(action, method);
             if (serializer != null && action is "create" or "update" or "partial_update") parameters.Add(BodyOf(ev, serializers, action, method, action != "partial_update", action == "partial_update" ? "any of the fields" : "request body"));
-            string? response = serializer == null || action == "destroy" ? null : action == "list" ? $"list[{serializer}]" : serializer;
+            string? response = serializer == null || action == "destroy" ? null : action == "list" ? $"list[{Shape(ev, serializers, serializer)}]" : Shape(ev, serializers, serializer);
             string? status = action == "create" ? "201" : action == "destroy" ? "204" : null;
             int at = own.FirstOrDefault(f => f.Name == action)?.NameStart ?? vs.Node.NameStart;
             var module = own.FirstOrDefault(f => f.Name == action) != null ? mro.First(t => t.Info.Node.Body.Contains(own.First(f => f.Name == action))).Info.Module : vs.Module;
-            found.Add(EntryOf(method, detail ? $"{basePath}/{{{lookup}}}/" : basePath + "/", $"{vs.Name}.{action}", "drf", module, at, parameters, response, status, permissions));
+            found.Add(EntryOf(method, detail ? $"{basePath}/{{{lookup}}}{slash}" : basePath + slash, $"{vs.Name}.{action}", "drf", module, at, parameters, response, status, permissions));
         }
 
         // @action(detail=True, methods=["post"], url_path="publish")
@@ -365,12 +391,37 @@ public sealed partial class LanguageService
                 string urlPath = d.Args.FirstOrDefault(a => a.Name == "url_path")?.Value is { } up && FixtureModel.StringValue(up) is { } custom ? custom : f.Name;
                 var parameters = detail ? new List<RouteParam> { new(lookup, "path", "str", true, "lookup") } : new List<RouteParam>();
                 parameters.AddRange(PathParamsOf(basePath));
-                string path = detail ? $"{basePath}/{{{lookup}}}/{urlPath}/" : $"{basePath}/{urlPath}/";
+                string path = detail ? $"{basePath}/{{{lookup}}}/{urlPath}{slash}" : $"{basePath}/{urlPath}{slash}";
                 var module = ev.MroOf(vs).OfType<ClassType>().First(t => t.Info.Node.Body.Contains(f)).Info.Module;
-                // @action(serializer_class=X), or what get_serializer_class gives for this action by name
-                string? actionSerializer = d.Args.FirstOrDefault(a => a.Name == "serializer_class")?.Value is { } se && ev.TypeOf(module, se) is ClassType { IsInstance: false } sc ? sc.Info.Name
-                    : serializers.ByAction.ContainsKey(f.Name) ? serializers.For(f.Name, methods.FirstOrDefault() ?? "GET") : null;
-                found.Add(EntryOf(string.Join(", ", methods), path, $"{vs.Name}.{f.Name}", "drf", module, f.NameStart, parameters, actionSerializer, tags: permissions));
+                // @action(serializer_class=X), or what get_serializer_class gives for this action by name or for each method
+                ClassInfo? fixedSerializer = d.Args.FirstOrDefault(a => a.Name == "serializer_class")?.Value is { } se && ev.TypeOf(module, se) is ClassType { IsInstance: false } sc ? sc.Info : null;
+                string? SerializerFor(string method) => fixedSerializer?.Name
+                    ?? (serializers.ByAction.ContainsKey(f.Name) || serializers.ByMethod.Count > 0 ? serializers.For(f.Name, method) : null);
+                var perMethod = methods.Select(x => x ?? "GET").ToList();
+                // one entry for each method when they are given different serializers: the detail shows each one's
+                bool split = perMethod.Count > 1 && perMethod.Select(SerializerFor).Distinct().Count() > 1;
+                foreach (var group in split ? perMethod.Select(x => new List<string> { x }).ToList() : new List<List<string>> { perMethod })
+                {
+                    string first = group[0];
+                    var these = new List<RouteParam>(parameters);
+                    string? actionSerializer = SerializerFor(first);
+                    if (actionSerializer != null && first is "POST" or "PUT" or "PATCH")
+                    {
+                        var picked = serializers.All.Select(x => x.Class).Append(fixedSerializer).OfType<ClassInfo>().Distinct().Where(c => c.Name == actionSerializer).ToList();
+                        var fields = picked.Count == 1 ? SerializerFieldParams(ev, picked[0], body: true) : null;
+                        these.Add(new RouteParam("data", "body", actionSerializer, first != "PATCH", first == "PATCH" ? "any of the fields" : "request body", fields is { Count: > 0 } ? fields : null));
+                    }
+                    found.Add(EntryOf(string.Join(", ", group), path, $"{vs.Name}.{f.Name}", "drf", module, f.NameStart, these, actionSerializer == null ? null : Shape(ev, serializers, actionSerializer), tags: permissions));
+                }
             }
+    }
+
+    /// <summary>A serializer named in a response, marked when its own `to_representation` decides what it gives rather than its fields.</summary>
+    static string Shape(TypeEvaluator ev, SerializerChoice choice, string serializer)
+    {
+        var picked = choice.All.Select(x => x.Class).Distinct().Where(c => c.Name == serializer).ToList();
+        bool custom = picked.Count == 1 && ev.MroOf(picked[0]).OfType<ClassType>().Any(t => !t.Info.Module.IsStub && !IsDjangoInternalModule(t.Info.Module)
+            && t.Info.Node.Body.OfType<FunctionDef>().Any(fn => fn.Name == "to_representation"));
+        return custom ? serializer + " (as its to_representation() makes it)" : serializer;
     }
 }

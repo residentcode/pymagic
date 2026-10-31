@@ -224,7 +224,7 @@ public sealed partial class LanguageService
     /// <summary>`form.cleaned_data.get("titel")`: a Django form's cleaned_data read with a key no field gives (a TypedDict's own get may take any key).</summary>
     IEnumerable<Finding> CleanedDataGet(ModuleInfo m, Expr receiver, ConstExpr key, TypeEvaluator ev)
     {
-        if (ev.TypeOf(m, receiver) is not ClassType { IsInstance: true } ct || !ct.Info.Name.StartsWith("cleaned_data of ", StringComparison.Ordinal)) return Array.Empty<Finding>();
+        if (ev.TypeOf(m, receiver) is not ClassType { IsInstance: true } ct || !(ct.Info.Name.StartsWith("cleaned_data of ", StringComparison.Ordinal) || ct.Info.Name.StartsWith("validated_data of ", StringComparison.Ordinal))) return Array.Empty<Finding>();
         return TypedDictKey(m, ct, key, ev);
     }
 
@@ -247,6 +247,9 @@ public sealed partial class LanguageService
         // a Django form's cleaned_data has a key for each of the form's fields
         string message = ct.Info.Name.StartsWith("cleaned_data of ", StringComparison.Ordinal)
             ? $"{ct.Info.Name["cleaned_data of ".Length..]} has no field '{name}', so cleaned_data has no such key. Its fields are: {string.Join(", ", fields.Select(f => f.Field.Name).Take(12))}"
+            // a REST framework serializer's validated_data holds the fields it writes
+            : ct.Info.Name.StartsWith("validated_data of ", StringComparison.Ordinal)
+            ? $"{ct.Info.Name["validated_data of ".Length..]} writes no field '{name}', so validated_data has no such key. The fields it writes are: {string.Join(", ", fields.Select(f => f.Field.Name).Take(12))}"
             : $"TypedDict '{ct.Info.Name}' has no key '{name}'";
         yield return new Finding(key.Start, Math.Max(key.End - key.Start, 1), message, "typeddict-keys", FindingLevel.Warning);
     }

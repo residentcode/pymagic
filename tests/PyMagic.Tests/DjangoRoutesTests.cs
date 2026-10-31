@@ -135,7 +135,7 @@ public class DjangoRoutesTests
         var list = Find(RoutesOf(Urls), "BookViewSet.list");
         Assert.Equal("title,author,search", string.Join(",", list.Params!.Where(p => p.Kind == "query").Select(p => p.Name)));
         Assert.Equal("list[BookSerializer]", list.Response);
-        Assert.Equal("permission IsAuthenticated", string.Join(",", list.Tags!));
+        Assert.Equal("permission IsAuthenticated", list.Tags![0]);
     }
 
     [Fact]

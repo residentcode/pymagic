@@ -99,6 +99,27 @@ public sealed partial class TypeEvaluator
         _ => PyType.Unknown,
     };
 
+    readonly Dictionary<(ClassInfo Owner, string Label), ClassInfo> _djangoDataDicts = new();
+
+    /// <summary>
+    /// A dict with these keys, as a TypedDict named "<paramref name="label"/>" (`validated_data of BookSerializer`): what a host knows a framework
+    /// fills a dict with. Made once for an owner and label.
+    /// </summary>
+    public PyType DjangoDataDict(ClassInfo owner, string label, IReadOnlyList<(string Name, PyType Type)> keys)
+    {
+        if (!_djangoDataDicts.TryGetValue((owner, label), out var data))
+        {
+            data = MakeSyntheticClass(owner.Module, label, owner.Node, BuiltinClass("dict"), Array.Empty<(string, PyType)>());
+            ClassDataOf(data).IsTypedDict = true;
+            _syntheticTypedDictFields[data] = keys.Select(k => (new FieldInfo(k.Name, k.Type, false), true)).ToList();
+            _djangoDataDicts[(owner, label)] = data;
+        }
+        return InstanceOfClass(data);
+    }
+
+    /// <summary>The value a model field gives on an instance (`str` for a CharField, the related model for a foreign key).</summary>
+    public PyType DjangoFieldValue(DjangoField f) => DjangoValueType(f);
+
     /// <summary>`form.cleaned_data`: a dict with a key for each field of the form, its value the field's cleaned value.</summary>
     PyType? DjangoCleanedData(ClassType c, bool instance)
     {

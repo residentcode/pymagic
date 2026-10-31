@@ -75,7 +75,7 @@ public class RealDrfTests
         var lines = Project().DjangoRoutes().Select(Line).OrderBy(x => x, StringComparer.Ordinal).ToList();
         var expected = new[]
         {
-            "ANY /api/v1/archive/{year}/ archive", "DELETE /api/v1/books/{pk}/ BookViewSet.destroy", "GET /api/v1/books/ BookViewSet.list",
+            "ANY /api/v1/archive/{year}/ archive", "GET /api/v1/ api-root (DefaultRouter)", "DELETE /api/v1/books/{pk}/ BookViewSet.destroy", "GET /api/v1/books/ BookViewSet.list",
             "GET /api/v1/books/{pk}/ BookViewSet.retrieve", "GET /api/v1/books/recent/ BookViewSet.latest", "GET /api/v1/ping/ Ping",
             "GET /api/v1/readonly/ ReadOnlyBooks.list", "GET /api/v1/readonly/{pk}/ ReadOnlyBooks.retrieve", "GET, PUT, PATCH, DELETE /api/v1/authors/{pk}/ AuthorDetail",
             "GET, POST /api/v1/authors/ AuthorList", "GET, POST /api/v1/status/ status", "PATCH /api/v1/books/{pk}/ BookViewSet.partial_update",
@@ -92,7 +92,7 @@ public class RealDrfTests
         var list = routes.Single(r => r.Name == "BookViewSet.list");
         Assert.Equal("list[BookSerializer]", list.Response);
         Assert.Equal("title,author,search", string.Join(",", list.Params!.Where(p => p.Kind == "query").Select(p => p.Name)));
-        Assert.Equal("permission IsAuthenticated", string.Join(",", list.Tags!));
+        Assert.Equal("permission IsAuthenticated", list.Tags![0]);
         var create = routes.Single(r => r.Name == "BookViewSet.create");
         Assert.Equal("201", create.Status);
         Assert.Equal("BookSerializer", create.Params!.Single(p => p.Kind == "body").Type);

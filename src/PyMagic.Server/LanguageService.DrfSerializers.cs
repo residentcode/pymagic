@@ -151,6 +151,7 @@ public sealed partial class LanguageService
                 if (f.Nested != null && ev.DjangoMetaModel(f.Nested) is { } serves && serves != end.Target && !IsSubclass(ev, end.Target, serves))
                     Warn(f.Call.Func.Start, f.Call.Func.End - f.Call.Func.Start, $"{f.Nested.Name} is for {serves.Name}, but '{f.Name}' gives {end.Target.Name}s: DRF raises AttributeError for the fields {end.Target.Name} does not have");
             }
+            findings.AddRange(WritableNestedFindings(m, cd, info, ev, declared));
         }
         foreach (var f in findings) if (!Suppressed(m.Source, f)) yield return AsDiag(f);
     }
