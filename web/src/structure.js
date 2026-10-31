@@ -6,7 +6,17 @@ const $ = (id) => document.getElementById(id);
 const KIND = {
     2: ['M', 'mod'], 5: ['C', 'class'], 6: ['m', 'fn'], 7: ['p', 'var'], 8: ['f', 'var'], 9: ['m', 'fn'], 10: ['E', 'class'], 11: ['I', 'class'],
     12: ['ƒ', 'fn'], 13: ['v', 'var'], 14: ['K', 'const'], 22: ['e', 'const'], 23: ['S', 'class'], 26: ['T', 'class'],
+    // the Django view (the logical structure)
+    'dj-model': ['M', 'class'], 'dj-serializer': ['S', 'class'], 'dj-view': ['V', 'fn'], 'dj-admin': ['A', 'class'], 'dj-form': ['F', 'class'],
+    'dj-signal': ['⚡', 'fn'], 'dj-field': ['f', 'var'], 'dj-relation': ['→', 'var'], 'dj-nested': ['S', 'class'], 'dj-endpoint': ['⇄', 'const'],
 };
+
+/** A node of the logical structure as a symbol of the tree (a line for its range, its kind marked as Django's). */
+export function fromLogical(n) {
+    const at = { line: n.line, character: 0 };
+    return { name: n.name, detail: n.detail ?? '', kind: `dj-${n.kind}`, range: { start: at, end: at }, selectionRange: { start: at, end: at },
+        children: (n.children ?? []).map(fromLogical), node: n };
+}
 
 /** The symbols from the outermost to the innermost that contain the line. */
 export function pathAt(symbols, line) {
@@ -21,9 +31,10 @@ export function pathAt(symbols, line) {
     return path;
 }
 
-export function setupStructure({ editor, lsp, uriOf, visible }) {
+export function setupStructure({ editor, lsp, uriOf, visible, actions }) {
     const root = $('structure');
     let symbols = [];
+    let django = false;   // the logical structure of the file, as Django sees it
     let ticket = 0;
     let follow = true;
     let sorted = false;
@@ -38,7 +49,11 @@ export function setupStructure({ editor, lsp, uriOf, visible }) {
         if (!uri) { symbols = []; draw(); return; }
         const mine = ++ticket;
         let found;
-        try { found = (await lsp.request('textDocument/documentSymbol', { textDocument: { uri } })) ?? []; }
+        try {
+            found = django
+                ? ((await lsp.request('pymagic/logicalStructure', { textDocument: { uri } })) ?? []).map(fromLogical)
+                : (await lsp.request('textDocument/documentSymbol', { textDocument: { uri } })) ?? [];
+        }
         catch { found = []; }
         if (mine !== ticket) return;
         symbols = found;
@@ -50,7 +65,7 @@ export function setupStructure({ editor, lsp, uriOf, visible }) {
         if (symbols.length === 0) {
             const none = document.createElement('div');
             none.className = 'side-empty';
-            none.textContent = editor.getModel() ? 'Nothing to show in this file.' : 'Open a file to see its classes and functions.';
+            none.textContent = !editor.getModel() ? 'Open a file to see its classes and functions.' : django ? 'No models, serializers, views, admins, forms or signal handlers in this file.' : 'Nothing to show in this file.';
             root.append(none);
             return;
         }
@@ -95,6 +110,19 @@ export function setupStructure({ editor, lsp, uriOf, visible }) {
                     d.textContent = s.detail;
                     li.append(d);
                 }
+                // a model without an admin or a serializer: make one
+                if (s.node?.kind === 'model' && actions) {
+                    const fields = s.node.children.filter((c) => c.kind === 'field' || c.kind === 'relation').map((c) => c.name);
+                    for (const [missing, label, run] of [[!s.node.hasAdmin, '+ admin', actions.createAdmin], [!s.node.hasSerializer, '+ serializer', actions.createSerializer]]) {
+                        if (!missing) continue;
+                        const b = document.createElement('button');
+                        b.className = 'st-action';
+                        b.textContent = label;
+                        b.title = label === '+ admin' ? `A ModelAdmin for ${s.name} in admin.py beside this file` : `A ModelSerializer for ${s.name} in serializers.py beside this file`;
+                        b.onclick = (e) => { e.stopPropagation(); void run(editor.getModel(), s.name, fields).then(() => later(300)); };
+                        li.append(b);
+                    }
+                }
                 li.onclick = () => {
                     const p = s.selectionRange.start;
                     editor.setPosition({ lineNumber: p.line + 1, column: p.character + 1 });
@@ -128,6 +156,7 @@ export function setupStructure({ editor, lsp, uriOf, visible }) {
 
     $('st-follow').onclick = () => { follow = !follow; $('st-follow').classList.toggle('on', follow); mark(); };
     $('st-sort').onclick = () => { sorted = !sorted; $('st-sort').classList.toggle('on', sorted); draw(); };
+    $('st-django').onclick = () => { django = !django; $('st-django').classList.toggle('on', django); void refresh(); };
     $('st-collapse').onclick = () => {
         const walk = (level, parent) => { for (const s of level) { const p = [...parent, s]; if (s.children?.length) { folded.add(keyOf(p)); walk(s.children, p); } } };
         folded.clear();

@@ -12,6 +12,7 @@ import { setupCodeGen } from './codegen';
 import { setupSharedText } from './sharedtext';
 import { setupPythonConsole } from './pyconsole';
 import { setupDiagrams } from './diagram';
+import { addModelAdmin, addModelSerializer } from './django-model';
 import { setLiveTemplateSource } from './settings-ui';
 import { setupHierarchy } from './hierarchy';
 import { setupRoutes } from './routes';
@@ -928,7 +929,25 @@ async function main() {
     });
     setupToolbar({ monaco, editor, save, openFile, currentFile: () => currentRel, refactor, search, runConfigs });
     setupAutoSave({ editor, saveAll: common.saveAll });
-    const structure = setupStructure({ editor, lsp, uriOf: (model) => serverUri.get(model), visible: () => chrome.shown() && chrome.view() === 'structure' });
+    // the Django view's "+ admin" and "+ serializer": in admin.py / serializers.py beside the model's file, in the editor to look at and save
+    const besideModel = async (model, file, edit) => {
+        const rel = relPathOf.get(normalise(serverUri.get(model) ?? ''));
+        if (!rel) return;
+        const target = (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/') + 1) : '') + file;
+        const exists = await fetch('/api/file?path=' + encodeURIComponent(target)).then((r) => r.ok).catch(() => false);
+        if (!exists) await fetch('/api/fs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'create', path: target }) });
+        const m = await ensureModel(target);
+        if (!m) return;
+        m.pushEditOperations([], [{ range: m.getFullModelRange(), text: edit(m.getValue()) }], () => null);
+        await openFile(target, new monaco.Range(m.getLineCount(), 1, m.getLineCount(), 1));
+    };
+    const structure = setupStructure({
+        editor, lsp, uriOf: (model) => serverUri.get(model), visible: () => chrome.shown() && chrome.view() === 'structure',
+        actions: {
+            createAdmin: (model, name, fields) => besideModel(model, 'admin.py', (t) => addModelAdmin(t, name, fields)),
+            createSerializer: (model, name, fields) => besideModel(model, 'serializers.py', (t) => addModelSerializer(t, name, fields)),
+        },
+    });
     window.addEventListener('pymagic:sidebar', (e) => { if (e.detail === 'structure') structure.show(); });
     const bookmarks = setupBookmarks({ monaco, editor, openFile, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')), revealInTree: (rel) => explorer?.select(rel) });
     const history = setupHistory({ monaco, editor, currentFile: () => currentRel, openFile });

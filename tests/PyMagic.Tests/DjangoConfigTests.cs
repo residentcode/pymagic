@@ -90,6 +90,35 @@ public class DjangoConfigTests
     }
 
     [Fact]
+    public void TheLogicalStructureOfAFile()
+    {
+        string code =
+            "from django.db import models\nfrom django.dispatch import receiver\nfrom django.db.models.signals import pre_save\nfrom rest_framework import serializers\nfrom django import forms\nfrom django.views import View\n\n\n" +
+            "class Author(models.Model):\n    name = models.CharField(max_length=100)\n\n\n" +
+            "class Book(models.Model):\n    title = models.CharField(max_length=200)\n    author = models.ForeignKey(Author, on_delete=models.CASCADE)\n    tags = models.ManyToManyField(\"Tag\")\n\n\n" +
+            "class AuthorSerializer(serializers.ModelSerializer):\n    class Meta:\n        model = Author\n        fields = ['name']\n\n\n" +
+            "class BookSerializer(serializers.ModelSerializer):\n    author = AuthorSerializer()\n    reviews = ReviewSerializer(many=True)\n    title = serializers.CharField()\n\n    class Meta:\n        model = Book\n\n\n" +
+            "class BookForm(forms.ModelForm):\n    note = forms.CharField()\n\n    class Meta:\n        model = Book\n\n\n" +
+            "class BookList(View):\n    pass\n\n\n" +
+            "@receiver(pre_save, sender=Book)\ndef stamp(sender, instance, **kwargs):\n    pass\n\n\ndef helper():\n    pass\n";
+        var svc = DjangoFixture.Service().With("shop/models.py", code)
+            .With("shop/admin.py", "from django.contrib import admin\nfrom .models import Author\n\nadmin.site.register(Author)\n")
+            .With("shop/urls.py", "from django.urls import path\nfrom .models import BookList\n\nurlpatterns = [path('books/', BookList.as_view(), name='books')]\n").Service;
+        var nodes = svc.LogicalStructure(DjangoFixture.Root + "shop/models.py");
+        string Show(LogicalNode n) => $"{n.Kind}:{n.Name}" + (n.Detail != null ? $"({n.Detail})" : "") + (n.Children.Count > 0 ? "[" + string.Join(" ", n.Children.Select(Show)) + "]" : "");
+        Assert.Equal("model:Author[field:name(CharField)] " +
+            "model:Book[field:title(CharField) relation:author(ForeignKey → Author) relation:tags(ManyToManyField → Tag)] " +
+            "serializer:AuthorSerializer(of Author) " +
+            "serializer:BookSerializer(of Book)[nested:author(AuthorSerializer) nested:reviews(ReviewSerializer (many)) field:title(CharField)] " +
+            "form:BookForm(of Book)[field:note(CharField)] view:BookList signal:stamp(pre_save of Book)",
+            System.Text.RegularExpressions.Regex.Replace(string.Join(" ", nodes.Select(Show)), @"view:BookList\[[^\]]*\]", "view:BookList"));
+        var author = nodes.Single(n => n.Name == "Author");
+        Assert.True(author.HasAdmin && author.HasSerializer);
+        var book = nodes.Single(n => n.Name == "Book");
+        Assert.True(!book.HasAdmin && book.HasSerializer);
+    }
+
+    [Fact]
     public void AFolderMarkedAsTemplatesHoldsTemplates()
     {
         string root = Folder();

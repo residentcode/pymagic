@@ -89,3 +89,11 @@ test('a new model, a new view and a model registered in the admin, with the impo
     assert.equal(d.registerModel('from django.contrib import admin\nfrom .models import Book\n', 'Author'), 'from django.contrib import admin\nfrom .models import Book, Author\n\nadmin.site.register(Author)\n');
     assert.equal(d.registerModel('# empty\n', 'Book'), 'from django.contrib import admin\nfrom .models import Book\n# empty\n\nadmin.site.register(Book)\n');
 });
+
+test('a ModelAdmin and a ModelSerializer made for a model, with its fields', () => {
+    assert.equal(d.addModelAdmin('from django.contrib import admin\n', 'Book', ['title', 'author']),
+        'from django.contrib import admin\nfrom .models import Book\n\n\n@admin.register(Book)\nclass BookAdmin(admin.ModelAdmin):\n    list_display = ("title", "author")\n');
+    assert.ok(d.addModelAdmin('', 'Tag', ['label']).includes('list_display = ("label",)'));
+    assert.equal(d.addModelSerializer('', 'Book', ['title']),
+        'from rest_framework import serializers\nfrom .models import Book\n\n\nclass BookSerializer(serializers.ModelSerializer):\n    class Meta:\n        model = Book\n        fields = ["id", "title"]\n');
+});

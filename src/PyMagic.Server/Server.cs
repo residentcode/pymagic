@@ -268,6 +268,8 @@ public sealed class Server
                 return _service.Diagram(p?["kind"]?.GetValue<string>() ?? "classes", p?["textDocument"]?["uri"]?.GetValue<string>());
             case "pymagic/djangoStructure":
                 return _service.DjangoStructure();
+            case "pymagic/logicalStructure":
+                return _service.LogicalStructure(UriOf(p));
             case "pymagic/templates":
                 return _service.TemplateList();
             case "pymagic/inlayHints":

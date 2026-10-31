@@ -130,3 +130,18 @@ export function registerModel(text, model) {
         out = withImport(out, `from .models import ${model}`);
     return endWith(out, `\nadmin.site.register(${model})\n`);
 }
+
+/** admin.py with a ModelAdmin for a model, listing its first fields. */
+export function addModelAdmin(text, model, fields) {
+    let out = withImport(text, 'from django.contrib import admin');
+    out = out.split('\n').some((l) => new RegExp(`^from \\.models import .*\\b${model}\\b`).test(l)) ? out : withImport(out, `from .models import ${model}`);
+    const shown = fields.slice(0, 4).map((f) => `"${f}"`).join(', ');
+    return endWith(out, `\n\n@admin.register(${model})\nclass ${model}Admin(admin.ModelAdmin):\n    list_display = (${shown}${fields.length === 1 ? ',' : ''})\n`);
+}
+
+/** serializers.py with a ModelSerializer for a model and its fields. */
+export function addModelSerializer(text, model, fields) {
+    let out = withImport(text, 'from rest_framework import serializers');
+    out = withImport(out, `from .models import ${model}`);
+    return endWith(out, `\n\nclass ${model}Serializer(serializers.ModelSerializer):\n    class Meta:\n        model = ${model}\n        fields = [${['id', ...fields].map((f) => `"${f}"`).join(', ')}]\n`);
+}
