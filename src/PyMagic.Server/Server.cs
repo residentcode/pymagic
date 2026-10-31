@@ -94,7 +94,7 @@ public sealed class Server
         var inbox = new BlockingCollection<JsonNode?>();
         var reader = new Thread(() =>
         {
-            try { while (channel.Read() is { } msg) inbox.Add(msg); }
+            try { while (channel.Read() is { } msg) { NoteCancel(msg); inbox.Add(msg); } }
             catch (IOException) { }
             inbox.Add(null);
         }) { IsBackground = true };
@@ -121,13 +121,17 @@ public sealed class Server
                 if (more == null) { ended = true; break; }
                 batch.Add(more);
             }
+            foreach (var msg in batch) NoteCancel(msg);
             foreach (var msg in Coalesce(batch))
             {
                 Handle(msg);
                 if (Exited) break;
             }
+            bool was = LineMap.Utf8.Value;
+            LineMap.Utf8.Value = _utf8;
             try { FlushDiagnostics(); }
             catch (Exception e) { Log($"error while publishing diagnostics: {e}"); }
+            finally { LineMap.Utf8.Value = was; }
             if (ended) break;
         }
     }
@@ -161,18 +165,49 @@ public sealed class Server
         var args = message["params"];
         if (method == null) return; // a response to something we asked; we never ask
 
+        // a request the client cancelled before it was reached is not worked out at all
+        if (id != null && _cancelled.TryRemove(id.ToJsonString(), out _)) { Fail(id, RequestCancelled, "the request was cancelled"); return; }
+
         // the whole project's problems take seconds: they are worked out beside the loop, on a copy of the documents, so typing and hovering go on
         if (id != null && method == "pymagic/problems" && Deferred) { StartProblems(id, args); return; }
 
+        bool was = LineMap.Utf8.Value;
+        LineMap.Utf8.Value = _utf8;
         try
         {
-            if (id != null) Respond(id, Request(method, args));
+            if (id != null)
+            {
+                var result = Request(method, args);
+                // cancelled while it was worked out: the answer is not wanted any more
+                if (_cancelled.TryRemove(id.ToJsonString(), out _)) Fail(id, RequestCancelled, "the request was cancelled");
+                else Respond(id, result);
+            }
             else Notify(method, args);
         }
         catch (RpcException e) when (id != null) { Fail(id, e.Code, e.Message); }
         catch (ServiceException e) when (id != null) { Fail(id, -32803, e.Message); }
         catch (Exception e) when (id != null) { Fail(id, -32603, e.Message); }
         catch (Exception e) { Log($"error in {method}: {e}"); }
+        finally { LineMap.Utf8.Value = was; }
+    }
+
+    const int RequestCancelled = -32800;
+
+    /// <summary>The ids of requests the client cancelled (`$/cancelRequest`) that have not been answered yet.</summary>
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _cancelled = new();
+
+    /// <summary>Whether positions count UTF-8 bytes: the client offered `utf-8` among its `general.positionEncodings`.</summary>
+    bool _utf8;
+
+    /// <summary>
+    /// Notes a `$/cancelRequest` as soon as it arrives (the readers call this before queueing), so that a request still waiting behind others is dropped.
+    /// A cancel of a request that was answered already stays until the set is cleared.
+    /// </summary>
+    public void NoteCancel(JsonNode? message)
+    {
+        if (message?["method"]?.GetValue<string>() != "$/cancelRequest" || message["params"]?["id"] is not { } id) return;
+        if (_cancelled.Count > 1000) _cancelled.Clear();
+        _cancelled[id.ToJsonString()] = true;
     }
 
     int _problemsTicket;
@@ -352,10 +387,15 @@ public sealed class Server
         }
         _ = _service.StartIndexing();   // the names of every file of the project, in the background
 
+        // UTF-8 positions when the client can take them (LSP 3.17): editors that keep their text as bytes then need no conversion
+        _utf8 = p?["capabilities"]?["general"]?["positionEncodings"] is JsonArray encodings && encodings.Any(e => e?.GetValue<string>() == "utf-8");
+        LineMap.Utf8.Value = _utf8;
+
         return new
         {
             capabilities = new
             {
+                positionEncoding = _utf8 ? "utf-8" : "utf-16",
                 textDocumentSync = new { openClose = true, change = 1 },
                 hoverProvider = true,
                 definitionProvider = true,

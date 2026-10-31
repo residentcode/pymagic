@@ -62,7 +62,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - ~~Notebooks: formatting a selection of a cell, formatting on save, cells with magics (120)~~ (done, item 213). A cell's selection is laid out by the built-in formatter whichever is chosen in the toolbar.
 - ~~Refactoring: choosing which files or hunks of a preview to apply, word-level highlighting in the diff (19); a module reached through `from pkg import *` and imports written over lines with backslashes are not followed by a move (143)~~ (done, item 214).
 - ~~Unresolved imports: asking PyPI whether a suggested package exists, an install command for other LSP clients, remembering "ignore this import" (15)~~ (done, item 215). The ignored modules are taken back out of `.pymagic/ignored-imports.json` by hand; there is no list of them in the page yet.
-- Language server: ~~semantic tokens~~ (done, item 197: the colours of names by their meaning, compared with VS Code's); cancelling a request, UTF-8 position encoding (8).
+- ~~Language server: semantic tokens (item 197); cancelling a request, UTF-8 position encoding (8)~~ (done, item 216). A request already being worked out is not stopped (its answer is dropped); positions the engine writes without its line map, if any are left, still count UTF-16 units.
 - Formatter: the import settings of ruff and isort not read yet: `lines-after-imports`, `section-order`, `force-wrap-aliases`, `from-first`, `relative-imports-order`, `split-on-trailing-comma` (44).
 - ~~Black's last corner cases: parentheses in `print((1))`, `with` and `await`, `# type:` comment placement, blank lines inside brackets (22, 43, 75)~~ (done, item 199, compared with black 26.10.1).
 - ~~Black 24-26's style elsewhere: parentheses around a conditional expression or a long annotation that is split, splitting before `%` after a string, implicitly joined strings one to a line, tuple targets, no trailing comma after `*args` / `**kwargs` unless the code is for 3.6 and later, an empty collection too long by its comment~~ (done, item 200: black's right-hand split ported; of 192 real files 177 come out as black writes them).
@@ -158,4 +158,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 215 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 216 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

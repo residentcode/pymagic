@@ -411,12 +411,12 @@ function registerProviders() {
         },
     });
     monaco.languages.registerHoverProvider(CODE_LANGUAGES, {
-        async provideHover(model, position) {
+        async provideHover(model, position, token) {
             const cell = notebook?.targetOf(model, position); // a notebook cell: the position is in the notebook's file
             const uri = cell ? cell.uri : serverUri.get(model);
             if (!uri)
                 return null;
-            const h = await lsp.request('textDocument/hover', { textDocument: { uri }, position: cell ? cell.position : toPos(position) });
+            const h = await lsp.request('textDocument/hover', { textDocument: { uri }, position: cell ? cell.position : toPos(position) }, token);
             if (!h)
                 return null;
             return { range: toRange(cell ? cell.fromServer(h.range) : h.range), contents: [{ value: h.contents.value }] };
@@ -445,7 +445,7 @@ function registerProviders() {
     });
     const completionProvider = (triggerCharacters) => ({
         triggerCharacters,
-        async provideCompletionItems(model, position) {
+        async provideCompletionItems(model, position, _context, token) {
             const cell = notebook?.targetOf(model, position); // targetOf also brings the notebook's file up to date
             const uri = cell ? cell.uri : serverUri.get(model);
             if (!uri)
@@ -458,7 +458,7 @@ function registerProviders() {
                     textDocument: { uri, version: model.getVersionId() },
                     contentChanges: [{ text: model.getValue() }],
                 });
-            const res = await lsp.request('textDocument/completion', { textDocument: { uri }, position: cell ? cell.position : toPos(position) });
+            const res = await lsp.request('textDocument/completion', { textDocument: { uri }, position: cell ? cell.position : toPos(position) }, token);
             return {
                 suggestions: (res?.items ?? []).map((i) => ({
                     label: i.label,
@@ -611,7 +611,7 @@ function registerProviders() {
     monaco.languages.registerSignatureHelpProvider(CODE_LANGUAGES, {
         signatureHelpTriggerCharacters: ['(', ','],
         signatureHelpRetriggerCharacters: [')'],
-        async provideSignatureHelp(model, position) {
+        async provideSignatureHelp(model, position, token) {
             const cell = notebook?.targetOf(model, position); // targetOf also brings the notebook's file up to date
             const uri = cell ? cell.uri : serverUri.get(model);
             if (!uri)
@@ -622,7 +622,7 @@ function registerProviders() {
                     textDocument: { uri, version: model.getVersionId() },
                     contentChanges: [{ text: model.getValue() }],
                 });
-            const h = await lsp.request('textDocument/signatureHelp', { textDocument: { uri }, position: cell ? cell.position : toPos(position) });
+            const h = await lsp.request('textDocument/signatureHelp', { textDocument: { uri }, position: cell ? cell.position : toPos(position) }, token);
             if (!h)
                 return null;
             return {

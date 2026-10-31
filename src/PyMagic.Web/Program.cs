@@ -587,7 +587,9 @@ app.Map("/lsp", async (HttpContext ctx) =>
                 if (r.MessageType == WebSocketMessageType.Close) goto done;
                 ms.Write(buffer, 0, r.Count);
             } while (!r.EndOfMessage);
-            inbox.Add(JsonNode.Parse(ms.ToArray()));
+            var incoming = JsonNode.Parse(ms.ToArray());
+            server.NoteCancel(incoming);   // a cancel counts at once, before the requests queued ahead of it are reached
+            inbox.Add(incoming);
         }
     }
     catch (WebSocketException) { }

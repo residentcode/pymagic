@@ -1,4 +1,11 @@
 // Minimal JSON-RPC client for the language server's WebSocket endpoint (one JSON message per frame).
+
+/** The error a cancelled request rejects with (named as Monaco names its own, so it is not reported). */
+function cancelled() {
+    const e = new Error('Canceled');
+    e.name = 'Canceled';
+    return e;
+}
 export class LspClient {
     ws;
     nextId = 1;
@@ -20,11 +27,26 @@ export class LspClient {
         });
     }
     on(method, handler) { this.handlers.set(method, handler); }
-    request(method, params) {
+    /**
+     * A request; with a cancellation token (Monaco's, or anything with isCancellationRequested and onCancellationRequested), the engine is told
+     * when it is no longer wanted ($/cancelRequest) and the promise rejects at once: typing on drops the completions and hovers still queued.
+     */
+    request(method, params, token) {
         const id = this.nextId++;
         return new Promise((resolve, reject) => {
+            if (token?.isCancellationRequested) {
+                reject(cancelled());
+                return;
+            }
             this.pending.set(id, { resolve, reject });
             this.send({ jsonrpc: '2.0', id, method, params });
+            token?.onCancellationRequested?.(() => {
+                if (!this.pending.has(id))
+                    return;
+                this.pending.delete(id);
+                this.notify('$/cancelRequest', { id });
+                reject(cancelled());
+            });
         });
     }
     notify(method, params) { this.send({ jsonrpc: '2.0', method, params }); }
