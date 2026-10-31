@@ -306,4 +306,49 @@ public class JinjaTemplateTests
         Assert.Equal("4: jinja-macro-call 'a' of macro 'm' is not given: Jinja passes it undefined, which prints as nothing", Messages(d));
         Assert.Equal(Severity.Warning, d[0].Severity);
     }
+
+    // ------------------------------------------------------------ item 208: expressions read whole, include lists and variables, line statements
+
+    [Fact]
+    public void ExpressionsAreReadAsJinjasParserReadsThem()
+    {
+        var d = DiagnosticsOf(Make("{{ title books }}\n{% if title books %}x{% endif %}\n{{ title + }}\n{% set x = 1 2 %}\n{{ \"}}\" }}\n"), "jinja-syntax").OrderBy(x => x.Range.Start.Line).ToList();
+        Assert.True(d.Count == 4, Messages(d));
+        Assert.Contains("Jinja expected the end of the print statement, got 'books': an operator or a comma is missing before it", d[0].Message);
+        Assert.Contains("Jinja expected the end of the statement block, got 'books'", d[1].Message);
+        Assert.Contains("Jinja expected an expression", d[2].Message);
+        Assert.Equal(3, d[3].Range.Start.Line);
+        // what Jinja does read: slices, tests with an argument, conditionals without else, calls with keywords, filters with arguments, dicts and tuples
+        string fine = "{{ books[1:] }}{{ books[::-1] }}{{ title is sameas false }}{{ 3 is divisibleby 3 }}{{ title if title }}{{ title|default('x', true) }}" +
+            "{{ {'a': 1, 'b': [1, 2]}['a'] }}{{ (1, 2) }}{{ 1, 2 }}{{ -1 }}{{ not title }}{{ title not in books }}{{ 'a' 'b' }}{{ books.0.title }}{{ range(3)|list|join(', ') }}" +
+            "{{ dict(a=1, **{}) }}{{ title is not none }}{{ 1 < 2 < 3 }}{{ 2 ** 3 // 1 % 2 }}{{ title ~ '!' }}\n";
+        Assert.Equal(0, DiagnosticsOf(Make(fine), "jinja-syntax").Count);
+    }
+
+    [Fact]
+    public void AnIncludeOfAListOrAVariable()
+    {
+        var app = App.Replace("render_template('index.html', books=books, title='Home')", "render_template('index.html', books=books, title='Home', partial='nothere.html', other='macros.html')");
+        var r = Make("{% include ['custom.html', 'gone.html'] %}\n{% include ['custom.html', 'base.html'] %}\n{% include partial %}\n{% include other %}\n", app: app);
+        var d = DiagnosticsOf(r, "django-template").OrderBy(x => x.Range.Start.Line).ToList();
+        Assert.True(d.Count == 3, Messages(d));
+        Assert.True(d[0].Message.Contains("None of the templates of this list") && d[1].Message.Contains("'gone.html' is not"), Messages(d));
+        Assert.Contains("'partial' is 'nothere.html' (given by", d[2].Message);
+        // each name of a list leads to its template, and completes
+        var r2 = Make("{% include ['custom.html', 'base@.html'] %}\n", app: app);
+        Assert.True(r2.Svc.Definition(r2.Uri, r2.Pos).Single().Uri.EndsWith("base.html", StringComparison.Ordinal));
+        var r3 = Make("{% include ['custom.html', 'ma@\n", app: app);
+        Assert.True(r3.Svc.Completion(r3.Uri, r3.Pos).Any(i => i.Label == "macros.html"));
+    }
+
+    [Fact]
+    public void LineStatementsOfTheEnvironment()
+    {
+        var app = App.Replace("app = Flask(__name__)\n", "app = Flask(__name__)\napp.jinja_env.line_statement_prefix = '#'\napp.jinja_env.line_comment_prefix = '##'\n");
+        var r = Make("<ul>\n# for b in books:\n  <li>{{ b.titel }}</li>   ## the title\n# endfor\n</ul>\n# if title\nx\n", app: app);
+        var all = DiagnosticsOf(r);
+        Assert.True(all.Any(x => x.Message.Contains("Unclosed tag 'if'")), Messages(all));
+        Assert.True(all.Any(x => x.Message.Contains("'Book' has no attribute 'titel'")), Messages(all));
+        Assert.True(!all.Any(x => x.Message.Contains("'for'")), Messages(all));
+    }
 }

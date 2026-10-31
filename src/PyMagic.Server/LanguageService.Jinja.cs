@@ -217,6 +217,8 @@ public sealed partial class LanguageService
         public HashSet<string> CustomTags { get; } = new(StringComparer.Ordinal);
         public HashSet<string> EnabledExtensions { get; } = new(StringComparer.Ordinal);
         public bool FiltersOpaque, GlobalsOpaque, TagsOpaque, Flask, Starlette;
+        /// <summary>`line_statement_prefix` and `line_comment_prefix` of the environment (`app.jinja_env.line_statement_prefix = "#"`, `Environment(line_comment_prefix="##")`).</summary>
+        public string? LineStatement, LineComment;
     }
 
     readonly ConditionalWeakTable<Snapshot, JinjaEnvironment> _jinjaEnvironments = new();
@@ -233,6 +235,11 @@ public sealed partial class LanguageService
             string src = m.Source;
             if (Regex.IsMatch(src, @"^[ \t]*(?:from|import)[ \t]+(?:flask|quart)\b", RegexOptions.Multiline)) env.Flask = true;
             if (src.Contains("Jinja2Templates", StringComparison.Ordinal)) env.Starlette = true;
+            if (src.Contains("line_", StringComparison.Ordinal))
+            {
+                if (Regex.Match(src, @"line_statement_prefix['""]?\s*[=:]\s*['""](?<p>[^'""\n]+)['""]") is { Success: true } ls) env.LineStatement = ls.Groups["p"].Value;
+                if (Regex.Match(src, @"line_comment_prefix['""]?\s*[=:]\s*['""](?<p>[^'""\n]+)['""]") is { Success: true } lc) env.LineComment = lc.Groups["p"].Value;
+            }
             foreach (var (tags, ext, evidence) in ExtensionTags)
                 if (evidence.Any(e => src.Contains(e, StringComparison.Ordinal))) env.EnabledExtensions.Add(ext);
             foreach (Match fx in FlaskExtensionImport.Matches(src))
@@ -744,9 +751,15 @@ public sealed partial class LanguageService
 
         // expressions Jinja cannot read
         foreach (var v in a.Parsed.Variables)
-            if (JinjaSyntaxProblem(v.Expression, v.ExprStart, true) is { } p) Add(p.Start, p.End, p.Message, Severity.Error, "jinja-syntax");
+            if ((JinjaSyntaxProblem(v.Expression, v.ExprStart, true) ?? (v.Expression.Trim().Length > 0 ? JinjaGrammarProblem(v.Expression, v.ExprStart, true) : null)) is { } p)
+                Add(p.Start, p.End, p.Message, Severity.Error, "jinja-syntax");
         foreach (var tag in a.Parsed.Tags.Where(t => t.Name is not ("raw" or "endraw") && t.Args.Length > 0))
-            if (JinjaSyntaxProblem(tag.Args, tag.ArgsStart, false) is { } p) Add(p.Start, p.End, p.Message, Severity.Error, "jinja-syntax");
+        {
+            if (JinjaSyntaxProblem(tag.Args, tag.ArgsStart, false) is { } p) { Add(p.Start, p.End, p.Message, Severity.Error, "jinja-syntax"); continue; }
+            // what Jinja reads as one expression, token by token: `{% if a b %}` stops at b
+            foreach (var (text, at) in WholeExpressionsOf(tag))
+                if (text.Trim().Length > 0 && JinjaGrammarProblem(text, at, false) is { } g) { Add(g.Start, g.End, g.Message, Severity.Error, "jinja-syntax"); break; }
+        }
         foreach (var tag in a.Parsed.Tags.Where(t => t.Name is "if" or "elif" or "for" or "set" or "include" or "extends" or "import" or "from" or "macro" or "call" or "filter" && t.Args.Trim().Length == 0))
             Add(tag.Start, tag.End, $"'{tag.Name}' needs {(tag.Name is "if" or "elif" ? "a condition" : "its arguments")}", Severity.Error, "jinja-syntax");
 
@@ -813,6 +826,8 @@ public sealed partial class LanguageService
             if (!IsLibraryTemplate(quoted) && !Templates().Any(t => t.Name == quoted))
                 Add(tag.ArgsStart + first.Offset + 1, tag.ArgsStart + first.Offset + 1 + quoted.Length, $"Template '{quoted}' is not in any templates folder of the project", Severity.Information, "django-template");
         }
+
+        IncludeListProblems(a, Add);
 
         // blocks no parent has
         if (a.Parsed.Tags.Any(t => t.Name == "extends") && ParentChainKnown(a) == true)
@@ -925,13 +940,15 @@ public sealed partial class LanguageService
         }
         if (tag.Name is "extends" or "include" or "import" or "from")
         {
-            var first = SplitTopLevel(tag.Args, ' ').Select(Trimmed).FirstOrDefault(p => p.Text.Length > 0);
-            int qs = tag.ArgsStart + (first.Text == null ? 0 : first.Offset);
-            if (first.Text != null && DjangoTemplateParser.Unquote(first.Text) is { } quoted && offset >= qs && offset <= qs + first.Text.Length)
+            // any template named in it: the one of `{% include 'x.html' %}`, each of `{% include ['a.html', 'b.html'] %}`
+            foreach (Match q in QuotedTemplate.Matches(tag.Args))
             {
+                int qs = tag.ArgsStart + q.Index;
+                if (offset < qs || offset > qs + q.Length) continue;
+                string quoted = q.Groups["n"].Value;
                 var files = Templates().Where(t => t.Name == quoted).ToList();
                 if (files.Count == 0) return null;
-                return new TemplateTarget(Code("(template) " + quoted) + "\n\n" + string.Join("\n\n", files.Select(f => $"`{f.Path}`")), qs + 1, qs + first.Text.Length - 1, files.Select(f => InFile(f.Path, 0, 0)).OfType<Location>().ToList());
+                return new TemplateTarget(Code("(template) " + quoted) + "\n\n" + string.Join("\n\n", files.Select(f => $"`{f.Path}`")), qs + 1, qs + q.Length - 1, files.Select(f => InFile(f.Path, 0, 0)).OfType<Location>().ToList());
             }
         }
         if (tag.Name is "block" or "endblock")
@@ -1061,7 +1078,8 @@ public sealed partial class LanguageService
             var tagName = Regex.Match(inside, @"^\s*(?<name>\w+)\s+(?<rest>.*)$", RegexOptions.Singleline);
             if (!tagName.Success) return items;
             string name = tagName.Groups["name"].Value, rest = tagName.Groups["rest"].Value;
-            var quote = Regex.Match(rest, @"^[""'](?<typed>[^""']*)$");
+            // the template's name, or one of a list: `{% include ['custom.html', 'de`
+            var quote = Regex.Match(rest, @"^(?:[\[(](?:\s*[""'][^""']*[""']\s*,)*\s*)?[""'](?<typed>[^""']*)$");
             if (quote.Success && name is "extends" or "include" or "import" or "from")
             {
                 string typed = quote.Groups["typed"].Value;

@@ -34,7 +34,14 @@ internal static class DjangoTemplateParser
     static readonly HashSet<string> Opaque = new(StringComparer.Ordinal) { "comment", "verbatim" };
 
     /// <summary>Jinja: comments may span lines, and `{%-` / `-%}` (or `+`) control the whitespace around a tag.</summary>
-    static readonly Regex JinjaToken = new(@"\{%(?<tag>.*?)%\}|\{\{(?<var>.*?)\}\}|\{#.*?#\}", RegexOptions.Singleline | RegexOptions.Compiled);
+    /// <remarks>
+    /// As Jinja's lexer, a string inside a tag or a variable is read whole: `{{ "}}" }}` ends at the second `}}`; a string that is never closed falls
+    /// back to the first `}}`, so that the open string is what is reported.
+    /// </remarks>
+    static readonly Regex JinjaToken = new(
+        @"\{%(?<tag>(?:'(?:\\.|[^'\\])*'|""(?:\\.|[^""\\])*""|[^'""%]|%(?!\}))*?)%\}|\{\{(?<var>(?:'(?:\\.|[^'\\])*'|""(?:\\.|[^""\\])*""|[^'""}]|\}(?!\}))*?)\}\}" +
+        @"|\{%(?<tag>.*?)%\}|\{\{(?<var>.*?)\}\}|\{#.*?#\}",
+        RegexOptions.Singleline | RegexOptions.Compiled);
 
     /// <summary>Jinja's tags that open a block and the tag that closes it (`set` only in its block form, `{% set x %}...{% endset %}`).</summary>
     public static readonly Dictionary<string, string> JinjaClosers = new(StringComparer.Ordinal)
@@ -56,8 +63,23 @@ internal static class DjangoTemplateParser
         return (body, offset);
     }
 
-    public static ParsedTemplate Parse(string text, bool jinja = false)
+    /// <summary>
+    /// A Jinja template's tokens when the environment sets `line_statement_prefix` (a line `# for x in y:` is a tag) and `line_comment_prefix`
+    /// (`## ...` up to the end of the line is a comment).
+    /// </summary>
+    static Regex JinjaTokenWith(string? lineStatement, string? lineComment)
     {
+        if (lineStatement == null && lineComment == null) return JinjaToken;
+        var parts = new List<string>();
+        if (lineComment != null) parts.Add(Regex.Escape(lineComment) + @"[^\n]*");
+        if (lineStatement != null) parts.Add(@"(?<=^|\n)[ \t]*" + Regex.Escape(lineStatement) + @"(?<line>[^\n]*)");
+        parts.Add(JinjaToken.ToString());
+        return new Regex(string.Join("|", parts), RegexOptions.Singleline);
+    }
+
+    public static ParsedTemplate Parse(string text, bool jinja = false, string? lineStatement = null, string? lineComment = null)
+    {
+        var token = jinja ? JinjaTokenWith(lineStatement, lineComment) : Token;
         var result = new ParsedTemplate();
         var stack = new List<TemplateTag>();
         var blocks = new Dictionary<string, TemplateTag>(StringComparer.Ordinal);
@@ -67,7 +89,7 @@ internal static class DjangoTemplateParser
         int at = 0;
         while (at < text.Length)
         {
-            var m = (jinja ? JinjaToken : Token).Match(text, at);
+            var m = token.Match(text, at);
             if (!m.Success) break;
             at = m.Index + m.Length;
             if (m.Groups["var"].Success)
@@ -80,10 +102,18 @@ internal static class DjangoTemplateParser
                 nodeBeforeExtends = true;
                 continue;
             }
-            if (!m.Groups["tag"].Success) continue;   // a comment
+            bool lineTag = m.Groups["line"].Success;
+            if (!m.Groups["tag"].Success && !lineTag) continue;   // a comment
 
-            var tg = m.Groups["tag"];
-            var (body, bodyAt) = WithoutMarks(tg.Value, tg.Index, jinja);
+            var tg = lineTag ? m.Groups["line"] : m.Groups["tag"];
+            var (body, bodyAt) = lineTag ? (tg.Value, tg.Index) : WithoutMarks(tg.Value, tg.Index, jinja);
+            // a line statement may end with a colon (`# for x in y:`), and a line comment after it is not part of it
+            if (lineTag)
+            {
+                if (lineComment != null && body.IndexOf(lineComment, StringComparison.Ordinal) is int cut and >= 0) body = body[..cut];
+                body = body.TrimEnd();
+                if (body.EndsWith(':')) body = body[..^1];
+            }
             int bodyLead = body.Length - body.TrimStart().Length;
             string trimmed = body.Trim();
             var nameMatch = Regex.Match(trimmed, @"^[\w]*");

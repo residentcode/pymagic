@@ -354,7 +354,7 @@ public sealed partial class LanguageService
             if (match.Name != null) name = match.Name;
         }
         bool jinja = IsJinjaTemplate(uri, snap);
-        var analysis = new TemplateAnalysis { Uri = uri, Text = text, Name = name, Parsed = DjangoTemplateParser.Parse(text, jinja), Snap = snap, Context = name == null ? new() : ContextOf(snap, name), Jinja = jinja };
+        var analysis = new TemplateAnalysis { Uri = uri, Text = text, Name = name, Parsed = jinja ? ParseJinja(snap, text) : DjangoTemplateParser.Parse(text), Snap = snap, Context = name == null ? new() : ContextOf(snap, name), Jinja = jinja };
         if (!jinja)
         {
             analysis.Context.AddRange(ContextProcessorEntries(snap));
@@ -663,7 +663,7 @@ public sealed partial class LanguageService
             if (file.Path == null || !seen.Add(file.Path)) return null;
             string? text = TemplateTextOf(file.Path);
             if (text == null) return null;
-            current = DjangoTemplateParser.Parse(text, a.Jinja);
+            current = (a.Jinja ? ParseJinja(a.Snap, text) : DjangoTemplateParser.Parse(text));
             foreach (var t in current.Tags.Where(t => t.Name == "block"))
             {
                 var parts = DjangoTemplateParser.SplitArguments(t.Args, t.ArgsStart);
@@ -984,7 +984,7 @@ public sealed partial class LanguageService
             if (file.Path == null || !seen.Add(file.Path)) return false;
             string? text = TemplateTextOf(file.Path);
             if (text == null) return false;
-            current = DjangoTemplateParser.Parse(text, a.Jinja);
+            current = (a.Jinja ? ParseJinja(a.Snap, text) : DjangoTemplateParser.Parse(text));
         }
         return false;
     }
