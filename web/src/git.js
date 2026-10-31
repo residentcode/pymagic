@@ -576,6 +576,8 @@ export function setupGit(deps) {
         ed.onMouseDown((e) => {
             if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS || !e.target.position)
                 return;
+            if (e.target.element && [...e.target.element.classList].some((c) => /^cov-(hit|part|miss)$/.test(c)))
+                return;
             const h = hunkAt(ed, hunksOf(), e.target.position.lineNumber);
             if (!h)
                 return;

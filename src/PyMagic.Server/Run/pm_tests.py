@@ -406,14 +406,66 @@ def run_doctest(channel, root, ids):
 SKIP_DIRS = {".git", ".hg", ".venv", "venv", "env", ".env", "node_modules", "__pycache__", "site-packages", ".tox", ".mypy_cache", ".pytest_cache", "build", "dist", ".pymagic"}
 
 
+BRANCH_OPS = {"FOR_ITER", "JUMP_IF_TRUE_OR_POP", "JUMP_IF_FALSE_OR_POP"}
+# instructions that stand between a jump and the code it reaches, and have no line of their own to show
+FILLER_OPS = {"NOT_TAKEN", "END_FOR", "POP_ITER", "CACHE", "NOP", "EXTENDED_ARG"}
+
+
+def _instructions(code):
+    import dis
+    return [ins for ins in dis.get_instructions(code)]
+
+
+def _line_of(ins):
+    positions = getattr(ins, "positions", None)
+    return positions.lineno if positions is not None else ins.starts_line
+
+
+def _dest_line(instructions, offset, from_line):
+    """The line a jump to this offset reaches: the first real instruction from there on another line than the jump's; 0 when the code ends first."""
+    for ins in instructions:
+        if ins.offset < offset or ins.opname in FILLER_OPS:
+            continue
+        line = _line_of(ins)
+        if line is not None and line > 0 and line != from_line:
+            return line
+    return 0
+
+
+def _branches_of(code):
+    """{offset of a conditional jump: (its line, the lines its two ways reach)}, the ways that reach one line left out."""
+    instructions = _instructions(code)
+    found = {}
+    for i, ins in enumerate(instructions):
+        if not (ins.opname.startswith("POP_JUMP") or ins.opname in BRANCH_OPS) or not isinstance(ins.argval, int):
+            continue
+        line = _line_of(ins)
+        if line is None or i + 1 >= len(instructions):
+            continue
+        ways = {_dest_line(instructions, instructions[i + 1].offset, line), _dest_line(instructions, ins.argval, line)}
+        if len(ways) == 2:
+            found[ins.offset] = (line, ways)
+    return found
+
+
 class Coverage:
-    """Records the lines of the project's own files that run, and knows which lines could run."""
+    """Records the lines of the project's own files that run and the ways their branches went, and knows which lines and branches could run."""
 
     def __init__(self, root):
         self.root = os.path.normcase(os.path.abspath(root))
         self.executed = {}
+        self.arcs = {}            # filename -> {line of a branch: lines it went to (0: out of the code)}
         self._tracked = {}
+        self._code_lines = {}     # code object -> its instructions, for the lines a branch reaches
         self._monitoring = hasattr(sys, "monitoring") and hasattr(sys.monitoring, "COVERAGE_ID") and not os.environ.get("PYMAGIC_COVERAGE_TRACE")
+
+    def _went(self, code, source, destination):
+        instructions = self._code_lines.get(code)
+        if instructions is None:
+            instructions = self._code_lines[code] = _instructions(code)
+        line = next((_line_of(i) for i in instructions if i.offset == source), None)
+        if line is not None:
+            self.arcs.setdefault(code.co_filename, {}).setdefault(line, set()).add(_dest_line(instructions, destination, line))
 
     def _wanted(self, filename):
         wanted = self._tracked.get(filename)
@@ -438,17 +490,46 @@ class Coverage:
                 else:
                     return mon.DISABLE
             mon.register_callback(tool, mon.events.LINE, on_line)
-            mon.set_events(tool, mon.events.LINE)
+            events = mon.events.LINE
+            # 3.14 reports each way of a branch apart, so a way seen once is turned off; before, BRANCH covers both ways and stays on
+            sides = [getattr(mon.events, n) for n in ("BRANCH_LEFT", "BRANCH_RIGHT") if hasattr(mon.events, n)]
+            if sides:
+                def on_side(code, source, destination):
+                    if not self._wanted(code.co_filename):
+                        return mon.DISABLE
+                    self._went(code, source, destination)
+                    return mon.DISABLE
+                for side in sides:
+                    mon.register_callback(tool, side, on_side)
+                    events |= side
+            elif hasattr(mon.events, "BRANCH"):
+                def on_branch(code, source, destination):
+                    if not self._wanted(code.co_filename):
+                        return mon.DISABLE
+                    self._went(code, source, destination)
+                mon.register_callback(tool, mon.events.BRANCH, on_branch)
+                events |= mon.events.BRANCH
+            mon.set_events(tool, events)
         else:
-            def local(frame, event, arg):
-                if event == "line":
-                    self.executed.setdefault(frame.f_code.co_filename, set()).add(frame.f_lineno)
+            # without sys.monitoring the ways of a branch are the line that runs next in the same frame
+            def tracer(frame):
+                arcs = self.arcs.setdefault(frame.f_code.co_filename, {})
+                last = [frame.f_lineno]
+
+                def local(frame, event, arg):
+                    if event == "line":
+                        self.executed.setdefault(frame.f_code.co_filename, set()).add(frame.f_lineno)
+                        arcs.setdefault(last[0], set()).add(frame.f_lineno)
+                        last[0] = frame.f_lineno
+                    elif event == "return":
+                        arcs.setdefault(last[0], set()).add(0)
+                    return local
                 return local
 
             def global_trace(frame, event, arg):
                 if self._wanted(frame.f_code.co_filename):
                     self.executed.setdefault(frame.f_code.co_filename, set()).add(frame.f_lineno)
-                    return local
+                    return tracer(frame)
                 return None
             sys.settrace(global_trace)
             threading.settrace(global_trace)
@@ -458,6 +539,9 @@ class Coverage:
             mon = sys.monitoring
             mon.set_events(mon.COVERAGE_ID, 0)
             mon.register_callback(mon.COVERAGE_ID, mon.events.LINE, None)
+            for name in ("BRANCH", "BRANCH_LEFT", "BRANCH_RIGHT"):
+                if hasattr(mon.events, name):
+                    mon.register_callback(mon.COVERAGE_ID, getattr(mon.events, name), None)
             mon.free_tool_id(mon.COVERAGE_ID)
         else:
             sys.settrace(None)
@@ -479,6 +563,28 @@ class Coverage:
                 if line is not None and line > 0:
                     lines.add(line)
             stack.extend(k for k in c.co_consts if hasattr(k, "co_lines"))
+        lines = Coverage._without_docstrings(source, tree, lines)
+        return lines
+
+    @staticmethod
+    def _branch_ways(source, path):
+        """{line: the lines its branches can go to} over every function of the file."""
+        try:
+            code = compile(source, path, "exec")
+        except (SyntaxError, ValueError, MemoryError):
+            return {}
+        ways = {}
+        stack = [code]
+        while stack:
+            c = stack.pop()
+            for line, reached in _branches_of(c).values():
+                ways.setdefault(line, set()).update(reached)
+            stack.extend(k for k in c.co_consts if hasattr(k, "co_lines"))
+        return ways
+
+    @staticmethod
+    def _without_docstrings(source, tree, lines):
+        import ast
         # a docstring is not a statement that can be missed
         for node in ast.walk(tree):
             if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
@@ -494,6 +600,11 @@ class Coverage:
     def report(self):
         files = {}
         executed_by_norm = {os.path.normcase(os.path.abspath(k)): v for k, v in self.executed.items()}
+        arcs_by_norm = {}
+        for k, v in self.arcs.items():
+            merged = arcs_by_norm.setdefault(os.path.normcase(os.path.abspath(k)), {})
+            for line, reached in v.items():
+                merged.setdefault(line, set()).update(reached)
         for folder, dirs, names in os.walk(self.root):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
             for name in names:
@@ -508,9 +619,20 @@ class Coverage:
                 executable = self._lines_of(source, path)
                 if executable is None:
                     continue
-                ran = executed_by_norm.get(os.path.normcase(os.path.abspath(path)), set()) & executable
+                norm = os.path.normcase(os.path.abspath(path))
+                ran = executed_by_norm.get(norm, set()) & executable
                 rel = os.path.relpath(path, self.root).replace(os.sep, "/")
-                files[rel] = {"executable": sorted(executable), "executed": sorted(ran)}
+                entry = {"executable": sorted(executable), "executed": sorted(ran)}
+                # a branch line: the lines its ways reach (0 is out of the function) and those the run took; only lines that ran have taken ways
+                went = arcs_by_norm.get(norm, {})
+                text_lines = source.splitlines()
+                branches = {}
+                for line, reached in self._branch_ways(source, path).items():
+                    if line in executable and line <= len(text_lines) and "pragma: no branch" not in text_lines[line - 1]:
+                        branches[str(line)] = [sorted(reached), sorted(reached & went.get(line, set()))]
+                if branches:
+                    entry["branches"] = branches
+                files[rel] = entry
         return {"files": files}
 
 
@@ -563,14 +685,16 @@ def main():
     except ImportError as e:
         print("cannot run tests with %s: %s" % (framework, e), file=sys.stderr)
         code = 2
-    if coverage is not None:
-        coverage.stop()
-        try:
-            os.makedirs(os.path.dirname(os.path.abspath(options.coverage)), exist_ok=True)
-            with open(options.coverage, "w", encoding="utf-8") as f:
-                json.dump(coverage.report(), f)
-        except OSError as e:
-            print("cannot write the coverage data: %s" % e, file=sys.stderr)
+    finally:
+        # what ran is written even when the run stopped on an error of its own (a test database that cannot be made)
+        if coverage is not None:
+            coverage.stop()
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(options.coverage)), exist_ok=True)
+                with open(options.coverage, "w", encoding="utf-8") as f:
+                    json.dump(coverage.report(), f)
+            except OSError as e:
+                print("cannot write the coverage data: %s" % e, file=sys.stderr)
     sys.stdout.flush()
     sys.stderr.flush()
     sys.exit(code)

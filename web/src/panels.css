@@ -194,6 +194,11 @@
 #prof-bar label { white-space: nowrap; }
 .cov-hit { border-left: 3px solid var(--good); margin-left: 3px; } .cov-miss { border-left: 3px solid var(--bad); margin-left: 3px; }
 .cov-miss-line { background: rgba(229,83,75,.10); }
+.cov-part { border-left: 3px solid #e0a800; margin-left: 3px; } .cov-hit, .cov-miss, .cov-part { cursor: pointer; }
+.cov-part-line { background: rgba(224,168,0,.10); }
+.cov-popup button { margin-top: 6px; } .cov-popup .meta { color: var(--dim); }
+#files .fcov { margin-left: auto; padding: 0 8px 0 6px; color: var(--dim); font-size: 11.5px; }
+#files .fcov.poor { color: var(--bad); } #files .fcov.good { color: var(--good); }
 .listbar label { color: var(--dim); display: flex; gap: 4px; align-items: center; }
 #terminal-main { flex: 1; }
 #term-views { flex: 1; min-height: 0; position: relative; }

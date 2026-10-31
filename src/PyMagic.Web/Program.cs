@@ -783,6 +783,17 @@ app.MapGet("/api/django/help", async (string? command) =>
     catch (System.ComponentModel.Win32Exception e) { return Results.BadRequest(new { error = e.Message }); }
 });
 
+// the kept coverage runs (suites), the newest first; one of them; forgetting one
+app.MapGet("/api/coverage/suites", () => Results.Json(CoverageSuites.List(root).Select(s => new { name = s.Name, label = s.Label, when = s.When.ToUniversalTime().ToString("o"), percent = s.Percent })));
+app.MapGet("/api/coverage/suite", (string name) => CoverageSuites.Read(root, name) is { } data ? Results.Json(data) : Results.NotFound());
+app.MapDelete("/api/coverage/suite", (string name) => CoverageSuites.Delete(root, name) ? Results.Ok() : Results.NotFound());
+// the HTML report the page wrote (Export report), opened in the browser
+app.MapGet("/api/coverage/report", () =>
+{
+    string path = Path.Combine(root, "htmlcov", "index.html");
+    return File.Exists(path) ? Results.File(path, "text/html; charset=utf-8") : Results.NotFound();
+});
+
 // the lines the last coverage run executed, from .pymagic/coverage.json
 app.MapGet("/api/coverage", () =>
 {

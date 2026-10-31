@@ -121,7 +121,9 @@ export function setupExplorer(deps) {
     let clip = null;          // { path, cut }: what Ctrl+X / Ctrl+C took, for Ctrl+V
     let dragging = null;      // the row being dragged onto a folder
     let marks = { sources: [], tests: [], excluded: [], templates: [], resources: [], autoTemplates: [] };   // Mark Directory As (.pymagic/folders.json), and TEMPLATES['DIRS']
+    let coverage = window.pymagicCoverageTree ?? null;   // {path: {lines, hit, branches, taken, percent}} from the Coverage panel, or null
     try { open = new Set(JSON.parse(localStorage.getItem('pymagic.explorer.open') ?? '[]')); } catch { /* storage unavailable */ }
+    window.addEventListener('pymagic:coverageTree', (e) => { coverage = e.detail; paint(); });
     list.tabIndex = 0;
 
     function remember() { try { localStorage.setItem('pymagic.explorer.open', JSON.stringify([...open])); } catch { /* storage unavailable */ } }
@@ -162,6 +164,15 @@ export function setupExplorer(deps) {
         label.className = 'fname';
         label.textContent = name;
         li.append(twisty, icon, label);
+        // coverage of the shown runs: the share of the lines that ran, for a file and for everything in a folder
+        const cov = (coverage ?? window.pymagicCoverageTree)?.[path];
+        if (cov) {
+            const pct = document.createElement('span');
+            pct.className = `fcov ${cov.percent >= 80 ? 'good' : cov.percent < 50 ? 'poor' : ''}`;
+            pct.textContent = `${cov.percent.toFixed(0)}%`;
+            pct.title = `${cov.hit} of ${cov.lines} lines ran${cov.branches ? `, ${cov.taken} of ${cov.branches} branch ways taken` : ''}`;
+            li.append(pct);
+        }
         if (path === selected) li.classList.add('sel');
         // a marked folder has its colour: sources blue, test sources green, excluded orange (and what is inside an excluded folder is dim)
         const mark = isDir ? markOf(path) : null;

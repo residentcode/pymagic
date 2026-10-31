@@ -113,6 +113,17 @@ export function setupTests(deps) {
         row.onclick = () => select(n);
         row.ondblclick = () => void goTo(n);
         play.onclick = (e) => { e.stopPropagation(); void run([n.id]); };
+        row.oncontextmenu = (e) => {
+            e.preventDefault();
+            select(n);
+            openMenu({ x: e.clientX, y: e.clientY }, [
+                { label: 'Run', run: () => void run([n.id]) },
+                { label: 'Debug', run: () => debugTests([n.id]) },
+                { label: 'Run with coverage', run: () => void run([n.id], true) },
+                '-',
+                { label: 'Go to the code', run: () => void goTo(n) },
+            ]);
+        };
         if (n.children.length && n.open) {
             const ul = document.createElement('ul');
             for (const c of n.children)

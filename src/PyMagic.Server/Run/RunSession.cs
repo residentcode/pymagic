@@ -118,7 +118,14 @@ public sealed class RunSession : IDisposable
         if (coverage)
         {
             helperArgs.Add("--coverage"); helperArgs.Add(CoveragePath(root));
-            _afterExit = () => { if (!Target.IsLocal) Target.Fetch(Target.ToTarget(CoveragePath(root)), CoveragePath(root)); };
+            string label = CoverageSuites.LabelOf(ids);
+            var started = DateTime.UtcNow.AddSeconds(-2);
+            _afterExit = () =>
+            {
+                if (!Target.IsLocal) Target.Fetch(Target.ToTarget(CoveragePath(root)), CoveragePath(root));
+                // a run stopped before it wrote its result leaves the previous one, which is a suite already
+                if (File.Exists(CoveragePath(root)) && File.GetLastWriteTimeUtc(CoveragePath(root)) >= started) CoverageSuites.Keep(root, label);
+            };
         }
         helperArgs.Add("--");
         Launch(root, true, helperArgs, ids, null, helper: "pm_tests.py");

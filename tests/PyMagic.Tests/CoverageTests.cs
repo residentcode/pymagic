@@ -128,6 +128,59 @@ public class CoverageTests
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
     }
 
+    static string Branch(JsonObject data, string file, int line) =>
+        data["files"]![file]!["branches"]?[line.ToString()] is JsonArray b ? $"{string.Join(",", b[0]!.AsArray().Select(n => n!.GetValue<int>()))}/{string.Join(",", b[1]!.AsArray().Select(n => n!.GetValue<int>()))}" : "";
+
+    [Fact]
+    public void TheWaysOfEachBranchAndTheOnesTaken()
+    {
+        if (!HavePython) return;
+        foreach (string? trace in new[] { null, "1" })
+        {
+            string root = Project(new() { ["calc.py"] = Calc, ["test_calc.py"] = Tests });
+            Environment.SetEnvironmentVariable("PYMAGIC_COVERAGE_TRACE", trace);
+            try
+            {
+                var data = RunWithCoverage(root);
+                // sign(5) went into line 7, sign(0) on to line 8; at line 8 only sign(0) came, on to line 10
+                Assert.Equal("7,8/7,8", Branch(data, "calc.py", 6));
+                Assert.Equal("9,10/10", Branch(data, "calc.py", 8));
+                Assert.Equal("", Branch(data, "calc.py", 7));
+                // the run is kept as a suite
+                var suite = CoverageSuites.List(root).Single();
+                Assert.Equal("All tests", suite.Label);
+                Assert.True(CoverageSuites.Read(root, suite.Name)?["files"]?["calc.py"] != null);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("PYMAGIC_COVERAGE_TRACE", null);
+                try { Directory.Delete(root, true); } catch (IOException) { }
+            }
+        }
+    }
+
+    [Fact]
+    public void SuitesAreKeptNamedListedAndForgotten()
+    {
+        string root = Project(new() { [".pymagic/coverage.json"] = "{\"files\": {\"a.py\": {\"executable\": [1, 2, 3, 4], \"executed\": [1, 2, 3]}}}" });
+        try
+        {
+            var start = new DateTime(2026, 10, 31, 9, 0, 0);
+            for (int i = 0; i < CoverageSuites.Kept + 2; i++) CoverageSuites.Keep(root, i == 0 ? CoverageSuites.LabelOf(new[] { "test_a.py::T::test_x" }) : $"run {i}", start.AddMinutes(i));
+            var list = CoverageSuites.List(root);
+            Assert.Equal(CoverageSuites.Kept, list.Count);
+            Assert.Equal($"run {CoverageSuites.Kept + 1}", list[0].Label);
+            Assert.Equal(75.0, list[0].Percent);
+            Assert.True(!list.Any(s => s.Label == "test_a.py::T::test_x"));
+            Assert.True(CoverageSuites.Read(root, "../coverage") == null);
+            Assert.True(CoverageSuites.Delete(root, list[0].Name));
+            Assert.Equal(CoverageSuites.Kept - 1, CoverageSuites.List(root).Count);
+            Assert.Equal("a.py and 2 more", CoverageSuites.LabelOf(new[] { "a.py", "b.py", "c.py" }));
+            Assert.Equal("All tests", CoverageSuites.LabelOf(Array.Empty<string>()));
+        }
+        finally { try { Directory.Delete(root, true); } catch (IOException) { } }
+    }
+
     [Fact]
     public void TheOlderTraceHookGivesTheSameLines()
     {

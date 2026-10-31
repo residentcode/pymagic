@@ -68,7 +68,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 **Run, debug and tests**
 - Debugger: pausing a running program, attaching to a running process, breakpoints added while a frame is already running (they only count in new calls) (10); the stacks of other threads (76); setting attributes and items of objects, watches that expand, exception filters by type, function and data breakpoints (21).
 - Test runner: debugging a test, stopping a test run, `unittest` subtests as their own nodes, tests in classes whose bases live in other files (11).
-- Coverage: branch coverage, combining runs, exporting a report, running one test with coverage (52).
+- ~~Coverage: branch coverage, combining runs, exporting a report, running one test with coverage (52)~~ (done, item 191).
 
 **Git, packages and interpreters**
 - Git: pushing tags (72); choosing lines from the editor's gutter, moving single lines between changelists (73); a merge result built from three editors, picking lines inside one side, conflicts of binary files (116); interactive rebase's *edit*, `--rebase-merges`, rebasing onto another branch, reordering by dragging (117).
@@ -139,7 +139,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Refactoring: ~~Introduce Parameter, Introduce Attribute (field), Extract Superclass, Pull Members Up, Push Members Down, Encapsulate Fields, Invert Boolean, Convert to Package / Module, Make Function Top-Level, Move Static Members, Extract Delegate~~ (done, item 166). Simpler than PyCharm's: Introduce Parameter gives the parameter a default instead of passing the value at each call, Invert Boolean works on variables (not on functions that return one), and moved members do not bring the imports they need.
 - Search: ~~Structural Search and Replace (find code by its shape, with templates and constraints); finding duplicated code; analysing a stack trace pasted from elsewhere (its lines become links)~~ (done, item 167). Simpler than PyCharm's: the conditions on a variable are a regular expression on its text (no type or count conditions), and duplicates are compared statement by statement.
 - Tests: ~~doctest, nose and Twisted Trial; test statistics and export of the results to a file; the history of earlier runs; rerunning automatically after each change; installing a missing test library from a quick fix~~ (done, item 168). Not tried yet: Trial with Twisted installed (it needs the download).
-- Coverage: branch coverage in the line popup; going to the next / previous uncovered lines; coverage per file in the project tree; coverage suites and reports (Ctrl+Alt+F6).
+- ~~Coverage: branch coverage in the line popup; going to the next / previous uncovered lines; coverage per file in the project tree; coverage suites and reports (Ctrl+Alt+F6)~~ (done, item 191).
 - Python console: ~~an interactive interpreter beside the editor that runs a line or a selection from the editor (Alt+Shift+E), with completion, a variables view, its history, a starting script~~ (done, item 172; the history is Up / Down, not a Ctrl+Alt+E list). Still missing: several consoles, IPython in it, a command queue and Attach Debugger.
 - Notebooks: debugging a cell; a Variables window after each run; Run Section for a Markdown heading; merge and split cells, cell tags; the Jupyter server window (local or remote), the server selector and a Jupyter console per notebook; Markdown headings in the Structure window; opening the notebook in a browser.
 - Git: shelve, changelists (grouping changes before a commit), the Log tab with its graph of commits, comparing two branches, pull requests and merge requests (GitHub, GitLab) reviewed and merged inside the editor, a toolbar on a change marker to revert it or show its diff.
@@ -154,4 +154,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 190 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 191 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
