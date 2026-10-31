@@ -138,8 +138,10 @@ export function setupExplorer(deps) {
     async function markAs(path, kind) {
         await deps.saveAll();
         if (!(await post({ op: 'mark', path, kind }))) return;
-        toast(kind === 'none' ? `${path} is not marked any more` : `${path} is marked as ${MARK_LABELS[kind]}: starting the analysis again`);
-        window.setTimeout(() => location.reload(), 700);
+        toast(kind === 'none' ? `${path} is not marked any more` : `${path} is marked as ${MARK_LABELS[kind]}`);
+        // the language server takes the new roots at once (main.js tells it); the tree takes the new colours
+        window.dispatchEvent(new CustomEvent('pymagic:folders'));
+        await refresh();
     }
 
     function row(path, name, isDir, depth, isOpen) {

@@ -280,8 +280,8 @@ export function setupRefactor(deps) {
         void run(kind, uri, range, defaultName, all, members ?? [], chosen ?? []);
     });
     /** Runs the refactoring of this kind for the current selection (or cursor), through the same menu the lightbulb uses. */
-    async function trigger(kind) {
-        const model = editor.getModel(), sel = editor.getSelection();
+    async function trigger(kind, ed = editor) {
+        const model = ed.getModel(), sel = ed.getSelection();
         const uri = model && deps.uriOf(model);
         if (!model || !sel || !uri)
             return;

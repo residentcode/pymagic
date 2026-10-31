@@ -358,6 +358,12 @@ public sealed class Server
     {
         switch (method)
         {
+            case "pymagic/foldersChanged":
+                // a folder was marked or unmarked: the sources roots are read again and every open file looked at again
+                _service.SetMarkedSourceRoots(ProjectFolders.SourceRoots);
+                RepublishAll();
+                if (!Deferred) FlushDiagnostics();
+                break;
             case "workspace/didChangeConfiguration":
             {
                 // settings may be nested under "pymagic" (the usual shape) or given flat

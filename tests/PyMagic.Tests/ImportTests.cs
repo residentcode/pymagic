@@ -6,7 +6,7 @@ namespace PyMagic.Tests;
 
 public class ImportTests
 {
-    static readonly string? RealPython = FindPython();
+    internal static readonly string? RealPython = FindPython();
 
     static string? FindPython()
     {

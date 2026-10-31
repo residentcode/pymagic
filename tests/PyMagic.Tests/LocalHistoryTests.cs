@@ -83,4 +83,42 @@ public class LocalHistoryTests
         Assert.Contains("index.json", again);
         Assert.Equal(1, again.Split('\n').Count(l => l.Trim() == "history/"));
     }
+
+    [Fact]
+    public void AMarkedSourcesRootTakesEffectWithoutAStart()
+    {
+        string dir = Root();
+        Directory.CreateDirectory(Path.Combine(dir, "code", "pkg"));
+        File.WriteAllText(Path.Combine(dir, "code", "pkg", "__init__.py"), "");
+        File.WriteAllText(Path.Combine(dir, "code", "pkg", "mod.py"), "def f():\n    return 1\n");
+        string main = "import pkg.mod\npkg.mod.f()\n";
+        File.WriteAllText(Path.Combine(dir, "main.py"), main);
+        if (ImportTests.RealPython == null) return;   // imports are checked against an interpreter
+        var svc = new LanguageService();
+        svc.AddSourceRoot(dir);
+        svc.ConfigureInterpreter(InterpreterInspector.Inspect(ImportTests.RealPython, "system", "test").Interpreter!);
+        string uri = LanguageService.UriOfPath(Path.Combine(dir, "main.py"));
+        svc.Open(uri, main, 1);
+        Assert.True(svc.Diagnostics(uri).Any(d => d.Message.Contains("pkg")), "not found before code/ is marked: " + string.Join(" | ", svc.Diagnostics(uri).Select(d => d.Message)));
+        svc.SetMarkedSourceRoots(new[] { Path.Combine(dir, "code") });
+        Assert.True(!svc.Diagnostics(uri).Any(d => d.Message.Contains("pkg")), "found once it is: " + string.Join(" | ", svc.Diagnostics(uri).Select(d => d.Message)));
+        svc.SetMarkedSourceRoots(Array.Empty<string>());
+        Assert.True(svc.Diagnostics(uri).Any(d => d.Message.Contains("pkg")), "and lost when it is unmarked");
+        Assert.Equal(1, svc.SourceRoots.Count);
+    }
+
+    [Fact]
+    public void AFoldersHistoryHasTheVersionsOfItsFilesNewestFirst()
+    {
+        var h = new LocalHistory(Root());
+        var t0 = new DateTime(2026, 10, 31, 10, 0, 0, DateTimeKind.Utc);
+        h.Record("app/models.py", "a\n", t0);
+        h.Record("app/views.py", "b\n", t0.AddMinutes(1));
+        h.Record("app/models.py", "a2\n", t0.AddMinutes(2));
+        h.Record("main.py", "m\n", t0.AddMinutes(3));
+        h.Record("application.py", "x\n", t0.AddMinutes(4));   // not in app/
+        Assert.Equal("app/models.py,app/views.py,app/models.py", string.Join(",", h.ListFolder("app").Select(x => x.Path)));
+        Assert.Equal(5, h.ListFolder("").Count);
+        Assert.Equal(0, h.ListFolder("nothing").Count);
+    }
 }

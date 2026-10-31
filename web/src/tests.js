@@ -433,7 +433,7 @@ export function setupTests(deps) {
             showDetail(selected);
     }
     function setButtons() {
-        for (const id of ['tests-all', 'tests-cov', 'tests-sel', 'tests-here'])
+        for (const id of ['tests-all', 'tests-cov', 'tests-sel', 'tests-here', 'tests-debug'])
             $(id).disabled = client !== null;
         $('tests-rerun').disabled = client !== null;
     }
@@ -505,6 +505,23 @@ export function setupTests(deps) {
     $('tests-sel').onclick = () => { if (selected)
         void run([selected.id]); };
     $('tests-here').onclick = runAtCursor;
+    /** Debugging tests: the test runner itself started under the debugger (Run panel), so the tests' breakpoints stop. */
+    function debugTests(ids) {
+        window.dispatchEvent(new CustomEvent('pymagic:debugTests', { detail: { ids, framework: $('tests-fw').value } }));
+    }
+    $('tests-debug').onclick = () => {
+        const id = selected?.id ?? idAtCursor();
+        debugTests(id ? [id] : []);
+    };
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.F9, () => {
+        const id = idAtCursor();
+        if (id)
+            debugTests([id]);
+        else {
+            showTab('tests');
+            appendConsole('The cursor is not inside a test.\n', 'info');
+        }
+    });
     $('tests-rerun').onclick = () => {
         const failed = [...byId.values()].filter((n) => n.children.length === 0 && (n.status === 'failed' || n.status === 'error')).map((n) => n.id);
         if (failed.length)
@@ -518,9 +535,13 @@ export function setupTests(deps) {
     void load().catch(() => { });
     setButtons();
     /** Runs the tests of a file, or of every test file under a folder (the menus of the project tree and the tabs). */
-    async function runPath(path) {
+    async function runPath(path, debug = false) {
         await load();
         const ids = roots.filter((r) => !path || r.file === path || r.file.startsWith(path + '/')).map((r) => r.id);
+        if (debug && ids.length) {
+            debugTests(path ? ids : []);
+            return;
+        }
         if (ids.length === 0) {
             showTab('tests');
             appendConsole(`No tests were found in ${path || 'the project'}.

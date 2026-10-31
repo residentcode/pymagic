@@ -1253,6 +1253,23 @@ export function setupRun(deps) {
         other.addCommand(M.Shift | K.F11, () => resume('stepOut'));
         placeKeys(other);
     }
+    // Debug tests (the Tests panel, the menus of the tree): pytest, or unittest for the unittest framework, run as a module under the debugger
+    window.addEventListener('pymagic:debugTests', (e) => {
+        const { ids, framework } = e.detail;
+        if (run) {
+            append('A program is running; stop it first.\n', 'err');
+            showTab('output');
+            return;
+        }
+        if (framework === 'unittest' || framework === 'nose' || framework === 'trial') {
+            const names = ids.map((id) => id.replace(/\.py(?=::|$)/, '').replace(/\/|::/g, '.'));
+            void launch(null, true, false, names.length ? names : ['discover'], { module: 'unittest' });
+        }
+        else if (framework === 'doctest')
+            void launch(null, true, false, ['--doctest-modules', ...ids.map((id) => id.split('::')[0])], { module: 'pytest' });
+        else
+            void launch(null, true, false, ['-q', ...ids], { module: 'pytest' });
+    });
     return {
         onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null,
         attach,

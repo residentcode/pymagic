@@ -6,12 +6,23 @@ import { toast } from './toast';
 
 const $ = (id) => document.getElementById(id);
 
-export function setupHistory({ monaco, editor, currentFile }) {
+export function setupHistory({ monaco, editor, currentFile, openFile }) {
     let versions = [];
+    let folder = null;   // a folder's history (the tree's menu), else the open file's
     let ticket = 0;
     const active = () => $('history-tab').classList.contains('active');
 
     async function refresh() {
+        if (folder !== null) {
+            $('history-title').textContent = `Local history of ${folder || 'the project'}`;
+            const mine = ++ticket;
+            let found = [];
+            try { found = await (await fetch('/api/history/folder?path=' + encodeURIComponent(folder))).json(); } catch { /* none */ }
+            if (mine !== ticket) return;
+            versions = found;
+            draw();
+            return;
+        }
         const rel = currentFile();
         $('history-title').textContent = rel ? `Local history of ${rel}` : 'Local history';
         const mine = ++ticket;
@@ -29,7 +40,7 @@ export function setupHistory({ monaco, editor, currentFile }) {
         if (versions.length === 0) {
             const none = document.createElement('div');
             none.className = 'side-empty';
-            none.textContent = currentFile() ? 'No versions yet: each save of this file keeps one.' : 'Open a file to see the versions it had.';
+            none.textContent = folder !== null ? 'No versions of files in this folder yet: each save keeps one.' : currentFile() ? 'No versions yet: each save of this file keeps one.' : 'Open a file to see the versions it had.';
             box.append(none);
             return;
         }
@@ -47,10 +58,36 @@ export function setupHistory({ monaco, editor, currentFile }) {
             bytes.className = 'hist-size';
             bytes.textContent = size(v.bytes);
             row.append(when, rel, bytes);
+            if (folder !== null) {
+                // a folder's rows name their file; a deleted file's version can be written back
+                const file = document.createElement('span');
+                file.className = 'hist-tag';
+                file.textContent = v.exists ? v.path : `${v.path} (deleted)`;
+                row.append(file);
+                row.onclick = () => void (v.exists ? openAndCompare(v) : restoreDeleted(v));
+                box.append(row);
+                return;
+            }
             if (i === 0) { const tag = document.createElement('span'); tag.className = 'hist-tag'; tag.textContent = 'last save'; row.append(tag); }
             row.onclick = () => void compare(v);
             box.append(row);
         });
+    }
+
+    async function openAndCompare(v) {
+        await openFile(v.path);
+        if (currentFile() === v.path) await compare(v);
+    }
+
+    async function restoreDeleted(v) {
+        if (!window.confirm(`${v.path} was deleted. Write this version back to it?`)) return;
+        const text = await fetch(`/api/history/text?path=${encodeURIComponent(v.path)}&id=${v.id}`).then((r) => (r.ok ? r.text() : null)).catch(() => null);
+        if (text === null) { toast('That version is gone.', true); return; }
+        const res = await fetch('/api/file?path=' + encodeURIComponent(v.path), { method: 'PUT', body: text }).catch(() => null);
+        if (!res?.ok) { toast('The file could not be written.', true); return; }
+        toast(`${v.path} is back.`);
+        await openFile(v.path);
+        void refresh();
     }
 
     async function compare(version) {
@@ -115,10 +152,15 @@ export function setupHistory({ monaco, editor, currentFile }) {
         };
     }
 
-    $('t-history').onclick = () => { showTab('history'); void refresh(); };
+    $('t-history').onclick = () => { folder = null; showTab('history'); void refresh(); };
     $('hist-refresh').onclick = () => void refresh();
-    editor.onDidChangeModel(() => { if (active()) void refresh(); });
+    editor.onDidChangeModel(() => { if (active() && folder === null) void refresh(); });
     window.addEventListener('pymagic:saved', () => { if (active()) void refresh(); });
     // Local History of the tree's and the tabs' menus: the file is opened first, so the panel is about it
-    return { refresh, show: () => { showTab('history'); void refresh(); } };
+    return {
+        refresh,
+        show: () => { folder = null; showTab('history'); void refresh(); },
+        /** The versions of every file under a folder ('' for the project), deleted ones too. */
+        showFolder: (dir) => { folder = dir; showTab('history'); void refresh(); },
+    };
 }

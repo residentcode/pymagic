@@ -9,6 +9,7 @@ import { setupSearch } from './search';
 import { setupEditorNav } from './editornav';
 import { setupCodeVision } from './codevision';
 import { setupCodeGen } from './codegen';
+import { setupSharedText } from './sharedtext';
 import { setLiveTemplateSource } from './settings-ui';
 import { setupHierarchy } from './hierarchy';
 import { setupRoutes } from './routes';
@@ -76,7 +77,7 @@ function ensureModel(rel) {
     let p = loading.get(key);
     if (!p) {
         // a type chosen with Override File Type colours the file as that language
-        loading.set(key, (p = loadModel(rel, key).then((model) => { const chosen = fileTypes()[rel]; if (model && chosen) monaco.editor.setModelLanguage(model, chosen); return model; })));
+        loading.set(key, (p = loadModel(rel, key).then((model) => { const chosen = fileTypes()[rel]; if (model && chosen) applyLanguage(rel, model, chosen); return model; })));
     }
     return p;
 }
@@ -126,7 +127,12 @@ async function loadModel(rel, key) {
         serverUri.set(plain, uri);
         relPathOf.set(key, rel);
         savedText.set(rel, text);
-        plain.onDidChangeContent(() => refreshDirty());
+        sharedText.watch(rel, plain, () => plain.getValue() !== savedText.get(rel));
+        plain.onDidChangeContent(() => {
+            refreshDirty();
+            if (served.has(plain))
+                lsp.notify('textDocument/didChange', { textDocument: { uri, version: plain.getVersionId() }, contentChanges: [{ text: plain.getValue() }] });
+        });
         if (lang === 'django-html') {
             lsp.notify('textDocument/didOpen', { textDocument: { uri, languageId: 'django-html', version: plain.getVersionId(), text } });
             let templateTimer;
@@ -146,20 +152,49 @@ async function loadModel(rel, key) {
     serverUri.set(model, uri);
     relPathOf.set(key, rel);
     savedText.set(rel, text);
+    sharedText.watch(rel, model, () => model.getValue() !== savedText.get(rel));
     runHooks?.onModelCreated(rel, model);
-    lsp.notify('textDocument/didOpen', {
-        textDocument: { uri, languageId: 'python', version: model.getVersionId(), text },
-    });
+    serveAsPython(model, true);
     let timer;
     model.onDidChangeContent(() => {
         refreshDirty();
         clearTimeout(timer);
+        if (!served.has(model))
+            return;   // shown as another type (Override File Type): the language server does not have it
         timer = window.setTimeout(() => lsp.notify('textDocument/didChange', {
             textDocument: { uri, version: model.getVersionId() },
             contentChanges: [{ text: model.getValue() }],
         }), 120);
     });
     return model;
+}
+/** A type for a file (Override File Type): its colours, and whether the language server reads it as Python (templates keep their own reader). */
+function applyLanguage(rel, model, id) {
+    monaco.editor.setModelLanguage(model, id);
+    if (languageFor(rel) !== 'django-html')
+        serveAsPython(model, id === 'python');
+}
+/** Unsaved text shared with PyMagic's other windows on this project (sharedtext.js). */
+const sharedText = setupSharedText({
+    modelOf: (rel) => models.get(normalise(uriFor(rel))),
+    markSaved: (rel, text) => { savedText.set(rel, text); refreshDirty(); },
+});
+const noteSaved = (rel, text) => { savedText.set(rel, text); sharedText.saved(rel, text); };
+/** The models the language server reads as Python: the .py files, and any file whose type was overridden to Python. */
+const served = new WeakSet();
+function serveAsPython(model, on) {
+    const uri = serverUri.get(model);
+    if (!uri || on === served.has(model))
+        return;
+    if (on) {
+        served.add(model);
+        lsp.notify('textDocument/didOpen', { textDocument: { uri, languageId: 'python', version: model.getVersionId(), text: model.getValue() } });
+    }
+    else {
+        served.delete(model);
+        lsp.notify('textDocument/didClose', { textDocument: { uri } });
+        monaco.editor.setModelMarkers(model, 'pymagic', []);
+    }
 }
 /** Resolves a location the server returned to a model, loading the file if it is not open yet. */
 async function modelForUri(uri) {
@@ -633,7 +668,7 @@ async function saveFile(rel) {
         return;
     const res = await fetch('/api/file?path=' + encodeURIComponent(rel), { method: 'PUT', body: m.getValue() });
     if (res.ok) {
-        savedText.set(rel, m.getValue());
+        noteSaved(rel, m.getValue());
         refreshDirty();
         window.dispatchEvent(new Event('pymagic:saved'));
     }
@@ -644,7 +679,7 @@ async function forgetPath(rel) {
         const path = relPathOf.get(key);
         if (!path || (path !== rel && !path.startsWith(rel + '/')))
             continue;
-        if (path.endsWith('.py') || languageFor(path) === 'django-html')
+        if (served.has(model) || languageFor(path) === 'django-html')
             lsp.notify('textDocument/didClose', { textDocument: { uri: serverUri.get(model) ?? uriFor(path) } });
         models.delete(key);
         loading.delete(key);
@@ -787,7 +822,7 @@ async function save() {
         return;
     const res = await fetch('/api/file?path=' + encodeURIComponent(rel), { method: 'PUT', body: model.getValue() });
     if (res.ok) {
-        savedText.set(rel, model.getValue());
+        noteSaved(rel, model.getValue());
         refreshDirty();
         window.dispatchEvent(new Event('pymagic:saved'));
     }
@@ -853,7 +888,7 @@ async function main() {
                 if (rel && model.getValue() !== savedText.get(rel)) {
                     const res = await fetch('/api/file?path=' + encodeURIComponent(rel), { method: 'PUT', body: model.getValue() });
                     if (res.ok)
-                        savedText.set(rel, model.getValue());
+                        noteSaved(rel, model.getValue());
                 }
             }
             refreshDirty();
@@ -885,7 +920,7 @@ async function main() {
     const structure = setupStructure({ editor, lsp, uriOf: (model) => serverUri.get(model), visible: () => chrome.shown() && chrome.view() === 'structure' });
     window.addEventListener('pymagic:sidebar', (e) => { if (e.detail === 'structure') structure.show(); });
     const bookmarks = setupBookmarks({ monaco, editor, openFile, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')), revealInTree: (rel) => explorer?.select(rel) });
-    const history = setupHistory({ monaco, editor, currentFile: () => currentRel });
+    const history = setupHistory({ monaco, editor, currentFile: () => currentRel, openFile });
     recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
     const editorNav = setupEditorNav({
         editor, lsp, openFile, modelFor: ensureModel, currentFile: () => currentRel, saveAll: common.saveAll,
@@ -918,6 +953,7 @@ async function main() {
     const codeGen = setupCodeGen();
     codeGen.attach(editor);
     setLiveTemplateSource(() => lsp.request('pymagic/templates', {}));
+    window.addEventListener('pymagic:folders', () => lsp.notify('pymagic/foldersChanged', {}));
     const codeVision = setupCodeVision({ editor, lsp, uriOf: (model) => model && serverUri.get(model), relOf: (model) => model && relPathOf.get(normalise(serverUri.get(model) ?? '')), savedText: (rel) => savedText.get(rel) });
     setupRoutes({ editor, lsp, openFile, relOfUri });
     setupDjango({ openFile, run: runHooks });
@@ -939,7 +975,7 @@ async function main() {
             const res = await fetch('/api/file?path=' + encodeURIComponent(rel));
             return res.ok ? await res.text() : null;
         },
-        setLanguage: (rel, id) => { const m = models.get(normalise(uriFor(rel))); if (m) monaco.editor.setModelLanguage(m, id); },
+        setLanguage: (rel, id) => { const m = models.get(normalise(uriFor(rel))); if (m) applyLanguage(rel, m, id); },
         defaultLanguage: (rel) => (rel.endsWith('.py') ? 'python' : languageFor(rel)),
     });
     fileActions.attachEditor(editor, monaco, () => refactorMenu(editor, refactor));
@@ -1063,7 +1099,7 @@ async function main() {
             codeVision.attach(e);
             editorNav.attach(e);
             codeGen.attach(e);
-            fileActions.attachEditor(e, monaco);
+            fileActions.attachEditor(e, monaco, () => refactorMenu(e, refactor));
             return e;
         },
         mainEditor: editor,

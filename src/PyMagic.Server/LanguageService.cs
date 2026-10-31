@@ -46,6 +46,19 @@ public sealed partial class LanguageService
     /// The host adds the folder it was started on and the client's `initialize` names it again; adding it twice both doubled it and changed the list
     /// while the background indexer was reading it.
     /// </summary>
+    /// <summary>The marked sources roots changed (Mark Directory As): the project folder stays first, the marked ones follow, and everything is analysed again.</summary>
+    public void SetMarkedSourceRoots(IEnumerable<string> marked)
+    {
+        lock (_rootsGate)
+        {
+            var project = SourceRoots.FirstOrDefault();
+            SourceRoots.Clear();
+            if (project != null) SourceRoots.Add(project);
+        }
+        foreach (var m in marked) if (Directory.Exists(m)) AddSourceRoot(m);
+        Invalidate();
+    }
+
     public bool AddSourceRoot(string path)
     {
         static string Plain(string p) => System.IO.Path.GetFullPath(p).TrimEnd('\\', '/');

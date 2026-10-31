@@ -15,20 +15,20 @@ export function refactorMenu(editor, refactor) {
     return [
         { label: 'Rename…', key: 'F2', run: act('editor.action.rename') },
         '-',
-        { label: 'Extract variable', key: 'Ctrl+Alt+V', run: () => { editor.focus(); void refactor.trigger('extractVariable'); } },
-        { label: 'Extract constant', key: 'Ctrl+Alt+C', run: () => { editor.focus(); void refactor.trigger('extractConstant'); } },
-        { label: 'Extract method', key: 'Ctrl+Alt+M', run: () => { editor.focus(); void refactor.trigger('extractMethod'); } },
+        { label: 'Extract variable', key: 'Ctrl+Alt+V', run: () => { editor.focus(); void refactor.trigger('extractVariable', editor); } },
+        { label: 'Extract constant', key: 'Ctrl+Alt+C', run: () => { editor.focus(); void refactor.trigger('extractConstant', editor); } },
+        { label: 'Extract method', key: 'Ctrl+Alt+M', run: () => { editor.focus(); void refactor.trigger('extractMethod', editor); } },
         '-',
-        { label: 'Inline variable', key: 'Ctrl+Alt+N', run: () => { editor.focus(); void refactor.trigger('inlineVariable'); } },
-        { label: 'Inline method', key: 'Ctrl+Alt+P', run: () => { editor.focus(); void refactor.trigger('inlineMethod'); } },
+        { label: 'Inline variable', key: 'Ctrl+Alt+N', run: () => { editor.focus(); void refactor.trigger('inlineVariable', editor); } },
+        { label: 'Inline method', key: 'Ctrl+Alt+P', run: () => { editor.focus(); void refactor.trigger('inlineMethod', editor); } },
         '-',
-        { label: 'Change signature…', key: 'Ctrl+F6', run: () => { editor.focus(); void refactor.trigger('changeSignature'); } },
-        { label: 'Move to another file…', key: 'F6', run: () => { editor.focus(); void refactor.trigger('moveSymbol'); } },
+        { label: 'Change signature…', key: 'Ctrl+F6', run: () => { editor.focus(); void refactor.trigger('changeSignature', editor); } },
+        { label: 'Move to another file…', key: 'F6', run: () => { editor.focus(); void refactor.trigger('moveSymbol', editor); } },
         '-',
         ...[['introduceParameter', 'Introduce parameter'], ['introduceField', 'Introduce attribute'], ['extractSuperclass', 'Extract superclass…'], ['extractDelegate', 'Extract delegate…'],
             ['pullMembersUp', 'Pull members up…'], ['pushMembersDown', 'Push members down…'], ['encapsulateField', 'Encapsulate field'], ['invertBoolean', 'Invert boolean…'],
             ['makeTopLevel', 'Make function top-level'], ['moveStaticMember', 'Move static member…']]
-            .map(([kind, label]) => ({ label, run: () => { editor.focus(); void refactor.trigger(kind); } })),
+            .map(([kind, label]) => ({ label, run: () => { editor.focus(); void refactor.trigger(kind, editor); } })),
     ];
 }
 

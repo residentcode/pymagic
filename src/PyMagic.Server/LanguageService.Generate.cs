@@ -31,6 +31,8 @@ public sealed partial class LanguageService
         {
             InitOption(m, uri, cd, result);
             PropertyOptions(m, uri, cd, result);
+            PublicPropertyOption(m, uri, cd, result);
+            EqualityAndReprOptions(m, uri, cd, result);
             OverrideOptions(snap, m, uri, cd, result);
         }
         TestOption(snap, m, at, result);
@@ -95,6 +97,115 @@ public sealed partial class LanguageService
         string list = string.Join(", ", names.Select(n => n[1..]));
         result.Add(new GenerateOption($"Getters of {list}", "getters", Insert(m, uri, end.At, end.Lead + string.Concat(names.Select(Getter)))));
         result.Add(new GenerateOption($"Getters and setters of {list}", "properties", Insert(m, uri, end.At, end.Lead + string.Concat(names.Select(n => Getter(n) + Setter(n))))));
+    }
+
+    /// <summary>The attributes a class keeps: its annotated fields, else the `self.x = ...` of its __init__, in order (no private ones).</summary>
+    static List<string> FieldsOf(ModuleInfo m, ClassDef cd)
+    {
+        string src = m.Source;
+        var fields = cd.Body.OfType<AnnAssignStmt>().Where(a => a.Target is NameExpr n && !n.Name.StartsWith('_') && !src[a.Annotation.Start..a.Annotation.End].StartsWith("ClassVar"))
+            .Select(a => ((NameExpr)a.Target).Name).ToList();
+        if (fields.Count > 0) return fields;
+        var init = cd.Body.OfType<FunctionDef>().FirstOrDefault(f => f.Name == "__init__");
+        if (init == null || init.Params.FirstOrDefault()?.Name is not { } self) return fields;
+        foreach (var n in AstChildren.Descendants(init))
+        {
+            var targets = n switch { AssignStmt a => a.Targets, AnnAssignStmt a => new[] { a.Target }, _ => Array.Empty<Expr>() };
+            foreach (var t in targets)
+                if (t is AttributeExpr { Value: NameExpr { Name: var v }, Attr: var attr } && v == self && !attr.StartsWith('_') && !fields.Contains(attr)) fields.Add(attr);
+        }
+        return fields;
+    }
+
+    /// <summary>Properties for the public attributes set in the methods (`self.x`): each is kept as `_x` inside the class, as Encapsulate Field does.</summary>
+    void PublicPropertyOption(ModuleInfo m, string uri, ClassDef cd, List<GenerateOption> result)
+    {
+        if (ClassEnd(m, cd) is not { } end) return;
+        string src = m.Source;
+        if (cd.Decorators.Any(d => FieldClass.IsMatch(src[d.Start..d.End]))) return;
+        var defined = cd.Body.OfType<FunctionDef>().Select(f => f.Name).ToHashSet(StringComparer.Ordinal);
+        var names = new List<string>();
+        foreach (var f in cd.Body.OfType<FunctionDef>())
+        {
+            if (f.Params.FirstOrDefault()?.Name is not { } self) continue;
+            foreach (var n in AstChildren.Descendants(f))
+                if (n is AttributeExpr { Value: NameExpr { Name: var v }, Attr: var attr } && v == self && !attr.StartsWith('_') && !defined.Contains(attr) && !names.Contains(attr)
+                    && m.ParentOf(n) is AssignStmt or AnnAssignStmt)
+                    names.Add(attr);
+        }
+        if (names.Count == 0) return;
+        var edits = new List<Edit>();
+        foreach (var name in names)
+        {
+            var at = AstChildren.Descendants(cd).OfType<AttributeExpr>().First(a => a.Attr == name && a.Value is NameExpr);
+            try
+            {
+                var plan = EncapsulateField(m, at.End - 1);
+                edits.AddRange(plan[m].Take(plan[m].Count - 1));   // the renames; the properties are written below, all together
+            }
+            catch (ServiceException) { return; }
+        }
+        string Props(string f) => Indented(end.Indent, new[] { "", "@property", $"def {f}(self):", $"    return self._{f}", "", $"@{f}.setter", $"def {f}(self, value):", $"    self._{f} = value" });
+        edits.Add(new Edit(end.At, end.At, Newlines(m, end.Lead + string.Concat(names.Select(Props)))));
+        var lines = Lines(m);
+        result.Add(new GenerateOption($"Properties of {string.Join(", ", names)} (kept as _{names[0]}{(names.Count > 1 ? "…" : "")})", "publicProperties",
+            new() { [uri] = edits.OrderBy(e => e.Start).Select(e => new TextEdit(lines.RangeOf(e.Start, e.End), e.Text)).ToList() }));
+    }
+
+    /// <summary>__eq__ and __repr__ from the fields, unless the class has them or makes them itself (a dataclass and the like).</summary>
+    void EqualityAndReprOptions(ModuleInfo m, string uri, ClassDef cd, List<GenerateOption> result)
+    {
+        string src = m.Source;
+        if (ClassEnd(m, cd) is not { } end) return;
+        if (cd.Decorators.Any(d => FieldClass.IsMatch(src[d.Start..d.End])) || cd.Bases.Any(b => b.Name == null && FieldClass.IsMatch(src[b.Value.Start..b.Value.End]))) return;
+        var fields = FieldsOf(m, cd);
+        if (fields.Count == 0) return;
+        var own = cd.Body.OfType<FunctionDef>().Select(f => f.Name).ToHashSet(StringComparer.Ordinal);
+        string list = string.Join(", ", fields);
+        if (!own.Contains("__eq__"))
+        {
+            string mine = fields.Count == 1 ? $"self.{fields[0]}" : "(" + string.Join(", ", fields.Select(f => "self." + f)) + ")";
+            string theirs = fields.Count == 1 ? $"other.{fields[0]}" : "(" + string.Join(", ", fields.Select(f => "other." + f)) + ")";
+            string text = end.Lead + "\n" + Indented(end.Indent, new[] { "def __eq__(self, other):", $"    if not isinstance(other, {cd.Name}):", "        return NotImplemented", $"    return {mine} == {theirs}" });
+            result.Add(new GenerateOption($"__eq__ of {list}", "eq", Insert(m, uri, end.At, text)));
+        }
+        if (!own.Contains("__repr__"))
+        {
+            string inner = string.Join(", ", fields.Select(f => $"{f}={{self.{f}!r}}"));
+            string text = end.Lead + "\n" + Indented(end.Indent, new[] { "def __repr__(self):", $"    return f\"{cd.Name}({inner})\"" });
+            result.Add(new GenerateOption($"__repr__ of {list}", "repr", Insert(m, uri, end.At, text)));
+        }
+    }
+
+    /// <summary>A value of a parameter's type for a test to pass: 0 for an int, "" for a str, and so on; None when the type says nothing.</summary>
+    static string SampleArgument(string? annotation) => (annotation ?? "").Trim() switch
+    {
+        "int" => "0",
+        "float" => "0.0",
+        "str" => "\"\"",
+        "bool" => "False",
+        "bytes" => "b\"\"",
+        var t when t.StartsWith("list") || t.StartsWith("List") || t.StartsWith("Sequence") => "[]",
+        var t when t.StartsWith("dict") || t.StartsWith("Dict") || t.StartsWith("Mapping") => "{}",
+        var t when t.StartsWith("set") || t.StartsWith("Set") => "set()",
+        var t when t.StartsWith("tuple") || t.StartsWith("Tuple") => "()",
+        _ => "None",
+    };
+
+    /// <summary>The arguments a test passes: each required parameter by name, with a value of its type.</summary>
+    static string SampleArguments(FunctionDef? f, string src, bool skipFirst)
+    {
+        if (f == null) return "";
+        var args = new List<string>();
+        foreach (var (p, i) in f.Params.Select((p, i) => (p, i)))
+        {
+            if (i == 0 && skipFirst) continue;
+            // passed by name, so keyword-only ones are right too; *args, **kwargs and parameters with a default are left out
+            if (p.Kind != ParamKind.Normal || p.Default != null) continue;
+            string value = SampleArgument(p.Annotation == null ? null : src[p.Annotation.Start..p.Annotation.End]);
+            args.Add($"{p.Name}={value}");
+        }
+        return string.Join(", ", args);
     }
 
     void OverrideOptions(Snapshot snap, ModuleInfo m, string uri, ClassDef cd, List<GenerateOption> result)
@@ -166,7 +277,14 @@ public sealed partial class LanguageService
             ?? (root != null && Directory.Exists(System.IO.Path.Combine(root, "tests")) ? System.IO.Path.Combine(root, "tests") : dir!);
         string target = System.IO.Path.Combine(folder, $"test_{(m.IsPackage ? m.Name.Split('.')[^1] : file)}.py");
         string snake = Regex.Replace(name, "(?<=[a-z0-9])([A-Z])", "_$1").ToLowerInvariant();
-        string test = top is ClassDef ? $"def test_{snake}():\n    obj = {name}()\n    assert obj\n" : $"def test_{snake}():\n    assert {name}()\n";
+        // the call passes each required parameter, with a value of its type to change
+        string arguments = top switch
+        {
+            FunctionDef fn => SampleArguments(fn, m.Source, false),
+            ClassDef c => SampleArguments(c.Body.OfType<FunctionDef>().FirstOrDefault(x => x.Name == "__init__"), m.Source, true),
+            _ => "",
+        };
+        string test = top is ClassDef ? $"def test_{snake}():\n    obj = {name}({arguments})\n    assert obj\n" : $"def test_{snake}():\n    assert {name}({arguments})\n";
         string import = $"from {m.Name} import {name}\n";
         string existing = File.Exists(target) ? File.ReadAllText(target) : "";
         if (Regex.IsMatch(existing, $@"^def test_{Regex.Escape(snake)}\(", RegexOptions.Multiline)) return;

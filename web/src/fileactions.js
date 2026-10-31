@@ -129,7 +129,7 @@ export function setupFileActions(deps) {
         if (isPy(rel)) {
             items.push({ label: `Run '${rel.slice(rel.lastIndexOf('/') + 1)}'`, run: () => deps.run.runScript(rel, '', false) },
                 { label: `Debug '${rel.slice(rel.lastIndexOf('/') + 1)}'`, run: () => deps.run.runScript(rel, '', true) });
-            if (isTestFile(rel)) items.push({ label: 'Run the tests in it', run: () => deps.tests.runPath(rel) });
+            if (isTestFile(rel)) items.push({ label: 'Run the tests in it', run: () => deps.tests.runPath(rel) }, { label: 'Debug the tests in it', run: () => deps.tests.runPath(rel, true) });
             items.push('-');
         }
         items.push(
@@ -161,7 +161,9 @@ export function setupFileActions(deps) {
         );
         if (isDir) {
             items.push({ label: `Run the tests in ${path ? `'${path.slice(path.lastIndexOf('/') + 1)}'` : 'the project'}`, run: () => deps.tests.runPath(path) },
+                { label: `Debug the tests in ${path ? `'${path.slice(path.lastIndexOf('/') + 1)}'` : 'the project'}`, run: () => deps.tests.runPath(path, true) },
                 '-', openIn(path, true));
+            items.push({ label: 'Local history', run: () => deps.history.showFolder(path) });
             if (path) items.push({ label: 'Add to .gitignore', run: () => gitignore(path) }, bookmarkItem(path, true));
             items.push({ label: 'Clean Python compiled files', run: () => clean(path) });
         } else {
@@ -172,7 +174,7 @@ export function setupFileActions(deps) {
 
     /** Open Tab in New Window: the page again, in a window of its own (of PyMagic in the desktop app, a browser tab otherwise), showing this file. */
     async function newWindow(rel) {
-        await deps.saveFile(rel);   // the other window reads the file from disk
+        // the new window asks this one for the file's unsaved text (sharedtext.js), so nothing is saved first
         window.open(`${location.origin}/?open=${encodeURIComponent(rel)}`, '_blank');
     }
 
@@ -184,8 +186,8 @@ export function setupFileActions(deps) {
     /** The entries PyCharm's editor menu has and Monaco's lacks, on an editor (the main one, and each side of a split). `refactorItems` is the
      *  Refactor submenu, given for the main editor only (the refactorings work on it). */
     /** Generate… (Alt+Insert): what the engine offers where the cursor is, in a menu there; a test goes into its own file, which opens. */
-    async function generate(rel, atCursor) {
-        const ed = deps.editor, model = ed.getModel(), pos = ed.getPosition();
+    async function generate(rel, atCursor, ed = deps.editor) {
+        const model = ed.getModel(), pos = ed.getPosition();
         if (!model || !pos) return;
         const uri = deps.uriFor(rel);
         deps.lsp.notify('textDocument/didChange', { textDocument: { uri, version: model.getVersionId() }, contentChanges: [{ text: model.getValue() }] });
@@ -241,7 +243,7 @@ export function setupFileActions(deps) {
             { keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.Enter] });
         if (refactorItems) add('pymagic.refactorThis', 'Refactor…', '1_modification', 0.5, () => atCursor(refactorItems()),
             { keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.KeyT] });
-        if (refactorItems) add('pymagic.generate', 'Generate…', '1_modification', 0.6, file((r) => generate(r, atCursor)),
+        if (refactorItems) add('pymagic.generate', 'Generate…', '1_modification', 0.6, file((r) => generate(r, atCursor, ed)),
             { keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.Insert], precondition: 'editorLangId == python' });
         add('pymagic.columnSelection', 'Column Selection Mode (on / off)', '9_cutcopypaste', 10,
             () => ed.updateOptions({ columnSelection: !ed.getOption(monaco.editor.EditorOption.columnSelection) }),

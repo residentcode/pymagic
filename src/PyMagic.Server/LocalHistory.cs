@@ -113,6 +113,25 @@ public sealed class LocalHistory
         }
     }
 
+    /// <summary>The versions of every file under a folder ('' for the project), deleted files too, the newest first: (file, version).</summary>
+    public IReadOnlyList<(string Path, HistoryEntry Entry)> ListFolder(string dirRel, int max = 500)
+    {
+        string dir = dirRel.Replace('\\', '/').Trim('/');
+        string store = Path.Combine(_root, ".pymagic", "history");
+        var found = new List<(string, HistoryEntry)>();
+        if (!Directory.Exists(store)) return found;
+        foreach (var folder in Directory.GetDirectories(store))
+        {
+            string marker = Path.Combine(folder, "path.txt");
+            string rel;
+            try { if (!File.Exists(marker)) continue; rel = File.ReadAllText(marker).Trim().Replace('\\', '/'); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            if (dir.Length > 0 && !rel.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase)) continue;
+            foreach (var entry in List(rel)) found.Add((rel, entry));
+        }
+        return found.OrderByDescending(x => x.Item2.Id, StringComparer.Ordinal).Take(max).ToList();
+    }
+
     public string? Read(string rel, string id)
     {
         if (id.Length != 19 || !id.All(char.IsDigit)) return null;

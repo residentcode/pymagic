@@ -78,7 +78,7 @@ public class GenerateTests
         var run = At(new[] { ("shop/__init__.py", ""), ("shop/cart.py", "def total(items):\n    return sum(items)\n"), ("tests/conftest.py", "") }, "shop/cart.py", "sum");
         var test = run.Options.Single(o => o.Kind == "test");
         Assert.Equal(Path.Combine(run.Dir, "tests", "test_cart.py"), new Uri(test.NewFile!).LocalPath);
-        Assert.Equal("from shop.cart import total\n\n\ndef test_total():\n    assert total()\n", test.NewText);
+        Assert.Equal("from shop.cart import total\n\n\ndef test_total():\n    assert total(items=None)\n", test.NewText);
     }
 
     [Fact]
@@ -86,5 +86,30 @@ public class GenerateTests
     {
         var run = At(new[] { ("cart.py", "class Cart:\n    pass\n"), ("test_cart.py", "import pytest\n\n\ndef test_other():\n    pass\n") }, "cart.py", "pass");
         Assert.Equal("import pytest\nfrom cart import Cart\n\n\ndef test_other():\n    pass\n\n\ndef test_cart():\n    obj = Cart()\n    assert obj\n", run.Options.Single(o => o.Kind == "test").NewText);
+    }
+
+    [Fact]
+    public void ATestPassesTheRequiredParametersWithValuesOfTheirTypes()
+    {
+        var run = At(new[] { ("cart.py", "class Cart:\n    def __init__(self, owner: str, size: int, tags: list[str], note=None, *rest, limit: float):\n        pass\n") }, "cart.py", "pass");
+        Assert.True(run.Options.Single(o => o.Kind == "test").NewText!.Contains("obj = Cart(owner=\"\", size=0, tags=[], limit=0.0)"));
+    }
+
+    [Fact]
+    public void EqualityAndReprFromTheFields()
+    {
+        var run = At(new[] { ("m.py", "class Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n        self._cache = None\n") }, "m.py", "_cache");
+        string eq = Applied(run, "eq");
+        Assert.True(eq.EndsWith("\n    def __eq__(self, other):\n        if not isinstance(other, Point):\n            return NotImplemented\n        return (self.x, self.y) == (other.x, other.y)\n"), eq);
+        Assert.True(Applied(run, "repr").EndsWith("\n    def __repr__(self):\n        return f\"Point(x={self.x!r}, y={self.y!r})\"\n"));
+        Assert.True(!At(new[] { ("m.py", "from dataclasses import dataclass\n\n@dataclass\nclass P:\n    x: int\n") }, "m.py", "x:").Options.Any(o => o.Kind is "eq" or "repr"));
+    }
+
+    [Fact]
+    public void PropertiesForPublicAttributesKeepThemAsPrivateOnes()
+    {
+        var run = At(new[] { ("m.py", "class Box:\n    def __init__(self):\n        self.size = 1\n\n    def grow(self):\n        self.size += 1\n") }, "m.py", "grow");
+        Assert.Equal("class Box:\n    def __init__(self):\n        self._size = 1\n\n    def grow(self):\n        self._size += 1\n\n" +
+            "    @property\n    def size(self):\n        return self._size\n\n    @size.setter\n    def size(self, value):\n        self._size = value\n", Applied(run, "publicProperties"));
     }
 }

@@ -234,6 +234,15 @@ app.MapGet("/api/history", (string path) =>
     }
     catch (UnauthorizedAccessException) { return Results.NotFound(); }
 });
+app.MapGet("/api/history/folder", (string? path) =>
+{
+    try
+    {
+        string rel = string.IsNullOrEmpty(path) ? "" : Path.GetRelativePath(root, ResolveInRoot(path)).Replace('\\', '/');
+        return Results.Json(history.ListFolder(rel == "." ? "" : rel).Select(x => new { path = x.Path, id = x.Entry.Id, time = x.Entry.Time.ToString("o"), bytes = x.Entry.Bytes, exists = File.Exists(Path.Combine(root, x.Path)) }).ToList());
+    }
+    catch (UnauthorizedAccessException) { return Results.NotFound(); }
+});
 app.MapGet("/api/history/text", (string path, string id) =>
 {
     try
