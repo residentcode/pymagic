@@ -491,8 +491,12 @@ public sealed partial class LanguageService
             var scope = m.Semantics.ScopeOf(n)?.Parent;
             var sym = scope?.Symbols.GetValueOrDefault(d.name);
             if (sym == null) continue;
-            return MakeHover(Describe(ev, d.name, ev.TypeOfSymbol(sym)), lines.RangeOf(d.nameStart, d.nameStart + d.name.Length));
+            var defType = ev.TypeOfSymbol(sym);
+            string? defDoc = n is FunctionDef fd ? DocOf(ev, m, fd, FunctionInfoOf(ev, m, fd)?.Owner) : DocOfType(ev, defType);
+            return MakeHover(Describe(ev, d.name, defType), lines.RangeOf(d.nameStart, d.nameStart + d.name.Length), defDoc);
         }
+
+        if (ParameterHover(ev, m, offset, lines) is { } parameterHover) return parameterHover;
 
         var target = NameLikeAt(m, offset);
         if (target is NameExpr ne)
@@ -500,14 +504,19 @@ public sealed partial class LanguageService
             var type = ev.TypeOf(m, ne);
             var sym = m.Semantics.Resolve(ne);
             string text = Describe(ev, ne.Name, type);
+            string? doc = DocOfType(ev, type);
             if (sym != null && sym.Declarations.Count > 0 && sym.Declarations[0].Kind == DeclKind.Parameter)
+            {
                 text = "(parameter) " + text;
-            return MakeHover(text, lines.RangeOf(ne.Start, ne.End));
+                if (sym.Declarations[0].Node is Parameter p && m.ParentOf(p) is FunctionDef owner) doc = ParameterDoc(ev, FunctionInfoOf(ev, m, owner), null, p.Name) ?? doc;
+            }
+            return MakeHover(text, lines.RangeOf(ne.Start, ne.End), doc);
         }
         if (target is AttributeExpr ae)
         {
             var (s, e) = AttrSpan(ae);
-            return MakeHover(Describe(ev, ae.Attr, ev.TypeOf(m, ae)), lines.RangeOf(s, e));
+            var attrType = ev.TypeOf(m, ae);
+            return MakeHover(Describe(ev, ae.Attr, attrType), lines.RangeOf(s, e), DocOfType(ev, attrType));
         }
 
         // any other expression: show its type
@@ -518,8 +527,8 @@ public sealed partial class LanguageService
         return MakeHover($"{FormatType(ev, t)}", lines.RangeOf(expr.Start, expr.End));
     }
 
-    static Hover MakeHover(string code, Range range) =>
-        new(new MarkupContent("markdown", "```python\n" + code + "\n```"), range);
+    static Hover MakeHover(string code, Range range, string? doc = null) =>
+        new(new MarkupContent("markdown", "```python\n" + code + "\n```" + (string.IsNullOrWhiteSpace(doc) ? "" : "\n\n" + DocMarkdown(doc))), range);
 
     /// <summary>One-line description of a named value: signature for functions, header for classes, annotation-style for the rest.</summary>
     internal static string Describe(TypeEvaluator ev, string name, PyType type)

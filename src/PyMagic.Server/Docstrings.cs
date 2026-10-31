@@ -31,6 +31,7 @@ public static class Docstrings
     {
         if (string.IsNullOrWhiteSpace(doc)) return null;
         string first = Regex.Replace(Regex.Split(doc.Trim(), @"\n\s*\n")[0], @"\s*\n\s*", " ").Trim();
+        if (first.StartsWith(':')) return null;   // only fields (`:param x: ...`), which the parameters show
         return first.Length > 300 ? first[..300] + "..." : first;
     }
 

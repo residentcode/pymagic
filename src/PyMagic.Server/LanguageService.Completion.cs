@@ -110,6 +110,23 @@ public sealed partial class LanguageService
         // a call that is still being typed has no closing bracket yet: add what is missing right after the name, so it parses
         string closers = MissingClosers(patched);
         if (closers.Length > 0) patched = patched[..(start + CursorMark.Length)] + closers + patched[(start + CursorMark.Length)..];
+        // a class or def header being written has no `:` yet either (`class A(Base(|`): give it one, and a body when none follows
+        int lineStart = patched.LastIndexOf('\n', Math.Max(0, start - 1)) + 1;
+        string header = patched[lineStart..start].TrimStart();
+        if (header.StartsWith("class ", StringComparison.Ordinal) || header.StartsWith("def ", StringComparison.Ordinal) || header.StartsWith("async def ", StringComparison.Ordinal))
+        {
+            int after = start + CursorMark.Length + closers.Length;
+            int lineEnd = patched.IndexOf('\n', after);
+            if (lineEnd < 0) lineEnd = patched.Length;
+            if (patched.IndexOf(':', after, lineEnd - after) < 0 && MissingClosers(patched[..lineEnd]).Length == 0)
+            {
+                int indent = patched[lineStart..start].Length - header.Length;
+                int next = lineEnd + 1;
+                while (next < patched.Length && patched.IndexOf('\n', next) is var e && e >= 0 && patched[next..e].Trim().Length == 0) next = e + 1;
+                bool bodyFollows = next < patched.Length && patched[next..].Length - patched[next..].TrimStart(' ', '\t').Length > indent;
+                patched = patched[..lineEnd] + (bodyFollows ? ":" : ": pass") + patched[lineEnd..];
+            }
+        }
         var (ws, fixtures) = NewWorkspace();
         foreach (var d in _docs.Values)
             if (d.Uri != doc.Uri) fixtures.Register(ws.AddModule(d.ModuleName, d.Text, d.IsPackage), d.Uri, d.Path);

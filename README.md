@@ -56,7 +56,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - ~~pytest: `request.param` of `parametrize(..., indirect=True)` (151), fixtures registered by hooks at run time (134), a fixtures panel and a run icon in the gutter (29)~~ (done, item 209).
 
 **Editor**
-- Hover and signature help: a parameter's documentation in hover and in completion's `name=` items, the class docstring for a constructor call, `name=` after a `*`, documentation of methods of library base classes (119, 121); signature help inside decorators and class bases (118).
+- ~~Hover and signature help: a parameter's documentation in hover and in completion's `name=` items, the class docstring for a constructor call, `name=` after a `*`, documentation of methods of library base classes (119, 121); signature help inside decorators and class bases (118)~~ (done, item 210).
 - Completion: dictionary keys and `Literal[...]` strings, a setting to leave out the call parentheses (31).
 - Find in files: replacing in the selected results only, multi-line patterns, searching library files, a list of recent searches, filtering symbols by kind (20).
 - Notebooks: formatting a selection of a cell, formatting on save, cells with magics (120).
@@ -158,4 +158,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 209 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 210 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

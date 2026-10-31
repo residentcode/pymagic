@@ -57,7 +57,11 @@ public sealed partial class LanguageService
         return new OpenCall(call2.At, call2.Commas, keyword);
     }
 
-    sealed record CallContext(TypeEvaluator Ev, ModuleInfo Module, CallExpr Call, IReadOnlyList<CallSignature> Sigs, string Name, OpenCall Open);
+    /// <summary>
+    /// The open call: its callee (null for a class's bases, `class A(Base, |`, whose keywords go to `__init_subclass__`), the arguments written,
+    /// what the callee takes, and the class being called when it is one (its docstring counts).
+    /// </summary>
+    sealed record CallContext(TypeEvaluator Ev, ModuleInfo Module, Expr? Func, IReadOnlyList<Argument> Args, IReadOnlyList<CallSignature> Sigs, string Name, OpenCall Open, ClassInfo? Class);
 
     /// <summary>
     /// The call that is open where text[start..end) is being typed, with what its callee takes; null when the cursor is in no call or nothing is known
@@ -77,12 +81,48 @@ public sealed partial class LanguageService
             while (p < m.Source.Length && char.IsWhiteSpace(m.Source[p])) p++;
             if (p == open.Paren && (call == null || c.Start >= call.Start)) call = c;
         }
-        if (call == null) return null;
         var ev = ws.Evaluator;
-        var sigs = ev.CallSignatures(ev.TypeOf(m, call.Func));
+        if (call == null) return ClassHeaderAt(ev, m, open);
+        var calleeType = ev.TypeOf(m, call.Func);
+        var sigs = ev.CallSignatures(calleeType);
         if (sigs.Count == 0) return null;
         string name = call.Func switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => SourceText(m, call.Func) };
-        return new CallContext(ev, m, call, sigs, name, open);
+        return new CallContext(ev, m, call.Func, call.Args, sigs, name, open, calleeType is ClassType { IsInstance: false } cls ? cls.Info : null);
+    }
+
+    /// <summary>
+    /// The bases of a class being written (`class A(Base, |`): any number of bases, `metaclass=`, and the keywords the bases' `__init_subclass__`
+    /// takes (`class A(Plugin, tag='x')`); null when the bracket is not a class's.
+    /// </summary>
+    static CallContext? ClassHeaderAt(TypeEvaluator ev, ModuleInfo m, OpenCall open)
+    {
+        var cd = AstChildren.Descendants(m.Ast).OfType<ClassDef>().FirstOrDefault(c =>
+        {
+            int p = c.NameStart + c.Name.Length;
+            if (p < m.Source.Length && m.Source[p] == '[') p = m.Source.IndexOf(']', p) + 1;   // class A[T](...)
+            while (p > 0 && p < m.Source.Length && char.IsWhiteSpace(m.Source[p])) p++;
+            return p == open.Paren;
+        });
+        if (cd == null) return null;
+        var unknown = new UnknownType(false, false);
+        var ps = new List<ParamInfo> { new("bases", unknown, ParamCategory.VarPositional, false), new("metaclass", unknown, ParamCategory.KeywordOnly, true) };
+        FunctionInfo? hook = null;
+        foreach (var b in cd.Bases.Where(a => a.Name == null && a.Stars == 0))
+        {
+            if (ev.TypeOf(m, b.Value) is not ClassType { IsInstance: false } bc) continue;
+            foreach (var t in ev.MroOf(bc.Info))
+            {
+                if (t is not ClassType { Info: var c } || c.Name == "object" && c.Module.Name == "builtins") continue;
+                if (c.Scope.Symbols.GetValueOrDefault("__init_subclass__") is not { } sym) continue;
+                hook = ev.TypeOfSymbol(sym) switch { FunctionType f => f.Info, SignatureType { Origin: { } o } => o.Info, _ => null };
+                break;
+            }
+            if (hook != null) break;
+        }
+        if (hook != null)
+            foreach (var p in ev.ParametersOf(hook).Skip(1))   // cls
+                ps.Add(p.Category is ParamCategory.Normal or ParamCategory.PositionalOnly ? p with { Category = ParamCategory.KeywordOnly } : p);
+        return new CallContext(ev, m, null, cd.Bases, new[] { new CallSignature(ps, null, hook) }, "class " + cd.Name, open, null);
     }
 
     /// <summary>Parameter info for the call the cursor is in, or null when there is none or nothing is known about the callee.</summary>
@@ -92,8 +132,7 @@ public sealed partial class LanguageService
         int offset = new LineMap(doc.Text).OffsetOf(pos);
         if (CallAt(doc, offset, offset) is not { } cx) return null;
         // calling a class: its docstring, and what it says about the parameters, count as much as __init__'s
-        var owner = cx.Ev.TypeOf(cx.Module, cx.Call.Func) is ClassType { IsInstance: false } cls ? cls.Info.Node : null;
-        var infos = cx.Sigs.Select(s => DescribeCall(cx.Ev, cx.Name, s, owner)).ToList();
+        var infos = cx.Sigs.Select(s => DescribeCall(cx.Ev, cx.Name, s, cx.Class)).ToList();
         int chosen = Enumerable.Range(0, cx.Sigs.Count).FirstOrDefault(i => Accepts(cx.Sigs[i].Params, cx.Open), 0);
         return new SignatureHelp(infos.Select(i => i.Info).ToList(), chosen, infos[chosen].Index(cx.Open));
     }
@@ -108,9 +147,9 @@ public sealed partial class LanguageService
         int i = start - 1;
         while (i >= 0 && char.IsWhiteSpace(text[i])) i--;
         if (i < 0 || text[i] is not ('(' or ',') || CallAt(doc, start, end) is not { } cx) return Array.Empty<CompletionItem>();
-        var given = cx.Call.Args.Where(a => a.Name != null).Select(a => a.Name!).ToHashSet();
-        int positional = cx.Call.Args.Count(a => a.Name == null && a.Stars == 0 && a.Value is not NameExpr { Name: CursorMark });
-        var found = new Dictionary<string, PyType>();
+        var given = cx.Args.Where(a => a.Name != null).Select(a => a.Name!).ToHashSet();
+        int positional = cx.Args.Count(a => a.Name == null && a.Stars == 0 && a.Value is not NameExpr { Name: CursorMark });
+        var found = new Dictionary<string, (PyType Type, CallSignature Sig)>();
         foreach (var sig in cx.Sigs)
         {
             var byPosition = sig.Params.Where(p => p.Category is ParamCategory.PositionalOnly or ParamCategory.Normal).ToList();
@@ -119,11 +158,14 @@ public sealed partial class LanguageService
             {
                 if (p.Category is not (ParamCategory.Normal or ParamCategory.KeywordOnly) || given.Contains(p.Name) || !p.Name.StartsWith(prefix, StringComparison.Ordinal)) continue;
                 if (p.Category == ParamCategory.Normal && byPosition.IndexOf(p) < positional) continue;
-                found.TryAdd(p.Name, p.Type);
+                found.TryAdd(p.Name, (p.Type, sig));
             }
         }
+        // in a class's bases the base names come first: the keywords are rarer there
+        bool bases = cx.Func == null;
         return found.Select(kv => new CompletionItem(kv.Key + "=", CompletionKind.Variable,
-            kv.Value is UnknownType { Explicit: false } ? null : FormatType(cx.Ev, kv.Value), SortText: "00" + kv.Key.ToLowerInvariant(), InsertText: kv.Key + "=", FilterText: kv.Key)).ToList();
+            kv.Value.Type is UnknownType { Explicit: false } ? null : FormatType(cx.Ev, kv.Value.Type), SortText: (bases ? "zz" : "00") + kv.Key.ToLowerInvariant(),
+            InsertText: kv.Key + "=", FilterText: kv.Key, Documentation: ParameterDoc(cx.Ev, kv.Value.Sig.Function, cx.Class, kv.Key) is { } d ? DocMarkdown(d) : null)).ToList();
     }
 
     /// <summary>Whether a signature could take the argument the cursor is on (a keyword it has or a position it reaches), to pick among overloads.</summary>
@@ -156,12 +198,12 @@ public sealed partial class LanguageService
         }
     }
 
-    static Described DescribeCall(TypeEvaluator ev, string name, CallSignature s, ClassDef? owner)
+    Described DescribeCall(TypeEvaluator ev, string name, CallSignature s, ClassInfo? owner)
     {
         // a class has no def of its own to point at: its own __init__ is the one whose docstring counts
-        var def = s.Function?.Node as FunctionDef ?? owner?.Body.OfType<FunctionDef>().FirstOrDefault(f => f.Name == "__init__");
-        string? functionDoc = def != null ? Docstrings.Of(def.Body) : null;
-        string? classDoc = owner != null ? Docstrings.Of(owner.Body) : null;
+        string? functionDoc = s.Function is { } fn ? DocOf(ev, fn.Module, fn.Node, fn.Owner)
+            : owner?.Node.Body.OfType<FunctionDef>().FirstOrDefault(f => f.Name == "__init__") is { } init ? DocOf(ev, owner.Module, init, owner) : null;
+        string? classDoc = owner != null ? DocOf(ev, owner.Module, owner.Node, null) : null;
         var parameterDocs = Docstrings.Parameters(functionDoc);
         var classParameterDocs = Docstrings.Parameters(classDoc);
         var sb = new StringBuilder(name).Append('(');
