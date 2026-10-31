@@ -57,7 +57,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 **Editor**
 - ~~Hover and signature help: a parameter's documentation in hover and in completion's `name=` items, the class docstring for a constructor call, `name=` after a `*`, documentation of methods of library base classes (119, 121); signature help inside decorators and class bases (118)~~ (done, item 210).
-- Completion: dictionary keys and `Literal[...]` strings, a setting to leave out the call parentheses (31).
+- ~~Completion: dictionary keys and `Literal[...]` strings, a setting to leave out the call parentheses (31)~~ (done, item 211).
 - Find in files: replacing in the selected results only, multi-line patterns, searching library files, a list of recent searches, filtering symbols by kind (20).
 - Notebooks: formatting a selection of a cell, formatting on save, cells with magics (120).
 - Refactoring: choosing which files or hunks of a preview to apply, word-level highlighting in the diff (19); a module reached through `from pkg import *` and imports written over lines with backslashes are not followed by a move (143).
@@ -158,4 +158,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 210 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 211 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

@@ -48,6 +48,7 @@ const PAGES = [
         { key: 'smoothScrolling', label: 'Smooth scrolling', type: 'bool' },
         { key: 'cursorStyle', label: 'Cursor', type: 'choice', options: [['line', 'Line'], ['block', 'Block'], ['underline', 'Underline']] },
         { key: 'cursorBlinking', label: 'Cursor blinking', type: 'choice', options: [['blink', 'Blink'], ['smooth', 'Smooth'], ['phase', 'Phase'], ['expand', 'Expand'], ['solid', 'None']] },
+        { key: 'callParens', label: 'Add parentheses when completing a function', type: 'bool', hint: 'Choosing `area` writes `area()`, with the cursor inside when it takes arguments. Off: only the name.' },
     ]],
     ['hints', 'Code vision and hints', [
         { key: 'codeVision', label: 'Usages and inheritors above functions and classes', type: 'bool', hint: 'A click lists them.' },

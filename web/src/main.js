@@ -49,7 +49,7 @@ import { setupHistory } from './history';
 import { setupFileActions, fileTypes } from './fileactions';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
-import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings } from './settings';
+import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings, withoutCallParens } from './settings';
 // each language service runs in its worker; the rest share the editor's
 self.MonacoEnvironment = {
     getWorker: (_id, label) => new Worker(
@@ -454,7 +454,7 @@ function registerProviders() {
                     kind: completionKinds[i.kind] ?? K.Text,
                     detail: i.detail,
                     documentation: i.documentation ? { value: i.documentation } : undefined,
-                    insertText: i.insertText ?? i.label,
+                    insertText: i.isSnippet ? withoutCallParens(i.insertText ?? i.label) : i.insertText ?? i.label,
                     insertTextRules: i.isSnippet ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
                     // an import to add, or the expression a postfix template takes over
                     // an import added at the top of a notebook's file would land in another cell: no edits there

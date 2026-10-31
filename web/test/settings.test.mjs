@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULTS, merged, editorOptions } from '../src/settings.js';
+import { DEFAULTS, merged, editorOptions, withoutCallParens } from '../src/settings.js';
 
 test('what is stored is laid over the defaults, and a value of the wrong kind is dropped', () => {
     const s = merged({ theme: 'light', fontSize: '20', minimap: true, unknown: 1, wordWrap: 7 });
@@ -31,4 +31,14 @@ test('the settings become the options of the editor', () => {
     assert.equal(o.wordWrap, 'on');
     assert.equal(o.fontLigatures, true);
     assert.deepEqual(editorOptions(DEFAULTS).rulers, []);
+});
+
+test('completing a function writes its parentheses unless the setting says not to', () => {
+    const on = merged({});
+    const off = merged({ callParens: false });
+    assert.equal(withoutCallParens('area($0)', on), 'area($0)');
+    assert.equal(withoutCallParens('area($0)', off), 'area');
+    assert.equal(withoutCallParens('close()', off), 'close');
+    // other snippets (a postfix template, a live template) are kept
+    assert.equal(withoutCallParens('for ${1:x} in items:', off), 'for ${1:x} in items:');
 });

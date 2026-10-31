@@ -32,7 +32,15 @@ export const DEFAULTS = {
     codeVisionAuthor: true,   // and who wrote most of each (Git blame)
     hintParams: true,         // the names of parameters before arguments
     hintTypes: true,          // inferred return and variable types, the types along a method chain
+    callParens: true,         // completing a function or method writes its parentheses too, `area()` or `area(|)`
 };
+
+/** A completion's text as the settings want it: without the call's parentheses when those are not to be written. */
+export function withoutCallParens(insertText, s = current) {
+    if (s.callParens || typeof insertText !== 'string') return insertText;
+    const m = /^([A-Za-z_][\w]*)\((\$0)?\)$/.exec(insertText);
+    return m ? m[1] : insertText;
+}
 
 let current = { ...DEFAULTS };
 const listeners = new Set();

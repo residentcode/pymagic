@@ -29,7 +29,7 @@ public sealed partial class LanguageService
         switch (SiteAt(text, offset))
         {
             case CursorSite.Nothing:
-                return FixtureCompletion(doc, start, offset, prefix) ?? DjangoStringCompletion(doc, start, offset) ?? WebStringCompletion(doc, start, offset) ?? MetaStringCompletion(doc, start, offset) ?? TypedDictKeyCompletion(doc, start, offset) ?? FlaskFormFieldCompletion(doc, start, offset) ?? Array.Empty<CompletionItem>();   // a few strings name things: a fixture, a URL, a template, a field
+                return FixtureCompletion(doc, start, offset, prefix) ?? DjangoStringCompletion(doc, start, offset) ?? WebStringCompletion(doc, start, offset) ?? MetaStringCompletion(doc, start, offset) ?? TypedDictKeyCompletion(doc, start, offset) ?? FlaskFormFieldCompletion(doc, start, offset) ?? StringValueCompletion(doc, start, offset) ?? Array.Empty<CompletionItem>();   // a few strings name things: a fixture, a URL, a template, a field, a key
             case CursorSite.FStringField:
                 break;
         }
@@ -110,10 +110,10 @@ public sealed partial class LanguageService
         // a call that is still being typed has no closing bracket yet: add what is missing right after the name, so it parses
         string closers = MissingClosers(patched);
         if (closers.Length > 0) patched = patched[..(start + CursorMark.Length)] + closers + patched[(start + CursorMark.Length)..];
-        // a class or def header being written has no `:` yet either (`class A(Base(|`): give it one, and a body when none follows
+        // a header being written has no `:` yet either (`class A(Base(|`, `if state == '|'`): give it one, and a body when none follows
         int lineStart = patched.LastIndexOf('\n', Math.Max(0, start - 1)) + 1;
         string header = patched[lineStart..start].TrimStart();
-        if (header.StartsWith("class ", StringComparison.Ordinal) || header.StartsWith("def ", StringComparison.Ordinal) || header.StartsWith("async def ", StringComparison.Ordinal))
+        if (Regex.IsMatch(header, @"^(class|def|async\s+def|if|elif|while|for|async\s+for|with|async\s+with)\s") && !HasTopLevelColon(header))
         {
             int after = start + CursorMark.Length + closers.Length;
             int lineEnd = patched.IndexOf('\n', after);
@@ -133,6 +133,21 @@ public sealed partial class LanguageService
         var m = ws.AddModule(doc.ModuleName, patched, doc.IsPackage, cached: false);
         fixtures.Register(m, doc.Uri, doc.Path);
         return (ws, m);
+    }
+
+    /// <summary>Whether a header's text already has its `:` (`if x: y = f(`), outside brackets and strings: then it is not a header being written.</summary>
+    static bool HasTopLevelColon(string text)
+    {
+        int depth = 0;
+        foreach (var t in Lexer.Tokenize(text))
+        {
+            if (t.Kind != TokenKind.Operator || t.Length != 1) continue;
+            char c = text[t.Start];
+            if (c is '(' or '[' or '{') depth++;
+            else if (c is ')' or ']' or '}') depth = Math.Max(0, depth - 1);
+            else if (c == ':' && depth == 0) return true;
+        }
+        return false;
     }
 
     /// <summary>The closing brackets, innermost first, for the brackets the text opens and never closes.</summary>
@@ -178,7 +193,7 @@ public sealed partial class LanguageService
         int i = start - 1;
         while (i >= 0 && char.IsWhiteSpace(text[i])) i--;
         if (i < 0) return false;
-        if (text[i] is '(' or ',' or '=') return true;
+        if (text[i] is '(' or ',' or '=' or '[') return true;
         return i >= 5 && text.AsSpan(i - 5, 6).SequenceEqual("return");
     }
 
@@ -351,6 +366,12 @@ public sealed partial class LanguageService
             foreach (var item in AutoImportItems(doc, m, lines, prefix, items))
                 items.TryAdd("\u0002" + item.Label + item.Detail, item);
 
+        // `d[|` and a place that wants a Literal: the keys and values themselves, quoted, first
+        if (placeholder != null)
+        {
+            var quoted = QuotedValueItems(m, ev, placeholder, expected ?? WantedAt(m, ev, placeholder), prefix);
+            if (quoted.Count > 0) return quoted.Concat(items.Values).ToList();
+        }
         return items.Values.ToList();
     }
 
