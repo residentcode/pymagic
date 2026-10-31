@@ -45,7 +45,7 @@ The test project is a plain console runner because this machine's NuGet only has
 Everything that is known to be left, in one place, gathered on 30 October 2026 from the "Not done" and "Still open" notes of items 2 to 154 (the item a line comes from is in brackets), and from PyCharm's own dialogs and menus (what PyMagic's notes never named). **How it is kept:** when an item does one of these, the line goes from here and the item says so; a new item's own "Not done" note is added here too. Code signing, auto-update and anything else for selling PyMagic are left out on purpose.
 
 **Frameworks**
-- Django admin: `list_display` entries that are callables from other modules, and `get_queryset` / `formfield_for_*` overrides (37).
+- ~~Django admin: `list_display` entries that are callables from other modules, and `get_queryset` / `formfield_for_*` overrides (37)~~ (done, item 201).
 - Django forms: `clean_<field>` methods and `cleaned_data` keys (37).
 - Django templates: the context `{% include ... with a=b %}` gives the included file, the project's context processors, `{% blocktrans %}` bodies, the tags of third-party libraries (`crispy`), and the HTML itself (35).
 - Django project: reading `INSTALLED_APPS` (an app is a folder that looks like one), choosing the settings module for commands that need a database (76); the custom managers of other installed apps (125); reverse relations in the project-wide Problems scan, which therefore skips some prefetch names (154).
@@ -158,4 +158,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 200 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 201 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

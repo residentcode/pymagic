@@ -55,6 +55,7 @@ public sealed partial class TypeEvaluator
     {
         if (callee is FunctionType { Info: { Name: "get_user_model" } f } && f.Module.Name == "django.contrib.auth" && !f.Module.IsStub)
             return DjangoUserModel() is { } user ? new ClassType(user, false) : null;
+        if (DjangoAdminQuerySet(m, call) is { } adminQuerySet) return adminQuerySet;
 
         if (call.Func is not AttributeExpr { Attr: "values" or "values_list" } access) return null;
         var receiver = TypeOf(m, access.Value);

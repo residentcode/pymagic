@@ -60,47 +60,23 @@ public sealed partial class LanguageService
     Dictionary<ClassInfo, ClassInfo> AdminModelsOf(Snapshot snap) => _adminModels.GetValue(snap, s => AdminRegistry(s.Project, s.Workspace.Evaluator));
 
     /// <summary>`@admin.register(Book)` and `admin.site.register(Book, BookAdmin)`: the model each admin class is registered for.</summary>
-    static Dictionary<ClassInfo, ClassInfo> AdminRegistry(IEnumerable<ModuleInfo> modules, TypeEvaluator ev)
-    {
-        var map = new Dictionary<ClassInfo, ClassInfo>();
-        foreach (var m in modules.ToList())
-        {
-            if (m.IsStub || m.Source.IndexOf("register", StringComparison.Ordinal) < 0) continue;
-            ClassInfo? ModelOf(Expr e) => ev.TypeOf(m, e) is ClassType { IsInstance: false } c && ev.IsDjangoModel(c.Info) ? c.Info : null;
-            foreach (var cd in AstChildren.Descendants(m.Ast).OfType<ClassDef>().ToList())
-                foreach (var d in cd.Decorators)
-                    if (d is CallExpr { Func: var f } call && (f is NameExpr { Name: "register" } || f is AttributeExpr { Attr: "register" })
-                        && call.Args.Where(a => a.Name == null).Select(a => ModelOf(a.Value)).FirstOrDefault(x => x != null) is { } model
-                        && ClassInfoOf(m, cd, ev) is { } admin)
-                        map[admin] = model;
-            foreach (var call in AstChildren.Descendants(m.Ast).OfType<CallExpr>().ToList())
-            {
-                if (call.Func is not AttributeExpr { Attr: "register" }) continue;
-                var args = call.Args.Where(a => a.Name == null).ToList();
-                var adminArg = args.Count > 1 ? args[1].Value : call.Args.FirstOrDefault(a => a.Name == "admin_class")?.Value;
-                if (args.Count == 0 || adminArg == null || ev.TypeOf(m, adminArg) is not ClassType { IsInstance: false } adminClass) continue;
-                var models = args[0].Value is ListExpr l ? l.Items : args[0].Value is TupleExpr t ? t.Items : new[] { args[0].Value };
-                if (models.Select(ModelOf).FirstOrDefault(x => x != null) is { } model2) map[adminClass.Info] = model2;
-            }
-        }
-        return map;
-    }
+    static Dictionary<ClassInfo, ClassInfo> AdminRegistry(IEnumerable<ModuleInfo> modules, TypeEvaluator ev) => TypeEvaluator.DjangoAdminRegistry(modules, ev);
 
-    readonly ConditionalWeakTable<Workspace, Dictionary<ClassInfo, ClassInfo>> _adminModelsByWorkspace = new();
-
-    /// <summary>`def save_model(self, request, obj, form, change)` of a registered admin: obj is a model instance.</summary>
+    /// <summary>
+    /// `def save_model(self, request, obj, form, change)` of a registered admin: obj is a model instance; so is the one parameter of a function
+    /// the admin's `list_display` calls (`def short_title(book)`, in any module).
+    /// </summary>
     PyType? AdminParameterType(Workspace ws, ModuleInfo m, Parameter p)
     {
-        if (m.IsStub || p.Name is not ("obj" or "instance") || m.ParentOf(p) is not FunctionDef f || m.ParentOf(f) is not ClassDef cd) return null;
+        if (m.IsStub || m.ParentOf(p) is not FunctionDef f) return null;
         var ev = ws.Evaluator;
-        if (ClassInfoOf(m, cd, ev) is not { } info || ev.DjangoRoleOf(info) is not (DjangoClassRole.Admin or DjangoClassRole.Inline)) return null;
-        var model = ev.DjangoMetaModel(info);
-        if (model == null)
+        if (m.ParentOf(f) is ClassDef cd)
         {
-            var registry = _adminModelsByWorkspace.GetValue(ws, w => AdminRegistry(w.UserModules.ToList(), w.Evaluator));
-            if (registry.TryGetValue(info, out var registered)) model = registered;
+            if (p.Name is not ("obj" or "instance") || ClassInfoOf(m, cd, ev) is not { } info) return null;
+            return ev.DjangoAdminModel(info) is { } model ? new ClassType(model, Array.Empty<PyType>(), true) : null;
         }
-        return model == null ? null : new ClassType(model, Array.Empty<PyType>(), true);
+        if (f.Params.Count == 0 || !ReferenceEquals(f.Params[0], p) || p.Kind != ParamKind.Normal) return null;
+        return ev.DjangoAdminCallableModel(f) is { } listed ? new ClassType(listed, Array.Empty<PyType>(), true) : null;
     }
 
     // ------------------------------------------------------------ the context of a string
@@ -108,6 +84,7 @@ public sealed partial class LanguageService
     /// <summary>What a string literal in a list, tuple or dict assigned in a model Meta, form, serializer or admin class means: the model, the class and how the name is read.</summary>
     MetaContext? MetaContextOf(ModuleInfo m, TypeEvaluator ev, Dictionary<ClassInfo, ClassInfo> admins, ConstExpr literal)
     {
+        if (FormfieldContextOf(m, ev, admins, literal) is { } formfield) return formfield;
         Node node = literal;
         bool key = false, value = false;
         bool underFieldsKey = false;
@@ -173,6 +150,37 @@ public sealed partial class LanguageService
         return model == null ? null : new MetaContext(model, owner, role, attr, rule);
     }
 
+    /// <summary>
+    /// `if db_field.name == "author":` (or `in ("author", "editor")`) in an admin's `formfield_for_foreignkey`, `formfield_for_manytomany`,
+    /// `formfield_for_choice_field` or `formfield_for_dbfield`: the string names a field of the admin's model.
+    /// </summary>
+    MetaContext? FormfieldContextOf(ModuleInfo m, TypeEvaluator ev, Dictionary<ClassInfo, ClassInfo> admins, ConstExpr literal)
+    {
+        Node node = literal;
+        var parent = m.ParentOf(node);
+        if (parent is TupleExpr or ListExpr or SetExpr) { node = parent; parent = m.ParentOf(node); }
+        if (parent is not CompareExpr compare || compare.Ops.Count != 1 || compare.Ops[0] is not ("==" or "!=" or "in" or "not in")) return null;
+        var other = ReferenceEquals(compare.Left, node) ? compare.Comparators[0] : compare.Left;
+        if (other is not AttributeExpr { Attr: "name", Value: NameExpr { Name: var fieldParam } }) return null;
+        if (node is not ConstExpr && compare.Ops[0] is "==" or "!=") return null;
+        Node? scope = compare;
+        while (scope != null && scope is not FunctionDef) scope = m.ParentOf(scope);
+        if (scope is not FunctionDef f || !f.Name.StartsWith("formfield_for_", StringComparison.Ordinal) || f.Params.Count < 2 || f.Params[1].Name != fieldParam) return null;
+        if (m.ParentOf(f) is not ClassDef cd || ClassInfoOf(m, cd, ev) is not { } owner) return null;
+        var role = ev.DjangoRoleOf(owner);
+        if (role is not (DjangoClassRole.Admin or DjangoClassRole.Inline)) return null;
+        var model = admins.GetValueOrDefault(owner) ?? ev.DjangoAdminModel(owner);
+        return model == null ? null : new MetaContext(model, owner, role, f.Name, new MetaRule("field", false));
+    }
+
+    /// <summary>The kinds of field a `formfield_for_*` method is called for; null when any field is.</summary>
+    static string[]? FormfieldKinds(string method) => method switch
+    {
+        "formfield_for_foreignkey" => new[] { "foreign", "one-to-one" },
+        "formfield_for_manytomany" => new[] { "many-to-many" },
+        _ => null,
+    };
+
     /// <summary>The names valid at such a place.</summary>
     static HashSet<string> MetaNames(TypeEvaluator ev, MetaContext c)
     {
@@ -196,7 +204,7 @@ public sealed partial class LanguageService
     IEnumerable<Diag> MetaDiagnostics(ModuleInfo m, TypeEvaluator ev, Snapshot snap)
     {
         if (m.IsStub || m.Source.IndexOf("Meta", StringComparison.Ordinal) < 0 && m.Source.IndexOf("list_display", StringComparison.Ordinal) < 0 && m.Source.IndexOf("search_fields", StringComparison.Ordinal) < 0
-            && m.Source.IndexOf("fields", StringComparison.Ordinal) < 0 && m.Source.IndexOf("queryset", StringComparison.Ordinal) < 0) yield break;
+            && m.Source.IndexOf("fields", StringComparison.Ordinal) < 0 && m.Source.IndexOf("queryset", StringComparison.Ordinal) < 0 && m.Source.IndexOf("db_field", StringComparison.Ordinal) < 0) yield break;
         if (m.Source.IndexOf("django", StringComparison.OrdinalIgnoreCase) < 0 && m.Source.IndexOf("rest_framework", StringComparison.Ordinal) < 0) yield break;
         var admins = AdminModelsOf(snap);
         foreach (var literal in AstChildren.Descendants(m.Ast).OfType<ConstExpr>())
@@ -209,9 +217,12 @@ public sealed partial class LanguageService
             if (c.Rule.Mode == "field")
             {
                 var names = MetaNames(ev, c);
+                var kinds = FormfieldKinds(c.Attr);
                 if (!names.Contains(path))
                     message = $"'{path}' is not a field of {c.Model.Name}" + (c.Rule.Lenient ? $" or a method or property of {c.Owner.Name} or the model" : "")
-                        + $". Choices are: {string.Join(", ", ev.DjangoFieldsOf(c.Model).Select(f => f.Name).Take(12))}";
+                        + $". Choices are: {string.Join(", ", ev.DjangoFieldsOf(c.Model).Where(f => kinds == null || kinds.Contains(f.Kind)).Select(f => f.Name).Take(12))}";
+                else if (kinds != null && ev.DjangoFieldNamed(c.Model, path) is { } field && !kinds.Contains(field.Kind))
+                    message = $"{c.Attr} is only called for {(kinds.Length > 1 ? "ForeignKey and OneToOneField" : "ManyToManyField")} fields; '{path}' of {c.Model.Name} is a {field.FieldClass.Name}";
             }
             else
             {
@@ -223,6 +234,23 @@ public sealed partial class LanguageService
             if (message == null) continue;
             var finding = new Finding(span.Start, span.End - span.Start, message, "django-meta-field", FindingLevel.Warning);
             if (!Suppressed(m.Source, finding)) yield return AsDiag(finding);
+        }
+
+        // the functions list_display calls with each object take that one argument
+        foreach (var cd in AstChildren.Descendants(m.Ast).OfType<ClassDef>().ToList())
+        {
+            if (ClassInfoOf(m, cd, ev) is not { } admin || (admins.GetValueOrDefault(admin) ?? ev.DjangoAdminModel(admin)) is not { } model) continue;
+            foreach (var entry in TypeEvaluator.DjangoAdminCallableEntries(cd))
+            {
+                if (ev.TypeOf(m, entry) is not FunctionType { Info: { Owner: null, Node: FunctionDef fd } fn }) continue;
+                var positional = fd.Params.Where(p => p.Kind == ParamKind.Normal).ToList();
+                bool varargs = fd.Params.Any(p => p.Kind == ParamKind.VarArgs);
+                int required = positional.Count(p => p.Default == null);
+                if (required <= 1 && (positional.Count >= 1 || varargs)) continue;
+                var finding = new Finding(entry.Start, entry.End - entry.Start,
+                    $"The admin calls {fn.Name} with each {model.Name}: it must take one argument, it takes {(required > 1 ? required.ToString() : "none")}", "django-meta-field", FindingLevel.Warning);
+                if (!Suppressed(m.Source, finding)) yield return AsDiag(finding);
+            }
         }
     }
 
@@ -313,9 +341,11 @@ public sealed partial class LanguageService
         var items = new List<CompletionItem>();
         if (c.Rule.Mode == "field")
         {
+            var kinds = FormfieldKinds(c.Attr);
             foreach (var name in MetaNames(ev, c).Where(n => n.StartsWith(path, StringComparison.Ordinal)).OrderBy(n => n, StringComparer.Ordinal))
             {
                 var field = ev.DjangoFieldNamed(c.Model, name);
+                if (kinds != null && (field == null || !kinds.Contains(field.Kind))) continue;
                 items.Add(new CompletionItem(name, field != null ? CompletionKind.Field : CompletionKind.Property, field?.Kind ?? "attribute", (field != null ? "0" : "1") + name));
             }
             return items;

@@ -11,7 +11,7 @@ public class DjangoMetaTests
         ("django/forms/__init__.py", "class BaseForm:\n    def __init__(self, *args, **kwargs): ...\n\n\nclass BaseModelForm(BaseForm):\n    def save(self, commit=True): ...\n\n\nclass ModelForm(BaseModelForm): ...\n\n\nclass CharField: ...\n"),
         ("django/contrib/__init__.py", ""),
         ("django/contrib/admin/__init__.py",
-            "class BaseModelAdmin: ...\n\n\nclass ModelAdmin(BaseModelAdmin):\n    def save_model(self, request, obj, form, change): ...\n\n\nclass InlineModelAdmin(BaseModelAdmin): ...\n\n\nclass TabularInline(InlineModelAdmin): ...\n\n\n" +
+            "class BaseModelAdmin: ...\n\n\nclass ModelAdmin(BaseModelAdmin):\n    def save_model(self, request, obj, form, change): ...\n\n    def get_queryset(self, request): ...\n\n    def formfield_for_foreignkey(self, db_field, request, **kwargs): ...\n\n\nclass InlineModelAdmin(BaseModelAdmin): ...\n\n\nclass TabularInline(InlineModelAdmin): ...\n\n\n" +
             "def register(*models, site=None):\n    def decorator(cls):\n        return cls\n    return decorator\n\n\nclass AdminSite:\n    def register(self, model_or_iterable, admin_class=None, **options): ...\n\n\nsite = AdminSite()\n"),
         ("rest_framework/__init__.py", ""),
         ("rest_framework/serializers.py", "class Serializer:\n    def save(self, **kwargs): ...\n\n\nclass ModelSerializer(Serializer): ...\n\n\nclass CharField: ...\n"),
@@ -192,5 +192,47 @@ public class DjangoMetaTests
         svc.SourceRoots.Insert(0, dir);
         svc.SetInspection("django-meta-field", "off");
         Assert.Equal(0, svc.Diagnostics(uri).Count(d => d.Code == "django-meta-field"));
+    }
+
+    // ------------------------------------------------------------ get_queryset, formfield_for_*, callables of list_display (item 201)
+
+    const string Registered = "from django.contrib import admin\nfrom shop.models import Book\n\n\n@admin.register(Book)\nclass BookAdmin(admin.ModelAdmin):\n";
+
+    [Fact]
+    public void GetQuerysetOfAnAdminIsAQuerysetOfItsModel()
+    {
+        var (svc, uri, pos) = Open("admin.py", Registered + "    def get_queryset(self, request):\n        qs = super().get_queryset(request)\n        book = qs.first()\n        bo§ok\n");
+        Assert.Contains("Book", svc.Hover(uri, pos)!.Contents.Value);
+        var (svc2, uri2, pos2) = Open("admin.py", Registered + "    def changelist(self, request):\n        q§s = self.get_queryset(request)\n");
+        Assert.Contains("QuerySet", svc2.Hover(uri2, pos2)!.Contents.Value);
+    }
+
+    [Fact]
+    public void FormfieldForForeignkeyNamesAForeignKeyOfTheModel()
+    {
+        string code = Registered + "    def formfield_for_foreignkey(self, db_field, request, **kwargs):\n        if db_field.name == \"autor\":\n            pass\n        if db_field.name in (\"author\", \"title\"):\n            pass\n        return super().formfield_for_foreignkey(db_field, request, **kwargs)\n";
+        var found = Problems("admin.py", code).Select(d => d.Message).ToList();
+        Assert.Equal(2, found.Count);
+        Assert.True(found.Any(m => m.Contains("'autor' is not a field of Book") && m.Contains("author") && !m.Contains("pages")), string.Join(" | ", found));
+        Assert.True(found.Any(m => m.Contains("only called for ForeignKey") && m.Contains("'title'")), string.Join(" | ", found));
+        var (svc, uri, pos) = Open("admin.py", code.Replace("\"autor\"", "\"a§\""));
+        var labels = svc.Completion(uri, pos).Select(i => i.Label).ToList();
+        Assert.True(labels.Contains("author") && !labels.Contains("title"), string.Join(", ", labels));
+    }
+
+    [Fact]
+    public void AFunctionListDisplayCallsGetsTheModelFromAnotherModule()
+    {
+        var b = DjangoFixture.Service().With("shop/__init__.py", "").With("shop/models.py", Models);
+        foreach (var (p, t) in Libraries) b.With(p, t);
+        string display = "def short_title(book):\n    return book\n\n\ndef both(book, other):\n    return book\n";
+        b.With("shop/display.py", display);
+        b.With("shop/admin.py", Registered.Replace("from shop.models import Book\n", "from shop.models import Book\nfrom shop import display\n") + "    list_display = (\"title\", display.short_title, display.both)\n");
+        var svc = b.Service;
+        var hover = svc.Hover(Shop + "display.py", new LineMap(display).PositionOf(display.IndexOf("book\n") + 1));
+        Assert.Contains("Book", hover!.Contents.Value);
+        var found = svc.Diagnostics(Shop + "admin.py").Where(d => d.Code == "django-meta-field").Select(d => d.Message).ToList();
+        Assert.Equal(1, found.Count);
+        Assert.Contains("calls both with each Book", found[0]);
     }
 }
