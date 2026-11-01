@@ -1830,6 +1830,22 @@ describe('a notebook: objects in the Variables window, Debug Cell, the console, 
     });
 });
 
+// a repository of its own for a test: the project as it is, committed as 'start' on main (PyMagic's own files, which change while it runs, stay out)
+function freshRepo() {
+    const git = (...args) => {
+        const r = spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8' });
+        assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+    };
+    rmSync(join(projectRoot, '.git'), { recursive: true, force: true });
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.name', 'Tester');
+    git('config', 'user.email', 'tester@example.com');
+    git('config', 'core.autocrlf', 'false');
+    writeFileSync(join(projectRoot, '.git', 'info', 'exclude'), ['.pymagic/', 'nb_demo.ipynb', ''].join(String.fromCharCode(10)));
+    git('add', '-A');
+    git('commit', '-q', '-m', 'start');
+}
+
 describe('git: the Log graph, its filters and actions, and the toolbar on a change marker', () => {
     const git = (...args) => {
         const r = spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8' });
@@ -1839,6 +1855,7 @@ describe('git: the Log graph, its filters and actions, and the toolbar on a chan
     const setField = (id, value) => page.evaluate(`(() => { const e = ${$(id)}; e.value = ${JSON.stringify(value)}; e.dispatchEvent(new Event(e.tagName === 'SELECT' || e.type === 'date' ? 'change' : 'input')); return true; })()`);
     const rowCount = `document.querySelectorAll('#git-log .gl[data-hash]').length`;
     test('the log draws a graph with merge lines and labels, filters, and acts on a commit', async () => {
+        freshRepo();
         git('config', 'user.name', 'Tester');
         git('config', 'user.email', 'tester@example.com');
         git('switch', '-q', 'main');
@@ -1901,6 +1918,7 @@ describe('git: the Log graph, its filters and actions, and the toolbar on a chan
     });
 
     test('a click on a change marker shows Revert, Show diff and the next and previous change', async () => {
+        freshRepo();
         await open('hist.py');
         await page.evaluate(`(() => { const ed = window.pymagic.editor; const m = ed.getModel(); const n = m.getLineCount(); const R = window.pymagic.monaco.Range;
             ed.executeEdits('t', [{ range: new R(2, 1, 2, 1), text: '    x = 1' + String.fromCharCode(10) }, { range: new R(n, 1, n, 1), text: '# tail' + String.fromCharCode(10) }]); return true; })()`);
@@ -1911,7 +1929,7 @@ describe('git: the Log graph, its filters and actions, and the toolbar on a chan
             await page.waitFor(`document.querySelector('.git-popup')`, 5000, 'the popup');
         };
         await clickBar(0);
-        assert.equal(await page.evaluate(`[...document.querySelectorAll('.git-popup button')].map((b) => b.textContent).join(',')`), 'Revert,Show diff,↑,↓');
+        assert.equal(await page.evaluate(`[...document.querySelectorAll('.git-popup button')].map((b) => b.textContent).join(',')`), 'Revert,Show diff,Commit lines…,↑,↓');
         // next: the cursor goes to the second change and the popup follows it
         await page.evaluate(`document.querySelector('.git-popup .git-next-change').click()`);
         await page.waitFor(`window.pymagic.editor.getPosition().lineNumber >= 4 && document.querySelector('.git-popup')`, 5000, 'the second change').catch(async (e) => { throw new Error(e.message + ' ' + (await page.evaluate(`JSON.stringify([window.pymagic.editor.getPosition(), document.querySelector('.git-popup')?.textContent, [...document.querySelectorAll('.git-bar-added, .git-bar-modified, .git-bar-deleted')].map((b) => b.className + Math.round(b.getBoundingClientRect().top)),window.pymagic.editor.getModel().getValue()])`))); });
@@ -1950,6 +1968,11 @@ describe('changelists, the shelf, and choosing lines from the editor gutter', ()
     const status = () => git('status', '--porcelain').split(NL).filter(Boolean).map((l) => l.slice(3)).sort();
 
     test('a changelist commits only its own files, the shelf puts files away and back, and the gutter picks lines', async () => {
+        freshRepo();
+        // the change-marker test above leaves hist.py edited in the open editor; the file as committed is what this test starts from
+        git('checkout', '--', 'hist.py');
+        await page.evaluate(`window.pymagic.editor.getModel().setValue(${JSON.stringify(readFileSync(join(projectRoot, 'hist.py'), 'utf8'))})`);
+        await sleep(3000);
         git('init', '-q', '-b', 'main');
         git('config', 'user.name', 'Tester');
         git('config', 'user.email', 'tester@example.com');
