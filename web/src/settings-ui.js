@@ -49,6 +49,7 @@ const PAGES = [
         { key: 'cursorStyle', label: 'Cursor', type: 'choice', options: [['line', 'Line'], ['block', 'Block'], ['underline', 'Underline']] },
         { key: 'cursorBlinking', label: 'Cursor blinking', type: 'choice', options: [['blink', 'Blink'], ['smooth', 'Smooth'], ['phase', 'Phase'], ['expand', 'Expand'], ['solid', 'None']] },
         { key: 'callParens', label: 'Add parentheses when completing a function', type: 'bool', hint: 'Choosing `area` writes `area()`, with the cursor inside when it takes arguments. Off: only the name.' },
+        { key: 'quotes', label: 'String quotes', type: 'choice', options: [['single', "Single: 'text'"], ['double', 'Double: "text" (black)'], ['preserve', 'As written']], hint: 'What Format gives strings when the project\'s pyproject.toml, ruff.toml or .editorconfig does not say (their quote-style wins). black has no single quotes: with it, quotes are kept as written.' },
     ]],
     ['hints', 'Code vision and hints', [
         { key: 'codeVision', label: 'Usages and inheritors above functions and classes', type: 'bool', hint: 'A click lists them.' },

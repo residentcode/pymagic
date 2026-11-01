@@ -49,15 +49,20 @@ public static class FormatConfig
     /// and ruff find it). A project root without a formatter section means the defaults. What those files do not say
     /// is taken from the .editorconfig files that apply to the file.
     /// </summary>
-    public static FormatOptions For(string filePath)
+    /// <param name="defaultQuotes">The quotes when neither the project nor .editorconfig names them (PyMagic's setting); null for black's double quotes.</param>
+    public static FormatOptions For(string filePath, QuoteStyle? defaultQuotes = null)
     {
         var fromEditor = FromEditorConfig(EditorConfig.For(filePath));
         var fromProject = ProjectSettings(filePath, out string? source);
         var merged = new FormatSettings(
-            fromProject.LineLength ?? fromEditor.LineLength, fromProject.Quotes ?? fromEditor.Quotes, fromProject.MagicTrailingComma ?? fromEditor.MagicTrailingComma,
+            fromProject.LineLength ?? fromEditor.LineLength, fromProject.Quotes ?? fromEditor.Quotes ?? defaultQuotes, fromProject.MagicTrailingComma ?? fromEditor.MagicTrailingComma,
             fromProject.IndentWidth ?? fromEditor.IndentWidth, fromProject.UseTabs ?? fromEditor.UseTabs, fromProject.Endings ?? fromEditor.Endings, fromProject.Imports, fromProject.ParenthesizedWith, fromProject.CommaAfterStar);
         return merged.ToOptions(source);
     }
+
+    /// <summary>Whether the project's configuration or .editorconfig names a quote style for the file.</summary>
+    public static bool QuotesStated(string filePath) =>
+        ProjectSettings(filePath, out _).Quotes != null || FromEditorConfig(EditorConfig.For(filePath)).Quotes != null;
 
     static FormatSettings ProjectSettings(string filePath, out string? source)
     {

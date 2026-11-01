@@ -49,7 +49,8 @@ import { setupHistory } from './history';
 import { setupFileActions, fileTypes } from './fileactions';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
-import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings, withoutCallParens } from './settings';
+import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings, withoutCallParens, onSettings } from './settings';
+import { requote } from './quotes-model';
 // each language service runs in its worker; the rest share the editor's
 self.MonacoEnvironment = {
     getWorker: (_id, label) => new Worker(
@@ -920,6 +921,25 @@ async function main() {
     defineLightTheme(monaco);
     await loadSettings();
     // the main editor and the right side of a split are made alike
+    // a quote typed over a selected string changes its quotes ("pen" with ' gives 'pen') instead of wrapping it ('"pen"'), in every editor
+    monaco.editor.onDidCreateEditor((ed) => ed.onKeyDown((e) => {
+        const key = e.browserEvent.key;
+        if ((key !== "'" && key !== '"') || e.ctrlKey || e.altKey || e.metaKey)
+            return;
+        const model = ed.getModel(), selections = ed.getSelections();
+        if (!model || !selections?.length || ed.getOption(monaco.editor.EditorOption.readOnly) || selections.some((s) => s.isEmpty()))
+            return;
+        const texts = selections.map((s) => requote(model.getValueInRange(s), key));
+        if (texts.some((t) => t === null))
+            return;
+        e.preventDefault();
+        e.stopPropagation();
+        ed.pushUndoStop();
+        ed.executeEdits('requote', selections.map((s, i) => ({ range: s, text: texts[i], forceMoveMarkers: true })),
+            // the string stays selected (a triple-quoted one over several lines keeps its length: only its quotes change)
+            selections.map((s, i) => new monaco.Selection(s.startLineNumber, s.startColumn, s.endLineNumber, s.startLineNumber === s.endLineNumber ? s.startColumn + texts[i].length : s.endColumn)));
+        ed.pushUndoStop();
+    }));
     const createEditor = (el) => monaco.editor.create(el, {
         theme: THEMES[themeNow()],
         automaticLayout: true,
@@ -1161,6 +1181,16 @@ async function main() {
     await lsp.connect(`${scheme}://${location.host}/lsp`);
     await lsp.request('initialize', { processId: null, rootUri, capabilities: {} });
     lsp.notify('initialized', {});
+    // the quotes Format gives strings when the project does not say (Settings, Editor)
+    let quotesSent = null;
+    const sendQuotes = () => {
+        if (settings().quotes === quotesSent)
+            return;
+        quotesSent = settings().quotes;
+        void lsp.request('pymagic/setFormatDefaults', { quotes: quotesSent });
+    };
+    sendQuotes();
+    onSettings(sendQuotes);
     registerProviders();
     void refreshFormatters();
     const files = await (await fetch('/api/files')).json();

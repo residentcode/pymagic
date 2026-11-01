@@ -76,4 +76,27 @@ public class FormatTextTests
         Assert.Equal("a=1\nb = 2\n%time c=3\nd=4", svc.FormatText(cell, Uri, range: range));
         Assert.Equal("a = 1\nb = 2\n%time c=3\nd = 4", svc.FormatText(cell, Uri));
     }
+
+    [Fact]
+    public void ThePagesQuoteSettingIsUsedWhenTheProjectDoesNotNameOne()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "pm_quotes_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "other"));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "pyproject.toml"), "[project]\nname = 'shop'\n");
+            string uri = new Uri(Path.Combine(root, "tests.py")).AbsoluteUri;
+            const string code = "r = client.get(\"/shop/about/\")\ns = \"it's\"\n";
+            var svc = new LanguageService();
+            Assert.Equal(code, svc.FormatText(code, uri));   // black's double quotes without the setting
+            svc.DefaultQuotes = PyMagic.Server.Formatting.QuoteStyle.Single;
+            Assert.Equal("r = client.get('/shop/about/')\ns = \"it's\"\n", svc.FormatText(code, uri));   // single, unless that needs an escape
+            // a project that names its quote style keeps it
+            File.WriteAllText(Path.Combine(root, "other", "pyproject.toml"), "[tool.ruff.format]\nquote-style = \"double\"\n");
+            string other = new Uri(Path.Combine(root, "other", "a.py")).AbsoluteUri;
+            Assert.Equal("x = \"a\"\n", svc.FormatText("x = 'a'\n", other));
+        }
+        finally { Directory.Delete(root, true); }
+    }
 }
+

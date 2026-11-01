@@ -46,15 +46,22 @@ public sealed partial class LanguageService
     static string FilePathOf(string uri) =>
         uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ? new Uri(uri).LocalPath : "main.py";
 
+    /// <summary>The quotes strings get when the project's pyproject.toml, ruff.toml or .editorconfig does not say (the page's
+    /// setting, single quotes by default there); null keeps black's double quotes.</summary>
+    public QuoteStyle? DefaultQuotes { get; set; }
+
     /// <summary>The settings the built-in formatter uses for a file: from pyproject.toml or ruff.toml of its project, else black's defaults.</summary>
     public FormatOptions FormatConfigOf(string uri) =>
-        uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ? FormatConfig.For(FilePathOf(uri)) : FormatOptions.Default;
+        uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ? FormatConfig.For(FilePathOf(uri), DefaultQuotes)
+            : DefaultQuotes is { } q ? FormatOptions.Default with { Quotes = q } : FormatOptions.Default;
 
     /// <summary>Formats text with black or ruff and checks that what came back is still Python.</summary>
     string RunExternal(string engine, string text, string uri, (int, int)? lines = null)
     {
         if (!ExternalFormatter.Tools.Contains(engine)) throw new ServiceException($"Unknown formatter '{engine}'.");
-        string result = ExternalFormatter.Format(FormatterPython, engine, text, FilePathOf(uri), lines, FormatterTarget);
+        // PyMagic's quote setting, when the project does not name one: ruff is told it; black has no single quotes, so it leaves them as written
+        var quotes = DefaultQuotes is { } q && q != QuoteStyle.Double && !FormatConfig.QuotesStated(FilePathOf(uri)) ? q : (QuoteStyle?)null;
+        string result = ExternalFormatter.Format(FormatterPython, engine, text, FilePathOf(uri), lines, FormatterTarget, quotes);
         if (PyMagic.Core.Syntax.Parser.Parse(result).Diagnostics.Count > 0)
             throw new ServiceException($"{engine} returned text that does not parse; the file was left as it is.");
         return result;

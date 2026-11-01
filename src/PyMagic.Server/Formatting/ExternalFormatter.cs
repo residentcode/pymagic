@@ -27,12 +27,14 @@ public static class ExternalFormatter
     /// <param name="filePath">Where the text lives, so that the tool finds the project's pyproject.toml.</param>
     /// <param name="lines">1-based first and last line to format (black only); null for the whole text.</param>
     /// <exception cref="ServiceException">The tool is not installed, rejects the text, or takes too long.</exception>
-    public static string Format(string python, string tool, string source, string filePath, (int First, int Last)? lines = null, ExecutionTarget? target = null)
+    /// <param name="quotes">Single or Preserve: the quotes to keep when the project does not say (ruff's quote-style; black only preserves, -S).</param>
+    public static string Format(string python, string tool, string source, string filePath, (int First, int Last)? lines = null, ExecutionTarget? target = null, QuoteStyle? quotes = null)
     {
         var args = new List<string> { "-m", tool };
         if (tool == "black")
         {
             args.Add("-q");
+            if (quotes != null) args.Add("--skip-string-normalization");
             if (lines != null)
             {
                 // --line-ranges arrived in 23.11
@@ -49,6 +51,7 @@ public static class ExternalFormatter
         else
         {
             args.Add("format");
+            if (quotes != null) { args.Add("--config"); args.Add($"format.quote-style = \"{(quotes == QuoteStyle.Single ? "single" : "preserve")}\""); }
             args.Add("--stdin-filename"); args.Add(filePath);
             args.Add("-");
         }

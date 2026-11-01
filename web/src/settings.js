@@ -33,6 +33,7 @@ export const DEFAULTS = {
     hintParams: true,         // the names of parameters before arguments
     hintTypes: true,          // inferred return and variable types, the types along a method chain
     callParens: true,         // completing a function or method writes its parentheses too, `area()` or `area(|)`
+    quotes: 'single',         // single | double | preserve: the quotes the formatter gives strings when the project's pyproject.toml, ruff.toml or .editorconfig does not say
 };
 
 /** A completion's text as the settings want it: without the call's parentheses when those are not to be written. */

@@ -159,4 +159,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 222 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 223 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

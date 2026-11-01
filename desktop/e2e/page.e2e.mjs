@@ -11,6 +11,7 @@ const FILES = {
     'calc.py': 'import json\n\n\ndef total(prices):\n    """The sum of the prices."""\n    return sum(prices)\n\n\nprint(json.dumps({"total": total([1, 2, 3])}))\nprint(undefined_name)\n',
     'loop.py': 'import time\n\n\ndef spin():\n    count = 0\n    while count < 2000:\n        count += 1\n        time.sleep(0.05)\n\n\nprint("started", flush=True)\nspin()\n',
     'fmt.py': 'x=1\nif x :\n  y=[1,2 ,3]\n',
+    'quotes.py': 'url = "/shop/about/"\nname = "pen"\nsaid = "it\'s"\n',
     'tests/__init__.py': '',
     'tests/test_calc.py': 'import unittest\n\n\nclass Calc(unittest.TestCase):\n    def test_ok(self):\n        self.assertEqual(1 + 1, 2)\n\n    def test_bad(self):\n        self.assertEqual(1 + 1, 3)\n',
 };
@@ -72,6 +73,18 @@ describe('the editor and the language server', () => {
         await page.evaluate(`window.pymagic.editor.getAction('editor.action.formatDocument').run()`);
         const text = await page.waitFor(`(() => { const t = window.pymagic.editor.getValue(); return t.startsWith('x = 1') ? t : null; })()`, 15000, 'the formatted text');
         assert.equal(text, 'x = 1\nif x:\n    y = [1, 2, 3]\n');
+    });
+
+    test('a quote typed over a selected string changes its quotes, and Format gives single quotes by default', async () => {
+        await open('quotes.py');
+        // select "/shop/about/" with its quotes and type '
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setSelection(new window.pymagic.monaco.Selection(1, 7, 1, 21)); ed.focus(); })()`);
+        await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: "'", code: 'Quote', text: "'", windowsVirtualKeyCode: 222 });
+        await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: "'", code: 'Quote', windowsVirtualKeyCode: 222 });
+        assert.equal(await page.evaluate('window.pymagic.editor.getModel().getLineContent(1)'), "url = '/shop/about/'");
+        await page.evaluate(`window.pymagic.editor.getAction('editor.action.formatDocument').run()`);
+        const text = await page.waitFor(`(() => { const t = window.pymagic.editor.getValue(); return t.includes("name = 'pen'") ? t : null; })()`, 15000, 'the formatted text');
+        assert.equal(text, "url = '/shop/about/'\nname = 'pen'\nsaid = \"it's\"\n");
     });
 });
 

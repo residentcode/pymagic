@@ -340,6 +340,10 @@ public sealed class Server
                 _service.ResetInspections();
                 RepublishAll();
                 return null;
+            case "pymagic/setFormatDefaults":
+                // the page's quote setting: the quotes strings get when the project's configuration does not name them
+                _service.DefaultQuotes = p?["quotes"]?.GetValue<string>() switch { "single" => Formatting.QuoteStyle.Single, "preserve" => Formatting.QuoteStyle.Preserve, "double" => Formatting.QuoteStyle.Double, _ => null };
+                return null;
             case "pymagic/formatConfig":
                 return _service.FormatConfigOf(UriOf(p));
             case "pymagic/formatText":
