@@ -947,12 +947,18 @@ app.MapPost("/api/interpreter", async (HttpRequest req) =>
 });
 
 // WSL distributions and Docker images an interpreter can be taken from
-app.MapGet("/api/interpreter/targets", async () => await Task.Run(() => new
+app.MapGet("/api/interpreter/targets", async (string? composeFile) => await Task.Run(() => new
 {
     wsl = WslTarget.Distros(),
     ssh = new { installed = SshTarget.Installed(), hosts = SshConfigHosts() },
     docker = new { available = DockerTarget.Available() },
     dockerImages = DockerTarget.Available() ? DockerTarget.Images() : Array.Empty<string>(),
+    // the services of the project's compose file (or the one named): listing them needs no running engine
+    compose = new
+    {
+        file = string.IsNullOrWhiteSpace(composeFile) ? (ComposeTarget.FindFile(root) is { } cf ? Path.GetRelativePath(root, cf) : null) : composeFile,
+        services = ComposeTarget.Services(root, string.IsNullOrWhiteSpace(composeFile) ? null : composeFile),
+    },
 }));
 
 // the names in the user's ~/.ssh/config that can be connected to (wildcard entries are patterns, not hosts)
@@ -980,13 +986,26 @@ app.MapPost("/api/interpreter/remote", async (HttpRequest req) =>
     {
         "wsl" => new WslTarget(name),
         "docker" => new DockerTarget(name),
+        "compose" => ComposeTarget.FromHead(name + ComposeOptions(body)),
         "ssh" => SshTarget.FromHead(name + (identity.Length > 0 || knownHosts.Length > 0 ? "?" + string.Join("&", new[] { identity.Length > 0 ? "i=" + identity : "", knownHosts.Length > 0 ? "kh=" + knownHosts : "" }.Where(x => x.Length > 0)) : ""))!,
         _ => null!,
     };
-    if (target == null) return Results.BadRequest(new { error = kind == "ssh" ? "that is not an address: write user@host or user@host:port" : "the kind is wsl, docker or ssh" });
+    if (target == null) return Results.BadRequest(new { error = kind == "ssh" ? "that is not an address: write user@host or user@host:port" : kind == "compose" ? "give the name of a service of the compose file" : "the kind is wsl, docker, compose or ssh" });
     try { return Results.Json(Describe(await Task.Run(() => interpreters.AddRemote(target, py)))); }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
 });
+
+// "?f=file&exec=1&w=/app" for a compose service, from {composeFile, exec, composeDir} of the request
+static string ComposeOptions(JsonNode? body)
+{
+    string file = body?["composeFile"]?.GetValue<string>()?.Trim() ?? "", dir = body?["composeDir"]?.GetValue<string>()?.Trim() ?? "";
+    bool exec = body?["exec"]?.GetValue<bool>() == true;
+    var o = new List<string>();
+    if (file.Length > 0) o.Add("f=" + file);
+    if (exec) o.Add("exec=1");
+    if (exec && dir.Length > 0) o.Add("w=" + dir);
+    return o.Count > 0 ? "?" + string.Join("&", o) : "";
+}
 
 app.MapDelete("/api/interpreter/remote", (string spec) => { interpreters.ForgetRemote(spec); return Results.NoContent(); });
 
