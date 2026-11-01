@@ -266,7 +266,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         if (!state.varsOpen) return;
         const head = el('div', 'nb-vars-head', `Variables (${state.vars.length})`);
         if (!state.vars.length) {
-            const why = state.server ? 'The Variables window needs the built-in kernel: a Jupyter server does not send its names here' : 'Nothing yet: run a cell and the names it leaves are listed here';
+            const why = state.server ? 'Nothing yet: run a cell and the names it leaves are asked of the Jupyter server (an IPython kernel is needed; the answer comes when the cell is done)' : 'Nothing yet: run a cell and the names it leaves are listed here';
             box.replaceChildren(head, el('div', 'nb-empty', why));
             return;
         }
@@ -813,7 +813,6 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         const input = state.consoleInput;
         const target = completionTarget(input.value, input.selectionStart);
         if (!target) return false;
-        if (state.server) { toast('Completion in the console needs the built-in kernel: a Jupyter server is asked for nothing here', true); return true; }
         const id = `k${state.nextId++}`;
         state.completing = { id, target, text: input.value, cursor: input.selectionStart };
         whenOpen(state, () => send(state, { type: 'complete', id, prefix: target.prefix }));
@@ -984,6 +983,33 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         use.onclick = () => { useServer(state, chosen === BUILT_IN_SERVER.id ? null : servers.find((x) => x.id === chosen) ?? null); done(); };
         const close = el('button', '', 'Close');
         close.onclick = done;
+        // a server on this computer, started with the project's Python (it needs jupyter_server and ipykernel there; nothing is installed for you)
+        const startLocal = el('button', '', 'Start one on this computer');
+        startLocal.id = 'nb-server-local-start';
+        startLocal.title = "Runs `python -m jupyter_server` with the project's interpreter, on a port of this computer only, with a token made now";
+        startLocal.onclick = async () => {
+            startLocal.disabled = true;
+            say("Starting a Jupyter server with the project's Python…");
+            let r;
+            try { r = await (await fetch('/api/jupyter/local/start', { method: 'POST' })).json(); } catch (e) { r = { ok: false, message: e.message }; }
+            startLocal.disabled = false;
+            if (!r.ok) { say(r.message, true); return; }
+            const s = normalizeServer({ name: 'This computer (Jupyter)', url: r.url, token: r.token });
+            servers = addServer(servers, s);
+            store.set(SERVERS_KEY, JSON.stringify(servers));
+            chosen = s.id;
+            say(`${r.message} Choose "Use for this notebook" to run on it.`);
+            paint();
+        };
+        const stopLocal = el('button', '', 'Stop it');
+        stopLocal.id = 'nb-server-local-stop';
+        stopLocal.title = 'Stops the server that PyMagic started (the notebooks on it lose their variables)';
+        stopLocal.onclick = async () => {
+            await fetch('/api/jupyter/local/stop', { method: 'POST' }).catch(() => null);
+            say('The server that PyMagic started was stopped.');
+        };
+        const localRow = el('div', 'nb-server-local');
+        localRow.append(startLocal, stopLocal);
         const form = el('div', 'nb-server-form');
         form.append(name.wrap, url.wrap, token.wrap, kernel.wrap);
         const addRow = el('div', 'ask-buttons');
@@ -993,7 +1019,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         box.append(
             el('div', 'ask-title', 'Kernel and Jupyter servers'),
             el('div', 'ask-hint', 'A notebook runs on the built-in kernel (PyMagic starts Python itself) or on a Jupyter server you started yourself, here or on another computer: type its address and token. The token is kept in this browser profile.'),
-            list, el('div', 'nb-server-sub', 'Add a Jupyter server'), form, addRow, message, buttons);
+            list, el('div', 'nb-server-sub', 'On this computer'), localRow, el('div', 'nb-server-sub', 'Add a Jupyter server'), form, addRow, message, buttons);
         shade.append(box);
         shade.onmousedown = (e) => { if (e.target === shade) done(); };
         shade.onkeydown = (e) => { if (e.key === 'Escape') done(); };

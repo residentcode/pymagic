@@ -205,6 +205,17 @@ app.MapPost("/api/jupyter/probe", async (HttpRequest req) =>
     var body = await JsonNode.ParseAsync(req.Body);
     return Results.Json(await JupyterKernel.Probe(body?["url"]?.GetValue<string>() ?? "", body?["token"]?.GetValue<string>() ?? ""));
 });
+// a Jupyter server on this computer, started with the project's Python (nothing is installed: when it has no jupyter_server, the answer says so)
+app.MapPost("/api/jupyter/local/start", async () =>
+{
+    var current = interpreters.Current;
+    if (current != null && !current.Target.IsLocal)
+        return Results.Json(new JsonObject { ["ok"] = false, ["message"] = "A Jupyter server on this computer needs a local interpreter: the project uses " + current.Target.Kind });
+    return Results.Json(await LocalJupyter.Start(current?.Python ?? python ?? "", root));
+});
+app.MapGet("/api/jupyter/local", () => Results.Json(LocalJupyter.Status()));
+app.MapPost("/api/jupyter/local/stop", () => { LocalJupyter.Stop(); return Results.NoContent(); });
+app.Lifetime.ApplicationStopping.Register(LocalJupyter.Stop);
 // reStructuredText as HTML by docutils, when the project's Python has it: {text}
 app.MapPost("/api/rst", async (HttpRequest req) =>
 {

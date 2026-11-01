@@ -91,7 +91,7 @@ FILES['nb_more.ipynb'] = JSON.stringify({
     metadata: {}, nbformat: 4, nbformat_minor: 5,
 }, null, 1) + '\n';
 
-let app, page;
+let app, page, stubSite;
 const $ =(id) => `document.getElementById(${JSON.stringify(id)})`;
 // the file stays in the editor: on a fresh start PyMagic opens a file of its own, which can land after this one
 const open = async (rel) => {
@@ -158,6 +158,37 @@ before(async () => {
     // a GitHub of this run's own (a server on this computer): the engine is told to use it instead of api.github.com, which is never contacted
     forge = await startFakeForge();
     process.env.PYMAGIC_GITHUB_API = forge.base;
+    // no Jupyter is installed for the checks: a package of this run's own called jupyter_server (on the app's PYTHONPATH) stands in for it
+    stubSite = mkdtempSync(join(tmpdir(), 'pymagic-e2e-jupyter-'));
+    mkdirSync(join(stubSite, 'jupyter_server'));
+    writeFileSync(join(stubSite, 'jupyter_server', '__init__.py'), '');
+    writeFileSync(join(stubSite, 'jupyter_server', '__main__.py'), String.raw`import sys, os, json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+port = 0
+for a in sys.argv[1:]:
+    if a.startswith("--port="):
+        port = int(a.split("=", 1)[1])
+token = os.environ.get("JUPYTER_TOKEN", "")
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def do_GET(self):
+        if self.headers.get("Authorization") != "token " + token:
+            self.send_response(403)
+            self.end_headers()
+            return
+        if self.path == "/api/kernelspecs":
+            body = json.dumps({"default": "python3", "kernelspecs": {"python3": {}}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+HTTPServer(("127.0.0.1", port), H).serve_forever()
+`);
+    process.env.PYTHONPATH = stubSite;
     app = await launch(root);
     page = app.page;
 });
@@ -1833,6 +1864,26 @@ describe('a notebook: objects in the Variables window, Debug Cell, the console, 
         assert.equal(await page.evaluate(`fetch('/api/notebook/view?id=0000').then((r) => r.status)`), 404);
     });
 
+    test('the servers window starts a Jupyter server on this computer, with a token, and stops it', async () => {
+        await nb(`(s.serverBtn.click(), 1)`);
+        await page.waitFor(`document.getElementById('nb-server-local-start')`, 5000, 'the servers window');
+        await page.evaluate(`document.getElementById('nb-server-local-start').click()`);
+        await page.waitFor(`/runs on this computer \\(http:\\/\\/127\\.0\\.0\\.1:\\d+\\)/.test(document.querySelector('.nb-server-msg')?.textContent ?? '')`, 60000, 'the server to start');
+        assert.match(await page.evaluate(`document.querySelector('.nb-servers').textContent`), /This computer \(Jupyter\)/);
+        const status = await page.evaluate(`fetch('/api/jupyter/local').then((r) => r.json())`);
+        assert.equal(status.running, true);
+        assert.match(status.url, /^http:\/\/127\.0\.0\.1:\d+$/);
+        // the entry that was made is a server the window can test: it answers with the token that was made for it
+        await page.evaluate(`[...document.querySelectorAll('.nb-server-row')].find((r) => r.textContent.includes('This computer')).querySelector('button').click()`);
+        await page.waitFor(`/Connected/.test(document.querySelector('.nb-server-msg')?.textContent ?? '')`, 20000, 'the test of the new server');
+        await page.evaluate(`document.getElementById('nb-server-local-stop').click()`);
+        await page.waitFor(`/was stopped/.test(document.querySelector('.nb-server-msg')?.textContent ?? '')`, 10000, 'the stop');
+        assert.equal((await page.evaluate(`fetch('/api/jupyter/local').then((r) => r.json())`)).running, false);
+        // the entry goes: a stopped server with its one-time token is of no use
+        await page.evaluate(`[...document.querySelectorAll('.nb-server-row')].find((r) => r.textContent.includes('This computer')).querySelectorAll('button')[1].click()`);
+        await page.evaluate(`[...document.querySelectorAll('.ask-buttons button')].find((b) => b.textContent === 'Close').click()`);
+    });
+
     test('the server selector adds a Jupyter server by address and token and runs the notebook on it', async () => {
         const jupyter = fakeJupyter('tok-123');
         await new Promise((ok) => jupyter.server.listen(0, '127.0.0.1', ok));
@@ -1860,8 +1911,8 @@ describe('a notebook: objects in the Variables window, Debug Cell, the console, 
             assert.ok(jupyter.calls.includes('POST /api/kernels ok') && jupyter.calls.includes('WS /api/kernels/k1/channels'), jupyter.calls.join('\n'));
             assert.ok(jupyter.calls.some((c) => c.startsWith('execute "a = 4')), jupyter.calls.join('\n'));
             assert.ok(!jupyter.calls.some((c) => c.endsWith('denied') && !c.startsWith('GET /api/kernelspecs')), 'the token was sent on every call');
-            // the Variables window says why it is empty; Debug Cell says it needs the built-in kernel
-            assert.match(await nb(`s.varsEl.textContent`), /built-in kernel/);
+            // this stand-in server cannot be asked what the cells left (it is no IPython kernel), so the Variables window says it asks and waits; Debug Cell needs the built-in kernel
+            assert.match(await nb(`s.varsEl.textContent`), /asked of the Jupyter server/);
             // back to the built-in kernel: the server's kernel is deleted
             await nb(`(s.serverBtn.click(), 1)`);
             await page.waitFor(`document.querySelector('.nb-servers #nb-server-use')`, 5000, 'the servers window');

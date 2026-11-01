@@ -236,7 +236,14 @@ def report(error, filename):
     send({"type": "error", "id": _current_id, "ename": type(error).__name__, "evalue": str(error), "traceback": text})
 
 
-_HIDDEN = {"display", "__pm_shell__", "__builtins__", "__name__"}
+# <shared:begin> the Variables window, the members of a value and the words of a name: used here, and sent as text to a Jupyter server (JupyterKernel.cs)
+# (it needs `namespace`, the dict the cells run in, as a global; and nothing else of this file)
+import base64
+import builtins
+import json
+import types
+
+_HIDDEN = {"display", "__pm_shell__", "__builtins__", "__name__", "In", "Out", "get_ipython", "exit", "quit"}
 
 
 def short_repr(value, limit=120):
@@ -375,16 +382,6 @@ def inspect_path(path):
     return [describe(label, key, child) for label, key, child in child_items(value)]
 
 
-def answer_inspect(message):
-    out = {"type": "children", "id": message.get("id"), "path": message.get("path")}
-    try:
-        out["children"] = inspect_path(message.get("path") or [])
-    except BaseException as error:  # noqa: BLE001 - a value that cannot be looked into is reported, not fatal
-        out["children"] = []
-        out["error"] = "%s: %s" % (type(error).__name__, error)
-    send(out)
-
-
 _MISSING = object()
 
 
@@ -419,6 +416,54 @@ def complete_names(prefix):
     show_private = tail.startswith("_")
     found = sorted(n for n in pool if n.startswith(tail) and (show_private or not n.startswith("_")))
     return found[:200]
+
+
+# ---- what a Jupyter server gets: the answers as an application/json bundle, which is what user_expressions of an execute_request bring back
+
+class Bundle:
+    """A value that a Jupyter front end shows as JSON (IPython asks for _repr_mimebundle_)."""
+
+    def __init__(self, data):
+        self.data = data
+
+    def _repr_mimebundle_(self, include=None, exclude=None):
+        return {"application/json": self.data}
+
+    def __repr__(self):
+        return "<pm bundle>"
+
+
+def _argument(b64):
+    return json.loads(base64.b64decode(b64).decode("utf-8"))
+
+
+def jupyter_variables():
+    return Bundle({"vars": variables()})
+
+
+def jupyter_children(b64):
+    try:
+        return Bundle({"children": inspect_path(_argument(b64))})
+    except BaseException as error:  # noqa: BLE001 - a value that cannot be looked into is reported, not fatal
+        return Bundle({"children": [], "error": "%s: %s" % (type(error).__name__, error)})
+
+
+def jupyter_complete(b64):
+    try:
+        return Bundle({"items": complete_names(str(_argument(b64)))})
+    except BaseException as error:  # noqa: BLE001
+        return Bundle({"items": [], "error": "%s: %s" % (type(error).__name__, error)})
+# <shared:end>
+
+
+def answer_inspect(message):
+    out = {"type": "children", "id": message.get("id"), "path": message.get("path")}
+    try:
+        out["children"] = inspect_path(message.get("path") or [])
+    except BaseException as error:  # noqa: BLE001 - a value that cannot be looked into is reported, not fatal
+        out["children"] = []
+        out["error"] = "%s: %s" % (type(error).__name__, error)
+    send(out)
 
 
 def answer_complete(message):

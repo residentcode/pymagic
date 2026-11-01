@@ -626,3 +626,4 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 .nb-console-hint-item { background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 0 6px; font: 12px var(--mono, Consolas, monospace); cursor: pointer; }
 .nb-console-hint-item:hover { background: var(--hover); }
 .nb-console-hint-more { color: var(--dim); font-size: 12px; align-self: center; }
+.nb-server-local { display: flex; gap: 8px; padding: 2px 0 6px; }

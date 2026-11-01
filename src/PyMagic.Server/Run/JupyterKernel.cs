@@ -40,7 +40,71 @@ public sealed class JupyterKernel : INotebookKernel
     bool _readySent;
     string? _infoRequest;
 
-    sealed class Pending(string id) { public readonly string Id = id; public bool Idle; public bool Replied; public string Status = "ok"; public int? Count; }
+    sealed class Pending(string id)
+    {
+        public readonly string Id = id; public bool Idle; public bool Replied; public string Status = "ok"; public int? Count;
+        /// <summary>Set for a silent question of ours (the variables, the members of a value, the words of a name): its reply is handed on and nothing is shown.</summary>
+        public Action<JsonObject>? Answer;
+    }
+
+    // the Variables window and the console's completion work on a Jupyter server by asking its kernel with silent execute_requests that carry
+    // user_expressions: the same Python code as the built-in kernel's (the shared part of pm_kernel.py) is run there once, as a module of its own
+    bool _python;            // the kernel says it runs Python
+    bool _noQuestions;       // it did not answer a question of ours: it is not an IPython kernel, so none is asked again
+
+    static readonly Lazy<string> SharedSource = new(() =>
+    {
+        using var s = typeof(JupyterKernel).Assembly.GetManifestResourceStream("pm_kernel.py") ?? throw new InvalidOperationException("the kernel helper is missing from the assembly");
+        using var reader = new StreamReader(s, Encoding.UTF8);
+        string text = reader.ReadToEnd().Replace("\r\n", "\n");
+        int a = text.IndexOf("# <shared:begin>", StringComparison.Ordinal), b = text.IndexOf("# <shared:end>", StringComparison.Ordinal);
+        if (a < 0 || b < a) throw new InvalidOperationException("the shared part of the kernel helper is not marked");
+        return text[a..b];
+    });
+
+    /// <summary>Python that makes the module pm_jvars in the kernel, once (its names start with an underscore, so the Variables window does not list them).</summary>
+    public static string SetupCode()
+    {
+        string b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(SharedSource.Value));
+        return "import sys as _pm_sys, types as _pm_types, base64 as _pm_b64\n"
+            + "if 'pm_jvars' not in _pm_sys.modules:\n"
+            + "    _pm_mod = _pm_types.ModuleType('pm_jvars')\n"
+            + "    _pm_mod.namespace = globals()\n"
+            + $"    exec(compile(_pm_b64.b64decode('{b64}').decode('utf-8'), 'pm_jvars.py', 'exec'), _pm_mod.__dict__)\n"
+            + "    _pm_sys.modules['pm_jvars'] = _pm_mod\n";
+    }
+
+    /// <summary>A question to the kernel: a silent execute_request whose user_expressions hold one call of the shared code; <paramref name="answer"/> gets the JSON that came back (null when there was none).</summary>
+    void Ask(string expression, Action<JsonObject?> answer)
+    {
+        if (!_python || _noQuestions || _disposed) { answer(null); return; }
+        var msg = Message("execute_request", new JsonObject
+        {
+            ["code"] = SetupCode(), ["silent"] = true, ["store_history"] = false, ["allow_stdin"] = false, ["stop_on_error"] = false,
+            ["user_expressions"] = new JsonObject { ["r"] = expression },
+        });
+        string id = msg["header"]!["msg_id"]!.GetValue<string>();
+        _pending[id] = new Pending(id)
+        {
+            Answer = content =>
+            {
+                var r = content["user_expressions"]?["r"] as JsonObject;
+                var data = r?["status"]?.GetValue<string>() == "ok" ? r["data"]?["application/json"] as JsonObject : null;
+                if (data == null) _noQuestions = true;   // an answer that is not ours: this kernel cannot be asked
+                answer(data);
+            },
+        };
+        _outgoing.Writer.TryWrite(msg.ToJsonString());
+    }
+
+    static string Pass(JsonNode? value) => Convert.ToBase64String(Encoding.UTF8.GetBytes(value?.ToJsonString() ?? "null"));
+
+    /// <summary>Asks for the names the cells left, and sends them as the built-in kernel does (<c>variables</c>).</summary>
+    void AskVariables() =>
+        Ask("__import__('pm_jvars').jupyter_variables()", data =>
+        {
+            if (data?["vars"] is JsonArray vars) _emit(new JsonObject { ["type"] = "variables", ["id"] = "", ["vars"] = vars.DeepClone() });
+        });
 
     public JupyterKernel(Action<JsonNode> emit) { _emit = emit; }
 
@@ -157,10 +221,18 @@ public sealed class JupyterKernel : INotebookKernel
     }
 
     public void Inspect(string id, JsonNode? path) =>
-        _emit(new JsonObject { ["type"] = "children", ["id"] = id, ["path"] = path?.DeepClone(), ["children"] = new JsonArray(), ["error"] = "A Jupyter server does not send its variables here" });
+        Ask($"__import__('pm_jvars').jupyter_children('{Pass(path)}')", data =>
+        {
+            var children = data?["children"] as JsonArray ?? new JsonArray();
+            var reply = new JsonObject { ["type"] = "children", ["id"] = id, ["path"] = path?.DeepClone(), ["children"] = children.DeepClone() };
+            if (data == null) reply["error"] = "This Jupyter kernel cannot tell what its variables hold (it is not an IPython kernel)";
+            else if (data["error"] is { } e) reply["error"] = e.DeepClone();
+            _emit(reply);
+        });
 
     public void Complete(string id, string prefix) =>
-        _emit(new JsonObject { ["type"] = "completions", ["id"] = id, ["items"] = new JsonArray(), ["error"] = "A Jupyter server is not asked for words here" });
+        Ask($"__import__('pm_jvars').jupyter_complete('{Pass(prefix)}')", data =>
+            _emit(new JsonObject { ["type"] = "completions", ["id"] = id, ["items"] = (data?["items"] as JsonArray ?? new JsonArray()).DeepClone() }));
 
     /// <summary>POST /api/kernels/{id}/interrupt.</summary>
     public void Interrupt() => Post("interrupt");
@@ -234,10 +306,16 @@ public sealed class JupyterKernel : INotebookKernel
         {
             _readySent = true;
             string? version = content["language_info"]?["version"]?.GetValue<string>();
+            _python = string.Equals(content["language_info"]?["name"]?.GetValue<string>(), "python", StringComparison.OrdinalIgnoreCase);
             _emit(new JsonObject { ["type"] = "ready", ["python"] = version ?? "" });
             return;
         }
         if (!_pending.TryGetValue(parent, out var p)) return;
+        if (p.Answer != null)
+        {
+            if (type == "execute_reply" && _pending.TryRemove(parent, out _)) p.Answer(content);
+            return;
+        }
         switch (type)
         {
             case "stream":
@@ -264,7 +342,10 @@ public sealed class JupyterKernel : INotebookKernel
         }
         // the cell is done when the reply and the idle state have both come: output can still arrive after the reply
         if (p.Idle && p.Replied && _pending.TryRemove(parent, out _))
+        {
             _emit(new JsonObject { ["type"] = "done", ["id"] = p.Id, ["status"] = p.Status, ["execution_count"] = p.Count });
+            AskVariables();
+        }
     }
 
     public void Dispose()

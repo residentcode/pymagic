@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
@@ -24,9 +25,61 @@ public class JupyterKernelTests
         public readonly List<string> Auth = new();
         readonly CancellationTokenSource _stop = new();
         int _count;
+        Process? _py;
+        readonly object _pyGate = new();
+        string? _pyScript;
 
-        public FakeJupyter()
+        // the "kernel" of a fake that is asked to be Python: a loop that runs the code of an execute_request in one namespace and evaluates its
+        // user_expressions the way IPython does (text/plain, and whatever _repr_mimebundle_ adds), so the code a client sends runs for real
+        const string MiniKernel = """
+            import sys, json, io, contextlib
+            ns = {"__name__": "__main__"}
+            def bundle(value):
+                data = {"text/plain": repr(value)}
+                f = getattr(value, "_repr_mimebundle_", None)
+                if f:
+                    b = f()
+                    data.update(b[0] if isinstance(b, tuple) else b)
+                return data
+            for line in sys.stdin:
+                req = json.loads(line)
+                out = {"stdout": "", "error": None, "exprs": {}}
+                buf = io.StringIO()
+                try:
+                    with contextlib.redirect_stdout(buf):
+                        exec(compile(req["code"], "<cell>", "exec"), ns)
+                        for k, expr in (req.get("exprs") or {}).items():
+                            try:
+                                out["exprs"][k] = {"status": "ok", "data": bundle(eval(expr, ns)), "metadata": {}}
+                            except BaseException as e:
+                                out["exprs"][k] = {"status": "error", "ename": type(e).__name__, "evalue": str(e), "traceback": []}
+                except BaseException as e:
+                    out["error"] = {"ename": type(e).__name__, "evalue": str(e)}
+                out["stdout"] = buf.getvalue()
+                print(json.dumps(out), flush=True)
+            """;
+
+        JsonObject RunPython(string code, JsonObject? expressions)
         {
+            lock (_pyGate)
+            {
+                var request = new JsonObject { ["code"] = code, ["exprs"] = expressions?.DeepClone() ?? new JsonObject() };
+                _py!.StandardInput.WriteLine(request.ToJsonString());
+                _py.StandardInput.Flush();
+                return JsonNode.Parse(_py.StandardOutput.ReadLine() ?? "{}")!.AsObject();
+            }
+        }
+
+        public FakeJupyter(bool python = false)
+        {
+            if (python)
+            {
+                _pyScript = Path.Combine(Path.GetTempPath(), "pm_minikernel_" + Guid.NewGuid().ToString("N") + ".py");
+                File.WriteAllText(_pyScript, MiniKernel);
+                var psi = new ProcessStartInfo(Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python", "-u \"" + _pyScript + "\"")
+                { RedirectStandardInput = true, RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+                _py = Process.Start(psi);
+            }
             var probe = new TcpListener(IPAddress.Loopback, 0);
             probe.Start();
             int port = ((IPEndPoint)probe.LocalEndpoint).Port;
@@ -111,6 +164,16 @@ public class JupyterKernelTests
                     string code = content["code"]!.GetValue<string>();
                     lock (Calls) Calls.Add("execute allow_stdin=" + content["allow_stdin"] + " silent=" + content["silent"]);
                     int count = ++_count;
+                    if (_py != null)
+                    {
+                        var run = RunPython(code, content["user_expressions"] as JsonObject);
+                        await Send(Msg("status", id, new JsonObject { ["execution_state"] = "busy" }, "iopub"));
+                        await Send(Msg("execute_reply", id, new JsonObject { ["status"] = run["error"] == null ? "ok" : "error", ["execution_count"] = count, ["user_expressions"] = run["exprs"]?.DeepClone() ?? new JsonObject() }, "shell"));
+                        string printed = run["stdout"]?.GetValue<string>() ?? "";
+                        if (printed.Length > 0) await Send(Msg("stream", id, new JsonObject { ["name"] = "stdout", ["text"] = printed }, "iopub"));
+                        await Send(Msg("status", id, new JsonObject { ["execution_state"] = "idle" }, "iopub"));
+                        continue;
+                    }
                     await Send(Msg("status", id, new JsonObject { ["execution_state"] = "busy" }, "iopub"));
                     // the reply comes BEFORE the output on purpose: the two travel on different channels and may arrive in either order
                     string status = code == "boom" ? "error" : "ok";
@@ -131,7 +194,24 @@ public class JupyterKernelTests
             return false;
         }
 
-        public void Dispose() { _stop.Cancel(); try { Listener.Close(); } catch (ObjectDisposedException) { } }
+        public void Dispose()
+        {
+            _stop.Cancel();
+            try { Listener.Close(); } catch (ObjectDisposedException) { }
+            try { _py?.Kill(true); _py?.Dispose(); } catch (InvalidOperationException) { }
+            try { if (_pyScript != null) File.Delete(_pyScript); } catch (IOException) { }
+        }
+    }
+
+    static bool HavePython()
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo(Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python", "--version") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true });
+            p!.WaitForExit(15000);
+            return p.ExitCode == 0;
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { return false; }
     }
 
     static JsonNode Wait(BlockingCollection<JsonNode> events, Func<JsonNode, bool> until, int seconds = 15)
@@ -184,6 +264,69 @@ public class JupyterKernelTests
         // what the protocol asks of a client: the token in the Authorization header (and nowhere else), no stdin prompts
         Assert.True(server.Saw("POST /api/kernels") && server.Saw("execute allow_stdin=false silent=false"));
         lock (server.Auth) Assert.True(server.Auth.All(a => a == "token " + FakeJupyter.Token), "every request carries the token in the header");
+    }
+
+    [Fact]
+    public void TheVariablesTheirMembersAndTheWordsOfANameAreAskedOfTheServersKernel()
+    {
+        if (!HavePython()) return;
+        using var server = new FakeJupyter(python: true);
+        var events = new BlockingCollection<JsonNode>();
+        using var k = new JupyterKernel(events.Add);
+        k.Start(server.Url, FakeJupyter.Token, null);
+        Wait(events, e => Is(e, "ready"));
+
+        k.Execute("c1", "class Point:\n    def __init__(self):\n        self.x = 3\n        self._hidden = 1\n    def move(self): return 1\n\n\n"
+            + "p = Point()\nd = {'one': [1, 2], 'n': 7}\nname = 'text'\nempty = []\n");
+        var vars = Wait(events, e => Is(e, "variables"))["vars"]!.AsArray();
+        var names = vars.Select(v => v!["name"]!.GetValue<string>()).ToList();
+        Assert.Equal("Point,d,empty,name,p", string.Join(",", names));        // sorted; the helper's own names and the underscore ones are not there
+        bool Expandable(string n) => vars.First(v => v!["name"]!.GetValue<string>() == n)!["expandable"]!.GetValue<bool>();
+        Assert.True(Expandable("d") && Expandable("p") && !Expandable("name") && !Expandable("empty"));
+        Assert.Equal("dict", vars.First(v => v!["name"]!.GetValue<string>() == "d")!["type"]!.GetValue<string>());
+
+        // the members of a dict, one level at a time
+        string idA = "i1";
+        k.Inspect(idA, JsonNode.Parse("[[\"v\",\"d\"]]"));
+        var children = Wait(events, e => Is(e, "children") && e["id"]!.GetValue<string>() == idA);
+        Assert.Equal("'one','n'", string.Join(",", children["children"]!.AsArray().Select(c => c!["name"]!.GetValue<string>())));
+        string idB = "i2";
+        k.Inspect(idB, JsonNode.Parse("[[\"v\",\"p\"]]"));
+        var attrs = Wait(events, e => Is(e, "children") && e["id"]!.GetValue<string>() == idB);
+        Assert.Equal("x,_hidden", string.Join(",", attrs["children"]!.AsArray().Select(c => c!["name"]!.GetValue<string>())));
+        // a name that is gone is said in words
+        string idC = "i3";
+        k.Inspect(idC, JsonNode.Parse("[[\"v\",\"nothing\"]]"));
+        Assert.Contains("gone", Wait(events, e => Is(e, "children") && e["id"]!.GetValue<string>() == idC)["error"]!.GetValue<string>());
+
+        // the words of a name
+        k.Complete("t1", "p.mo");
+        Assert.Equal("move", string.Join(",", Wait(events, e => Is(e, "completions") && e["id"]!.GetValue<string>() == "t1")["items"]!.AsArray().Select(x => x!.GetValue<string>())));
+        k.Complete("t2", "d.ke");
+        Assert.Equal("keys", string.Join(",", Wait(events, e => Is(e, "completions") && e["id"]!.GetValue<string>() == "t2")["items"]!.AsArray().Select(x => x!.GetValue<string>())));
+
+        // a later cell changes the names, and they are sent again; a cell that fails still reports what it left
+        k.Execute("c2", "late = 5\nraise ValueError('x')");
+        var again = Wait(events, e => Is(e, "variables") && e["vars"]!.AsArray().Any(v => v!["name"]!.GetValue<string>() == "late"));
+        Assert.True(again["vars"]!.AsArray().Count == 6);
+    }
+
+    [Fact]
+    public void AKernelThatCannotBeAskedIsLeftAlone()
+    {
+        using var server = new FakeJupyter();                 // answers every request, but never with the user_expressions we ask for
+        var events = new BlockingCollection<JsonNode>();
+        using var k = new JupyterKernel(events.Add);
+        k.Start(server.Url, FakeJupyter.Token, null);
+        Wait(events, e => Is(e, "ready"));
+        Run(k, events, "c1", "1+1");
+        Run(k, events, "c2", "1+1");
+        // two cells ran and the Variables window was asked for once: after the first no answer came, so the kernel is not asked again
+        int silent = 0;
+        lock (server.Calls) silent = server.Calls.Count(c => c == "execute allow_stdin=false silent=true");
+        Assert.True(silent <= 2, "asked " + silent + " times");
+        k.Inspect("i1", JsonNode.Parse("[[\"v\",\"x\"]]"));
+        Assert.Contains("cannot tell", Wait(events, e => Is(e, "children"))["error"]!.GetValue<string>());
     }
 
     [Fact]
