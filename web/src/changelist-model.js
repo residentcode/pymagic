@@ -6,7 +6,8 @@ export const DEFAULT_LIST = 'Changes';
 
 /**
  * The changed files grouped by list, in the order of the lists. A file no list holds (a new one the server has not
- * placed yet, or one of PyMagic's own such as .pymagic/changelists.json) is shown in the default list.
+ * placed yet, or one of PyMagic's own such as .pymagic/changelists.json) is shown in the default list. A file that is in
+ * part in several lists (`state.partCounts`) is in each of them as a copy with `part: { here, total }`.
  */
 export function groupFiles(files, state) {
     const lists = state?.lists?.length ? state.lists : [{ name: DEFAULT_LIST, files: [] }];
@@ -14,7 +15,14 @@ export function groupFiles(files, state) {
     for (const l of lists) for (const p of l.files) owner.set(p, l.name);
     const def = lists[0].name;
     const byName = new Map(lists.map((l) => [l.name, []]));
-    for (const f of files) (byName.get(owner.get(f.path)) ?? byName.get(def)).push(f);
+    // a file of which some changes were moved to other lists is in each of those lists, with how many of its changes that list holds
+    const counts = state?.partCounts ?? {};
+    for (const f of files) {
+        const per = counts[f.path];
+        if (!per) { (byName.get(owner.get(f.path)) ?? byName.get(def)).push(f); continue; }
+        const total = Object.values(per).reduce((a, b) => a + b, 0);
+        for (const [name, here] of Object.entries(per)) (byName.get(name) ?? byName.get(def)).push({ ...f, part: { here, total } });
+    }
     const active = lists.some((l) => l.name === state?.active) ? state.active : def;
     return lists.map((l) => ({ name: l.name, files: byName.get(l.name), active: l.name === active, isDefault: l.name === def }));
 }

@@ -639,3 +639,11 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 .pr-patch-add .pr-patch-text, .pr-patch-row.pr-patch-add { background: rgba(63, 185, 80, 0.12); }
 .pr-patch-del { background: rgba(255, 107, 107, 0.12); }
 .pr-patch-comment { margin: 2px 0 6px 70px; white-space: normal; }
+.git-parts { width: min(720px, 94vw); }
+.git-parts-list { max-height: 50vh; overflow: auto; margin: 6px 0; }
+.git-parts-row { display: flex; gap: 8px; align-items: baseline; padding: 2px 4px; cursor: pointer; }
+.git-parts-row:hover { background: var(--hover); }
+.git-parts-where { color: var(--dim); min-width: 110px; flex: none; }
+.git-parts-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, Consolas, monospace); font-size: 12.5px; }
+.git-parts-list-name { color: var(--accent, #4aa3ff); flex: none; font-size: 12px; }
+.git-parts-none { color: var(--dim); padding: 8px 4px; }

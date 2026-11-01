@@ -8,7 +8,8 @@ namespace PyMagic.Server.Git;
 public sealed record Changelist(string Name, List<string> Files);
 
 /// <param name="Active">The list that new changes go into.</param>
-public sealed record ChangelistState(string Active, List<Changelist> Lists);
+/// <param name="PartCounts">For a file of which some changes were moved to another list: how many of its changes each list holds (path, then list).</param>
+public sealed record ChangelistState(string Active, List<Changelist> Lists, Dictionary<string, Dictionary<string, int>>? PartCounts = null);
 
 public sealed record ShelfFile(string Path, string Status);
 
@@ -26,6 +27,8 @@ public sealed partial class GitRepository
     public const string DefaultChangelist = "Changes";
 
     readonly object _clLock = new();
+    /// <summary>Changes moved away from the list of their file: path, then the key of the change, then the list it is in (kept in changelists.json as "parts").</summary>
+    readonly Dictionary<string, Dictionary<string, string>> _parts = new(StringComparer.Ordinal);
     string ListsFile => Path.Combine(_dir, ".pymagic", "changelists.json");
     string ShelfDir => Path.Combine(_dir, ".pymagic", "shelf");
 
@@ -43,6 +46,7 @@ public sealed partial class GitRepository
     ChangelistState LoadLists(out bool existed)
     {
         existed = File.Exists(ListsFile);
+        _parts.Clear();
         var state = new ChangelistState(DefaultChangelist, new List<Changelist>());
         if (existed)
         {
@@ -61,6 +65,15 @@ public sealed partial class GitRepository
                         lists.Add(new Changelist(n.GetString()!, files));
                     }
                 state = new ChangelistState(active, lists);
+                if (doc.RootElement.TryGetProperty("parts", out var ps) && ps.ValueKind == JsonValueKind.Object)
+                    foreach (var file in ps.EnumerateObject())
+                    {
+                        if (file.Value.ValueKind != JsonValueKind.Object) continue;
+                        var moved = new Dictionary<string, string>(StringComparer.Ordinal);
+                        foreach (var change in file.Value.EnumerateObject())
+                            if (change.Value.ValueKind == JsonValueKind.String && change.Value.GetString() is { Length: > 0 } to) moved[change.Name] = to;
+                        if (moved.Count > 0) _parts[file.Name] = moved;
+                    }
             }
             catch (JsonException) { /* a damaged file starts over: everything is in the default list */ }
         }
@@ -75,10 +88,19 @@ public sealed partial class GitRepository
             clean.Add(new Changelist(l.Name, l.Files.Where(f => !IsAppFile(f) && owned.Add(f)).ToList()));
         }
         string act = clean.Any(l => l.Name == state.Active) ? state.Active : DefaultChangelist;
+        // changes moved to a list that is gone go back to the list of their file
+        var names = clean.Select(l => l.Name).ToHashSet(StringComparer.Ordinal);
+        foreach (var (path, moved) in _parts.ToList())
+        {
+            foreach (var key in moved.Where(m => !names.Contains(m.Value)).Select(m => m.Key).ToList()) moved.Remove(key);
+            if (moved.Count == 0) _parts.Remove(path);
+        }
         return new ChangelistState(act, clean);
     }
 
-    static string Serialise(ChangelistState s) => JsonSerializer.Serialize(new { active = s.Active, lists = s.Lists }, Pretty);
+    string Serialise(ChangelistState s) => _parts.Count == 0
+        ? JsonSerializer.Serialize(new { active = s.Active, lists = s.Lists }, Pretty)
+        : JsonSerializer.Serialize(new { active = s.Active, lists = s.Lists, parts = _parts }, Pretty);
 
     void SaveLists(ChangelistState s)
     {
@@ -96,15 +118,37 @@ public sealed partial class GitRepository
             var state = LoadLists(out bool existed);
             var changed = Status().Files.Select(f => f.Path).Where(p => !IsAppFile(p)).ToList();
             var changedSet = changed.ToHashSet();
-            var before = Serialise(state);
+            var before = Serialise(state);   // as it was read (the parts too)
             foreach (var l in state.Lists) l.Files.RemoveAll(f => !changedSet.Contains(f));
             var owned = state.Lists.SelectMany(l => l.Files).ToHashSet();
             var target = state.Lists.First(l => l.Name == state.Active);
             foreach (var p in changed) if (owned.Add(p)) target.Files.Add(p);
+            Dictionary<string, Dictionary<string, int>>? counts = null;
+            foreach (var path in _parts.Keys.ToList())
+            {
+                if (!changedSet.Contains(path)) { _parts.Remove(path); continue; }
+                var raw = RawChanges(DiffOf(path));
+                var moved = _parts[path];
+                var keys = raw.Select(c => c.Key).ToHashSet(StringComparer.Ordinal);
+                string owner = OwnerOf(state, path);
+                foreach (var key in moved.Where(m => !keys.Contains(m.Key) || m.Value == owner).Select(m => m.Key).ToList()) moved.Remove(key);
+                // every change of the file went to one list: the file is that list's now
+                if (moved.Count > 0 && moved.Count == raw.Count && moved.Values.Distinct().Count() == 1)
+                {
+                    string to = moved.Values.First();
+                    foreach (var l in state.Lists) l.Files.Remove(path);
+                    state.Lists.First(l => l.Name == to).Files.Add(path);
+                    moved.Clear();
+                }
+                if (moved.Count == 0) { _parts.Remove(path); continue; }
+                var per = new Dictionary<string, int>();
+                foreach (var c in raw) { string at = moved.TryGetValue(c.Key, out var l) ? l : owner; per[at] = per.GetValueOrDefault(at) + 1; }
+                (counts ??= new Dictionary<string, Dictionary<string, int>>())[path] = per;
+            }
             // nothing to remember until someone makes a list of their own: no file for a project that never used the feature
-            bool plain = state.Active == DefaultChangelist && state.Lists.Count == 1;
+            bool plain = state.Active == DefaultChangelist && state.Lists.Count == 1 && _parts.Count == 0;
             if (Serialise(state) != before && (existed || !plain)) SaveLists(state);
-            return state;
+            return counts == null ? state : state with { PartCounts = counts };
         }
     }
 
@@ -139,6 +183,7 @@ public sealed partial class GitRepository
             if (state.Lists.All(l => l.Name != from)) throw new GitException($"there is no changelist '{from}'");
             if (state.Lists.Any(l => l.Name != from && string.Equals(l.Name, n, StringComparison.OrdinalIgnoreCase))) throw new GitException($"there is a changelist '{n}' already");
             var lists = state.Lists.Select(l => l.Name == from ? new Changelist(n, l.Files) : l).ToList();
+            foreach (var moved in _parts.Values) foreach (var key in moved.Where(m => m.Value == from).Select(m => m.Key).ToList()) moved[key] = n;
             var next = new ChangelistState(state.Active == from ? n : state.Active, lists);
             SaveLists(next);
             return next;
@@ -155,6 +200,7 @@ public sealed partial class GitRepository
             var gone = state.Lists.FirstOrDefault(l => l.Name == name) ?? throw new GitException($"there is no changelist '{name}'");
             state.Lists.First(l => l.Name == DefaultChangelist).Files.AddRange(gone.Files);
             state.Lists.Remove(gone);
+            foreach (var moved in _parts.Values) foreach (var key in moved.Where(m => m.Value == name).Select(m => m.Key).ToList()) moved[key] = DefaultChangelist;
             var next = new ChangelistState(state.Active == name ? DefaultChangelist : state.Active, state.Lists);
             SaveLists(next);
             return next;
@@ -183,6 +229,7 @@ public sealed partial class GitRepository
             var moving = paths.Select(CheckPath).Distinct().Where(p => !IsAppFile(p)).ToList();
             foreach (var l in state.Lists) l.Files.RemoveAll(moving.Contains);
             target.Files.AddRange(moving);
+            foreach (var p in moving) _parts.Remove(p);          // a whole file moved: its changes go with it
             SaveLists(state);
             return state;
         }
@@ -196,7 +243,7 @@ public sealed partial class GitRepository
         foreach (var raw in paths)
         {
             string p = CheckPath(raw);
-            bool inList = list.Files.Contains(p) || name == DefaultChangelist && IsAppFile(p);
+            bool inList = list.Files.Contains(p) || name == DefaultChangelist && IsAppFile(p) || _parts.TryGetValue(p, out var moved) && moved.Values.Contains(name);
             if (!inList) throw new GitException($"'{p}' is not in the changelist '{name}'");
         }
     }
@@ -226,15 +273,28 @@ public sealed partial class GitRepository
     public ShelvedSet Shelve(IReadOnlyList<string> paths, string? name, string? changelist)
     {
         var wanted = paths.Select(CheckPath).Distinct().Where(p => !IsAppFile(p)).ToHashSet();
+        // a file of which only some changes are in the list being shelved gives just those changes
+        var partials = new List<(string Path, string Patch)>();
+        if (changelist != null)
+        {
+            Changelists();
+            foreach (var p in wanted.ToList())
+            {
+                if (!_parts.ContainsKey(p)) continue;
+                var (selection, all) = SelectionFor(p, changelist);
+                if (selection == null) wanted.Remove(p);
+                else if (!all) { partials.Add((p, PatchBuilder.Build(DiffOf(p), selection) ?? "")); wanted.Remove(p); }
+            }
+        }
         var status = Status();
         var files = status.Files.Where(f => wanted.Contains(f.Path)).ToList();
-        if (files.Count == 0) throw new GitException("there is nothing to shelve in these files");
+        if (files.Count == 0 && partials.Count == 0) throw new GitException("there is nothing to shelve in these files");
         if (files.Any(f => f.IsConflict)) throw new GitException("a file with a conflict cannot be shelved: resolve it first");
 
         var pathspec = files.Select(f => f.Path).Concat(files.Where(f => f.OriginalPath != null).Select(f => CheckPath(f.OriginalPath!))).Distinct().ToList();
         string temp = Path.Combine(Path.GetTempPath(), "pymagic_shelf_" + Guid.NewGuid().ToString("N"));
-        string patch;
-        try
+        string patch = "";
+        if (files.Count > 0) try
         {
             string Must((int Code, string Out, string Err) r) => r.Code == 0 ? r.Out : throw new GitException(Message(r));
             Must(InIndex(temp, null, status.HasCommits ? new[] { "read-tree", "HEAD" } : new[] { "read-tree", "--empty" }));
@@ -248,17 +308,22 @@ public sealed partial class GitRepository
             try { File.Delete(temp); } catch (IOException) { }
             try { File.Delete(temp + ".lock"); } catch (IOException) { }
         }
-        if (patch.Trim().Length == 0) throw new GitException("these files have no changes to shelve");
+        if (patch.Trim().Length == 0 && partials.Count == 0) throw new GitException("these files have no changes to shelve");
+        if (partials.Count > 0)
+        {
+            TakeOut(partials.Select(x => x.Patch).ToList());      // checked first: when it fails nothing has been put on the shelf
+            patch += string.Concat(partials.Select(x => x.Patch.EndsWith('\n') ? x.Patch : x.Patch + "\n"));
+        }
 
         var now = DateTime.Now;
         string id = now.ToString("yyyyMMdd-HHmmss") + "-" + Convert.ToHexString(Guid.NewGuid().ToByteArray())[..6].ToLowerInvariant();
         string title = string.IsNullOrWhiteSpace(name) ? (changelist ?? "Shelved changes") : name.Trim();
-        var shelved = files.Select(f => new ShelfFile(f.Path, f.IsUntracked || f.Index == 'A' ? "A" : f.Worktree == 'D' || f.Index == 'D' ? "D" : "M")).ToList();
+        var shelved = files.Select(f => new ShelfFile(f.Path, f.IsUntracked || f.Index == 'A' ? "A" : f.Worktree == 'D' || f.Index == 'D' ? "D" : "M")).Concat(partials.Select(x => new ShelfFile(x.Path, "M"))).ToList();
         var set = new ShelvedSet(id, title, now.ToString("yyyy-MM-ddTHH:mm:ss"), changelist, status.Detached ? null : status.Branch, shelved);
         Directory.CreateDirectory(ShelfDir);
         File.WriteAllText(PatchPath(id), patch, new UTF8Encoding(false));
         File.WriteAllText(MetaPath(id), JsonSerializer.Serialize(set, Pretty) + "\n", new UTF8Encoding(false));
-        try { Discard(files.Select(f => f.Path).ToList()); }
+        try { if (files.Count > 0) Discard(files.Select(f => f.Path).ToList()); }
         catch (GitException e) { throw new GitException($"the changes were shelved as '{title}' but could not all be taken out of the working tree: {e.Message}"); }
         return set;
     }

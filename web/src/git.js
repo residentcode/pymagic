@@ -8,6 +8,7 @@ import { openRebase } from './rebase';
 import { Lanes, graphFits, logQuery, parseRefs, rowShapes } from './git-graph';
 import { changedLines, counts, hunkState, numbering, payload, selectAll, selectNone, stateOf, toggleHunk, toggleLine } from './hunks';
 import { commitList, commitPaths, groupFiles, linesOfChange, partialPaths } from './changelist-model';
+import { openChanges } from './git-parts';
 const $ = (id) => document.getElementById(id);
 async function api(url, init) {
     const res = await fetch(url, init);
@@ -191,6 +192,18 @@ export function setupGit(deps) {
             lines.textContent = '☰';
             lines.title = 'Choose the hunks or lines of this file to commit';
             lines.onclick = (ev) => { ev.stopPropagation(); void chooseLines(f); };
+            if (f.part) {
+                const badge = document.createElement('span');
+                badge.className = 'part';
+                badge.textContent = `${f.part.here} of ${f.part.total} changes`;
+                badge.title = 'Only some of the changes of this file are in this changelist';
+                path.append(badge);
+            }
+            const changesBtn = document.createElement('button');
+            changesBtn.className = 'roll changes';
+            changesBtn.textContent = '≡';
+            changesBtn.title = 'The changes of this file one by one: move some to another changelist, or shelve some';
+            changesBtn.onclick = (ev) => { ev.stopPropagation(); openChanges({ path: f.path, lists, api, post, toast, refresh }); };
             if (partial.has(f.path)) {
                 const c = counts(partial.get(f.path).diff, partial.get(f.path).sel);
                 const badge = document.createElement('span');
@@ -209,7 +222,7 @@ export function setupGit(deps) {
             move.textContent = '⇄';
             move.title = 'Move this file to another changelist';
             move.onclick = (ev) => { ev.stopPropagation(); moveMenu(ev, f); };
-            row.append(box1, st, path, lines, move, roll);
+            row.append(box1, st, path, lines, changesBtn, move, roll);
             row.onclick = () => void showChange(f);
             row.ondblclick = () => { if (f.worktree !== 'D' && f.index !== 'D')
                 void deps.openFile(f.path); };

@@ -1943,16 +1943,19 @@ app.MapPost("/api/git/commit", async (HttpRequest req) =>
         }
     // with a changelist named, only the files of that list may go into the commit
     string? list = body?["changelist"]?.GetValue<string>();
-    if (partial.Count == 0)
-        return await GitCall(r =>
-        {
-            if (list != null) r.RequireInChangelist(list, StringsOf(body?["paths"]));
-            return new { hash = r.Commit(StringsOf(body?["paths"]), message, amend) };
-        });
+    if (list == null && partial.Count == 0)
+        return await GitCall(r => new { hash = r.Commit(StringsOf(body?["paths"]), message, amend) });
+    if (list == null)
+        return await GitCall(r => new { hash = r.CommitSelection(StringsOf(body?["paths"]), partial, message, amend) });
     return await GitCall(r =>
     {
-        if (list != null) r.RequireInChangelist(list, StringsOf(body?["paths"]).Concat(partial.Keys));
-        return new { hash = r.CommitSelection(StringsOf(body?["paths"]), partial, message, amend) };
+        var paths = StringsOf(body?["paths"]);
+        r.RequireInChangelist(list, paths.Concat(partial.Keys));
+        // a file of which only some changes are in this list goes in with just those changes
+        var (whole, resolved) = r.ResolveForList(list, paths, partial);
+        return resolved.Count == 0
+            ? new { hash = r.Commit(whole, message, amend) }
+            : new { hash = r.CommitSelection(whole, resolved, message, amend) };
     });
 });
 
@@ -1964,16 +1967,23 @@ app.MapPost("/api/git/changelist", async (HttpRequest req) =>
     var body = await JsonNode.ParseAsync(req.Body);
     string op = body?["op"]?.GetValue<string>() ?? "";
     string Str(string key) => body?[key]?.GetValue<string>() ?? "";
-    return await GitCall(r => (object?)(op switch
+    return await GitCall(r =>
     {
-        "create" => r.CreateChangelist(Str("name"), body?["active"]?.GetValue<bool>() ?? false),
-        "rename" => r.RenameChangelist(Str("name"), Str("newName")),
-        "delete" => r.DeleteChangelist(Str("name")),
-        "active" => r.SetActiveChangelist(Str("name")),
-        "move" => r.MoveToChangelist(StringsOf(body?["paths"]), Str("name")),
-        _ => throw new GitException($"'{op}' is not something to do"),
-    }));
+        switch (op)
+        {
+            case "create": r.CreateChangelist(Str("name"), body?["active"]?.GetValue<bool>() ?? false); break;
+            case "rename": r.RenameChangelist(Str("name"), Str("newName")); break;
+            case "delete": r.DeleteChangelist(Str("name")); break;
+            case "active": r.SetActiveChangelist(Str("name")); break;
+            case "move": r.MoveToChangelist(StringsOf(body?["paths"]), Str("name")); break;
+            case "moveChanges": r.MoveChanges(Str("path"), StringsOf(body?["keys"]), Str("name")); break;
+            default: throw new GitException($"'{op}' is not something to do");
+        }
+        return (object?)r.Changelists();      // the lists as they are now, with the files that are in part in a list
+    });
 });
+// the changes of one file, each with the list it is in: what can be moved one by one
+app.MapGet("/api/git/changes", (string path) => GitCall(r => r.ChangeParts(path)));
 
 app.MapGet("/api/git/shelf", () => GitCall(r => r.ShelvedSets()));
 app.MapGet("/api/git/shelf/patch", (string id) => GitCall(r => new { patch = r.ShelfPatch(id) }));
@@ -1982,11 +1992,12 @@ app.MapPost("/api/git/shelf", async (HttpRequest req) =>
     var body = await JsonNode.ParseAsync(req.Body);
     string op = body?["op"]?.GetValue<string>() ?? "";
     string Str(string key) => body?[key]?.GetValue<string>() ?? "";
-    if (op == "shelve") AutoLabel("Before Git shelve");
+    if (op == "shelve" || op == "shelveChanges") AutoLabel("Before Git shelve");
     if (op == "unshelve") AutoLabel("Before Git unshelve");
     return await GitCall(r => (object?)(op switch
     {
         "shelve" => r.Shelve(StringsOf(body?["paths"]), body?["title"]?.GetValue<string>(), body?["changelist"]?.GetValue<string>()),
+        "shelveChanges" => r.ShelveChanges(Str("path"), StringsOf(body?["keys"]), body?["title"]?.GetValue<string>(), body?["changelist"]?.GetValue<string>()),
         "unshelve" => r.Unshelve(Str("id"), body?["changelist"]?.GetValue<string>(), body?["delete"]?.GetValue<bool>() ?? false),
         "delete" => DeleteShelf(r, Str("id")),
         _ => throw new GitException($"'{op}' is not something to do"),

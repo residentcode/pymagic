@@ -2227,4 +2227,52 @@ describe('changelists, the shelf, and choosing lines from the editor gutter', ()
         assert.equal(readFileSync(join(projectRoot, 'cl_a.py'), 'utf8'), numbered(14, [3, 'line 3 A']));
         assert.equal(readFileSync(join(projectRoot, 'cl_g.py'), 'utf8'), numbered(14, [2, 'line 2 G'], [13, 'line 13 G']));
     });
+
+    test('the changes of a file move one by one to another list, a commit of that list takes just them, and some changes are shelved', async () => {
+        writeFileSync(join(projectRoot, 'cp_parts.py'), numbered(30));
+        git('add', '-A');
+        git('commit', '-q', '-m', 'parts base');
+        writeFileSync(join(projectRoot, 'cp_parts.py'), numbered(30, [3, 'line 3 X'], [15, 'line 15 X'], [28, 'line 28 X']));
+        await refresh();
+        await waitRows(`rows.some((r) => r.startsWith('cp_parts.py'))`, 'the file');
+        await page.evaluate(`window.__answer = 'Fixes'`);
+        await page.evaluate(`${$('git-cl-new')}.click()`);
+        await page.waitFor(`document.querySelector('.gc-list[data-list="Fixes"]')`, 15000, 'the list Fixes');
+
+        // the window of its changes: three rows, the middle one is moved to Fixes
+        await clickRowButton('cp_parts.py', 'changes');
+        await page.waitFor(`document.querySelectorAll('.git-parts-row').length === 3`, 15000, 'the three changes');
+        assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('.git-parts-row .git-parts-where')].map((e) => e.textContent)`), ['line 3', 'line 15', 'line 28']);
+        assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('.git-parts-row .git-parts-preview')].map((e) => e.textContent)`), ['line 3 X', 'line 15 X', 'line 28 X']);
+        await page.evaluate(`document.querySelectorAll('.git-parts-row input')[1].click()`);
+        await page.evaluate(`(() => { const t = document.getElementById('git-parts-target'); t.value = 'Fixes'; t.dispatchEvent(new Event('change')); document.getElementById('git-parts-move').click(); })()`);
+        await page.waitFor(`[...document.querySelectorAll('#git-changes .gc .part')].map((p) => p.textContent).sort().join() === '1 of 3 changes,2 of 3 changes'`, 15000, 'the file in two lists');
+        // the window reads the lists again after the move; the file is in the list that was active when it appeared
+        await page.waitFor(`[...document.querySelectorAll('.git-parts-row .git-parts-list-name')].map((e) => e.textContent).join() === 'Feature,Fixes,Feature'`, 15000, 'the lists named in the window');
+        assert.ok(readFileSync(join(projectRoot, '.pymagic', 'changelists.json'), 'utf8').includes('"parts"'), 'kept in the project file');
+        await page.evaluate(`[...document.querySelectorAll('.git-parts .ask-buttons button')].find((b) => b.textContent === 'Close').click()`);
+
+        // a commit of the list Fixes takes the one change
+        await page.evaluate(`(() => { const s = ${$('git-cl-commit')}; s.value = 'Fixes'; s.dispatchEvent(new Event('change')); ${$('git-message')}.value = 'just the fifteen'; ${$('git-commit')}.click(); })()`);
+        for (let i = 0; i < 40 && git('log', '-1', '--format=%s').trim() !== 'just the fifteen'; i++) await sleep(300);
+        const shown = git('show', '--format=', 'HEAD');
+        assert.ok(shown.includes('+line 15 X'), shown);
+        assert.ok(!shown.includes('line 3 X') && !shown.includes('line 28 X'), shown);
+        assert.equal(readFileSync(join(projectRoot, 'cp_parts.py'), 'utf8'), numbered(30, [3, 'line 3 X'], [15, 'line 15 X'], [28, 'line 28 X']), 'the other two are still in the working tree');
+        await refresh();
+        await page.waitFor(`![...document.querySelectorAll('#git-changes .gc .part')].length`, 15000, 'the marks gone with the committed change');
+
+        // two changes of three are put on the shelf, the third stays in the file
+        await clickRowButton('cp_parts.py', 'changes');
+        await page.waitFor(`document.querySelectorAll('.git-parts-row').length === 2`, 15000, 'the two changes left');
+        await page.evaluate(`document.querySelectorAll('.git-parts-row input')[0].click()`);
+        await page.evaluate(`window.__answer = 'the first of two'`);
+        await page.evaluate(`document.getElementById('git-parts-shelve').click()`);
+        await page.waitFor(`!document.querySelector('.git-parts-shade')`, 15000, 'the window to close');
+        const text = readFileSync(join(projectRoot, 'cp_parts.py'), 'utf8');
+        assert.ok(!text.includes('line 3 X') && text.includes('line 28 X'), text);
+        const shelf = await page.evaluate(`fetch('/api/git/shelf').then((r) => r.json())`);
+        assert.equal(shelf[0].name, 'the first of two');
+        assert.deepEqual(shelf[0].files.map((f) => f.path), ['cp_parts.py']);
+    });
 });

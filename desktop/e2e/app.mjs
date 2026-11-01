@@ -2,7 +2,7 @@
 // recent projects and the page's storage are not touched), and drives its page over the Chrome DevTools Protocol
 // with Node's own WebSocket: no browser driver to download.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -109,9 +109,29 @@ export async function launch(root) {
         async close() {
             ws.close();
             stop(child, profile);
-            rmSync(root, { recursive: true, force: true });
+            removeTree(root);
         },
     };
+}
+
+/** Removes a folder of a test run. A git repository keeps read-only files (its packs), which Windows will not delete: they are made writable first, and a file that is still held by a closing process is tried again. */
+export function removeTree(dir) {
+    const writable = (p) => {
+        try {
+            const st = statSync(p);
+            if (st.isDirectory()) for (const name of readdirSync(p)) writable(join(p, name));
+            chmodSync(p, 0o666);
+        }
+        catch { /* gone already, or not ours to change: the removal below says */ }
+    };
+    for (let i = 0; i < 6; i++) {
+        try { rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); return; }
+        catch (e) {
+            if (i === 5) throw e;
+            writable(dir);
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+        }
+    }
 }
 
 function stop(child, profile) {

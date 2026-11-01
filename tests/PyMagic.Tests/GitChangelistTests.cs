@@ -60,6 +60,187 @@ public class GitChangelistTests
     static string Names(IEnumerable<string> items) => string.Join(",", items.OrderBy(x => x, StringComparer.Ordinal));
     static Changelist List(ChangelistState s, string name) => s.Lists.First(l => l.Name == name);
 
+    // ------------------------------------------------------------ the changes of a file, one by one
+
+    /// <summary>A file of 30 lines with three changes far apart: lines 3, 15 and 28.</summary>
+    static GitRepository ThreeChanges(Repo r)
+    {
+        r.Write("a.txt", Numbered(30));
+        r.Commit("base");
+        r.Write("a.txt", Numbered(30, (3, "three"), (15, "fifteen"), (28, "twenty-eight")));
+        return r.Open();
+    }
+
+    static string KeyAt(IEnumerable<ChangePart> parts, int newLine) => parts.First(c => c.NewLine == newLine).Key;
+
+    [Fact]
+    public void ChangesOfAFileAreMovedToAnotherListOneByOneAndStayThereWhileTheFileChangesElsewhere()
+    {
+        if (!HasGit) return;
+        using var r = new Repo();
+        var repo = ThreeChanges(r);
+        var parts = repo.ChangeParts("a.txt");
+        Assert.Equal("3,15,28", string.Join(",", parts.Select(c => c.NewLine)));
+        Assert.True(parts.All(c => c.List == "Changes"));
+        Assert.Equal("three", parts[0].Preview);
+        repo.CreateChangelist("Fix", false);
+
+        var state = repo.MoveChanges("a.txt", new[] { KeyAt(parts, 15) }, "Fix");
+        Assert.Equal("Changes", string.Join(",", state.Lists.Where(l => l.Files.Contains("a.txt")).Select(l => l.Name)));   // the file stays where it was
+        Assert.Equal(2, state.PartCounts!["a.txt"]["Changes"]);
+        Assert.Equal(1, state.PartCounts["a.txt"]["Fix"]);
+        Assert.Equal("Changes,Fix,Changes", string.Join(",", repo.ChangeParts("a.txt").Select(c => c.List)));
+
+        // the file is edited somewhere else and one of the other changes moves down: the moved change keeps its list
+        r.Write("a.txt", Numbered(30, (3, "three"), (10, "ten"), (15, "fifteen"), (28, "twenty-eight")));
+        var after = repo.ChangeParts("a.txt");
+        Assert.Equal("3,10,15,28", string.Join(",", after.Select(c => c.NewLine)));
+        Assert.Equal("Changes,Changes,Fix,Changes", string.Join(",", after.Select(c => c.List)));
+
+        // taking a change back to the list of its file removes the mark
+        var back = repo.MoveChanges("a.txt", new[] { KeyAt(after, 15) }, "Changes");
+        Assert.True(back.PartCounts == null, "nothing is in part any more");
+        Assert.True(!File.ReadAllText(Path.Combine(r.Dir, ".pymagic", "changelists.json")).Contains("\"parts\""));
+    }
+
+    [Fact]
+    public void WhenEveryChangeOfAFileHasGoneToOneListTheFileIsThatListsAndAChangeThatIsGoneForgetsItsList()
+    {
+        if (!HasGit) return;
+        using var r = new Repo();
+        var repo = ThreeChanges(r);
+        repo.CreateChangelist("Fix", false);
+        var keys = repo.ChangeParts("a.txt").Select(c => c.Key).ToArray();
+        var state = repo.MoveChanges("a.txt", keys, "Fix");
+        Assert.Equal("Fix", string.Join(",", state.Lists.Where(l => l.Files.Contains("a.txt")).Select(l => l.Name)));
+        Assert.True(state.PartCounts == null);
+
+        // one change to Changes, then that change is reverted by hand: nothing is left of the mark
+        var one = repo.MoveChanges("a.txt", new[] { keys[0] }, "Changes");
+        Assert.Equal(1, one.PartCounts!["a.txt"]["Changes"]);
+        r.Write("a.txt", Numbered(30, (15, "fifteen"), (28, "twenty-eight")));
+        Assert.True(repo.Changelists().PartCounts == null);
+        Assert.True(Throws(() => repo.MoveChanges("a.txt", new[] { "no-such-change" }, "Fix")));
+        Assert.True(Throws(() => repo.MoveChanges("a.txt", keys.Take(1).ToArray(), "No such list")));
+    }
+
+    [Fact]
+    public void RenamingAndDeletingAListCarryItsChangesWithIt()
+    {
+        if (!HasGit) return;
+        using var r = new Repo();
+        var repo = ThreeChanges(r);
+        repo.CreateChangelist("Fix", false);
+        repo.MoveChanges("a.txt", new[] { KeyAt(repo.ChangeParts("a.txt"), 28) }, "Fix");
+        var renamed = repo.RenameChangelist("Fix", "Fixes");
+        Assert.Equal(1, repo.Changelists().PartCounts!["a.txt"]["Fixes"]);
+        Assert.Equal("Changes,Changes,Fixes", string.Join(",", repo.ChangeParts("a.txt").Select(c => c.List)));
+        repo.DeleteChangelist("Fixes");
+        Assert.True(repo.Changelists().PartCounts == null, "the change is back with its file");
+        Assert.Equal("Changes,Changes,Changes", string.Join(",", repo.ChangeParts("a.txt").Select(c => c.List)));
+        // a whole file moved takes its changes along
+        repo.CreateChangelist("Other", false);
+        repo.CreateChangelist("Third", false);
+        repo.MoveChanges("a.txt", new[] { KeyAt(repo.ChangeParts("a.txt"), 3) }, "Other");
+        repo.MoveToChangelist(new[] { "a.txt" }, "Third");
+        Assert.True(repo.Changelists().PartCounts == null);
+        Assert.Equal("Third,Third,Third", string.Join(",", repo.ChangeParts("a.txt").Select(c => c.List)));
+        Assert.Equal(1, renamed.Lists.Count(l => l.Name == "Fixes"));
+    }
+
+    [Fact]
+    public void ACommitOfAListTakesJustTheChangesThatAreInIt()
+    {
+        if (!HasGit) return;
+        using var r = new Repo();
+        var repo = ThreeChanges(r);
+        repo.CreateChangelist("Fix", false);
+        repo.MoveChanges("a.txt", new[] { KeyAt(repo.ChangeParts("a.txt"), 15) }, "Fix");
+        r.Write("b.txt", "new file\n");
+
+        // the list Fix holds one change of a.txt; the list Changes holds the other two and b.txt
+        var (whole, partial) = repo.ResolveForList("Fix", new[] { "a.txt" }, new Dictionary<string, LineSelection>());
+        Assert.Equal(0, whole.Count);
+        Assert.Equal(1, partial.Count);
+        repo.CommitSelection(whole, partial, "only the fifteen", false);
+        string shown = r.G("show", "--format=", "HEAD");
+        Assert.Contains("+fifteen", shown);
+        Assert.True(!shown.Contains("+three") && !shown.Contains("+twenty-eight"), shown);
+        Assert.Equal(Numbered(30, (3, "three"), (15, "fifteen"), (28, "twenty-eight")), r.Read("a.txt"));
+        // the other two are still changes, and the mark of the one that was committed is gone
+        Assert.Equal("3,28", string.Join(",", repo.ChangeParts("a.txt").Select(c => c.NewLine)));
+        Assert.True(repo.Changelists().PartCounts == null);
+
+        // a file that is whole in the list goes whole; one with no change in the list is left out
+        var again = repo.ResolveForList("Changes", new[] { "a.txt", "b.txt" }, new Dictionary<string, LineSelection>());
+        Assert.Equal("a.txt,b.txt", Names(again.Whole));
+        Assert.Equal(0, again.Partial.Count);
+    }
+
+    [Fact]
+    public void AFileOfWhichOnlySomeChangesAreInAListCanBeNamedInThatListsCommitAndNotInAnothers()
+    {
+        if (!HasGit) return;
+        using var r = new Repo();
+        var repo = ThreeChanges(r);
+        repo.CreateChangelist("Fix", false);
+        repo.CreateChangelist("Empty", false);
+        repo.MoveChanges("a.txt", new[] { KeyAt(repo.ChangeParts("a.txt"), 3) }, "Fix");
+        repo.RequireInChangelist("Fix", new[] { "a.txt" });
+        repo.RequireInChangelist("Changes", new[] { "a.txt" });
+        Assert.True(Throws(() => repo.RequireInChangelist("Empty", new[] { "a.txt" })));
+        // a list with no change of the file leaves it out of its commit
+        var none = repo.ResolveForList("Empty", new[] { "a.txt" }, new Dictionary<string, LineSelection>());
+        Assert.True(none.Whole.Count == 0 && none.Partial.Count == 0);
+    }
+
+    [Fact]
+    public void SomeChangesOfAFileAreShelvedAndTheRestStaysAndTheyComeBack()
+    {
+        if (!HasGit) return;
+        using var r = new Repo();
+        var repo = ThreeChanges(r);
+        var parts = repo.ChangeParts("a.txt");
+        var set = repo.ShelveChanges("a.txt", new[] { KeyAt(parts, 3), KeyAt(parts, 28) }, "two of three", null);
+        Assert.Equal("two of three", set.Name);
+        Assert.Equal("a.txt", string.Join(",", set.Files.Select(f => f.Path)));
+        Assert.Equal(Numbered(30, (15, "fifteen")), r.Read("a.txt"));
+        string patch = repo.ShelfPatch(set.Id);
+        Assert.True(patch.Contains("+three") && patch.Contains("+twenty-eight") && !patch.Contains("fifteen"), patch);
+
+        var back = repo.Unshelve(set.Id, null, true);
+        Assert.True(!back.Conflicts);
+        Assert.Equal(Numbered(30, (3, "three"), (15, "fifteen"), (28, "twenty-eight")), r.Read("a.txt"));
+        Assert.Equal(0, repo.ShelvedSets().Count);
+
+        // the rest of the cases: all of them is just a smaller shelve, a change that is not there is refused, a new file is shelved whole
+        Assert.True(Throws(() => repo.ShelveChanges("a.txt", new[] { "no-such-change" }, null, null)));
+        Assert.True(Throws(() => repo.ShelveChanges("a.txt", Array.Empty<string>(), null, null)));
+        r.Write("new.txt", "x\ny\n");
+        Assert.True(Throws(() => repo.ShelveChanges("new.txt", new[] { "any" }, null, null)));
+    }
+
+    [Fact]
+    public void ShelvingAListTakesOnlyTheChangesOfAFileThatAreInIt()
+    {
+        if (!HasGit) return;
+        using var r = new Repo();
+        var repo = ThreeChanges(r);
+        r.Write("b.txt", "keep\n");
+        repo.CreateChangelist("Fix", false);
+        repo.MoveChanges("a.txt", new[] { KeyAt(repo.ChangeParts("a.txt"), 15) }, "Fix");
+        repo.MoveToChangelist(new[] { "b.txt" }, "Fix");
+        var set = repo.Shelve(new[] { "a.txt", "b.txt" }, null, "Fix");
+        Assert.Equal("a.txt,b.txt", Names(set.Files.Select(f => f.Path)));
+        Assert.True(!r.Has("b.txt"), "the whole file went");
+        Assert.Equal(Numbered(30, (3, "three"), (28, "twenty-eight")), r.Read("a.txt"));      // from a.txt only the change of the list
+        string patch = repo.ShelfPatch(set.Id);
+        Assert.True(patch.Contains("+fifteen") && patch.Contains("+keep") && !patch.Contains("+three"), patch);
+        Assert.True(!repo.Unshelve(set.Id, null, true).Conflicts);
+        Assert.Equal(Numbered(30, (3, "three"), (15, "fifteen"), (28, "twenty-eight")), r.Read("a.txt"));
+        Assert.Equal("keep\n", r.Read("b.txt"));
+    }
+
     // ------------------------------------------------------------ changelists
 
     [Fact]
