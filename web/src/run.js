@@ -1049,7 +1049,7 @@ export function setupRun(deps) {
         lastLaunch = { rel, debug, profile, args, extra, started: Date.now(), label: extra.module ? `python -m ${extra.module}` : extra.tests ? 'tests' : (rel ?? 'a program') };
         run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, tests: extra.tests, profileTests: extra.profileTests, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
             exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value, functionBreaks: functionNames(),
-            envFiles: extra.envFiles, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots });
+            envFiles: extra.envFiles, interpreter: extra.interpreter, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots });
         run.onMessage = handle;
         // only this run's connection counts: an earlier one closing late (Before launch) must not end the next run
         const mine = run;

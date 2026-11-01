@@ -390,6 +390,9 @@ public sealed class RunSession : IDisposable
         catch (ObjectDisposedException) { }
     });
 
+    /// <summary>Tells the page a run could not be started (the run it asked for), as any error of a start.</summary>
+    public void Reject(string message) => Error(message);
+
     void Error(string message) => _emit(new JsonObject { ["type"] = "error", ["message"] = message });
 
     internal static string ExtractHelper(string name)

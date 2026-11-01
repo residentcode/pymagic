@@ -7,7 +7,7 @@ export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m
 /** The settings beside name, script, args, cwd and env, with their defaults (strings and switches). */
 const DEFAULTS = {
     kind: 'script', module: '', app: '', host: '127.0.0.1', port: '', target: '', reload: true,
-    envFiles: '', uv: false, uvPath: '', contentRoots: true, sourceRoots: true, shared: false, openPanel: true,
+    envFiles: '', interpreter: '', uv: false, uvPath: '', contentRoots: true, sourceRoots: true, shared: false, openPanel: true,
     // Django: the settings module, a test server with fixtures, the browser opened once the server is up, debugging only the project's code,
     // log files shown in the console, another configuration run first, and --failfast for the tests
     settings: '', testServer: false, fixtures: '', openBrowser: false, justMyCode: true, logFiles: '', before: '', failfast: false,
@@ -71,6 +71,7 @@ export function startOf(c) {
         out.uv = true;
         if (c.uvPath) out.uvPath = c.uvPath;
     }
+    if (c.interpreter) out.interpreter = c.interpreter;
     if (c.contentRoots === false) out.contentRoots = false;
     if (c.sourceRoots === false) out.sourceRoots = false;
     return out;

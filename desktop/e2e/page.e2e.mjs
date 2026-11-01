@@ -6,7 +6,7 @@
 import { after, afterEach, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
@@ -46,6 +46,7 @@ const FILES = {
     'demo.md': '# Demo\n\nA [guide](docs/guide.md) and [setup](docs/guide.md#setup) and **bold**.\n\n| Name | Qty |\n|:--|--:|\n| pen | 2 |\n| notebook | 12 |\n\n- [ ] todo\n- [x] done\n\n```mermaid\ngraph TD\n  A[Start] --> B{Ok?}\n  B -->|yes| C[Done]\n```\n\n## Second\n\ntext\n',
     'demo.rst': 'Title\n=====\n\nA *word*.\n',
     'macro.py': 'x = 1\n',
+    'which.py': 'import sys\nprint("exe", sys.prefix)\n',
     'hist.py': 'def f():\n    return 0\n',
     'intent.py': "name = 'x'\nprint('Hello ' + name + '!')\nvalue = 255\n",
     'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\nN = re.compile(f"{PATTERN.pattern}[cc]")\n',
@@ -79,6 +80,7 @@ async function clickMargin(line) {
 }
 
 let echo;
+let altPython = '';
 before(async () => {
     // the scratch files of this run, not the user's own
     process.env.PYMAGIC_SCRATCHES = mkdtempSync(join(tmpdir(), 'pymagic-e2e-scratches-'));
@@ -98,6 +100,15 @@ before(async () => {
     await new Promise((ok) => echo.listen(0, '127.0.0.1', ok));
     writeFileSync(join(root, 'http-client.env.json'), JSON.stringify({ dev: { host: `http://127.0.0.1:${echo.address().port}` }, prod: { host: 'https://example.invalid' } }));
     writeFileSync(join(root, 'http-client.private.env.json'), JSON.stringify({ dev: { token: 'secret' } }));
+    // a second Python (a virtual environment made here) for the run configuration that names an interpreter of its own
+    altPython = join(root, '..', 'pymagic-e2e-altenv-' + Date.now(), 'Scripts', 'python.exe');
+    const venv = spawnSync('python', ['-m', 'venv', join(altPython, '..', '..')], { encoding: 'utf8' });
+    assert.equal(venv.status, 0, String(venv.stderr));
+    mkdirSync(join(root, '.pymagic'), { recursive: true });
+    writeFileSync(join(root, '.pymagic', 'run-configurations.json'), JSON.stringify({ selected: null, configurations: [
+        { name: 'which python', kind: 'script', script: 'which.py', interpreter: altPython },
+        { name: 'missing python', kind: 'script', script: 'which.py', interpreter: join(root, 'no', 'such', 'python.exe') },
+    ] }));
     app = await launch(root);
     page = app.page;
 });
@@ -791,5 +802,34 @@ describe('profiler', () => {
         await page.evaluate(`document.getElementById('prof-graph').click()`);
         const kept = await page.waitFor(`document.getElementById('prof-snapshot').options.length > 1 && document.getElementById('prof-snapshot').options[1].textContent`, 5000, 'the snapshot');
         assert.match(kept, / · busy$/);
+    });
+});
+
+// last: choosing a configuration (Run Anything does) stays chosen for the runs that follow
+describe('an interpreter of its own for a run configuration', () => {
+    const runAnything = async (text) => {
+        await page.evaluate(`window.pymagic.editor.getAction('pymagic.runAnything').run()`);
+        await page.waitFor(`document.querySelector('.ra-box input')`, 10000, 'the box');
+        await page.evaluate(`(() => { const i = document.querySelector('.ra-box input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input')); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+    };
+
+    test('the run uses the interpreter the configuration names, not the project\'s', async () => {
+        await open('which.py');
+        await runAnything('which python');
+        await page.waitFor(`${$('output')}.textContent.includes('exe ')`, 30000, 'the program\'s output');
+        const out = await page.evaluate(`${$('output')}.textContent`);
+        assert.ok(out.toLowerCase().includes('altenv'), out);
+        await page.waitFor(`${$('b-stop')}.disabled`, 20000, 'the run to end');
+    });
+
+    test('an interpreter that is not there is told, and nothing runs', async () => {
+        await runAnything('missing python');
+        await page.waitFor(`${$('output')}.textContent.includes('The interpreter of this configuration is not there')`, 20000, 'the message');
+        assert.ok(await page.evaluate(`${$('b-stop')}.disabled`));
+    });
+
+    test('the configuration\'s form offers the interpreters of the project', async () => {
+        const options = await page.evaluate(`fetch('/api/interpreters').then((r) => r.json()).then((l) => l.length)`);
+        assert.ok(options >= 1);
     });
 });

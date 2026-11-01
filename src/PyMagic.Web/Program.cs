@@ -1508,6 +1508,15 @@ app.Map("/run", async (HttpContext ctx) =>
                 if (module == null && debugTests == null && profileTests == null) ResolveInRoot(file0);   // refuses paths outside the workspace
                 if (Scratches.IsScratchPath(file0)) file0 = Scratches.PathOf(file0);                         // a scratch runs where it is kept, in the project's folder
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
+                // a run configuration may name an interpreter of its own (a path, or a spec of WSL, Docker or SSH) instead of the project's
+                if (msg["interpreter"]?.GetValue<string>()?.Trim() is { Length: > 0 } own0)
+                {
+                    var spec = ExecutionTarget.Parse(own0);
+                    string py = spec?.Python ?? own0;
+                    if (spec == null && Path.IsPathRooted(py) && !File.Exists(py)) { session.Reject($"The interpreter of this configuration is not there: {own0}"); continue; }
+                    session.Python = py;
+                    session.Target = spec?.Target ?? ExecutionTarget.Local;
+                }
                 // what a run configuration adds: variables, and a folder inside the project to start in
                 // .env files of the project first, the configuration's own variables over them
                 var variables = new JsonObject();

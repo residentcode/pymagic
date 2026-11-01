@@ -154,6 +154,13 @@ export function setupRunConfigurations({ currentFile }) {
                 input.oninput = () => { c[key] = input.value; };
                 return input;
             };
+            // the interpreters the project knows, offered as the box is typed in (any path may be typed)
+            const interpreterBox = text('interpreter', "the project's interpreter");
+            const known = document.createElement('datalist');
+            known.id = 'rc-interpreters';
+            interpreterBox.setAttribute('list', known.id);
+            interpreterBox.after(known);
+            void fetch('/api/interpreters').then((r) => r.json()).then((list) => { known.replaceChildren(...list.map((i) => Object.assign(document.createElement('option'), { value: i.path ?? i.spec ?? '', label: `${i.kind ?? ''} ${i.major ?? ''}.${i.minor ?? ''}`.trim() }))); }).catch(() => { });
             const kind = document.createElement('select');
             for (const [k, label] of KINDS) kind.add(new Option(label, k));
             kind.value = c.kind;
@@ -205,6 +212,7 @@ export function setupRunConfigurations({ currentFile }) {
                 ...what,
                 field(c.kind === 'script' || c.kind === 'module' ? 'Parameters' : 'More options', args, 'Typed as on a command line: words separated by spaces, "quotes" keep a space in one word.'),
                 field('Working folder', cwd),
+                field('Python interpreter', interpreterBox, 'Empty: the project\'s interpreter. A path of this machine, or one of WSL, Docker or SSH as the interpreter list names it (wsl:Ubuntu|/usr/bin/python3).'),
                 field('Environment variables', env, 'PATH, PYTHONPATH and the like are the interpreter\'s; a configuration cannot change them.'),
                 field('.env files', text('envFiles', '.env, config/dev.env'), 'Files of the project, comma separated; their variables come first, the ones above win.'),
                 check('Add the content root to PYTHONPATH', 'contentRoots', 'The project folder.'),
