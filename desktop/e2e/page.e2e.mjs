@@ -19,7 +19,11 @@ const FILES = {
     'queries.sql': "CREATE TABLE note (id INTEGER PRIMARY KEY, body TEXT);\nINSERT INTO note (body) VALUES ('one; two'), ('three');\nSELECT body FROM note ORDER BY id;\n",
     'more_items.csv': 'name,price\nlamp,30\nmug,\n',
     'busy.py': 'def inner(n):\n    return sum(i * i for i in range(n))\n\n\ndef outer():\n    return [inner(3000) for _ in range(40)]\n\n\nouter()\n',
-    'api.http': '### the items\nGET {{host}}/items\n    ?page=2\nAccept: application/json\n\n###\nPOST {{host}}/items\nContent-Type: application/json\nAuthorization: Bearer {{token}}\n\n{"name": "pen"}\n',
+    'broken.toml': '[tool]\nname = "x"\nname = "y"\nflag = True\n',
+    'broken.yml': 'a: 1\nb: 2\na: 3\n',
+    'notes.md': '# Notes\n\nSee [the guide](docs/nope.md) and [here](#notes).\n',
+    'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\n',
+    'api.http':'### the items\nGET {{host}}/items\n    ?page=2\nAccept: application/json\n\n###\nPOST {{host}}/items\nContent-Type: application/json\nAuthorization: Bearer {{token}}\n\n{"name": "pen"}\n',
     'tests/__init__.py': '',
     'tests/test_calc.py': 'import unittest\n\n\nclass Calc(unittest.TestCase):\n    def test_ok(self):\n        self.assertEqual(1 + 1, 2)\n\n    def test_bad(self):\n        self.assertEqual(1 + 1, 3)\n',
 };
@@ -288,6 +292,23 @@ describe('HTTP client', () => {
         const text = await page.evaluate('window.pymagic.editor.getValue()');
         assert.match(text, /###\nPOST http:\/\/127\.0\.0\.1\/missing\nAccept: text\/plain\nContent-Type: application\/x-www-form-urlencoded\n\na=1\n$/);
         await page.evaluate(`(() => { const ed = window.pymagic.editor; while (ed.getValue().includes('/missing')) ed.trigger('e2e', 'undo', {}); })()`);
+    });
+});
+
+describe('file checks', () => {
+    const problems = (file) => open(file).then(() => page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); const found = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.source === 'PyMagic' && /^(toml|yaml|md|re)-/.test(x.code)); return found.length ? found.map((x) => x.code + '@' + x.startLineNumber + ':' + x.startColumn) : null; })()`, 20000, 'the problems of ' + file));
+
+    test('TOML and YAML syntax problems are marked', async () => {
+        assert.deepEqual(await problems('broken.toml'), ['toml-duplicate-key@3:1', 'toml-value@4:8']);
+        assert.deepEqual(await problems('broken.yml'), ['yaml-duplicate-key@3:1']);
+    });
+
+    test('a Markdown link to a missing file is marked, an anchor that exists is not', async () => {
+        assert.deepEqual(await problems('notes.md'), ['md-link@3:17']);
+    });
+
+    test('a redundant escape and a repeated class character in re.compile are marked', async () => {
+        assert.deepEqual(await problems('rx.py'), ['re-class-repeat@2:26', 're-escape@2:28']);
     });
 });
 

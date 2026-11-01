@@ -24,6 +24,7 @@ import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
 import { setupRequirementsCheck } from './requirements-check';
+import { setupFileChecks } from './filecheck';
 import { setupSemantic } from './semantic';
 import { setupProfiler } from './profiler';
 import { setupDatabase } from './database';
@@ -1123,6 +1124,7 @@ async function main() {
     fileActions.attachEditor(editor, monaco, () => refactorMenu(editor, refactor));
     const coverage = setupCoverage(common);
     setupRequirementsCheck(common);
+    setupFileChecks(common);
     setupProfiler({ ...common, askText: (...a) => explorer.askText(...a) });
     setupHttpClient({ ...common, root: info.root, askText: (...a) => explorer.askText(...a) });
     setupDatabase({ ...common, askText: (...a) => explorer.askText(...a), runScript: (rel, args) => runHooks.runScript(rel, args) });
