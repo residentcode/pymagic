@@ -86,7 +86,7 @@ FILES['nb_more.ipynb'] = JSON.stringify({
     cells: [
         { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ['class Point:\n', '    def __init__(self):\n', '        self.x = 3\n', "        self.tags = ['a', 'b']\n", '\n', '\n', 'p = Point()\n', "d = {'one': [1, 2], 'two': 7}"] },
         { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ['a = 4\n', 'b = a * 2\n', 'c = b + 1\n', "print('c =', c)"] },
-        { cell_type: 'markdown', metadata: {}, source: ['# Report\n', '\n', 'Some *words*.'] },
+        { cell_type: 'markdown', metadata: {}, source: ['# Report\n', '\n', 'Some *words* and a formula $x_1^2$.'] },
     ],
     metadata: {}, nbformat: 4, nbformat_minor: 5,
 }, null, 1) + '\n';
@@ -1791,6 +1791,19 @@ describe('a notebook: objects in the Variables window, Debug Cell, the console, 
         // Up recalls the line
         await page.evaluate(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).consoleInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))`);
         assert.equal(await nb(`s.consoleInput.value`), 'print(late)');
+        // Tab finishes the name under the cursor with the kernel's words; when several fit, they are listed and a click picks one
+        const tab = (text) => page.evaluate(`(() => { const i = window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).consoleInput; i.value = ${JSON.stringify(text)}; i.selectionStart = i.selectionEnd = i.value.length;
+            i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })); return true; })()`);
+        await tab('print(lat');
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).consoleInput.value === 'print(late'`, 15000, 'one word: late');
+        await tab('late.app');
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).consoleInput.value === 'late.append'`, 15000, 'an attribute of the list');
+        await tab('late.re');
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).consoleHints.querySelectorAll('button').length === 2`, 15000, 'two words listed');
+        assert.equal(await nb(`[...s.consoleHints.querySelectorAll('button')].map((b) => b.textContent).join()`), 'remove,reverse');
+        await nb(`(s.consoleHints.querySelector('button').click(), 1)`);
+        assert.equal(await nb(`s.consoleInput.value`), 'late.remove');
+        assert.equal(await nb(`s.consoleHints.childElementCount`), 0, 'the list closes after a pick');
         await nb(`(s.consoleBtn.click(), s.consoleInput.value = '', 1)`);
     });
 
@@ -1806,6 +1819,16 @@ describe('a notebook: objects in the Variables window, Debug Cell, the console, 
         assert.match(got.csp, /script-src 'none'/);
         assert.ok(got.text.includes('<title>nb_more.ipynb</title>') && got.text.includes('<h1>Report</h1>') && got.text.includes('c = 9'), got.text.slice(0, 600));
         assert.ok(!got.text.includes('<script'), 'there is no script in the page');
+        // the code is coloured and the formula is MathML
+        assert.ok(got.text.includes('<span class="tok-k">class</span>'), 'keywords are marked');
+        assert.ok(got.text.includes('<msubsup><mi>x</mi><mn>1</mn><mn>2</mn></msubsup>'), 'the formula is MathML');
+        // and the browser (Chromium here) really draws them: a keyword in its own colour and a formula with a size
+        const drawn = await page.evaluate(`(async () => { const f = document.createElement('iframe'); f.style.cssText = 'position:fixed;left:0;top:0;width:900px;height:900px'; f.srcdoc = ${JSON.stringify(got.text)};
+            const loaded = new Promise((ok) => { f.onload = ok; }); document.body.append(f); await loaded; const d = f.contentDocument;
+            const out = { kw: getComputedStyle(d.querySelector('.tok-k')).color, body: getComputedStyle(d.body).color, w: d.querySelector('math').getBoundingClientRect().width, h: d.querySelector('math').getBoundingClientRect().height };
+            f.remove(); return out; })()`);
+        assert.notEqual(drawn.kw, drawn.body, 'a keyword has a colour of its own');
+        assert.ok(drawn.w > 8 && drawn.h > 8, `the formula has a size: ${JSON.stringify(drawn)}`);
         // the address is not a way to read anything else
         assert.equal(await page.evaluate(`fetch('/api/notebook/view?id=0000').then((r) => r.status)`), 404);
     });

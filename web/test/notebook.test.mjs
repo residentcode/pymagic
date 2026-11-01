@@ -3,9 +3,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-// web/package.json does not say "type": "module", so Node would read src/*.js as CommonJS; load the file as a module instead
-const source = readFileSync(new URL('../src/notebook-model.js', import.meta.url), 'utf8');
-const m = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+// web/package.json does not say "type": "module"; Node notices the import lines of src/*.js and reads them as modules (with a warning). The model
+// imports notebook-render.js, so it is loaded from its file and not from a copy of its text.
+const m = await import(new URL('../src/notebook-model.js', import.meta.url).href);
 
 // a notebook as Jupyter writes it: sorted keys, one space of indent, a final newline
 const SAMPLE = `{
@@ -433,7 +433,7 @@ test('a notebook becomes one HTML page with nothing live in it', () => {
     assert.ok(html.includes('<em>words</em>') && html.includes('<code>code</code>'));
     assert.ok(html.includes('&lt;b&gt;not bold&lt;/b&gt;'), 'markup in a text cell is text');
     assert.ok(html.includes('<li>one</li>') && html.includes('<li>two</li>'));
-    assert.ok(html.includes('In [3]:') && html.includes('print(&quot;&lt;hi&gt;&quot;)'));
+    assert.ok(html.includes('In [3]:') && html.includes('<span class="tok-b">print</span>(<span class="tok-s">&quot;&lt;hi&gt;&quot;</span>)'), 'code is coloured and its markup is text');
     assert.ok(html.includes('<img class="out" src="data:image/png;base64,iVBORw0KGgo="'));
     assert.ok(html.includes('<span class="ansi-red">ValueError</span>'));
     // the script of an HTML output is only ever inside the attribute of a frame with every right taken away

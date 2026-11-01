@@ -5,7 +5,7 @@ import {
     ansiSegments, applyKernelMessage, changeType, clearOutputs, collapseCarriageReturns, deleteCell, describeOutput, insertCell,
     cellOfLine, lastExecutionCount, mergeCells, moveCell, notebookSymbols, offsetOfPosition, parseNotebook, parseTags, sectionOf, serializeNotebook,
     setSource, setTags, sourceOf, splitCell, tagsOf, virtualDocument, virtualLine,
-    BUILT_IN_SERVER, addServer, cellDebugFile, needsMoreInput, normalizeServer, notebookSlug, notebookToHtml, parseCellDebugFile, parseServers,
+    BUILT_IN_SERVER, addServer, cellDebugFile, commonPrefix, completionTarget, needsMoreInput, normalizeServer, notebookSlug, notebookToHtml, parseCellDebugFile, parseServers,
     pathKey, pathsToRefresh, pushHistory, stepHistory, variableRows,
 } from './notebook-model';
 import { blocksOf, inlineOf } from './markdown-lite';
@@ -597,6 +597,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
             case 'kernelLog': return;
         }
         if (m.type === 'variables') { state.vars = m.vars ?? []; refreshOpen(state); paintVars(state); return; }
+        if (m.type === 'completions') { onCompletions(state, m); return; }
         if (m.type === 'children') {
             const key = state.inspecting.get(m.id);
             state.inspecting.delete(m.id);
@@ -754,10 +755,15 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         state.consoleInput = input;
         let at = state.history.length, draft = '';
         const grow = () => { input.rows = Math.min(8, input.value.split('\n').length); };
-        input.oninput = grow;
+        input.oninput = () => { grow(); hideHints(state); };
         input.onkeydown = (e) => {
             e.stopPropagation();                       // the keys of the notebook (Shift+Enter runs a cell) are not for this line
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+                if (completeConsole(state)) e.preventDefault();
+            } else if (e.key === 'Escape' && state.consoleHints?.childElementCount) {
+                hideHints(state);
+                e.preventDefault();
+            } else if (e.key === 'Enter' && !e.shiftKey) {
                 if (!e.ctrlKey && needsMoreInput(input.value)) return;   // the statement goes on: a new line
                 e.preventDefault();
                 const code = input.value;
@@ -778,7 +784,8 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
             }
         };
         row.append(prompt, input);
-        state.consoleEl.replaceChildren(head, state.consoleLog, row);
+        state.consoleHints = el('div', 'nb-console-hints');
+        state.consoleEl.replaceChildren(head, state.consoleLog, state.consoleHints, row);
     }
 
     /** Sends a line of the console to the kernel; what comes back is shown under the line, not in a cell. */
@@ -792,6 +799,51 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         const id = `k${state.nextId++}`;
         state.consoleIds.set(id, entry);
         whenOpen(state, () => send(state, { type: 'execute', id, code }));
+    }
+
+    // ---- Tab in the console: the kernel says which words finish the name under the cursor
+
+    function hideHints(state) {
+        state.completing = null;
+        state.consoleHints?.replaceChildren();
+    }
+
+    /** Asks the kernel to complete the name at the cursor; true when there was a name (so that Tab did not move the focus). */
+    function completeConsole(state) {
+        const input = state.consoleInput;
+        const target = completionTarget(input.value, input.selectionStart);
+        if (!target) return false;
+        if (state.server) { toast('Completion in the console needs the built-in kernel: a Jupyter server is asked for nothing here', true); return true; }
+        const id = `k${state.nextId++}`;
+        state.completing = { id, target, text: input.value, cursor: input.selectionStart };
+        whenOpen(state, () => send(state, { type: 'complete', id, prefix: target.prefix }));
+        return true;
+    }
+
+    function onCompletions(state, m) {
+        const ask = state.completing;
+        const input = state.consoleInput;
+        if (!ask || ask.id !== m.id || !input || input.value !== ask.text) return;   // the line changed since: the answer is old
+        const items = m.items ?? [];
+        if (!items.length) { hideHints(state); return; }
+        const { wordStart } = ask.target;
+        const put = (word) => {
+            input.value = ask.text.slice(0, wordStart) + word + ask.text.slice(ask.cursor);
+            input.selectionStart = input.selectionEnd = wordStart + word.length;
+            input.dispatchEvent(new Event('input'));
+            input.focus();
+        };
+        if (items.length === 1) { put(items[0]); return; }
+        const common = commonPrefix(items);
+        if (common.length > ask.target.word.length) put(common);
+        state.completing = { ...ask, text: input.value, cursor: input.selectionStart };
+        state.consoleHints.replaceChildren(...items.slice(0, 30).map((word) => {
+            const b = el('button', 'nb-console-hint-item', word);
+            b.onmousedown = (e) => e.preventDefault();        // the line keeps the focus
+            b.onclick = () => put(word);
+            return b;
+        }));
+        if (items.length > 30) state.consoleHints.append(el('span', 'nb-console-hint-more', `… ${items.length - 30} more`));
     }
 
     function onConsoleMessage(state, entry, m) {

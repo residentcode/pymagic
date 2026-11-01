@@ -1608,6 +1608,7 @@ app.Map("/nb", async (HttpContext ctx) =>
                 case "useServer" when remote && kernel == null: UseServer(msg["url"]?.GetValue<string>() ?? "", msg["token"]?.GetValue<string>() ?? "", msg["kernel"]?.GetValue<string>()); break;
                 case "execute": kernel?.Execute(msg["id"]?.GetValue<string>() ?? "", msg["code"]?.GetValue<string>() ?? "", msg["debug"]); break;
                 case "inspect": kernel?.Inspect(msg["id"]?.GetValue<string>() ?? "", msg["path"]); break;
+                case "complete": kernel?.Complete(msg["id"]?.GetValue<string>() ?? "", msg["prefix"]?.GetValue<string>() ?? ""); break;
                 case "interrupt": kernel?.Interrupt(); break;
                 case "restart": if (kernel is JupyterKernel jk) jk.Restart(); else if (!remote) StartKernel(); break;
             }

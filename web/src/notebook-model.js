@@ -1,6 +1,7 @@
 // The notebook file format (nbformat 4) as plain functions: reading, editing cells, turning the kernel's messages into
 // outputs, and writing the file back the way Jupyter writes it (keys sorted, one space of indent, a final newline), so
 // opening and saving a notebook changes nothing but what was edited. No DOM here: web/test/notebook.test.mjs checks it.
+import { HIGHLIGHT_CSS, MATH_CSS, extractMath, highlightPython, restoreMath } from './notebook-render.js';
 
 /** Reads the text of an .ipynb file. Returns { nb } or { error }. */
 export function parseNotebook(text) {
@@ -481,6 +482,35 @@ export function addServer(list, server) {
     return [...list.filter((s) => s.id !== server.id), server];
 }
 
+// ------------------------------------------------------------ completion in the console
+
+/**
+ * The dotted name that ends at `cursor` in the console's text, for the kernel to complete: { prefix, wordStart, word } (the prefix is the whole name,
+ * `word` the part after its last dot, which is what gets replaced), or null when there is no name there to complete. A name that follows a call or a
+ * bracket (`f().x`, `a[0].x`) is not completed, because finding its words would mean running the call.
+ */
+export function completionTarget(text, cursor) {
+    const before = String(text).slice(0, cursor);
+    const run = /[A-Za-z0-9_.]*$/.exec(before)[0];
+    if (run === '') return null;
+    const parts = run.split('.');
+    const word = parts[parts.length - 1];
+    if (parts.slice(0, -1).some((part) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(part))) return null;
+    if (word !== '' && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(word)) return null;
+    if (parts.length === 1 && word === '') return null;
+    const from = cursor - run.length;
+    if (parts.length > 1 && /[)\]}'"]\s*$/.test(before.slice(0, from))) return null;
+    return { prefix: run, word, wordStart: cursor - word.length };
+}
+
+/** The longest start that all the words share (case matters). */
+export function commonPrefix(words) {
+    if (!words.length) return '';
+    let prefix = words[0];
+    for (const w of words) while (!w.startsWith(prefix)) prefix = prefix.slice(0, -1);
+    return prefix;
+}
+
 // ------------------------------------------------------------ a notebook as one HTML page (Open in browser)
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -512,6 +542,12 @@ function blocksHtml(blocks) {
     }).join('\n');
 }
 
+/** Markdown as HTML with its formulas ($…$, $$…$$) set as MathML. */
+function markdownHtml(src, blocksOf) {
+    const { text, maths } = extractMath(src);
+    return restoreMath(blocksHtml(blocksOf(text)), maths);
+}
+
 function outputHtml(o, blocksOf) {
     const d = describeOutput(o);
     switch (d.kind) {
@@ -524,7 +560,7 @@ function outputHtml(o, blocksOf) {
         case 'image': return `<img class="out" src="data:${esc(d.mime)};base64,${esc(d.data)}" alt="output">`;
         // the page of a notebook is served from the host's own address: the HTML of an output stays in a frame with no rights at all (no scripts, no forms)
         case 'html': return `<iframe class="out html" sandbox="" srcdoc="${esc(d.html)}"></iframe>`;
-        case 'markdown': return `<div class="out md">${blocksHtml(blocksOf(d.text))}</div>`;
+        case 'markdown': return `<div class="out md">${markdownHtml(d.text, blocksOf)}</div>`;
         case 'json': return `<pre class="out result">${esc(d.text)}</pre>`;
         default: return `<pre class="out result">${esc(d.text ?? '')}</pre>`;
     }
@@ -539,7 +575,8 @@ pre{margin:0;font:13px/1.45 Consolas,Menlo,monospace;white-space:pre-wrap;word-b
 .out.html{width:100%;border:0;min-height:3rem}img.out{max-width:100%}
 .ansi-bold{font-weight:bold}.ansi-red{color:#c62828}.ansi-green{color:#2e7d32}.ansi-yellow{color:#9a6700}.ansi-blue{color:#1565c0}.ansi-magenta{color:#8e24aa}.ansi-cyan{color:#00838f}
 blockquote{border-left:3px solid #ccd;margin:.5rem 0;padding-left:1rem;color:#556}pre.code{background:#f5f6f8;padding:.4rem .6rem;border-radius:3px}
-code{background:#eef0f4;padding:0 .25em;border-radius:3px}`;
+code{background:#eef0f4;padding:0 .25em;border-radius:3px}
+${HIGHLIGHT_CSS}${MATH_CSS}`;
 
 /**
  * The notebook as one self-contained HTML page: markdown cells formatted, code and its outputs as they are saved (images inline).
@@ -547,13 +584,16 @@ code{background:#eef0f4;padding:0 .25em;border-radius:3px}`;
  * (passed in, so that this file has no imports).
  */
 export function notebookToHtml(nb, { title = 'Notebook', blocksOf }) {
+    // code is coloured as Python unless the notebook says another language
+    const language = nb.metadata?.language_info?.name ?? nb.metadata?.kernelspec?.language ?? 'python';
+    const codeHtml = (src) => (String(language).toLowerCase() === 'python' ? highlightPython(src) : esc(src));
     const cells = nb.cells.map((cell) => {
         const src = sourceOf(cell);
-        if (cell.cell_type === 'markdown') return `<div class="cell md">${blocksHtml(blocksOf(src))}</div>`;
+        if (cell.cell_type === 'markdown') return `<div class="cell md">${markdownHtml(src, blocksOf)}</div>`;
         if (cell.cell_type === 'raw') return `<div class="cell raw"><pre>${esc(src)}</pre></div>`;
         const count = cell.execution_count == null ? ' ' : cell.execution_count;
         const outs = (cell.outputs ?? []).map((o) => outputHtml(o, blocksOf)).join('\n');
-        return `<div class="cell code"><div class="in"><span class="prompt">In [${esc(count)}]:</span><pre>${esc(src)}</pre></div>${outs ? `<div class="outputs">${outs}</div>` : ''}</div>`;
+        return `<div class="cell code"><div class="in"><span class="prompt">In [${esc(count)}]:</span><pre>${codeHtml(src)}</pre></div>${outs ? `<div class="outputs">${outs}</div>` : ''}</div>`;
     });
     return `<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><title>${esc(title)}</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>${EXPORT_CSS}</style></head>\n<body><h1 class="title">${esc(title)}</h1>\n${cells.join('\n')}\n</body></html>\n`;
 }

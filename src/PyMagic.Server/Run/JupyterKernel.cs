@@ -14,6 +14,7 @@ public interface INotebookKernel : IDisposable
     void Execute(string id, string code, JsonNode? debug = null);
     void Interrupt();
     void Inspect(string id, JsonNode? path);
+    void Complete(string id, string prefix);
 }
 
 /// <summary>
@@ -157,6 +158,9 @@ public sealed class JupyterKernel : INotebookKernel
 
     public void Inspect(string id, JsonNode? path) =>
         _emit(new JsonObject { ["type"] = "children", ["id"] = id, ["path"] = path?.DeepClone(), ["children"] = new JsonArray(), ["error"] = "A Jupyter server does not send its variables here" });
+
+    public void Complete(string id, string prefix) =>
+        _emit(new JsonObject { ["type"] = "completions", ["id"] = id, ["items"] = new JsonArray(), ["error"] = "A Jupyter server is not asked for words here" });
 
     /// <summary>POST /api/kernels/{id}/interrupt.</summary>
     public void Interrupt() => Post("interrupt");

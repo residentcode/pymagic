@@ -385,6 +385,52 @@ def answer_inspect(message):
     send(out)
 
 
+_MISSING = object()
+
+
+def lookup_dotted(parts):
+    """What a dotted name holds, found by looking (attributes are read, nothing is called); _MISSING when it is not there."""
+    obj = namespace[parts[0]] if parts[0] in namespace else getattr(builtins, parts[0], _MISSING)
+    for part in parts[1:]:
+        if obj is _MISSING:
+            break
+        try:
+            obj = getattr(obj, part)
+        except BaseException:  # noqa: BLE001 - a property that raises just has no completions
+            return _MISSING
+    return obj
+
+
+def complete_names(prefix):
+    """The words that complete the dotted name `prefix`: names of the cells and built-ins, or the attributes of what comes before the last dot."""
+    import keyword
+    head, dot, tail = prefix.rpartition(".")
+    if not dot:
+        pool = set(namespace) | set(dir(builtins)) | set(keyword.kwlist)
+    else:
+        parts = head.split(".")
+        if not all(part.isidentifier() for part in parts):
+            return []
+        obj = lookup_dotted(parts)
+        try:
+            pool = set() if obj is _MISSING else set(dir(obj))
+        except BaseException:  # noqa: BLE001
+            pool = set()
+    show_private = tail.startswith("_")
+    found = sorted(n for n in pool if n.startswith(tail) and (show_private or not n.startswith("_")))
+    return found[:200]
+
+
+def answer_complete(message):
+    out = {"type": "completions", "id": message.get("id")}
+    try:
+        out["items"] = complete_names(str(message.get("prefix") or ""))
+    except BaseException as error:  # noqa: BLE001
+        out["items"] = []
+        out["error"] = "%s: %s" % (type(error).__name__, error)
+    send(out)
+
+
 def no_input(*_args, **_kwargs):
     raise RuntimeError("input() is not available in notebook cells")
 
@@ -412,6 +458,8 @@ def reader(stream):
                 jobs.put(message)
             elif kind == "inspect":
                 answer_inspect(message)         # answered here, so a value can be opened while a cell runs
+            elif kind == "complete":
+                answer_complete(message)        # the same: the console completes a name while a cell runs
     except OSError:
         pass                      # the host went away without closing the socket properly (it was killed)
     finally:

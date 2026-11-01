@@ -153,6 +153,10 @@ public sealed class NotebookKernel : INotebookKernel
     public void Inspect(string id, JsonNode? path) =>
         Send(new JsonObject { ["type"] = "inspect", ["id"] = id, ["path"] = path?.DeepClone() });
 
+    /// <summary>Asks which words complete a dotted name (<c>complete</c>); the kernel answers with <c>completions</c>, also while a cell runs.</summary>
+    public void Complete(string id, string prefix) =>
+        Send(new JsonObject { ["type"] = "complete", ["id"] = id, ["prefix"] = prefix });
+
     /// <summary>Raises KeyboardInterrupt in the running cell (a cell blocked inside native code stops when it returns to Python).</summary>
     public void Interrupt() => Send(new JsonObject { ["type"] = "interrupt" });
 

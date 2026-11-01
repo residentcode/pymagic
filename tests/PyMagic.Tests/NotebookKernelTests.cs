@@ -71,6 +71,15 @@ public class NotebookKernelTests
             return Wait(e => e["type"]!.GetValue<string>() == "children" && e["id"]?.GetValue<string>() == id);
         }
 
+        /// <summary>The words that complete a dotted name, as the kernel offers them.</summary>
+        public List<string> Complete(string prefix)
+        {
+            string id = "c" + _next++;
+            Inner.Complete(id, prefix);
+            var answer = Wait(e => e["type"]!.GetValue<string>() == "completions" && e["id"]?.GetValue<string>() == id);
+            return answer["items"]!.AsArray().Select(x => x!.GetValue<string>()).ToList();
+        }
+
         public void Dispose() => Inner.Dispose();
     }
 
@@ -242,6 +251,31 @@ public class NotebookKernelTests
 
     static List<(string Name, string Type, string Value, bool Expandable)> Members(JsonNode children) =>
         children["children"]!.AsArray().Select(c => (c!["name"]!.GetValue<string>(), c["type"]!.GetValue<string>(), c["value"]!.GetValue<string>(), c["expandable"]!.GetValue<bool>())).ToList();
+
+    [Fact]
+    public void ANameIsCompletedFromTheCellsAndWhatTheyHold()
+    {
+        if (!HavePython) return;
+        using var k = new Kernel();
+        k.Run("import math\nclass Point:\n    def __init__(self):\n        self.x = 3\n        self._hidden = 1\n    def move(self): return 1\n\n\ncounter = 0\ncart = Point()\n"
+            + "def boom():\n    global counter\n    counter += 1\n    return Point()\n\n\nclass Trap:\n    @property\n    def bad(self): raise RuntimeError('no')\n\n\ntrap = Trap()\n");
+        Assert.Equal("cart", string.Join(",", k.Complete("car")));
+        Assert.True(k.Complete("pri").Contains("print"));
+        Assert.True(k.Complete("imp").Contains("import"));
+        Assert.Equal("move,x", string.Join(",", k.Complete("cart.")));
+        Assert.Equal("move", string.Join(",", k.Complete("cart.mo")));
+        Assert.True(k.Complete("cart._h").Contains("_hidden"));
+        Assert.True(!k.Complete("cart.").Contains("_hidden"), "private names wait for an underscore");
+        Assert.True(k.Complete("math.sq").Contains("sqrt"));
+        // nothing is called to find the words: a call before the dot is no name, and a property that raises only has no words
+        Assert.Equal(0, k.Complete("boom().").Count);
+        Assert.Equal(0, k.Complete("trap.bad.").Count);
+        Assert.True(k.Complete("trap.b").Contains("bad"));
+        Assert.Equal(0, k.Complete("nothing.").Count);
+        // and boom() was not run by asking
+        var printed = string.Join("", k.Run("print(counter)").Select(e => e.ToJsonString()));
+        Assert.Contains("0", printed);
+    }
 
     [Fact]
     public void ObjectsOfTheVariablesWindowAreOpenedOneLevelAtATime()
