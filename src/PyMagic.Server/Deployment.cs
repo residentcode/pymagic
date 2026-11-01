@@ -9,11 +9,11 @@ namespace PyMagic.Server;
 public sealed record DeployMapping(string Local, string Remote);
 
 /// <summary>
-/// A server the project is deployed to (item 244): a folder (a share, a USB stick), an FTP server, or an SFTP server. <c>Root</c> is the
+/// A server the project is deployed to (item 244): a folder (a share, a USB stick), an FTP server (<c>ftp</c>, or <c>ftps</c>: explicit TLS), or an SFTP server. <c>DeleteOnDelete</c> (off unless chosen) takes a file off the server when it is deleted in the project. <c>Root</c> is the
 /// folder on it everything below is relative to (for a folder server, the folder itself).
 /// </summary>
 public sealed record DeployServer(string Id, string Name, string Type, string Host, int Port, string User, string Root, string KeyFile, bool UploadOnSave,
-    List<DeployMapping> Mappings, List<string> Excluded, string HostKey);
+    List<DeployMapping> Mappings, List<string> Excluded, string HostKey, bool DeleteOnDelete = false);
 
 public sealed record RemoteEntry(string Name, bool IsDir, long Size, DateTime Modified);
 
@@ -45,6 +45,8 @@ public static class DeployStore
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { return new(); }
     }
 
+    const string PassphraseSuffix = "#passphrase";
+
     static Dictionary<string, string> Passwords(string root)
     {
         try { return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(Private(root))) ?? new(); }
@@ -53,13 +55,16 @@ public static class DeployStore
 
     public static string PasswordOf(string root, string id) => Passwords(root).GetValueOrDefault(id, "");
 
+    /// <summary>The passphrase of the private key file, kept in the same private file as the password.</summary>
+    public static string PassphraseOf(string root, string id) => Passwords(root).GetValueOrDefault(id + PassphraseSuffix, "");
+
     public static DeployServer? Find(string root, string id) => Load(root).FirstOrDefault(s => s.Id == id);
 
     /// <summary>Makes a server from what the form sent, checked. <exception cref="ServiceException">A field is not usable.</exception></summary>
     public static DeployServer Parse(System.Text.Json.Nodes.JsonObject body, string? existingId = null)
     {
         string type = (body["type"]?.GetValue<string>() ?? "").ToLowerInvariant();
-        if (type is not ("folder" or "ftp" or "sftp")) throw new ServiceException("A server is a folder, an FTP server or an SFTP server.");
+        if (type is not ("folder" or "ftp" or "ftps" or "sftp")) throw new ServiceException("A server is a folder, an FTP server, an FTPS server or an SFTP server.");
         string host = (body["host"]?.GetValue<string>() ?? "").Trim();
         string root = (body["root"]?.GetValue<string>() ?? "").Trim().Replace('\\', '/');
         if (type == "folder")
@@ -68,11 +73,11 @@ public static class DeployStore
             host = "";
         }
         else if (host.Length == 0) throw new ServiceException("Name the host.");
-        int port = body["port"] is { } p && int.TryParse(p.ToString(), out var n) ? n : (type == "ftp" ? 21 : 22);
+        int port = body["port"] is { } p && int.TryParse(p.ToString(), out var n) ? n : (type is "ftp" or "ftps" ? 21 : 22);
         if (port is < 1 or > 65535) throw new ServiceException("The port is a number from 1 to 65535.");
         string user = (body["user"]?.GetValue<string>() ?? "").Trim();
         foreach (var field in new[] { host, user, root }) if (field.Any(char.IsControl)) throw new ServiceException("A name has a control character in it.");
-        if (type != "folder" && user.Length == 0) user = type == "ftp" ? "anonymous" : "";
+        if (type != "folder" && user.Length == 0) user = type is "ftp" or "ftps" ? "anonymous" : "";
         string name = (body["name"]?.GetValue<string>() ?? "").Trim();
         if (name.Length == 0) name = type == "folder" ? root : $"{user}@{host}";
         string id = existingId ?? new string((type + "-" + (type == "folder" ? root : host + "-" + port + "-" + user)).Select(c => char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : '-').ToArray()).Trim('-');
@@ -80,22 +85,23 @@ public static class DeployStore
         if (mappings == null || mappings.Count == 0) mappings = new() { new DeployMapping("", "") };
         if (mappings.Any(m => m.Local.Split('/').Contains("..") || m.Remote.Split('/').Contains(".."))) throw new ServiceException("A mapping cannot climb out of its folder.");
         var excluded = (body["excluded"] as System.Text.Json.Nodes.JsonArray)?.Select(x => x?.GetValue<string>()?.Trim() ?? "").Where(x => x.Length > 0).ToList() ?? new();
-        return new DeployServer(id, name, type, host, port, user, root, (body["keyFile"]?.GetValue<string>() ?? "").Trim(), body["uploadOnSave"]?.GetValue<bool>() ?? false, mappings, excluded, body["hostKey"]?.GetValue<string>() ?? "");
+        return new DeployServer(id, name, type, host, port, user, root, (body["keyFile"]?.GetValue<string>() ?? "").Trim(), body["uploadOnSave"]?.GetValue<bool>() ?? false, mappings, excluded, body["hostKey"]?.GetValue<string>() ?? "", body["deleteOnDelete"]?.GetValue<bool>() ?? false);
     }
 
     static string Clean(string? path) => (path ?? "").Trim().Replace('\\', '/').Trim('/');
 
-    public static void Save(string root, DeployServer server, string? password)
+    public static void Save(string root, DeployServer server, string? password, string? passphrase = null)
     {
         var list = Load(root).Where(s => s.Id != server.Id).ToList();
         list.Add(server);
         Directory.CreateDirectory(System.IO.Path.Combine(root, ".pymagic"));
         System.IO.File.WriteAllText(File_(root), JsonSerializer.Serialize(list, Options));
-        // a password that was not sent stays as it was
-        if (password != null)
+        // a password or passphrase that was not sent stays as it was
+        if (password != null || passphrase != null)
         {
             var passwords = Passwords(root);
-            if (password.Length > 0) passwords[server.Id] = password; else passwords.Remove(server.Id);
+            if (password != null) { if (password.Length > 0) passwords[server.Id] = password; else passwords.Remove(server.Id); }
+            if (passphrase != null) { if (passphrase.Length > 0) passwords[server.Id + PassphraseSuffix] = passphrase; else passwords.Remove(server.Id + PassphraseSuffix); }
             System.IO.File.WriteAllText(Private(root), JsonSerializer.Serialize(passwords));
         }
         PymagicFolder.IgnoreInGit(System.IO.Path.Combine(root, ".pymagic"), "deployment.private.json");
@@ -106,7 +112,8 @@ public static class DeployStore
         if (!System.IO.File.Exists(File_(root))) return;
         System.IO.File.WriteAllText(File_(root), JsonSerializer.Serialize(Load(root).Where(s => s.Id != id).ToList(), Options));
         var passwords = Passwords(root);
-        if (passwords.Remove(id)) System.IO.File.WriteAllText(Private(root), JsonSerializer.Serialize(passwords));
+        bool had = passwords.Remove(id) | passwords.Remove(id + PassphraseSuffix);
+        if (had) System.IO.File.WriteAllText(Private(root), JsonSerializer.Serialize(passwords));
     }
 }
 
@@ -146,18 +153,28 @@ public sealed class FolderRemote : IRemote
 #pragma warning disable SYSLIB0014   // FtpWebRequest is the client that needs no download
 public sealed class FtpRemote : IRemote
 {
-    readonly string _host; readonly int _port; readonly NetworkCredential _credential;
-    public FtpRemote(string host, int port, string user, string password) { _host = host; _port = port; _credential = new NetworkCredential(user, password); }
+    readonly string _host; readonly int _port; readonly NetworkCredential _credential; readonly bool _tls;
+    /// <param name="tls">FTPS: the control and the data connection are encrypted (explicit TLS: AUTH TLS on the usual port); the server's certificate must be one this computer trusts.</param>
+    public FtpRemote(string host, int port, string user, string password, bool tls = false) { _host = host; _port = port; _credential = new NetworkCredential(user, password); _tls = tls; }
 
     FtpWebRequest Request(string path, string method)
     {
         var uri = new UriBuilder("ftp", _host, _port) { Path = "/" + string.Join("/", path.Split('/', StringSplitOptions.RemoveEmptyEntries).Select(Uri.EscapeDataString)) };
         var r = (FtpWebRequest)WebRequest.Create(uri.Uri);
-        r.Method = method; r.Credentials = _credential; r.UsePassive = true; r.UseBinary = true; r.KeepAlive = false; r.Timeout = 20000; r.ReadWriteTimeout = 30000;
+        r.Method = method; r.Credentials = _credential; r.UsePassive = true; r.EnableSsl = _tls; r.UseBinary = true; r.KeepAlive = false; r.Timeout = 20000; r.ReadWriteTimeout = 30000;
         return r;
     }
 
-    static readonly Regex Unix = new(@"^(?<kind>[-dlDL])[\w-]{9}[+@.]?\s+\d+\s+\S+\s+\S+\s+(?<size>\d+)\s+(?<date>\w{3}\s+\d{1,2}\s+(?:\d{4}|\d{1,2}:\d{2}))\s+(?<name>.+)$", RegexOptions.Compiled);
+    /// <summary>The answer of the server; a certificate this computer does not accept (FTPS) is told as a <see cref="ServiceException"/>.</summary>
+    static WebResponse Respond(FtpWebRequest request) => Wrap(request.GetResponse);
+
+    static T Wrap<T>(Func<T> call)
+    {
+        try { return call(); }
+        catch (System.Security.Authentication.AuthenticationException e) { throw new ServiceException("The secure connection could not be made: " + e.Message + " (the server's certificate must be one this computer trusts)"); }
+    }
+
+    static readonly Regex Unix =new(@"^(?<kind>[-dlDL])[\w-]{9}[+@.]?\s+\d+\s+\S+\s+\S+\s+(?<size>\d+)\s+(?<date>\w{3}\s+\d{1,2}\s+(?:\d{4}|\d{1,2}:\d{2}))\s+(?<name>.+)$", RegexOptions.Compiled);
     static readonly Regex Dos = new(@"^(?<date>\d{2}-\d{2}-\d{2,4}\s+\d{1,2}:\d{2}[AP]M)\s+(?<size><DIR>|\d+)\s+(?<name>.+)$", RegexOptions.Compiled);
 
     public IReadOnlyList<RemoteEntry> List(string dir)
@@ -165,7 +182,7 @@ public sealed class FtpRemote : IRemote
         var entries = new List<RemoteEntry>();
         try
         {
-            using var res = (FtpWebResponse)Request(dir, WebRequestMethods.Ftp.ListDirectoryDetails).GetResponse();
+            using var res = (FtpWebResponse)Respond(Request(dir, WebRequestMethods.Ftp.ListDirectoryDetails));
             using var reader = new StreamReader(res.GetResponseStream(), Encoding.UTF8);
             string? line;
             while ((line = reader.ReadLine()) != null)
@@ -191,7 +208,7 @@ public sealed class FtpRemote : IRemote
 
     public byte[] Read(string path)
     {
-        using var res = (FtpWebResponse)Request(path, WebRequestMethods.Ftp.DownloadFile).GetResponse();
+        using var res = (FtpWebResponse)Respond(Request(path, WebRequestMethods.Ftp.DownloadFile));
         using var ms = new MemoryStream();
         res.GetResponseStream().CopyTo(ms);
         return ms.ToArray();
@@ -203,19 +220,19 @@ public sealed class FtpRemote : IRemote
         var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         for (int i = 1; i < parts.Length; i++)
         {
-            try { using var _ = (FtpWebResponse)Request(string.Join("/", parts.Take(i)), WebRequestMethods.Ftp.MakeDirectory).GetResponse(); }
+            try { using var _ = (FtpWebResponse)Respond(Request(string.Join("/", parts.Take(i)), WebRequestMethods.Ftp.MakeDirectory)); }
             catch (WebException) { /* it exists */ }
         }
         var req = Request(path, WebRequestMethods.Ftp.UploadFile);
         req.ContentLength = data.Length;
-        using (var stream = req.GetRequestStream()) stream.Write(data, 0, data.Length);
-        using var res = (FtpWebResponse)req.GetResponse();
+        using (var stream = Wrap(() => req.GetRequestStream())) stream.Write(data, 0, data.Length);
+        using var res = (FtpWebResponse)Respond(req);
     }
 
     public void Delete(string path)
     {
-        try { using var _ = (FtpWebResponse)Request(path, WebRequestMethods.Ftp.DeleteFile).GetResponse(); }
-        catch (WebException) { using var _ = (FtpWebResponse)Request(path, WebRequestMethods.Ftp.RemoveDirectory).GetResponse(); }
+        try { using var _ = (FtpWebResponse)Respond(Request(path, WebRequestMethods.Ftp.DeleteFile)); }
+        catch (WebException) { using var _ = (FtpWebResponse)Respond(Request(path, WebRequestMethods.Ftp.RemoveDirectory)); }
     }
 
     public RemoteEntry? Stat(string path)
@@ -231,12 +248,13 @@ public sealed class FtpRemote : IRemote
 public sealed class SftpRemote : IRemote
 {
     readonly Renci.SshNet.SftpClient _client;
-    public SftpRemote(string host, int port, string user, string password, string keyFile, string knownKey, Action<string> learn)
+    public SftpRemote(string host, int port, string user, string password, string keyFile, string knownKey, Action<string> learn, string passphrase = "")
     {
         var methods = new List<Renci.SshNet.AuthenticationMethod>();
         if (keyFile.Length > 0)
         {
-            try { methods.Add(new Renci.SshNet.PrivateKeyAuthenticationMethod(user, new Renci.SshNet.PrivateKeyFile(keyFile, password.Length > 0 ? password : null))); }
+            if (!File.Exists(keyFile)) throw new ServiceException("The key file is not there: " + keyFile);
+            try { methods.Add(new Renci.SshNet.PrivateKeyAuthenticationMethod(user, new Renci.SshNet.PrivateKeyFile(keyFile, passphrase.Length > 0 ? passphrase : password.Length > 0 ? password : null))); }
             catch (Exception e) when (e is IOException or Renci.SshNet.Common.SshException or ArgumentException) { throw new ServiceException("The key file could not be read: " + e.Message); }
         }
         else methods.Add(new Renci.SshNet.PasswordAuthenticationMethod(user, password));
@@ -293,8 +311,18 @@ public static class Deployment
         {
             "folder" => new FolderRemote(server.Root),
             "ftp" => new FtpRemote(server.Host, server.Port, server.User, password),
-            _ => new SftpRemote(server.Host, server.Port, server.User, password, server.KeyFile, server.HostKey, key => RememberKey(root, server.Id, key)),
+            "ftps" => new FtpRemote(server.Host, server.Port, server.User, password, tls: true),
+            _ => new SftpRemote(server.Host, server.Port, server.User, password, KeyPath(root, server.KeyFile), server.HostKey, key => RememberKey(root, server.Id, key), DeployStore.PassphraseOf(root, server.Id)),
         };
+    }
+
+    /// <summary>The key file as a full path: "~" is the home folder, a relative path is from the project.</summary>
+    public static string KeyPath(string root, string keyFile)
+    {
+        keyFile = keyFile.Trim();
+        if (keyFile.Length == 0) return "";
+        if (keyFile == "~" || keyFile.StartsWith("~/") || keyFile.StartsWith("~\\")) keyFile = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), keyFile.Length > 2 ? keyFile[2..] : "");
+        return System.IO.Path.GetFullPath(keyFile, root);
     }
 
     static void RememberKey(string root, string id, string key)
@@ -376,6 +404,56 @@ public static class Deployment
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or WebException or Renci.SshNet.Common.SshException or ServiceException) { results.Add(new TransferResult(rel, false, e.Message)); }
         }
+        return results;
+    }
+
+    /// <summary>
+    /// Deletes a file or folder of the server by its path under the server's root (what the browser of the server shows). The root itself,
+    /// an empty path and a path with ".." are refused. A folder goes with all that is in it.
+    /// </summary>
+    public static TransferResult DeleteRemote(string root, DeployServer server, string path)
+    {
+        string clean = path.Replace('\\', '/').Trim('/');
+        if (clean.Length == 0) return new TransferResult(path, false, "The server's top folder is not deleted from here.");
+        if (clean.Split('/').Contains("..") || clean.Any(char.IsControl)) return new TransferResult(path, false, "That path is not usable.");
+        string full = server.Type == "folder" ? clean : string.Join("/", new[] { server.Root.Trim('/').Replace('\\', '/'), clean }.Where(x => x.Length > 0));
+        try
+        {
+            using var remote = Open(root, server);
+            if (remote.Stat(full) == null) return new TransferResult(clean, false, "It is not on the server.");
+            remote.Delete(full);
+            return new TransferResult(clean, true, null);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or WebException or Renci.SshNet.Common.SshException or ServiceException) { return new TransferResult(clean, false, e.Message); }
+    }
+
+    /// <summary>
+    /// For a server that was set to delete what is deleted in the project: takes the server's copies of these deleted files off. Only files
+    /// (never a folder of the server), only those a mapping covers and that are not excluded; a file that is not there is left alone.
+    /// </summary>
+    public static List<TransferResult> DeleteForLocal(string root, DeployServer server, IEnumerable<string> rels)
+    {
+        var results = new List<TransferResult>();
+        if (!server.DeleteOnDelete) return results;
+        IRemote? remote = null;
+        try
+        {
+            foreach (var rel0 in rels)
+            {
+                string rel = rel0.Replace('\\', '/').Trim('/');
+                string? to = RemoteOf(server, rel);
+                if (rel.Length == 0 || to == null || IsExcluded(server, rel)) continue;
+                try
+                {
+                    remote ??= Open(root, server);
+                    if (remote.Stat(to) is not { IsDir: false }) continue;
+                    remote.Delete(to);
+                    results.Add(new TransferResult(rel, true, null));
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or WebException or Renci.SshNet.Common.SshException or ServiceException) { results.Add(new TransferResult(rel, false, e.Message)); }
+            }
+        }
+        finally { remote?.Dispose(); }
         return results;
     }
 
