@@ -79,3 +79,29 @@ export function tokenHint(info) {
         ? `A token for ${info.host} is kept on this computer (in .pymagic/pullrequests.private.json, outside version control). Type a new one to replace it, or leave the field empty and press Forget.`
         : `Type a personal access token for ${info.host}. It is kept on this computer in .pymagic/pullrequests.private.json (outside version control) and only sent to ${info.apiBase}.`;
 }
+
+/**
+ * A file's patch as rows for a list with real line numbers: { kind: 'hunk' | 'ctx' | 'add' | 'del', text, oldNo, newNo }. A comment can be put on the rows that have a
+ * `newNo` (the added lines and the ones around them), which are the lines the forges take a comment on.
+ */
+export function patchRows(patch) {
+    const rows = [];
+    let oldNo = 0;
+    let newNo = 0;
+    for (const raw of String(patch ?? '').split('\n')) {
+        const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
+        if (header) { oldNo = Number(header[1]); newNo = Number(header[2]); rows.push({ kind: 'hunk', text: raw, oldNo: null, newNo: null }); continue; }
+        if (newNo === 0 || raw === '' || raw.startsWith('\\')) continue;
+        if (raw.startsWith('+')) rows.push({ kind: 'add', text: raw.slice(1), oldNo: null, newNo: newNo++ });
+        else if (raw.startsWith('-')) rows.push({ kind: 'del', text: raw.slice(1), oldNo: oldNo++, newNo: null });
+        else if (raw.startsWith(' ')) rows.push({ kind: 'ctx', text: raw.slice(1), oldNo: oldNo++, newNo: newNo++ });
+    }
+    return rows;
+}
+
+/** What a review can say on a forge: [{ value, label, needsWords }]. GitLab has approvals only (words go through a comment). */
+export function reviewChoices(kind) {
+    return kind === 'github'
+        ? [{ value: 'approve', label: 'Approve', needsWords: false }, { value: 'request_changes', label: 'Request changes', needsWords: true }, { value: 'comment', label: 'Comment', needsWords: true }]
+        : [{ value: 'approve', label: 'Approve', needsWords: false }, { value: 'unapprove', label: 'Take my approval back', needsWords: false }];
+}

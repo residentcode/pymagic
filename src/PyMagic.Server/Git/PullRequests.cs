@@ -354,6 +354,101 @@ public static class PullRequests
             new[] { $"Repository: {r.Repository}", $"{noun} #{number}", "The comment is public to everyone who can see the repository, under your name." }, Array.Empty<string>());
     }
 
+    static readonly Regex HunkHeader = new(@"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", RegexOptions.Compiled);
+
+    /// <summary>The line numbers of the new side that a patch shows (the added lines and the ones around them): the lines a comment can be put on.</summary>
+    public static HashSet<int> NewSideLines(string? patch)
+    {
+        var lines = new HashSet<int>();
+        int next = 0;
+        foreach (var raw in (patch ?? "").Split('\n'))
+        {
+            var header = HunkHeader.Match(raw);
+            if (header.Success) { next = int.Parse(header.Groups[1].Value); continue; }
+            if (next == 0 || raw.Length == 0 || raw[0] == '\\' || raw[0] == '-') continue;
+            if (raw[0] is '+' or ' ') lines.Add(next++);
+        }
+        return lines;
+    }
+
+    /// <summary>
+    /// A review: an approval, a request for changes, or a comment on the whole (GitHub), or an approval taken back (GitLab, which has no other kind). It is pinned to the head commit
+    /// that was looked at, so a push in between makes the forge refuse it instead of approving what was not seen.
+    /// </summary>
+    public static async Task<PendingAction> PrepareReview(ForgeRemote r, string token, int number, string verdict, string? body)
+    {
+        if (number <= 0) throw new ServiceException("not a number of a pull request");
+        verdict = (verdict ?? "").Trim().ToLowerInvariant();
+        var detail = await Detail(r, token, number);
+        var s = detail.Summary;
+        if (s.State != "open") throw new ServiceException($"#{number} is {s.State}: there is nothing to review.");
+        if (detail.HeadSha.Length == 0) throw new ServiceException("The forge did not say which commit the branch is at, so the review cannot be pinned to what was looked at.");
+        string noun = r.Kind == "github" ? "pull request" : "merge request";
+        string text = string.IsNullOrWhiteSpace(body) ? "" : CheckText("review", body, 60000, false);
+        PlannedRequest req;
+        string what;
+        var warnings = new List<string>();
+        if (r.Kind == "github")
+        {
+            string eventName = verdict switch { "approve" => "APPROVE", "request_changes" => "REQUEST_CHANGES", "comment" => "COMMENT", _ => throw new ServiceException($"{r.Host} takes a review that approves, asks for changes or comments, not '{verdict}'.") };
+            if (verdict != "approve" && text.Length == 0) throw new ServiceException(verdict == "comment" ? "A review that only comments needs a few words." : "A request for changes needs a few words saying what to change.");
+            var content = new JsonObject { ["event"] = eventName, ["commit_id"] = detail.HeadSha };
+            if (text.Length > 0) content["body"] = text;
+            req = new PlannedRequest("POST", RepoUrl(r, $"/pulls/{number}/reviews"), content);
+            what = verdict switch { "approve" => "Approve it", "request_changes" => "Ask for changes", _ => "Review with a comment" };
+        }
+        else
+        {
+            if (verdict == "approve") { req = new PlannedRequest("POST", RepoUrl(r, $"/merge_requests/{number}/approve"), new JsonObject { ["sha"] = detail.HeadSha }); what = "Approve it"; }
+            else if (verdict == "unapprove") { req = new PlannedRequest("POST", RepoUrl(r, $"/merge_requests/{number}/unapprove"), null); what = "Take your approval back"; }
+            else throw new ServiceException($"{r.Host} knows approving and taking an approval back; a comment goes through Comment.");
+            if (text.Length > 0) warnings.Add("GitLab keeps no words with an approval: the text is not sent. Use Comment for it.");
+        }
+        if (verdict == "approve") warnings.Add($"An approval says you have read the changes; it is shown on {noun} #{number} under your name.");
+        return new PendingAction("review", $"{what}: {noun} #{number} on {r.Host}", r, req,
+            new[] { $"Repository: {r.Repository}", $"#{number} {s.Title}", what, $"Only if the branch is still at {detail.HeadSha[..Math.Min(10, detail.HeadSha.Length)]}" }, warnings);
+    }
+
+    /// <summary>A comment on one line of one file of the changes. The line must be one the patch shows: the forges refuse any other.</summary>
+    public static async Task<PendingAction> PrepareInline(ForgeRemote r, string token, int number, string path, int line, string? body)
+    {
+        if (number <= 0) throw new ServiceException("not a number of a pull request");
+        string text = CheckText("comment", body, 60000, false);
+        var detail = await Detail(r, token, number);
+        var s = detail.Summary;
+        if (s.State != "open") throw new ServiceException($"#{number} is {s.State}: comments are for requests that are open.");
+        var file = detail.Files.FirstOrDefault(f => f.Path == path) ?? throw new ServiceException($"{path} is not among the files of #{number}.");
+        if (line <= 0 || !NewSideLines(file.Patch).Contains(line))
+            throw new ServiceException($"Line {line} of {path} is not in what the changes show; {r.Host} takes a comment only on the lines of the changes and the ones around them.");
+        string noun = r.Kind == "github" ? "pull request" : "merge request";
+        PlannedRequest req;
+        if (r.Kind == "github")
+        {
+            if (detail.HeadSha.Length == 0) throw new ServiceException("The forge did not say which commit the branch is at, so the comment cannot be pinned to what was looked at.");
+            req = new PlannedRequest("POST", RepoUrl(r, $"/pulls/{number}/comments"),
+                new JsonObject { ["body"] = text, ["commit_id"] = detail.HeadSha, ["path"] = path, ["line"] = line, ["side"] = "RIGHT" });
+        }
+        else
+        {
+            // GitLab places a comment by the three commits of the comparison, which only the request itself can tell
+            var mr = await Send(r, token, Read(r, $"/merge_requests/{number}"));
+            var refs = mr?["diff_refs"] as JsonObject;
+            string baseSha = S(refs, "base_sha"), startSha = S(refs, "start_sha"), headSha = S(refs, "head_sha");
+            if (baseSha.Length == 0 || startSha.Length == 0 || headSha.Length == 0) throw new ServiceException("GitLab did not say which commits the changes compare, so a comment cannot be placed on a line.");
+            req = new PlannedRequest("POST", RepoUrl(r, $"/merge_requests/{number}/discussions"), new JsonObject
+            {
+                ["body"] = text,
+                ["position"] = new JsonObject
+                {
+                    ["position_type"] = "text", ["base_sha"] = baseSha, ["start_sha"] = startSha, ["head_sha"] = headSha,
+                    ["old_path"] = file.OldPath ?? path, ["new_path"] = path, ["new_line"] = line,
+                },
+            });
+        }
+        return new PendingAction("inline", $"Comment on {path}:{line} of {noun} #{number} on {r.Host}", r, req,
+            new[] { $"Repository: {r.Repository}", $"{noun} #{number}", $"{path}, line {line}", "The comment is public to everyone who can see the repository, under your name." }, Array.Empty<string>());
+    }
+
     /// <summary>The merge of the pull request as it is now: the head commit seen goes with the request, so a push in between makes the forge refuse instead of merging what was not looked at.</summary>
     public static async Task<PendingAction> PrepareMerge(ForgeRemote r, string token, int number, string method)
     {

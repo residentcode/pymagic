@@ -224,6 +224,104 @@ public class PullRequestTests
     }
 
     [Fact]
+    public void TheLinesOfAPatchThatTakeACommentAreTheNewSideOnes()
+    {
+        const string patch = "@@ -1,2 +1,3 @@\n def total():\n-    return 0\n+    return 1\n+    # more\n@@ -10,2 +20,2 @@\n keep\n-old\n+new\n\\ No newline at end of file\n";
+        Assert.Equal("1,2,3,20,21", string.Join(",", PullRequests.NewSideLines(patch).OrderBy(x => x)));
+        Assert.Equal("1", string.Join(",", PullRequests.NewSideLines("@@ -0,0 +1 @@\n+x = 1\n")));
+        Assert.Equal(0, PullRequests.NewSideLines("").Count);
+        Assert.Equal(0, PullRequests.NewSideLines(null).Count);
+    }
+
+    [Fact]
+    public void AReviewApprovesAsksForChangesOrCommentsAndIsPinnedToTheHeadThatWasLookedAt()
+    {
+        using var fake = new FakeForge(github: true);
+        var r = Remote(fake, true);
+        var approve = Wait(PullRequests.PrepareReview(r, "tok-test", 7, "approve", ""));
+        Assert.Equal("POST", approve.Request.Method);
+        Assert.True(approve.Request.Url.EndsWith("/repos/acme/widgets/pulls/7/reviews"), approve.Request.Url);
+        var shown = JsonNode.Parse(approve.Request.BodyText)!;
+        Assert.Equal(("APPROVE", fake.HeadSha), (shown["event"]!.GetValue<string>(), shown["commit_id"]!.GetValue<string>()));
+        Assert.True(shown["body"] == null, "no words with an approval unless there are some");
+        Assert.True(approve.Warnings.Any(w => w.Contains("read the changes")));
+        Assert.Equal(0, fake.Writes.Count());
+
+        // asking for changes and commenting need words; the words go as typed
+        Assert.Contains("few words", Said(() => Wait(PullRequests.PrepareReview(r, "tok-test", 7, "request_changes", " "))));
+        Assert.Contains("few words", Said(() => Wait(PullRequests.PrepareReview(r, "tok-test", 7, "comment", ""))));
+        Assert.Contains("approves, asks for changes or comments", Said(() => Wait(PullRequests.PrepareReview(r, "tok-test", 7, "merge", "x"))));
+        var changes = Wait(PullRequests.PrepareReview(r, "tok-test", 7, "request_changes", "Please test the empty cart."));
+        Wait(PullRequests.Carry(PullRequests.Redeem(PullRequests.Issue(changes))!, "tok-test"));
+        var sent = JsonNode.Parse(One(fake.Writes).Body)!;
+        Assert.Equal(("REQUEST_CHANGES", "Please test the empty cart."), (sent["event"]!.GetValue<string>(), sent["body"]!.GetValue<string>()));
+
+        // somebody pushes meanwhile: the forge refuses a review of what was not looked at
+        string looked = fake.HeadSha;
+        var stale = Wait(PullRequests.PrepareReview(r, "tok-test", 7, "approve", ""));
+        fake.HeadSha = "ffff0000ffff0000";
+        Assert.Contains("422", Said(() => Wait(PullRequests.Carry(PullRequests.Redeem(PullRequests.Issue(stale))!, "tok-test"))));
+        fake.HeadSha = looked;
+    }
+
+    [Fact]
+    public void GitLabHasApprovalsAndTakingThemBack()
+    {
+        using var fake = new FakeForge(github: false);
+        var r = Remote(fake, false);
+        var approve = Wait(PullRequests.PrepareReview(r, "tok-test", 3, "approve", ""));
+        Assert.True(approve.Request.Url.EndsWith("/merge_requests/3/approve"), approve.Request.Url);
+        Assert.Equal(fake.HeadSha, JsonNode.Parse(approve.Request.BodyText)!["sha"]!.GetValue<string>());
+        var withWords = Wait(PullRequests.PrepareReview(r, "tok-test", 3, "approve", "looks fine"));
+        Assert.True(withWords.Warnings.Any(w => w.Contains("keeps no words")));
+        var back = Wait(PullRequests.PrepareReview(r, "tok-test", 3, "unapprove", ""));
+        Assert.True(back.Request.Url.EndsWith("/merge_requests/3/unapprove"));
+        Assert.Contains("approving and taking an approval back", Said(() => Wait(PullRequests.PrepareReview(r, "tok-test", 3, "request_changes", "x"))));
+        Wait(PullRequests.Carry(PullRequests.Redeem(PullRequests.Issue(approve))!, "tok-test"));
+        Assert.True(One(fake.Writes).Path.EndsWith("/merge_requests/3/approve"));
+        // GitHub has no way to take an approval back from here
+        using var gh = new FakeForge(github: true);
+        Assert.Contains("approves, asks for changes or comments", Said(() => Wait(PullRequests.PrepareReview(Remote(gh, true), "tok-test", 7, "unapprove", ""))));
+    }
+
+    [Fact]
+    public void AnInlineCommentGoesOnALineThePatchShowsAndNowhereElse()
+    {
+        using var fake = new FakeForge(github: true);
+        var r = Remote(fake, true);
+        var pending = Wait(PullRequests.PrepareInline(r, "tok-test", 7, "cart.py", 3, "Why one?"));
+        Assert.True(pending.Request.Url.EndsWith("/repos/acme/widgets/pulls/7/comments"), pending.Request.Url);
+        var shown = JsonNode.Parse(pending.Request.BodyText)!;
+        Assert.Equal(("cart.py", 3, "RIGHT", fake.HeadSha, "Why one?"),
+            (shown["path"]!.GetValue<string>(), shown["line"]!.GetValue<int>(), shown["side"]!.GetValue<string>(), shown["commit_id"]!.GetValue<string>(), shown["body"]!.GetValue<string>()));
+        Assert.Equal(0, fake.Writes.Count());
+        Wait(PullRequests.Carry(PullRequests.Redeem(PullRequests.Issue(pending))!, "tok-test"));
+        Assert.Equal("/repos/acme/widgets/pulls/7/comments", One(fake.Writes).Path);
+
+        Assert.Contains("not in what the changes show", Said(() => Wait(PullRequests.PrepareInline(r, "tok-test", 7, "cart.py", 40, "x"))));
+        Assert.Contains("not in what the changes show", Said(() => Wait(PullRequests.PrepareInline(r, "tok-test", 7, "cart.py", 0, "x"))));
+        Assert.Contains("not among the files", Said(() => Wait(PullRequests.PrepareInline(r, "tok-test", 7, "other.py", 1, "x"))));
+        Assert.Contains("comment is empty", Said(() => Wait(PullRequests.PrepareInline(r, "tok-test", 7, "cart.py", 1, " "))));
+        Assert.Equal("new.py", JsonNode.Parse(Wait(PullRequests.PrepareInline(r, "tok-test", 7, "new.py", 1, "ok")).Request.BodyText)!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void OnGitLabAnInlineCommentIsPlacedByTheThreeCommitsOfTheComparison()
+    {
+        using var fake = new FakeForge(github: false);
+        var r = Remote(fake, false);
+        var pending = Wait(PullRequests.PrepareInline(r, "tok-test", 3, "a.py", 2, "and y?"));
+        Assert.True(pending.Request.Url.EndsWith("/merge_requests/3/discussions"), pending.Request.Url);
+        var shown = JsonNode.Parse(pending.Request.BodyText)!;
+        var pos = shown["position"]!;
+        Assert.Equal(("text", "b0b0b0b0", "5a5a5a5a", fake.HeadSha, "a.py", 2), (pos["position_type"]!.GetValue<string>(), pos["base_sha"]!.GetValue<string>(), pos["start_sha"]!.GetValue<string>(), pos["head_sha"]!.GetValue<string>(), pos["new_path"]!.GetValue<string>(), pos["new_line"]!.GetValue<int>()));
+        Assert.Equal("and y?", shown["body"]!.GetValue<string>());
+        Wait(PullRequests.Carry(PullRequests.Redeem(PullRequests.Issue(pending))!, "tok-test"));
+        Assert.True(One(fake.Writes).Path.EndsWith("/merge_requests/3/discussions"));
+        Assert.Contains("not in what the changes show", Said(() => Wait(PullRequests.PrepareInline(r, "tok-test", 3, "a.py", 9, "x"))));
+    }
+
+    [Fact]
     public void AMergeIsPinnedToTheCommitThatWasLookedAt()
     {
         using var fake = new FakeForge(github: true);

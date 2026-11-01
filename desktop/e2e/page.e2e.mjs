@@ -1499,6 +1499,8 @@ function startFakeForge() {
             if (req.method === 'GET' && path === repo + '/commits/' + state.head + '/check-runs') return send(res, 200, { check_runs: [{ name: 'tests', status: 'completed', conclusion: 'success' }] });
             if (req.method === 'GET' && path === repo + '/commits/' + state.head + '/status') return send(res, 200, { state: 'pending', statuses: [] });
             if (req.method === 'POST' && path === repo + '/issues/7/comments') return send(res, 201, { id: 1, body: json.body });
+            if (req.method === 'POST' && path === repo + '/pulls/7/reviews') return json.commit_id === state.head ? send(res, 200, { id: 31, state: json.event === 'APPROVE' ? 'APPROVED' : 'COMMENTED' }) : send(res, 422, { message: 'commit_id is not the head' });
+            if (req.method === 'POST' && path === repo + '/pulls/7/comments') return send(res, 201, { id: 32, path: json.path, line: json.line, body: json.body });
             if (req.method === 'POST' && path === repo + '/pulls') return send(res, 201, { ...pr(), number: 8, title: json.title });
             if (req.method === 'PUT' && path === repo + '/pulls/7/merge') {
                 if (json.sha !== state.head) return send(res, 409, { message: 'Head branch was modified' });
@@ -1609,6 +1611,59 @@ describe('pull requests: listing, reading, and the three outward actions behind 
         assert.equal(sent.length, 1);
         assert.equal(sent[0].path, '/repos/acme/widgets/issues/7/comments');
         assert.deepEqual(JSON.parse(sent[0].body), { body: 'Ship it, please.' });
+    });
+
+    test('a review shows the exact request first, needs words to ask for changes, and approves the head that was looked at', async () => {
+        const before = forge.writes().length;
+        const okButton = `[...document.querySelectorAll('.pr-form button')].find((b) => b.textContent.startsWith('Review')).click()`;
+        await click('pr-review');
+        await page.waitFor(`document.getElementById('pr-review-verdict')`, 5000, 'the form');
+        assert.equal(await page.evaluate(`[...document.getElementById('pr-review-verdict').options].map((o) => o.value).join()`), 'approve,request_changes,comment');
+        // asking for changes without a word is refused before anything is prepared
+        await setValue('pr-review-verdict', 'request_changes');
+        await page.evaluate(okButton);
+        assert.match(await page.evaluate(`document.querySelector('.pr-form .db-form-error').textContent`), /few words/);
+        assert.equal(await page.evaluate(`!!document.querySelector('.pr-confirm')`), false);
+        await setValue('pr-review-verdict', 'approve');
+        await page.evaluate(okButton);
+        await page.waitFor(`document.querySelector('.pr-confirm')`, 10000, 'the confirmation');
+        const shown = await confirmText();
+        assert.match(shown, /POST .*\/repos\/acme\/widgets\/pulls\/7\/reviews/);
+        assert.match(shown, /"event": "APPROVE"/);
+        assert.match(shown, /"commit_id": "abc123def4567890"/);
+        assert.equal(forge.writes().length, before, 'nothing has been sent yet');
+        await page.evaluate(`document.querySelector('.pr-confirm-send').click()`);
+        await page.waitFor(`!document.querySelector('.pr-confirm') && !document.querySelector('.pr-form')`, 10000, 'the windows to close');
+        const sent = forge.writes().slice(before);
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].path, '/repos/acme/widgets/pulls/7/reviews');
+        assert.deepEqual(JSON.parse(sent[0].body), { event: 'APPROVE', commit_id: 'abc123def4567890' });
+    });
+
+    test('a comment on a line of a file lists the lines with their numbers and sends the path and the line that were chosen', async () => {
+        const before = forge.writes().length;
+        await page.evaluate(`document.querySelector('#pr-detail .pr-lines').click()`);
+        await page.waitFor(`document.querySelector('.pr-lines-shade .pr-patch-row')`, 10000, 'the lines');
+        // the lines of the changes with their real numbers: a plus on those that take a comment, none on the removed line
+        const rows = await page.evaluate(`[...document.querySelectorAll('.pr-lines-shade .pr-patch-row')].map((r) => r.className.replace('pr-patch-row ', '') + ':' + (r.querySelector('.pr-patch-plus')?.dataset.line ?? '-')).join()`);
+        assert.equal(rows, 'pr-patch-hunk:-,pr-patch-ctx:1,pr-patch-del:-,pr-patch-add:2,pr-patch-add:3');
+        await page.evaluate(`document.querySelector('.pr-lines-shade .pr-patch-plus[data-line="3"]').click()`);
+        await page.waitFor(`document.getElementById('pr-inline-text')`, 5000, 'the form');
+        await setValue('pr-inline-text', 'Is this the count we want?');
+        await page.evaluate(`[...document.querySelectorAll('.pr-form button')].find((b) => b.textContent.startsWith('Review')).click()`);
+        await page.waitFor(`document.querySelector('.pr-confirm')`, 10000, 'the confirmation');
+        const shown = await confirmText();
+        assert.match(shown, /POST .*\/repos\/acme\/widgets\/pulls\/7\/comments/);
+        assert.match(shown, /"path": "cart\.py"/);
+        assert.match(shown, /"line": 3/);
+        assert.match(shown, /"side": "RIGHT"/);
+        assert.equal(forge.writes().length, before, 'nothing has been sent yet');
+        await page.evaluate(`document.querySelector('.pr-confirm-send').click()`);
+        await page.waitFor(`!document.querySelector('.pr-confirm') && !document.querySelector('.pr-form') && !document.querySelector('.pr-lines-shade')`, 10000, 'the windows to close');
+        const sent = forge.writes().slice(before);
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].path, '/repos/acme/widgets/pulls/7/comments');
+        assert.deepEqual(JSON.parse(sent[0].body), { body: 'Is this the count we want?', commit_id: 'abc123def4567890', path: 'cart.py', line: 3, side: 'RIGHT' });
     });
 
     test('a request is created from the current branch, only after the exact request was shown', async () => {

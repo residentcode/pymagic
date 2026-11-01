@@ -4,7 +4,7 @@
 // request in a window of its own, and only "Send" there carries it out (the engine accepts the token once).
 import * as monaco from 'monaco-editor';
 import { showTab } from './panel';
-import { baseChoices, changeText, checksText, newProblem, nounOf, refOf, splitPatch, startTitle, stateText, statusLetter, subjectOf, tokenHint, whoWants } from './pr-model.js';
+import { baseChoices, changeText, checksText, newProblem, nounOf, patchRows, refOf, reviewChoices, splitPatch, startTitle, stateText, statusLetter, subjectOf, tokenHint, whoWants } from './pr-model.js';
 import { toast } from './toast';
 
 const $ = (id) => document.getElementById(id);
@@ -117,7 +117,9 @@ export function setupPullRequests() {
         for (const m of info.kind === 'github' ? ['merge', 'squash', 'rebase'] : ['merge', 'squash']) method.append(new Option(m, m));
         const merge = el('button', { id: 'pr-merge', textContent: 'Merge…', title: 'Merge it (the request is shown to you first)', disabled: s.state !== 'open' });
         merge.onclick = () => void sendable({ action: 'merge', number: s.number, method: method.value }, () => { void refresh(); });
-        buttons.append(comment, method, merge);
+        const review = el('button', { id: 'pr-review', textContent: 'Review…', title: 'Approve it, ask for changes, or review with a comment (the request is shown to you first)', disabled: s.state !== 'open' });
+        review.onclick = () => reviewForm(s.number);
+        buttons.append(comment, review, method, merge);
         if (s.url) {
             const link = el('button', { textContent: 'Open on ' + info.host, title: s.url });
             link.onclick = () => window.open(s.url, '_blank', 'noopener');
@@ -139,6 +141,9 @@ export function setupPullRequests() {
                 el('span', { className: `st st-${statusLetter(f.status)}`, textContent: statusLetter(f.status) }), ' ' + (f.oldPath ? `${f.oldPath} → ${f.path}` : f.path),
                 el('span', { className: 'pr-dim', textContent: '  ' + changeText(f) }));
             row.onclick = () => diff(f);
+            const lines = el('button', { className: 'mini pr-lines', textContent: 'Comment on a line…', title: 'List the lines of the changes and comment on one' });
+            lines.onclick = (e) => { e.stopPropagation(); linesWindow(f, d.comments, s.number); };
+            row.append(lines);
             box.append(row);
         }
         box.append(section('Comments', d.comments.length));
@@ -249,6 +254,58 @@ export function setupPullRequests() {
             await sendable({ action: 'comment', number, body: text.value }, () => void open(number));
         };
         text.focus();
+    }
+
+    function reviewForm(number) {
+        const f = formShell(`Review ${ref(number)}`);
+        const choices = reviewChoices(info.kind);
+        const verdict = el('select', { id: 'pr-review-verdict' });
+        for (const c of choices) verdict.append(new Option(c.label, c.value));
+        f.box.append(el('label', { className: 'db-form-row' }, el('span', { textContent: 'Your review' }), verdict));
+        const text = el('textarea', { id: 'pr-review-text', rows: 5, placeholder: 'Your words (needed to ask for changes or to comment)', spellcheck: true });
+        f.box.append(text, f.error, f.row);
+        f.ok.onclick = async () => {
+            const choice = choices.find((c) => c.value === verdict.value);
+            if (choice.needsWords && !text.value.trim()) { f.error.textContent = 'Say a few words first.'; return; }
+            await sendable({ action: 'review', number, verdict: verdict.value, body: text.value }, () => void open(number));
+        };
+        verdict.focus();
+    }
+
+    function inlineForm(number, path, line, sent) {
+        const f = formShell(`Comment on ${path}, line ${line}`);
+        const text = el('textarea', { id: 'pr-inline-text', rows: 5, spellcheck: true });
+        f.box.append(text, f.error, f.row);
+        f.ok.onclick = async () => {
+            if (!text.value.trim()) { f.error.textContent = 'Write something first.'; return; }
+            await sendable({ action: 'inline', number, path, line, body: text.value }, () => { sent(); void open(number); });
+        };
+        text.focus();
+    }
+
+    /** The lines of a file's changes with their real numbers; a comment goes on a line that has a new number. */
+    function linesWindow(file, comments, number) {
+        if (!file.patch) { toast(`${file.path} has no text to comment on (it may be binary or too large for ${info.host} to show).`); return; }
+        const shade = el('div', { className: 'settings-shade pr-diff-shade pr-lines-shade' });
+        const box = el('div', { className: 'hist-diff pr-lines-box' });
+        const close = el('button', { textContent: 'Close' });
+        box.append(el('div', { className: 'hist-diff-head' }, el('span', { className: 'hist-diff-title', textContent: `${file.path}: click + at a line to comment on it` }), close));
+        const body = el('div', { className: 'pr-patch' });
+        for (const row of patchRows(file.patch)) {
+            const line = el('div', { className: `pr-patch-row pr-patch-${row.kind}` });
+            const add = el('button', { className: 'pr-patch-plus', textContent: '+', title: row.newNo ? `Comment on line ${row.newNo}` : '' });
+            if (row.newNo) { add.dataset.line = String(row.newNo); add.onclick = () => inlineForm(number, file.path, row.newNo, done); } else add.style.visibility = 'hidden';
+            line.append(add, el('span', { className: 'pr-patch-no', textContent: row.oldNo ?? '' }), el('span', { className: 'pr-patch-no', textContent: row.newNo ?? '' }), el('span', { className: 'pr-patch-text', textContent: row.text }));
+            body.append(line);
+            if (row.newNo) for (const c of comments.filter((x) => x.path === file.path && x.line === row.newNo))
+                body.append(el('div', { className: 'pr-comment pr-patch-comment' }, el('div', { className: 'pr-comment-head', textContent: `${c.author} · ${c.date ? new Date(c.date).toLocaleString() : ''}` }), el('pre', { className: 'pr-body', textContent: c.body })));
+        }
+        box.append(body);
+        shade.append(box);
+        document.body.append(shade);
+        const done = () => shade.remove();
+        close.onclick = done;
+        shade.onmousedown = (e) => { if (e.target === shade) done(); };
     }
 
     function newForm() {

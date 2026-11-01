@@ -126,6 +126,15 @@ public sealed class FakeForge : IDisposable
             Reply(c, 201, created); return;
         }
         if (method == "POST" && path == repo + "/issues/7/comments") { Reply(c, 201, new JsonObject { ["id"] = 1, ["body"] = body?["body"]?.GetValue<string>() }); return; }
+        if (method == "POST" && path == repo + "/pulls/7/reviews")
+        {
+            if (body?["commit_id"]?.GetValue<string>() != HeadSha) { Reply(c, 422, new JsonObject { ["message"] = "commit_id is not the head" }); return; }
+            Reply(c, 200, new JsonObject { ["id"] = 31, ["state"] = body?["event"]?.GetValue<string>() == "APPROVE" ? "APPROVED" : "COMMENTED" }); return;
+        }
+        if (method == "POST" && path == repo + "/pulls/7/comments")
+        {
+            Reply(c, 201, new JsonObject { ["id"] = 32, ["path"] = body?["path"]?.GetValue<string>(), ["line"] = body?["line"]?.DeepClone(), ["body"] = body?["body"]?.GetValue<string>() }); return;
+        }
         if (method == "PUT" && path == repo + "/pulls/7/merge")
         {
             if (body?["sha"]?.GetValue<string>() != HeadSha) { Reply(c, 409, new JsonObject { ["message"] = "Head branch was modified. Review and try the merge again." }); return; }
@@ -139,6 +148,7 @@ public sealed class FakeForge : IDisposable
     {
         ["iid"] = 3, ["title"] = "Draft: tidy", ["author"] = new JsonObject { ["username"] = "eve" }, ["state"] = Merged ? "merged" : "opened", ["draft"] = true, ["source_branch"] = "tidy", ["target_branch"] = "main",
         ["web_url"] = "https://gitlab.example.org/team/sub/proj/-/merge_requests/3", ["updated_at"] = "2026-10-30T10:00:00Z", ["sha"] = HeadSha, ["description"] = "Tidies things.", ["detailed_merge_status"] = "mergeable",
+        ["diff_refs"] = new JsonObject { ["base_sha"] = "b0b0b0b0", ["start_sha"] = "5a5a5a5a", ["head_sha"] = HeadSha },
     };
 
     void Gitlab(HttpListenerContext c, string method, string path, JsonNode? body)
@@ -164,6 +174,9 @@ public sealed class FakeForge : IDisposable
             Reply(c, 201, created); return;
         }
         if (method == "POST" && path == project + "/merge_requests/3/notes") { Reply(c, 201, new JsonObject { ["id"] = 9, ["body"] = body?["body"]?.GetValue<string>() }); return; }
+        if (method == "POST" && path == project + "/merge_requests/3/approve") { Reply(c, 201, new JsonObject { ["approved"] = true }); return; }
+        if (method == "POST" && path == project + "/merge_requests/3/unapprove") { Reply(c, 201, new JsonObject { ["approved"] = false }); return; }
+        if (method == "POST" && path == project + "/merge_requests/3/discussions") { Reply(c, 201, new JsonObject { ["id"] = "d1", ["notes"] = Arr(new JsonObject { ["body"] = body?["body"]?.GetValue<string>() }) }); return; }
         if (method == "PUT" && path == project + "/merge_requests/3/merge")
         {
             if (body?["sha"]?.GetValue<string>() != HeadSha) { Reply(c, 409, new JsonObject { ["message"] = "SHA does not match HEAD of source branch" }); return; }

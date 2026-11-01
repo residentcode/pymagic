@@ -627,3 +627,15 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 .nb-console-hint-item:hover { background: var(--hover); }
 .nb-console-hint-more { color: var(--dim); font-size: 12px; align-self: center; }
 .nb-server-local { display: flex; gap: 8px; padding: 2px 0 6px; }
+.pr-lines { margin-left: 10px; }
+.pr-lines-box { width: min(960px, 94vw); }
+.pr-patch { overflow: auto; flex: 1; font: 12.5px var(--mono, Consolas, monospace); }
+.pr-patch-row { display: flex; align-items: baseline; gap: 6px; white-space: pre; }
+.pr-patch-row:hover { background: var(--hover); }
+.pr-patch-plus { background: transparent; color: var(--accent, #4aa3ff); border: 1px solid var(--line); border-radius: 3px; width: 18px; height: 16px; padding: 0; line-height: 1; cursor: pointer; opacity: 0.35; }
+.pr-patch-row:hover .pr-patch-plus { opacity: 1; }
+.pr-patch-no { width: 38px; text-align: right; color: var(--dim); flex: none; }
+.pr-patch-hunk { color: var(--dim); background: var(--panel); }
+.pr-patch-add .pr-patch-text, .pr-patch-row.pr-patch-add { background: rgba(63, 185, 80, 0.12); }
+.pr-patch-del { background: rgba(255, 107, 107, 0.12); }
+.pr-patch-comment { margin: 2px 0 6px 70px; white-space: normal; }

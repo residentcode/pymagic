@@ -93,6 +93,8 @@ public static class PullRequestRoutes
                     case "create": pending = PullRequests.PrepareCreate(r, Str("title"), Str("body"), Str("head"), Str("base"), body["draft"]?.GetValue<bool>() == true, body["pushed"]?.GetValue<bool>() != false); break;
                     case "comment": pending = PullRequests.PrepareComment(r, number, Str("body")); break;
                     case "merge": pending = await PullRequests.PrepareMerge(r, t, number, Str("method")); break;
+                    case "review": pending = await PullRequests.PrepareReview(r, t, number, Str("verdict"), Str("body")); break;
+                    case "inline": pending = await PullRequests.PrepareInline(r, t, number, Str("path"), body["line"] is JsonValue ln && ln.TryGetValue<int>(out var lineNo) ? lineNo : 0, Str("body")); break;
                     default: throw new ServiceException("That is not something to send.");
                 }
                 return new
