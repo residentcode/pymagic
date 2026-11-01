@@ -68,6 +68,38 @@ public class PullRequestTests
     }
 
     [Fact]
+    public void AGitHubEnterpriseServerIsOneThatTheEnvironmentNames()
+    {
+        try
+        {
+            Assert.True(PullRequests.FromUrl("origin", "https://ghe.example.com/acme/widgets.git") == null, "not named yet");
+            Environment.SetEnvironmentVariable("PYMAGIC_GITHUB_HOSTS", "other.example.com, GHE.example.com");
+            var ghe = PullRequests.FromUrl("origin", "git@ghe.example.com:acme/widgets.git")!;
+            Assert.Equal(("github", "ghe.example.com", "acme/widgets"), Tuple(ghe));
+            Assert.Equal("https://ghe.example.com/api/v3", ghe.ApiBase);
+            Assert.Equal("github:ghe.example.com", ghe.TokenKey);
+            // github.com itself is unchanged, and a server that is named still needs owner/repo
+            Assert.Equal("https://api.github.com", PullRequests.FromUrl("origin", "https://github.com/acme/widgets")!.ApiBase);
+            Assert.True(PullRequests.FromUrl("origin", "https://ghe.example.com/a/b/c") == null);
+        }
+        finally { Environment.SetEnvironmentVariable("PYMAGIC_GITHUB_HOSTS", null); }
+    }
+
+    [Fact]
+    public void TheListIsReadOnePageAtATime()
+    {
+        using var fake = new FakeForge(github: true) { ManyPages = true };
+        var remote = Remote(fake, github: true);
+        var first = Wait(PullRequests.List(remote, "tok-test"));
+        Assert.Equal(PullRequests.PageSize, first.Count);
+        Assert.Equal(100, first[0].Number);
+        var second = Wait(PullRequests.List(remote, "tok-test", 2));
+        Assert.Equal(2, second.Count);
+        Assert.Equal(130, second[0].Number);
+        Assert.True(fake.Requests.Any(r => r.Path.StartsWith("/repos/acme/widgets/pulls")), "asked for the pulls");
+    }
+
+    [Fact]
     public void ATokenIsKeptInThePrivateFileAndNowhereElse()
     {
         string root = Temp();

@@ -23,6 +23,8 @@ public sealed class FakeForge : IDisposable
     public List<Seen> Requests { get; } = new();
     public string HeadSha = "aaaa1111bbbb2222";
     public bool Merged;
+    /// <summary>With this on, the list of open requests runs over two pages (30, then 2), as a busy repository's does.</summary>
+    public bool ManyPages;
     public string? RedirectTo;
     readonly object _gate = new();
 
@@ -87,7 +89,15 @@ public sealed class FakeForge : IDisposable
     void Github(HttpListenerContext c, string method, string path, JsonNode? body)
     {
         const string repo = "/repos/acme/widgets";
-        if (method == "GET" && path == repo + "/pulls") { Reply(c, 200, Arr(GithubPr())); return; }
+        if (method == "GET" && path == repo + "/pulls")
+        {
+            if (!ManyPages) { Reply(c, 200, Arr(GithubPr())); return; }
+            bool second = c.Request.QueryString["page"] == "2";
+            var many = new JsonArray();
+            for (int n = second ? 130 : 100; n < (second ? 132 : 130); n++) { var pr = GithubPr(); pr["number"] = n; pr["title"] = "Request " + n; many.Add(pr); }
+            Reply(c, 200, many);
+            return;
+        }
         if (method == "GET" && path == repo + "/pulls/7") { Reply(c, 200, GithubPr()); return; }
         if (method == "GET" && path == repo + "/pulls/7/commits")
         {

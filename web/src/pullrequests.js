@@ -13,6 +13,8 @@ const el = (tag, props = {}, ...children) => { const e = Object.assign(document.
 export function setupPullRequests() {
     let info = null;        // what the engine says of the remote
     let items = [];
+    let more = false;       // another page of open requests is there
+    let nextPage = 2;
     let shown = null;       // the number of the request in the detail pane
 
     const get = (url) => fetch(url).then((r) => r.json()).catch((e) => ({ error: String(e) }));
@@ -46,6 +48,8 @@ export function setupPullRequests() {
         const r = await get('/api/pr/list');
         if (r.error) { empty($('pr-list'), r.error); return; }
         items = r.items;
+        more = !!r.more;
+        nextPage = 2;
         drawList();
         if (shown !== null && items.some((i) => i.number === shown)) void open(shown);
         else { shown = null; empty($('pr-detail'), items.length ? `Choose a ${nounOf(info.kind)}.` : ''); }
@@ -55,7 +59,8 @@ export function setupPullRequests() {
         const box = $('pr-list');
         box.replaceChildren();
         if (!items.length) { empty(box, `No open ${nounOf(info.kind)}s.`); return; }
-        for (const pr of items) {
+        const rows = items;
+        for (const pr of rows) {
             const checks = checksText(pr.checks);
             const row = el('div', { className: 'pr-row' + (pr.number === shown ? ' sel' : '') });
             row.dataset.number = String(pr.number);
@@ -68,6 +73,19 @@ export function setupPullRequests() {
                 el('span', { className: 'pr-author', textContent: pr.author }));
             row.onclick = () => void open(pr.number);
             box.append(row);
+        }
+        if (more) {
+            const next = el('button', { className: 'mini', id: 'pr-more', textContent: 'Load more', title: 'The next page of open requests' });
+            next.onclick = async () => {
+                next.disabled = true;
+                const r = await get('/api/pr/list?page=' + nextPage);
+                if (r.error) { next.disabled = false; toast(r.error, true); return; }
+                items = items.concat(r.items);
+                more = !!r.more;
+                nextPage += 1;
+                drawList();
+            };
+            box.append(el('div', { className: 'pr-more-row' }, next));
         }
     }
 

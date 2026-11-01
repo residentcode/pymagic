@@ -21,7 +21,7 @@ public static class PullRequestRoutes
                 if (remotes.Count == 0) return (null, "The repository has no remote yet. Add one in the Git window.");
                 var found = PullRequests.Detect(remotes);
                 return found == null
-                    ? (null, "None of the remotes is on github.com or a GitLab host (a host with gitlab in its name; others can be named in PYMAGIC_GITLAB_HOSTS).")
+                    ? (null, "None of the remotes is on github.com or a GitLab host (a host with gitlab in its name; others can be named in PYMAGIC_GITLAB_HOSTS; a GitHub Enterprise server in PYMAGIC_GITHUB_HOSTS).")
                     : (found, null);
             }
             catch (GitException e) { return (null, e.Message); }
@@ -73,7 +73,11 @@ public static class PullRequestRoutes
             return Results.Json(new { hasToken = ForgeTokens.Has(root, remote.TokenKey) });
         });
 
-        app.MapGet("/api/pr/list", () => Guard(async (r, t) => new { items = await PullRequests.List(r, t) }));
+        app.MapGet("/api/pr/list", (int? page) => Guard(async (r, t) =>
+        {
+            var items = await PullRequests.List(r, t, page ?? 1);
+            return new { items, page = Math.Clamp(page ?? 1, 1, 1000), more = items.Count >= PullRequests.PageSize };
+        }));
         app.MapGet("/api/pr/get", (int number) => Guard(async (r, t) => await PullRequests.Detail(r, t, number)));
 
         app.MapPost("/api/pr/prepare", async (HttpRequest req) =>

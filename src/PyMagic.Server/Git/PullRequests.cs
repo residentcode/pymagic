@@ -98,13 +98,18 @@ public static class PullRequests
         string path = m.Groups["path"].Value.Trim('/');
         var segments = path.Split('/');
         if (segments.Length < 2 || segments.Any(s => !SegmentForm.IsMatch(s) || s == "." || s == "..")) return null;
-        string? kind = host is "github.com" or "www.github.com" ? "github" : IsGitLabHost(host) ? "gitlab" : null;
+        bool enterprise = IsEnterpriseHost(host);
+        string? kind = host is "github.com" or "www.github.com" || enterprise ? "github" : IsGitLabHost(host) ? "gitlab" : null;
         if (kind == null) return null;
         if (kind == "github" && segments.Length != 2) return null;
-        if (kind == "github") host = "github.com";
+        if (kind == "github" && !enterprise) host = "github.com";
         string? api = ApiBase(kind, host);
         return api == null ? null : new ForgeRemote(kind, host, path, name, api);
     }
+
+    /// <summary>A GitHub Enterprise server: a host named in PYMAGIC_GITHUB_HOSTS (a list with commas). Like the GitLab hosts, only the environment says so, never the project.</summary>
+    static bool IsEnterpriseHost(string host) =>
+        (Environment.GetEnvironmentVariable("PYMAGIC_GITHUB_HOSTS") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Contains(host, StringComparer.OrdinalIgnoreCase);
 
     static bool IsGitLabHost(string host) =>
         host.Contains("gitlab") || (Environment.GetEnvironmentVariable("PYMAGIC_GITLAB_HOSTS") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Contains(host, StringComparer.OrdinalIgnoreCase);
@@ -113,7 +118,7 @@ public static class PullRequests
     static string? ApiBase(string kind, string host)
     {
         string? set = Environment.GetEnvironmentVariable(kind == "github" ? "PYMAGIC_GITHUB_API" : "PYMAGIC_GITLAB_API");
-        string text = !string.IsNullOrWhiteSpace(set) ? set.Trim() : kind == "github" ? "https://api.github.com" : $"https://{host}/api/v4";
+        string text = !string.IsNullOrWhiteSpace(set) ? set.Trim() : kind == "github" ? (host == "github.com" ? "https://api.github.com" : $"https://{host}/api/v3") : $"https://{host}/api/v4";
         if (!Uri.TryCreate(text, UriKind.Absolute, out var uri)) return null;
         if (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback) return text.TrimEnd('/');
         return null;
@@ -188,18 +193,22 @@ public static class PullRequests
 
     // ------------------------------------------------------------ reading
 
-    public static async Task<List<PrSummary>> List(ForgeRemote r, string token)
+    /// <summary>Requests listed on a page; a page with this many has another after it.</summary>
+    public const int PageSize = 30;
+
+    public static async Task<List<PrSummary>> List(ForgeRemote r, string token, int page = 1)
     {
+        page = Math.Clamp(page, 1, 1000);
         if (r.Kind == "github")
         {
-            var data = await Send(r, token, Read(r, "/pulls?state=open&per_page=30"));
+            var data = await Send(r, token, Read(r, $"/pulls?state=open&per_page={PageSize}&page={page}"));
             var rows = Items(data).Select(p => (p, sha: S(p, "head", "sha"))).ToList();
             var checks = await Task.WhenAll(rows.Select(x => GithubChecks(r, token, x.sha)));
             return rows.Select((x, i) => GithubSummary(x.p, checks[i].State)).ToList();
         }
         else
         {
-            var data = await Send(r, token, Read(r, "/merge_requests?state=opened&per_page=30"));
+            var data = await Send(r, token, Read(r, $"/merge_requests?state=opened&per_page={PageSize}&page={page}"));
             var rows = Items(data).ToList();
             var checks = await Task.WhenAll(rows.Select(p => GitlabChecks(r, token, I(p, "iid"))));
             return rows.Select((p, i) => GitlabSummary(p, checks[i])).ToList();

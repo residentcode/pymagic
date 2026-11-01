@@ -620,3 +620,4 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 .gc .move { margin-left: 0; }
 #git-commit-bar select { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; max-width: 14em; }
 .shelf-patch { font: 12.5px Consolas, monospace; white-space: pre-wrap; word-break: break-all; } .shelf-patch .sp-add { background: rgba(76,187,108,.16); } .shelf-patch .sp-del { background: rgba(229,83,75,.16); } .shelf-patch .sp-hunk { color: var(--accent, #6aa9ff); } .shelf-patch .sp-head { color: var(--dim); font-weight: 600; } .shelf-patch .sp-ctx { color: var(--dim); }
+.pr-more-row { padding: 6px 12px; }

@@ -1437,7 +1437,7 @@ describe('branches: comparing, rebasing onto another, and pushing tags', () => {
 // The engine reaches it through PYMAGIC_GITHUB_API; the real github.com is never contacted, and the token below is made up for this run.
 const FORGE_TOKEN = 'e2e-fake-token-4711';
 function startFakeForge() {
-    const state = { requests: [], head: 'abc123def4567890', merged: false, base: '' };
+    const state = { requests: [], head: 'abc123def4567890', merged: false, base: '', many: false };
     const send = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
     const pr = () => ({
         number: 7, title: 'Add the cart', user: { login: 'ada' }, state: state.merged ? 'closed' : 'open', merged: state.merged, draft: false,
@@ -1453,7 +1453,13 @@ function startFakeForge() {
             if (req.headers.authorization !== 'Bearer ' + FORGE_TOKEN) return send(res, 401, { message: 'Bad credentials' });
             const repo = '/repos/acme/widgets';
             const json = body ? JSON.parse(body) : {};
-            if (req.method === 'GET' && path === repo + '/pulls') return send(res, 200, [pr()]);
+            if (req.method === 'GET' && path === repo + '/pulls') {
+                if (!state.many) return send(res, 200, [pr()]);
+                // a busy repository: 30 on the first page, 2 on the second
+                const second = new URL(req.url, 'http://x').searchParams.get('page') === '2';
+                const first = second ? 130 : 100, count = second ? 2 : 30;
+                return send(res, 200, Array.from({ length: count }, (_, i) => ({ ...pr(), number: first + i, title: 'Request ' + (first + i) })));
+            }
             if (req.method === 'GET' && path === repo + '/pulls/7') return send(res, 200, pr());
             if (req.method === 'GET' && path === repo + '/pulls/7/commits') return send(res, 200, [{ sha: 'c1c1c1c1c1', commit: { message: 'cart: the model\n\nmore', author: { name: 'Ada', date: '2026-10-29T09:00:00Z' } } }]);
             if (req.method === 'GET' && path === repo + '/pulls/7/files') return send(res, 200, [{ filename: 'cart.py', status: 'modified', additions: 2, deletions: 1, patch: '@@ -1,2 +1,3 @@\n def total():\n-    return 0\n+    return len(items)\n+    # counted\n' }]);
@@ -1516,6 +1522,21 @@ describe('pull requests: listing, reading, and the three outward actions behind 
         assert.ok(readFileSync(join(projectRoot, '.pymagic', '.gitignore'), 'utf8').split('\n').includes('pullrequests.private.json'));
         assert.ok(!(await api('/api/pr/info').then((i) => JSON.stringify(i))).includes(FORGE_TOKEN), 'the page is never told the token');
         assert.ok(!git('status', '--porcelain').includes('pullrequests'), 'the private file is not offered to git');
+    });
+
+    test('a long list is read a page at a time, with Load more for the next', async () => {
+        forge.state.many = true;
+        try {
+            await click('pr-refresh');
+            await page.waitFor(`document.querySelectorAll('#pr-list .pr-row').length === 30 && document.getElementById('pr-more')`, 20000, 'the first page and its button');
+            await click('pr-more');
+            await page.waitFor(`document.querySelectorAll('#pr-list .pr-row').length === 32 && !document.getElementById('pr-more')`, 20000, 'the second page, and no button after it');
+            assert.match(await page.evaluate(`[...document.querySelectorAll('#pr-list .pr-row')].pop()?.textContent ?? ''`), /Request 131|Request 130/);
+        } finally {
+            forge.state.many = false;
+            await click('pr-refresh');
+            await page.waitFor(`document.querySelectorAll('#pr-list .pr-row').length === 1`, 20000, 'the short list again');
+        }
     });
 
     test('one request is shown in full, and a changed file opens as a side-by-side diff', async () => {
