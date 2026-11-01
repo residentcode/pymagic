@@ -148,20 +148,44 @@ public sealed class RunSession : IDisposable
     /// <summary>Where a profiler run leaves what it measured.</summary>
     public static string ProfilePath(string root) => Path.Combine(root, ".pymagic", "profile.json");
 
-    /// <summary>Runs the script under cProfile (pm_profile.py): its output streams like a normal run, the timings land in <see cref="ProfilePath"/>.</summary>
-    public void StartProfile(string root, string script, IReadOnlyList<string> args)
+    /// <summary>The raw pstats of the last profiler run, beside <see cref="ProfilePath"/>.</summary>
+    public static string ProfileStatsPath(string root) => Path.Combine(root, ".pymagic", "profile.pstats");
+
+    /// <summary>
+    /// Runs a program under the profiler (pm_profile.py: yappi when installed, else cProfile): the script, or with
+    /// <paramref name="module"/> a module as `python -m` does, or with <paramref name="tests"/> (pytest, unittest or auto)
+    /// the tests whose ids are <paramref name="args"/>. Its output streams like a normal run, the timings land in
+    /// <see cref="ProfilePath"/> and the raw pstats in <see cref="ProfileStatsPath"/>, and the run is kept as a snapshot.
+    /// </summary>
+    public void StartProfile(string root, string? script, IReadOnlyList<string> args, string? module = null, string? tests = null)
     {
-        string scriptPath = Path.GetFullPath(Path.Combine(root, script));
-        if (!File.Exists(scriptPath)) { Error($"script not found: {script}"); return; }
+        var what = new List<string>();
+        string label;
+        if (tests != null) { what.AddRange(new[] { "--tests", tests }); label = "tests"; }
+        else if (module != null) { what.AddRange(new[] { "--module", module }); label = module; }
+        else
+        {
+            string scriptPath = Path.GetFullPath(Path.Combine(root, script ?? ""));
+            if (!File.Exists(scriptPath)) { Error($"script not found: {script}"); return; }
+            what.AddRange(new[] { "--script", scriptPath });
+            label = Path.GetFileNameWithoutExtension(scriptPath);
+        }
         try { File.Delete(ProfilePath(root)); } catch (IOException) { }
-        // a profile made in WSL or Docker names its files as that system does: the panel needs them as paths of this machine
         _afterExit = () =>
         {
-            if (Target.IsLocal) return;
-            Target.Fetch(Target.ToTarget(ProfilePath(root)), ProfilePath(root));    // only a machine that does not share the folder has anything to bring
-            MapProfilePaths(ProfilePath(root));
+            // a profile made in WSL or Docker names its files as that system does: the panel needs them as paths of this machine
+            if (!Target.IsLocal)
+            {
+                Target.Fetch(Target.ToTarget(ProfilePath(root)), ProfilePath(root));    // only a machine that does not share the folder has anything to bring
+                Target.Fetch(Target.ToTarget(ProfileStatsPath(root)), ProfileStatsPath(root));
+                MapProfilePaths(ProfilePath(root));
+            }
+            ProfileSnapshots.Keep(root, label);
         };
-        Launch(root, false, new[] { ExtractHelper("pm_profile.py"), "--out", ProfilePath(root), "--script", scriptPath, "--" }, args, null);
+        var leading = new List<string> { ExtractHelper("pm_profile.py"), "--out", ProfilePath(root), "--pstats", ProfileStatsPath(root) };
+        leading.AddRange(what);
+        leading.Add("--");
+        Launch(root, false, leading, args, null);
     }
 
     Action? _afterExit;
@@ -181,6 +205,7 @@ public sealed class RunSession : IDisposable
             {
                 Fix(fn);
                 foreach (var c in fn?["callers"]?.AsArray() ?? new JsonArray()) Fix(c);
+                foreach (var c in fn?["callees"]?.AsArray() ?? new JsonArray()) Fix(c);
             }
             File.WriteAllText(file, data.ToJsonString());
         }

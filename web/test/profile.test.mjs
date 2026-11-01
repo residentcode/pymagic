@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 
 // web/package.json does not say "type": "module", so Node would read src/*.js as CommonJS; load the file as a module instead
 const source = readFileSync(new URL('../src/profile-model.js', import.meta.url), 'utf8');
-const { formatTime, labelOf, locationOf, rowsOf, hottest, sameFunction } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { formatTime, labelOf, locationOf, rowsOf, hottest, sameFunction, callGraph } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const fn = (name, own, cumulative, extra = {}) => ({ name, own, cumulative, calls: 1, line: 1, file: '/p/app.py', rel: 'app.py', builtin: false, callers: [], ...extra });
 const data = {
@@ -79,4 +79,16 @@ test('labels and locations', () => {
 test('sameFunction compares file, line and name', () => {
     assert.ok(sameFunction(fn('a', 0, 0), fn('a', 5, 5)));
     assert.ok(!sameFunction(fn('a', 0, 0), fn('a', 0, 0, { line: 2 })));
+});
+
+test('callGraph: callers on the left, the function in the middle, callees on the right, the costliest first', () => {
+    const f = (name, cumulative, calls = 1) => ({ name, cumulative, calls, file: 'a.py', line: 1 });
+    const fn = { ...f('outer', 5), callers: [f('main', 5)], callees: [f('fast', 1, 10), f('slow', 3, 30), f('mid', 2)] };
+    const g = callGraph(fn, { max: 2, width: 100, height: 20, gap: 10, column: 200 });
+    assert.deepEqual(g.boxes.map((b) => [b.fn.name, b.x, b.y]), [['main', 0, 15], ['outer', 200, 15], ['slow', 400, 0], ['mid', 400, 30]]);
+    assert.deepEqual(g.edges.map((e) => `${e.from.fn.name}->${e.to.fn.name}:${e.calls}`), ['main->outer:1', 'outer->slow:30', 'outer->mid:1']);
+    assert.deepEqual(g.more, { callers: 0, callees: 1 });
+    assert.equal(g.width, 500);
+    assert.equal(g.height, 50);
+    assert.deepEqual(callGraph({ ...f('alone', 1) }).boxes.map((b) => b.fn.name), ['alone']);
 });

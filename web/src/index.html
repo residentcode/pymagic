@@ -396,6 +396,9 @@
               <option value="name">Name</option>
             </select>
             <input id="prof-filter" type="text" placeholder="Filter by name or file" spellcheck="false" autocomplete="off">
+            <select id="prof-snapshot" title="The last run, or one kept before (the last 20 are kept in .pymagic/profiles)"><option value="">The last run</option></select>
+            <button id="prof-graph" title="The call graph around the chosen function: who called it and what it called">Graph</button>
+            <button id="prof-open" title="Open a .pstats file of the project (cProfile, yappi, PyCharm)">Open .pstats…</button>
             <button id="prof-refresh" title="Read the last profile again">Refresh</button>
             <button id="prof-clear" title="Forget the result">Clear</button>
           </div>

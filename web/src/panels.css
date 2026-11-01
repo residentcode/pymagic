@@ -217,6 +217,14 @@
 #db-grid td.db-changed { background: rgba(80, 140, 255, .18); } #db-grid tr.db-added td { background: rgba(80, 200, 120, .15); }
 #db-grid tr.db-deleted td { text-decoration: line-through; opacity: .55; } #db-grid .db-edit { width: 100%; font: inherit; box-sizing: border-box; }
 #db-status { padding: 2px 10px; color: var(--dim); font-size: 12px; border-top: 1px solid var(--line); } #db-status.err { color: var(--red); }
+.prof-links { display: flex; gap: 12px; } .prof-links > .prof-callers { flex: 1; min-width: 0; }
+#prof-bar { flex-wrap: wrap; } #prof-bar #prof-summary { flex-basis: 100%; }
+#prof-graph.active { background: var(--accent); color: #fff; }
+.prof-graph-holder { overflow: auto; padding: 4px; } .prof-graph { font: 11px var(--ui-font, sans-serif); }
+.prof-node rect { fill: var(--panel); stroke: var(--line); } .prof-node.center rect { stroke: var(--accent); stroke-width: 2; } .prof-node { cursor: pointer; }
+.prof-node rect.prof-share { fill: #e06c4c; stroke: none; } .prof-node.unknown { opacity: .6; }
+.prof-node-name { fill: var(--fg); font-weight: 600; } .prof-node-detail, .prof-edge-label { fill: var(--dim); font-size: 10px; }
+.prof-edge { fill: none; stroke: var(--dim); } .prof-arrowhead { fill: var(--dim); }
 #prof-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #prof-bar label { white-space: nowrap; }
 .cov-hit { border-left: 3px solid var(--good); margin-left: 3px; } .cov-miss { border-left: 3px solid var(--bad); margin-left: 3px; }
@@ -256,7 +264,7 @@
 #term-input { flex: 1; border: 0; background: transparent; color: var(--fg); font: inherit; outline: none; }
 .listbar { display: flex; gap: 10px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); }
 .listbar input, .listbar select { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 1px 6px; }
-.listbar input { min-width: 220px; }
+.listbar input:not([type=checkbox]) { min-width: 220px; }   /* a checkbox of a bar keeps its own size */
 .listbar button { background: transparent; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; font: inherit; cursor: pointer; }
 .prob-file { padding: 4px 10px 1px; font-weight: 600; color: var(--dim); }
 .prob { display: flex; gap: 10px; align-items: baseline; padding: 1px 10px 1px 22px; cursor: pointer; }

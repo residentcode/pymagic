@@ -877,11 +877,29 @@ app.MapPost("/api/db", async (HttpRequest req) =>
     catch (UnauthorizedAccessException) { return Results.BadRequest("The database has to be inside the project."); }
 });
 
-// what the last profiler run measured, from .pymagic/profile.json; "rel" is the path inside the project (null for other code)
-app.MapGet("/api/profile", () =>
+// the profiler runs kept, newest first
+app.MapGet("/api/profile/snapshots", () => Results.Json(ProfileSnapshots.List(root)));
+
+// a .pstats file of the project (cProfile's, yappi's, PyCharm's) read into the Profiler panel: {path}
+app.MapPost("/api/profile/open", async (HttpRequest req) =>
 {
-    string path = RunSession.ProfilePath(root);
-    if (!File.Exists(path)) return Results.NotFound();
+    var body = await JsonNode.ParseAsync(req.Body);
+    try
+    {
+        string full = ResolveInRoot(body?["path"]?.GetValue<string>() ?? "");
+        if (!File.Exists(full)) return Results.BadRequest(new { error = $"There is no file {body?["path"]} in the project." });
+        return Results.Json(new { snapshot = ProfileSnapshots.Open(root, DatabasePython(), full) });
+    }
+    catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
+    catch (UnauthorizedAccessException) { return Results.BadRequest(new { error = "The file has to be inside the project." }); }
+});
+
+// what the last profiler run measured, from .pymagic/profile.json; "rel" is the path inside the project (null for other code)
+// ?snapshot=<name>: a run kept in .pymagic/profiles instead of the last one
+app.MapGet("/api/profile", (string? snapshot) =>
+{
+    string? path = snapshot is { Length: > 0 } ? ProfileSnapshots.PathOf(root, snapshot) : RunSession.ProfilePath(root);
+    if (path == null || !File.Exists(path)) return Results.NotFound();
     try
     {
         var data = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
@@ -899,7 +917,9 @@ app.MapGet("/api/profile", () =>
         {
             f!["rel"] = Rel(f["file"]?.GetValue<string>());
             foreach (var c in f["callers"]!.AsArray()) c!["rel"] = Rel(c["file"]?.GetValue<string>());
+            foreach (var c in f["callees"]?.AsArray() ?? new JsonArray()) c!["rel"] = Rel(c["file"]?.GetValue<string>());
         }
+        data["snapshot"] = snapshot;
         data["rel"] = Rel(data["script"]?.GetValue<string>());
         data["when"] = File.GetLastWriteTimeUtc(path).ToString("o");
         return Results.Json(data);
@@ -1168,7 +1188,8 @@ app.Map("/run", async (HttpContext ctx) =>
                 string? module = msg["module"]?.GetValue<string>();
                 string file0 = msg["file"]?.GetValue<string>() ?? "";
                 var debugTests = msg["tests"] as JsonObject;   // Debug of tests: the test runner under the debugger
-                if (module == null && debugTests == null) ResolveInRoot(file0);   // refuses paths outside the workspace
+                var profileTests = msg["profileTests"] as JsonObject;   // Profile of tests: pytest or unittest under the profiler
+                if (module == null && debugTests == null && profileTests == null) ResolveInRoot(file0);   // refuses paths outside the workspace
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
                 // what a run configuration adds: variables, and a folder inside the project to start in
                 // .env files of the project first, the configuration's own variables over them
@@ -1193,7 +1214,10 @@ app.Map("/run", async (HttpContext ctx) =>
                 if (debugTests != null)
                     session.StartDebugTests(root, (debugTests["ids"] as JsonArray)?.Select(i => i!.GetValue<string>()).ToList() ?? new List<string>(),
                         debugTests["framework"]?.GetValue<string>() ?? "auto", bps);   // pm_tests checks the name
-                else if (msg["profile"]?.GetValue<bool>() == true && module == null) session.StartProfile(root, file0, args);
+                else if (profileTests != null)
+                    session.StartProfile(root, null, (profileTests["ids"] as JsonArray)?.Select(i => i!.GetValue<string>()).ToList() ?? new List<string>(),
+                        tests: profileTests["framework"]?.GetValue<string>() is "pytest" or "unittest" ? profileTests["framework"]!.GetValue<string>() : "auto");
+                else if (msg["profile"]?.GetValue<bool>() == true) session.StartProfile(root, module == null ? file0 : null, args, module);
                 else if (module != null) session.StartModule(root, module, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
                 else session.StartWithBreakpoints(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
                 if (msg["exceptionBreak"]?.GetValue<string>() == "raised")

@@ -18,6 +18,7 @@ const FILES = {
     'quotes.py': 'url = "/shop/about/"\nname = "pen"\nsaid = "it\'s"\n',
     'queries.sql': "CREATE TABLE note (id INTEGER PRIMARY KEY, body TEXT);\nINSERT INTO note (body) VALUES ('one; two'), ('three');\nSELECT body FROM note ORDER BY id;\n",
     'more_items.csv': 'name,price\nlamp,30\nmug,\n',
+    'busy.py': 'def inner(n):\n    return sum(i * i for i in range(n))\n\n\ndef outer():\n    return [inner(3000) for _ in range(40)]\n\n\nouter()\n',
     'api.http': '### the items\nGET {{host}}/items\n    ?page=2\nAccept: application/json\n\n###\nPOST {{host}}/items\nContent-Type: application/json\nAuthorization: Bearer {{token}}\n\n{"name": "pen"}\n',
     'tests/__init__.py': '',
     'tests/test_calc.py': 'import unittest\n\n\nclass Calc(unittest.TestCase):\n    def test_ok(self):\n        self.assertEqual(1 + 1, 2)\n\n    def test_bad(self):\n        self.assertEqual(1 + 1, 3)\n',
@@ -25,9 +26,17 @@ const FILES = {
 
 let app, page;
 const $ = (id) => `document.getElementById(${JSON.stringify(id)})`;
+// the file stays in the editor: on a fresh start PyMagic opens a file of its own, which can land after this one
 const open = async (rel) => {
-    await page.evaluate(`window.pymagic.openFile(${JSON.stringify(rel)})`);
-    await page.waitFor(`window.pymagic.editor.getModel()?.uri.path.endsWith(${JSON.stringify('/' + rel)})`, 15000, rel);
+    const shown = `window.pymagic.editor.getModel()?.uri.path.endsWith(${JSON.stringify('/' + rel)})`;
+    for (let i = 0; i < 4; i++) {
+        await page.evaluate(`window.pymagic.openFile(${JSON.stringify(rel)})`);
+        await page.waitFor(shown, 15000, rel);
+        await sleep(400);
+        if (await page.evaluate(shown))
+            return;
+    }
+    throw new Error(`${rel} did not stay open`);
 };
 const output = () => page.evaluate(`${$('output')}.textContent`);
 /** A click in the editor's margin beside a line, as a breakpoint is set; gives whether the line has one afterwards. */
@@ -279,5 +288,26 @@ describe('HTTP client', () => {
         const text = await page.evaluate('window.pymagic.editor.getValue()');
         assert.match(text, /###\nPOST http:\/\/127\.0\.0\.1\/missing\nAccept: text\/plain\nContent-Type: application\/x-www-form-urlencoded\n\na=1\n$/);
         await page.evaluate(`(() => { const ed = window.pymagic.editor; while (ed.getValue().includes('/missing')) ed.trigger('e2e', 'undo', {}); })()`);
+    });
+});
+
+describe('profiler', () => {
+    test('Profile lists each function with what it called, draws the call graph and keeps the run', async () => {
+        await open('busy.py');
+        await page.evaluate(`document.getElementById('b-profile').click()`);
+        await page.waitFor(`document.getElementById('profiler-tab').classList.contains('active') && document.getElementById('prof-summary').textContent.startsWith('busy.py')`, 30000, 'the profile');
+        await page.evaluate(`[...document.querySelectorAll('#prof-list .prof-row')].find((r) => r.querySelector('.prof-name')?.textContent === 'outer').click()`);
+        const links = await page.waitFor(`document.querySelector('#prof-list .prof-links')?.textContent`, 5000, 'the links');
+        assert.match(links, /called from \(1\):<module>/);
+        assert.match(links, /calls \(\d+\):.*inner.*40×/);
+        await page.evaluate(`document.getElementById('prof-graph').click()`);
+        const nodes = await page.evaluate(`[...document.querySelectorAll('#prof-list svg .prof-node-name')].map((t) => t.textContent)`);
+        assert.ok(nodes.includes('outer') && nodes.includes('inner') && nodes.includes('<module>'), nodes.join(', '));
+        // a click on inner's box: the graph goes to it
+        await page.evaluate(`[...document.querySelectorAll('#prof-list svg .prof-node')].find((g) => g.querySelector('.prof-node-name').textContent === 'inner').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+        assert.equal(await page.evaluate(`document.querySelector('#prof-list svg .prof-node.center .prof-node-name').textContent`), 'inner');
+        await page.evaluate(`document.getElementById('prof-graph').click()`);
+        const kept = await page.waitFor(`document.getElementById('prof-snapshot').options.length > 1 && document.getElementById('prof-snapshot').options[1].textContent`, 5000, 'the snapshot');
+        assert.match(kept, / · busy$/);
     });
 });

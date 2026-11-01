@@ -122,6 +122,7 @@ export function setupTests(deps) {
             openMenu({ x: e.clientX, y: e.clientY }, [
                 { label: 'Run', run: () => void run([n.id]) },
                 { label: 'Debug', run: () => debugTests([n.id]) },
+                { label: 'Profile', run: () => profileTests([n.id]) },
                 { label: 'Run with coverage', run: () => void run([n.id], true) },
                 '-',
                 { label: 'Go to the code', run: () => void goTo(n) },
@@ -564,6 +565,11 @@ export function setupTests(deps) {
         summarize();
         window.dispatchEvent(new CustomEvent('pymagic:debugTests', { detail: { ids, framework: $('tests-fw').value } }));
     }
+    /** Profiling tests: pytest (or unittest, as the panel's framework says) under the profiler; the Profiler tab shows where the time went. */
+    function profileTests(ids) {
+        const fw = $('tests-fw').value;
+        window.dispatchEvent(new CustomEvent('pymagic:profileTests', { detail: { ids, framework: fw === 'pytest' || fw === 'unittest' ? fw : 'auto' } }));
+    }
     window.addEventListener('pymagic:testMessage', (e) => {
         if (debugRun)
             handle(e.detail);
@@ -627,6 +633,7 @@ export function setupTests(deps) {
         openMenu(where, [
             { label: `Run '${n.name}'`, run: () => void run([n.id]) },
             { label: `Debug '${n.name}'`, run: () => debugTests([n.id]) },
+            { label: `Profile '${n.name}'`, run: () => profileTests([n.id]) },
             { label: `Run '${n.name}' with coverage`, run: () => void run([n.id], true) },
         ]);
     });

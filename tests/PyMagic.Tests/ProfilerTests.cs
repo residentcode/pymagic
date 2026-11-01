@@ -30,11 +30,14 @@ public class ProfilerTests
         return root;
     }
 
-    static (JsonObject? Profile, string Output, int Code) Profile(string root, params string[] args)
+    static (JsonObject? Profile, string Output, int Code) Profile(string root, params string[] args) =>
+        ProfileWith(root, s => s.StartProfile(root, "app.py", args));
+
+    static (JsonObject? Profile, string Output, int Code) ProfileWith(string root, Action<RunSession> start)
     {
         var events = new BlockingCollection<JsonNode>();
         using var session = new RunSession(events.Add) { Python = PythonExe };
-        session.StartProfile(root, "app.py", args);
+        start(session);
         var output = new System.Text.StringBuilder();
         int code = -1;
         while (true)
@@ -117,5 +120,67 @@ public class ProfilerTests
         session.StartProfile(Path.GetTempPath(), "no_such_script_" + Guid.NewGuid().ToString("N") + ".py", new List<string>());
         Assert.True(events.TryTake(out var e, TimeSpan.FromSeconds(5)));
         Assert.Equal("error", e!["type"]!.GetValue<string>());
+    }
+
+    // ------------------------------------------------------------ item 228: callees, modules, tests, snapshots, .pstats files
+
+    [Fact]
+    public void EachFunctionListsWhatItCalledAndTheRunIsKeptAsASnapshot()
+    {
+        if (!HavePython) return;
+        string root = Project(Busy);
+        try
+        {
+            var (profile, _, _) = Profile(root);
+            var outer = Function(profile!, "outer")!;
+            var callee = outer["callees"]!.AsArray().Single(c => c!["name"]!.GetValue<string>() == "inner")!;
+            Assert.Equal(30, callee["calls"]!.GetValue<int>());
+            Assert.Equal("cprofile", profile!["engine"]!.GetValue<string>());
+            Assert.True(File.Exists(RunSession.ProfileStatsPath(root)), "the raw pstats are kept");
+            var snapshots = ProfileSnapshots.List(root);
+            Assert.Equal(1, snapshots.Count);
+            Assert.Equal("app", snapshots[0].Label);
+            Assert.True(snapshots[0].HasStats);
+            Assert.True(ProfileSnapshots.PathOf(root, snapshots[0].Name) != null);
+            Assert.True(ProfileSnapshots.PathOf(root, "../profile") == null, "a name with a path is not a snapshot");
+
+            // the .pstats of that run, opened again: the same functions
+            string copy = Path.Combine(root, "saved.pstats");
+            File.Copy(RunSession.ProfileStatsPath(root), copy);
+            File.Delete(RunSession.ProfilePath(root));
+            string name = ProfileSnapshots.Open(root, PythonExe, copy);
+            var opened = (JsonObject)JsonNode.Parse(File.ReadAllText(RunSession.ProfilePath(root)))!;
+            Assert.Equal(30, Function(opened, "outer")!["callees"]!.AsArray().Single(c => c!["name"]!.GetValue<string>() == "inner")!["calls"]!.GetValue<int>());
+            Assert.True(opened["loaded"]!.GetValue<bool>());
+            Assert.Equal("saved", ProfileSnapshots.List(root).Single(s => s.Name == name).Label);
+            File.WriteAllText(copy, "not a profile");
+            Assert.Throws<ServiceException>(() => ProfileSnapshots.Open(root, PythonExe, copy));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void AModuleAndTestsCanBeProfiled()
+    {
+        if (!HavePython) return;
+        string root = Project(Busy);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "tool"));
+            File.WriteAllText(Path.Combine(root, "tool", "__init__.py"), "");
+            File.WriteAllText(Path.Combine(root, "tool", "__main__.py"), "import sys\nfrom app import inner\n\ndef work():\n    return inner(5000)\n\nprint('module', work(), sys.argv[1:])\n");
+            var (module, output, code) = ProfileWith(root, s => s.StartProfile(root, null, new[] { "x" }, module: "tool"));
+            Assert.Equal(0, code);
+            Assert.Contains("module 41654167500 ['x']", output);
+            Assert.True(Function(module!, "work") != null, "the module's function is in the profile");
+
+            File.WriteAllText(Path.Combine(root, "test_app.py"), "import unittest\nfrom app import outer\n\nclass Busy(unittest.TestCase):\n    def test_outer(self):\n        self.assertTrue(outer() > 0)\n");
+            var (tests, testOutput, testCode) = ProfileWith(root, s => s.StartProfile(root, null, new[] { "test_app.py::Busy::test_outer" }, tests: "unittest"));
+            Assert.Equal(0, testCode);
+            Assert.Contains("Ran 1 test", testOutput);
+            Assert.True(Function(tests!, "test_outer") != null && Function(tests!, "outer") != null, "the test and the code it ran");
+            Assert.Equal("tests", ProfileSnapshots.List(root)[0].Label);
+        }
+        finally { Directory.Delete(root, true); }
     }
 }

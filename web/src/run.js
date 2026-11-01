@@ -958,11 +958,6 @@ export function setupRun(deps) {
                 try { await start(debug, profile); } finally { beforeDone = false; }
                 return;
             }
-            if (s.module && profile) {
-                append('The profiler runs a script; this configuration starts a module.\n', 'err');
-                showTab('output');
-                return;
-            }
             await launch(s.file ?? null, debug, profile, s.args, { ...s, openPanel: chosen.openPanel, openBrowser: chosen.kind === 'django' && chosen.openBrowser, logFiles: chosen.logFiles });
             return;
         }
@@ -1050,7 +1045,7 @@ export function setupRun(deps) {
         openBrowser = !!extra.openBrowser;
         followLogs((extra.logFiles ?? '').split(',').map((s) => s.trim()).filter(Boolean));
         testsRun = !!extra.tests;
-        run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, tests: extra.tests, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
+        run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, tests: extra.tests, profileTests: extra.profileTests, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
             exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value, functionBreaks: functionNames(),
             envFiles: extra.envFiles, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots });
         run.onMessage = handle;
@@ -1459,6 +1454,15 @@ export function setupRun(deps) {
         }
         // PyMagic's own test runner, under the debugger: the results land in the Tests tree as a run's do
         void launch(null, true, false, [], { tests: { ids, framework }, openPanel: false });   // the Tests tab stays in front
+    });
+    // Profile of tests (the Tests panel's menus): pytest or unittest under the profiler, the result in the Profiler tab
+    window.addEventListener('pymagic:profileTests', (e) => {
+        if (run) {
+            append('A program is running; stop it first.\n', 'err');
+            showTab('output');
+            return;
+        }
+        void launch(null, false, true, [], { profileTests: e.detail });
     });
     window.addEventListener('pymagic:stopDebugTests', () => { if (run && testsRun) run.send({ type: 'stop' }); });
     return {

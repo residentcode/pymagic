@@ -1123,7 +1123,7 @@ async function main() {
     fileActions.attachEditor(editor, monaco, () => refactorMenu(editor, refactor));
     const coverage = setupCoverage(common);
     setupRequirementsCheck(common);
-    setupProfiler(common);
+    setupProfiler({ ...common, askText: (...a) => explorer.askText(...a) });
     setupHttpClient({ ...common, root: info.root, askText: (...a) => explorer.askText(...a) });
     setupDatabase({ ...common, askText: (...a) => explorer.askText(...a), runScript: (rel, args) => runHooks.runScript(rel, args) });
     // code actions that need the page (not just a text edit) arrive as commands

@@ -52,3 +52,27 @@ export function hottest(data) {
 
 /** Two function entries are the same function when file, line and name agree. */
 export const sameFunction = (a, b) => a.file === b.file && a.line === b.line && a.name === b.name;
+
+/**
+ * The call graph around one function, as boxes and arrows to draw: its callers in a column on the left, the function in
+ * the middle, the functions it called on the right (the most expensive first, at most `max` on a side). Each arrow says
+ * how many calls and how much time went along it; each box has its x, y (top left), width and height.
+ */
+export function callGraph(fn, { max = 8, width = 220, height = 34, gap = 14, column = 320 } = {}) {
+    const side = (list) => [...list].sort((a, b) => b.cumulative - a.cumulative).slice(0, max);
+    const callers = side(fn.callers ?? []), callees = side(fn.callees ?? []);
+    const rows = Math.max(callers.length, callees.length, 1);
+    const totalHeight = rows * height + (rows - 1) * gap;
+    const columnOf = (list, x) => {
+        const top = (totalHeight - (list.length * height + Math.max(0, list.length - 1) * gap)) / 2;
+        return list.map((f, i) => ({ fn: f, x, y: top + i * (height + gap), width, height }));
+    };
+    const center = { fn, x: column, y: (totalHeight - height) / 2, width, height };
+    const left = columnOf(callers, 0), right = columnOf(callees, column * 2);
+    const edges = [
+        ...left.map((b) => ({ from: b, to: center, calls: b.fn.calls, time: b.fn.cumulative })),
+        ...right.map((b) => ({ from: center, to: b, calls: b.fn.calls, time: b.fn.cumulative })),
+    ];
+    return { boxes: [...left, center, ...right], edges, width: column * 2 + width, height: totalHeight,
+        more: { callers: Math.max(0, (fn.callers ?? []).length - callers.length), callees: Math.max(0, (fn.callees ?? []).length - callees.length) } };
+}
