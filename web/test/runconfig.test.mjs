@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { read, startOf, parseEnv, formatEnv, uniqueName, blank, splitShared, compoundMembers, KINDS } from '../src/runconfig-model.js';
+import { read, startOf, parseEnv, formatEnv, uniqueName, blank, splitShared, compoundMembers, KINDS, parseMappings, formatMappings, portOf } from '../src/runconfig-model.js';
 
 test('what is stored is read into well-formed configurations, the broken ones left out', () => {
     const { configurations, selected } = read({
@@ -92,4 +92,39 @@ test('a compound names the configurations it starts together; the ones that cann
     assert.match(skipped[3].why, /no such/);
     assert.deepEqual(compoundMembers(blank('x', 'compound'), () => null), { members: [], skipped: [] });
     assert.equal(blank('x', 'compound').members, '');
+});
+
+test('a Python Debug Server configuration starts a listener with its address, port and path mappings', () => {
+    assert.ok(KINDS.some(([k]) => k === 'debugserver'));
+    const fresh = blank('Server', 'debugserver');
+    assert.equal(fresh.port, '5678');
+    assert.deepEqual(startOf(fresh).debugServer, { host: '127.0.0.1', port: 5678, connectHost: '', mappings: [] });
+    const { configurations } = read({ configurations: [
+        { name: 'dbg', kind: 'debugserver', host: '*', port: '0', connectHost: ' build-box ', mappings: 'src=/app/src\n# a comment\nC:\\proj = /srv/proj\nbroken\n=/root\n' },
+        { name: 'bad port', kind: 'debugserver', port: '99999' },
+        { name: 'all', kind: 'compound', members: 'dbg' },
+    ] });
+    const dbg = configurations[0];
+    assert.equal(dbg.kind, 'debugserver');
+    assert.deepEqual(startOf(dbg).debugServer, {
+        host: '*', port: 0, connectHost: 'build-box',
+        mappings: [{ local: 'src', remote: '/app/src' }, { local: 'C:\\proj', remote: '/srv/proj' }, { local: '', remote: '/root' }],
+    });
+    assert.equal(startOf(configurations[1]).debugServer.port, 5678);
+    // a debug server is not started with a compound: it needs the debugger
+    const { members, skipped } = compoundMembers(configurations[2], (n) => configurations.find((c) => c.name === n) ?? null);
+    assert.equal(members.length, 0);
+    assert.match(skipped[0].why, /debugger/);
+});
+
+test('mapping lines and ports', () => {
+    assert.deepEqual(parseMappings('a => /x\r\nb=/y'), [{ local: 'a', remote: '/x' }, { local: 'b', remote: '/y' }]);
+    assert.equal(formatMappings(parseMappings('a=/x\nb=/y')), 'a=/x\nb=/y');
+    assert.deepEqual(parseMappings(undefined), []);
+    assert.equal(portOf('5679'), 5679);
+    assert.equal(portOf(' 0 '), 0);
+    assert.equal(portOf(''), 5678);
+    assert.equal(portOf('x'), 5678);
+    assert.equal(portOf('65536'), 5678);
+    assert.equal(portOf('1.5'), 5678);
 });

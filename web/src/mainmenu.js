@@ -205,6 +205,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 { label: 'Profile', run: press('b-profile'), disabled: $('b-profile').disabled },
                 { label: 'Stop', key: 'Shift+F5', run: press('b-stop'), disabled: $('b-stop').disabled },
                 { label: 'Attach to process…', run: () => debug.attach(), disabled: debug.running() },
+                { label: 'Debug server…', run: () => debug.debugServer(), disabled: debug.running() },
                 { label: 'Pause program', run: () => debug.pause(), disabled: !debug.canPause() },
                 '-',
                 { label: 'Step over', key: 'F10', run: press('b-over'), disabled: $('b-over').disabled },

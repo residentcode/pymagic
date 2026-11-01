@@ -1616,6 +1616,26 @@ app.Map("/run", async (HttpContext ctx) =>
                 session.Python = interpreters.Current?.Target.IsLocal != false ? interpreters.Current?.Python ?? python : python;
                 session.Attach(root, attachPid, bps);
             }
+            else if (msg["type"]?.GetValue<string>() == "listen")
+            {
+                // Debug server: this program listens, and a program started elsewhere connects back to be debugged
+                var bps = new Dictionary<string, JsonArray>();
+                if (msg["breakpoints"] is JsonObject bo)
+                    foreach (var (file, lines) in bo)
+                        bps[file] = lines is JsonArray arr ? (JsonArray)JsonNode.Parse(arr.ToJsonString())! : new JsonArray();
+                var maps = (msg["mappings"] as JsonArray)?.OfType<JsonObject>()
+                    .Select(m => (Local: m["local"]?.GetValue<string>() ?? "", Remote: m["remote"]?.GetValue<string>() ?? "")).ToList() ?? new List<(string, string)>();
+                int listenPort = msg["port"] is JsonValue pv && pv.TryGetValue<int>(out var pi) ? pi : 5678;
+                session.Listen(root, msg["host"]?.GetValue<string>() ?? "127.0.0.1", listenPort, msg["connectHost"]?.GetValue<string>() ?? "", maps, bps);
+                if (msg["exceptionBreak"]?.GetValue<string>() == "raised")
+                    session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised", ["classes"] = msg["exceptionClasses"]?.DeepClone() });
+                if (msg["muted"]?.GetValue<bool>() == true)
+                    session.Handle(new JsonObject { ["type"] = "mute", ["on"] = true });
+                if (msg["loadPolicy"]?.GetValue<string>() is "onDemand")
+                    session.Handle(new JsonObject { ["type"] = "setLoadPolicy", ["policy"] = "onDemand" });
+                if (msg["functionBreaks"] is JsonArray { Count: > 0 } functions)
+                    session.Handle(new JsonObject { ["type"] = "setFunctionBreaks", ["names"] = functions.DeepClone() });
+            }
             else if (msg["type"]?.GetValue<string>() == "startTests")
             {
                 var ids = (msg["ids"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();

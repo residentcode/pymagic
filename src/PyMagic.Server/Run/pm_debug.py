@@ -166,7 +166,11 @@ class Debugger(bdb.Bdb):
         self.muted = True
         self.break_on_raise = False
         self.clear_all_breaks()
-        threading.settrace_all_threads(None)
+        if hasattr(threading, "settrace_all_threads"):
+            threading.settrace_all_threads(None)
+        else:
+            threading.settrace(None)
+            sys.settrace(None)
         for top in sys._current_frames().values():
             frame = top
             while frame is not None:
@@ -1280,6 +1284,42 @@ def attach(host, port, token, root):
         while frame is not None:
             frame.f_trace = dbg.trace_dispatch
             frame = frame.f_back
+
+
+def connect(host, port, token="", root=None):
+    """Debug server: called by a program that was started elsewhere (another computer, a container, a shell of its own) to
+    connect back to the IDE that listens at host:port. From the next line on the program is debugged like any other
+    session: the IDE's breakpoints stop it, it can be stepped and inspected. The program keeps running when the IDE
+    stops listening or hangs up. `root` is the program's own project folder (the files "just my code" means); default: the
+    current folder."""
+    sock = socket.create_connection((host, int(port)))
+    dbg = Debugger(sock, root or os.getcwd())
+    dbg.attached = True
+    dbg.send({"type": "hello", "token": token})
+    reader = threading.Thread(target=dbg.read_loop, daemon=True, name="pymagic-debugger")
+    reader.start()
+    dbg.reader_ident = reader.ident
+    dbg.go.wait(15)   # the IDE sends its breakpoints first
+    dbg.reset()
+    outermost = sys._getframe()
+    while outermost.f_back is not None:
+        outermost = outermost.f_back
+    dbg.botframe = outermost
+    dbg.set_continue()
+    settrace_all = getattr(threading, "settrace_all_threads", None)
+    if settrace_all is not None:
+        settrace_all(dbg.trace_dispatch)
+    else:
+        threading.settrace(dbg.trace_dispatch)
+        sys.settrace(dbg.trace_dispatch)
+    for ident, top in sys._current_frames().items():
+        if ident == reader.ident:
+            continue
+        frame = top
+        while frame is not None:
+            frame.f_trace = dbg.trace_dispatch
+            frame = frame.f_back
+    return dbg
 
 
 def main():

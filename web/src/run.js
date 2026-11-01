@@ -1,6 +1,6 @@
 // Run and debug: toolbar, output panel, breakpoints in the gutter, stepping, frames, variables and evaluate.
 import * as monaco from 'monaco-editor';
-import { compoundMembers, startOf } from './runconfig-model.js';
+import { compoundMembers, parseMappings, portOf, startOf } from './runconfig-model.js';
 import { RunClient } from './runclient';
 import { showTab } from './panel';
 import { editBreakpoint, isPlain } from './bpdialog';
@@ -204,6 +204,7 @@ export function setupRun(deps) {
         if (stick)
             output.scrollTop = output.scrollHeight;
     }
+    let serving = false, connected = false;   // a debug server is listening / a program is connected to it
     function setButtons() {
         const active = run !== null;
         $('b-run').disabled = active;
@@ -212,10 +213,10 @@ export function setupRun(deps) {
         $('b-debug').querySelector('.lbl').textContent = paused ? 'Resume' : 'Debug';
         $('b-debug').querySelector('use').setAttribute('href', paused ? '#i-run' : '#i-debug');
         $('b-stop').disabled = !active && ![...sides.values()].some((e) => e.live);
-        $('b-pause').disabled = !active || !debugging || paused;
+        $('b-pause').disabled = !active || !debugging || paused || (serving && !connected);
         for (const id of ['b-over', 'b-into', 'b-out'])
             $(id).disabled = !paused;
-        $('runstate').textContent = !active ? '' : paused ? 'paused' : debugging ? 'debugging…' : profiling ? 'profiling…' : 'running…';
+        $('runstate').textContent = !active ? '' : serving && !connected ? 'waiting for a program…' : paused ? 'paused' : debugging ? 'debugging…' : profiling ? 'profiling…' : 'running…';
     }
     function relOfAbsolute(file) {
         const n = norm(file);
@@ -837,7 +838,30 @@ export function setupRun(deps) {
         if (testsRun && (TEST_MESSAGES.includes(m.type) || m.type === 'exited' || m.type === 'error'))
             window.dispatchEvent(new CustomEvent('pymagic:testMessage', { detail: m }));
         switch (m.type) {
+            case 'listening': {
+                const mapped = m.mapped ? `${m.mapped} path mapping${m.mapped === 1 ? '' : 's'} between this computer and the program's machine` : 'no path mappings: the files are taken to be the same on both sides';
+                append(`Debug server listening on ${m.host}:${m.port} (${mapped}).\nPut this in the program, started on the other machine:\n\n${m.snippet}\n\nThe program stops at the breakpoints set here, once it has run that line. Stop ends the listening; a program that is connected goes on running.\n`, 'info');
+                showServerSnippet(m);
+                break;
+            }
+            case 'connected':
+                connected = true;
+                append(`A program connected from ${m.from}.\n`, 'info');
+                setButtons();
+                break;
+            case 'disconnected':
+                connected = false;
+                paused = false;
+                frames = [];
+                clearCurrentLine();
+                $('frames').textContent = '';
+                $('vars').textContent = '';
+                append('The program disconnected; the debug server is waiting for the next one.\n', 'info');
+                setButtons();
+                break;
             case 'started':
+                if (m.listening)
+                    break;
                 append(m.attached ? `Attached to process ${m.pid}; the debugger starts with the program's next line of Python (its output is not shown here)\n`
                     : `${debugging ? 'Debugging' : 'Running'} (pid ${m.pid})\n`, 'info');
                 break;
@@ -887,7 +911,7 @@ export function setupRun(deps) {
                 void refreshWatches();
                 break;
             case 'exited':
-                append(m.detached ? '\nDetached; the program goes on running.\n' : `\nProcess finished with exit code ${m.code}\n`, 'info');
+                append(m.detached ? (serving ? '\nDebug server stopped; a program that was connected goes on running.\n' : '\nDetached; the program goes on running.\n') : `\nProcess finished with exit code ${m.code}\n`, 'info');
                 clearInterval(logTimer);
                 openBrowser = false;
                 if (afterExit) {
@@ -906,6 +930,7 @@ export function setupRun(deps) {
     function finish() {
         run?.close();
         run = null;
+        serving = connected = false;
         testsRun = false;
         dataBreaks = [];
         paused = false;
@@ -947,6 +972,10 @@ export function setupRun(deps) {
         }
         if (chosen) {
             const s = startOf(chosen);
+            if (s.debugServer) {
+                await startDebugServer(s.debugServer, chosen.openPanel);
+                return;
+            }
             // Django tests (and the like) go to the Tests panel and its tree
             if (s.tests) {
                 window.dispatchEvent(new CustomEvent('pymagic:runTests', { detail: { ...s.tests, debug } }));
@@ -1003,6 +1032,98 @@ export function setupRun(deps) {
         dialog('Attach to Process', holder);
         const overlay = holder.closest('#sigdialog');
         close = () => overlay?.remove();
+    }
+    /** The snippet to put in the program, in a dialog with a Copy button (the same text is in the Output). */
+    function showServerSnippet(m) {
+        const holder = document.createElement('div');
+        holder.className = 'debugserver-info';
+        const note = document.createElement('div');
+        note.className = 'dim';
+        note.textContent = `Listening on ${m.host}:${m.port}. Put this in the program that runs elsewhere; copy pm_debug.py from ${m.helper} to that machine first (next to the program or on its PYTHONPATH).`;
+        const pre = document.createElement('pre');
+        pre.className = 'value-text';
+        pre.id = 'debugserver-snippet';
+        pre.textContent = m.snippet;
+        holder.append(note, pre);
+        const copy = document.createElement('button');
+        copy.textContent = 'Copy snippet';
+        copy.onclick = () => void navigator.clipboard.writeText(m.snippet).then(() => toast('Snippet copied'), () => toast('Could not copy'));
+        dialog('Debug server', holder, [copy]);
+    }
+    /** Python Debug Server: this program listens, and a program started elsewhere connects back to be debugged (breakpoints, stepping, variables as in any session).
+     * `settings`: { host, port, connectHost, mappings: [{local, remote}] }. */
+    async function startDebugServer(settings, openPanel = true) {
+        if (run)
+            return false;
+        await deps.saveAll();
+        const breakpoints = {};
+        for (const m of monaco.editor.getModels()) {
+            const r = deps.relOf(m);
+            const bps = r ? breakpointsOf(m) : [];
+            if (r && bps.length)
+                breakpoints[r] = wire(m, bps);
+        }
+        output.textContent = '';
+        colours = ansiReader();
+        debugging = true;
+        profiling = false;
+        paused = false;
+        serving = true;
+        connected = false;
+        if (openPanel !== false)
+            showTab('output');
+        lastLaunch = { rel: null, debug: true, profile: false, args: [], extra: {}, started: Date.now(), label: `Debug server ${settings.host}:${settings.port}` };
+        run = new RunClient({ type: 'listen', ...settings, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
+            exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value, functionBreaks: functionNames() });
+        run.onMessage = handle;
+        const mine = run;
+        run.onClose = () => { if (run && run === mine) {
+            append('\nConnection to the host lost.\n', 'err');
+            finish();
+        } };
+        setButtons();
+        return true;
+    }
+    /** Debug server… of the Run menu: the settings in a dialog, then listen. */
+    function debugServerDialog() {
+        if (run)
+            return;
+        const holder = document.createElement('div');
+        holder.className = 'debugserver-form';
+        const row = (label, input) => {
+            const l = document.createElement('label');
+            l.style.display = 'block';
+            l.style.margin = '6px 0';
+            l.append(label + ' ', input);
+            return l;
+        };
+        const input = (value, placeholder) => Object.assign(document.createElement('input'), { value, placeholder, spellcheck: false });
+        const host = input('127.0.0.1', '127.0.0.1');
+        host.id = 'ds-host';
+        const port = input('5678', '5678');
+        port.id = 'ds-port';
+        const reach = input('', "empty: this computer's name");
+        reach.id = 'ds-reach';
+        const maps = document.createElement('textarea');
+        maps.id = 'ds-maps';
+        maps.rows = 4;
+        maps.cols = 50;
+        maps.spellcheck = false;
+        maps.placeholder = 'C:\\proj\\src=/app/src (local=remote, one per line)';
+        const note = document.createElement('div');
+        note.className = 'dim';
+        note.textContent = 'This IDE listens; a program started elsewhere calls pm_debug.connect(...) to be debugged here. Use * to listen on every network interface. The same settings can be kept in a Python Debug Server run configuration.';
+        holder.append(note, row('Listen on', host), row('Port', port), row('The program reaches this computer as', reach), row('Path mappings', maps));
+        const go = document.createElement('button');
+        go.textContent = 'Listen';
+        go.id = 'ds-listen';
+        go.className = 'primary';
+        go.onclick = () => {
+            holder.closest('#sigdialog')?.remove();
+            void startDebugServer({ host: host.value.trim() || '127.0.0.1', port: portOf(port.value), connectHost: reach.value.trim(), mappings: parseMappings(maps.value) });
+        };
+        dialog('Debug server', holder, [go]);
+        host.focus();
     }
     async function startAttach(pid) {
         await deps.saveAll();
@@ -1586,6 +1707,7 @@ export function setupRun(deps) {
             evaluate: () => evaluateWindow(expressionOf(focused)),
             forceStepInto: () => forceStep('stepIn'), forceStepOver: () => forceStep('next'),
             attach: () => void attachToProcess(), running: () => run !== null,
+            debugServer: () => debugServerDialog(), startDebugServer,
             pause, canPause: () => run !== null && debugging && !paused,
         },
     };

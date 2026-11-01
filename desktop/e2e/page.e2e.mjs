@@ -5,7 +5,7 @@
 // Each check is one a change has broken or could break unseen by the Node tests of the page's pure modules.
 import { after, afterEach, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
@@ -59,6 +59,7 @@ const FILES = {
     'intent.py': "name = 'x'\nprint('Hello ' + name + '!')\nvalue = 255\n",
     'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\nN = re.compile(f"{PATTERN.pattern}[cc]")\n',
     'api.http':'### the items\nGET {{host}}/items\n    ?page=2\nAccept: application/json\n\n###\nPOST {{host}}/items\nContent-Type: application/json\nAuthorization: Bearer {{token}}\n\n{"name": "pen"}\n',
+    'remote_job.py': 'def work(n):\n    total = n * 2\n    return total\n\n\nprint("job", work(21), flush=True)\n',
     'tests/__init__.py': '',
     'tests/test_calc.py': 'import unittest\n\n\nclass Calc(unittest.TestCase):\n    def test_ok(self):\n        self.assertEqual(1 + 1, 2)\n\n    def test_bad(self):\n        self.assertEqual(1 + 1, 3)\n',
 };
@@ -89,6 +90,7 @@ async function clickMargin(line) {
 
 let echo;
 let altPython = '';
+let projectRoot = '';
 before(async () => {
     // the scratch files of this run, not the user's own
     process.env.PYMAGIC_SCRATCHES = mkdtempSync(join(tmpdir(), 'pymagic-e2e-scratches-'));
@@ -119,7 +121,9 @@ before(async () => {
         { name: 'loop a', kind: 'script', script: 'loop.py' },
         { name: 'loop b', kind: 'script', script: 'loop.py' },
         { name: 'loop pair', kind: 'compound', members: 'loop a\nloop b' },
+        { name: 'dbg server', kind: 'debugserver', host: '127.0.0.1', port: '0' },
     ] }));
+    projectRoot = root;
     app = await launch(root);
     page = app.page;
 });
@@ -932,5 +936,51 @@ describe('a compound run configuration in the Services window', () => {
         await page.waitFor(`[...document.querySelectorAll('#services-list .svc-state')].every((s) => s.textContent.startsWith('finished'))`, 20000, 'all to finish again');
         await head('Close');
         await page.waitFor(`document.querySelectorAll('#services-list .svc-row').length === 0`, 10000, 'the group to be gone');
+    });
+});
+
+// last: this chooses the debug server configuration, which stays chosen
+describe('a debug server a program started elsewhere connects back to', () => {
+    test('the snippet is shown; a program that runs it stops at the IDE\'s breakpoint, steps, shows its variables and runs on after Resume', async () => {
+        await open('remote_job.py');
+        assert.equal(await clickMargin(2), true, 'a breakpoint on `total = n * 2`');
+        await page.evaluate(`window.pymagic.editor.getAction('pymagic.runAnything').run()`);
+        await page.waitFor(`document.querySelector('.ra-box input')`, 10000, 'the box');
+        await page.evaluate(`(() => { const i = document.querySelector('.ra-box input'); i.value = 'dbg server'; i.dispatchEvent(new Event('input')); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+        const snippet = await page.waitFor(`document.getElementById('debugserver-snippet')?.textContent`, 20000, 'the snippet');
+        assert.match(snippet, /import pm_debug\r?\npm_debug\.connect\('127\.0\.0\.1', \d+, '[0-9a-f]{24}', root=/);
+        const helper = /copy pm_debug\.py from (.+?) to that machine/.exec(await page.evaluate(`document.querySelector('.debugserver-info .dim').textContent`))?.[1];
+        assert.ok(helper, 'the folder of pm_debug.py is named');
+        assert.match(await output(), /Debug server listening on 127\.0\.0\.1:\d+/);
+        assert.equal(await page.evaluate(`${$('runstate')}.textContent`), 'waiting for a program…');
+        await page.evaluate(`document.querySelector('#sigdialog button.primary').click()`);
+
+        // the program, on its own: the snippet, then the project's file
+        const dir = mkdtempSync(join(tmpdir(), 'pymagic-e2e-remote-'));
+        writeFileSync(join(dir, 'launcher.py'), `import sys\nsys.path.insert(0, ${JSON.stringify(helper)})\n${snippet}\nimport runpy\nrunpy.run_path(${JSON.stringify(join(projectRoot, 'remote_job.py'))}, run_name='__main__')\n`);
+        const program = spawn('python', ['-u', 'launcher.py'], { cwd: dir });
+        let printed = '';
+        program.stdout.on('data', (d) => { printed += d; });
+        const exited = new Promise((ok) => program.on('exit', ok));
+        try {
+            assert.equal(await page.waitFor(`!${$('b-over')}.disabled && document.querySelector('#frames div.sel')?.textContent`, 30000, 'the stop'), 'work remote_job.py:2');
+            assert.match(await output(), /A program connected from 127\.0\.0\.1/);
+            assert.match(await page.waitFor(`${$('vars')}.textContent.includes('n = 21') && ${$('vars')}.textContent`, 10000, 'the variables'), /n = 21/);
+            await page.evaluate(`${$('b-over')}.click()`);
+            assert.equal(await page.waitFor(`!${$('b-over')}.disabled && document.querySelector('#frames div.sel')?.textContent.startsWith('work') && document.querySelector('#frames div.sel').textContent.endsWith(':3') && document.querySelector('#frames div.sel').textContent`, 10000, 'the step'), 'work remote_job.py:3');
+            assert.match(await page.waitFor(`${$('vars')}.textContent.includes('total = 42') && ${$('vars')}.textContent`, 10000, 'the new variable'), /total = 42/);
+            await page.evaluate(`${$('b-debug')}.click()`);   // Resume
+            await Promise.race([exited, sleep(20000)]);
+            assert.match(printed, /job 42/);
+            await page.waitFor(`${$('output')}.textContent.includes('The program disconnected')`, 15000, 'the disconnect');
+            assert.equal(await page.evaluate(`${$('runstate')}.textContent`), 'waiting for a program…');
+            // Stop ends the listening
+            await page.evaluate(`${$('b-stop')}.click()`);
+            await page.waitFor(`${$('b-stop')}.disabled`, 15000, 'the end of the debug server');
+            assert.match(await output(), /Debug server stopped/);
+        } finally {
+            program.kill();
+        }
+        assert.equal(await clickMargin(2), false, 'a second click takes the breakpoint away');
     });
 });

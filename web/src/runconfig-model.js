@@ -2,7 +2,7 @@
 import { splitArguments } from './django-model.js';
 
 /** The kinds of configuration, as PyCharm's: [kind, label]. */
-export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m)'], ['django', 'Django server'], ['djangoTests', 'Django tests'], ['fastapi', 'FastAPI (uvicorn)'], ['flask', 'Flask server'], ['pytest', 'pytest'], ['compound', 'Compound (several together)']];
+export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m)'], ['django', 'Django server'], ['djangoTests', 'Django tests'], ['fastapi', 'FastAPI (uvicorn)'], ['flask', 'Flask server'], ['pytest', 'pytest'], ['debugserver', 'Python Debug Server (a program connects back)'], ['compound', 'Compound (several together)']];
 
 /** The settings beside name, script, args, cwd and env, with their defaults (strings and switches). */
 const DEFAULTS = {
@@ -13,12 +13,14 @@ const DEFAULTS = {
     settings: '', testServer: false, fixtures: '', openBrowser: false, justMyCode: true, logFiles: '', before: '', failfast: false,
     // Compound: the names of the configurations it starts together, one per line
     members: '',
+    // Python Debug Server: the address the program reaches this computer by (for the snippet), and the folder pairs `local=remote`, one per line
+    connectHost: '', mappings: '',
 };
 
 /** A configuration: { name, kind, script (a file of the project), module, app, host, port, target, reload, args (as typed), cwd (a folder of the project,
  * '' for the project itself), env ({ NAME: value }), envFiles (.env files, comma separated), uv, uvPath, contentRoots, sourceRoots, shared, openPanel }. */
 export const blank = (name = 'New configuration', kind = 'script') => ({ name, script: kind === 'django' ? 'manage.py' : '', args: '', cwd: '', env: {}, ...DEFAULTS, kind,
-    app: kind === 'fastapi' ? 'main:app' : kind === 'flask' ? 'app' : '', port: { django: '8000', fastapi: '8000', flask: '5000' }[kind] ?? '' });
+    app: kind === 'fastapi' ? 'main:app' : kind === 'flask' ? 'app' : '', port: { django: '8000', fastapi: '8000', flask: '5000', debugserver: '5678' }[kind] ?? '' });
 
 /** The stored text, as a list of well-formed configurations and the name of the chosen one (or null for "the file in the editor"). */
 export function read(stored) {
@@ -59,9 +61,35 @@ export function compoundMembers(c, find) {
         else if (m.name === c.name) skipped.push({ name, why: 'a compound cannot start itself' });
         else if (m.kind === 'compound') skipped.push({ name, why: 'a compound cannot start another compound' });
         else if (m.kind === 'djangoTests') skipped.push({ name, why: 'tests run in the Tests panel' });
+        else if (m.kind === 'debugserver') skipped.push({ name, why: 'a debug server needs the debugger' });
         else members.push(m);
     }
     return { members, skipped };
+}
+
+/** The port of a debug server: a number from 0 (a free one) to 65535, 5678 when empty or not a number. */
+export function portOf(text) {
+    const t = String(text ?? '').trim();
+    const n = Number(t);
+    return t !== '' && Number.isInteger(n) && n >= 0 && n <= 65535 ? n : 5678;
+}
+
+/** Path mappings typed as lines `local=remote` (also `local => remote`; a line starting with # is a comment): [{local, remote}]. A local folder may be empty or
+ * relative (the project's). A line without a remote folder is left out. */
+export function parseMappings(text) {
+    const out = [];
+    for (const raw of String(text ?? '').split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line || line.startsWith('#')) continue;
+        const m = /^(.*?)\s*(?:=>|=)\s*(.+)$/.exec(line);
+        if (m && m[2].trim()) out.push({ local: m[1].trim(), remote: m[2].trim() });
+    }
+    return out;
+}
+
+/** The lines of mappings, as they are typed. */
+export function formatMappings(list) {
+    return list.map((m) => `${m.local}=${m.remote}`).join('\n');
 }
 
 /** What the start message of a run carries for this configuration: a file or a module, its arguments, and the run's settings. */
@@ -82,6 +110,7 @@ export function startOf(c) {
         case 'djangoTests': start = { tests: { ids: c.target ? [c.target] : [], framework: 'django', settings: c.settings || undefined, failfast: !!c.failfast } }; break;
         case 'fastapi': start = { module: 'uvicorn', args: [c.app || 'main:app', '--host', host, '--port', c.port || '8000', ...(c.reload !== false ? ['--reload'] : []), ...extra] }; break;
         case 'flask': start = { module: 'flask', args: ['--app', c.app || 'app', 'run', '--host', host, '--port', c.port || '5000', ...(c.reload !== false ? ['--debug'] : []), ...extra] }; break;
+        case 'debugserver': start = { debugServer: { host, port: portOf(c.port), connectHost: (c.connectHost ?? '').trim(), mappings: parseMappings(c.mappings) } }; break;
         case 'pytest': start = { module: 'pytest', args: [...(c.target ? [c.target] : []), ...extra] }; break;
         default: start = { file: c.script, args: extra };
     }

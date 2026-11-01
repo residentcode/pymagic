@@ -12,7 +12,7 @@ namespace PyMagic.Server;
 /// <c>started</c>, <c>output</c> (stdout/stderr text as it arrives), <c>exited</c>, and for debug sessions the helper's
 /// <c>stopped</c>/<c>running</c>/<c>scopes</c>/<c>variables</c>/<c>evaluated</c> messages.
 /// </summary>
-public sealed class RunSession : IDisposable
+public sealed partial class RunSession : IDisposable
 {
     static readonly HashSet<string> DebugCommands = new()
     {
@@ -466,8 +466,8 @@ public sealed class RunSession : IDisposable
 
     void WriteLocked(JsonNode msg)
     {
-        if (!Target.IsLocal && msg["type"]?.GetValue<string>() == "setBreakpoints" && msg["file"]?.GetValue<string>() is { } file)
-            msg["file"] = Target.ToTarget(file);
+        if ((_map != null || !Target.IsLocal) && msg["type"]?.GetValue<string>() == "setBreakpoints" && msg["file"]?.GetValue<string>() is { } file)
+            msg["file"] = ToRemote(file);
         WriteRawLocked(msg.ToJsonString());
     }
 
@@ -509,13 +509,14 @@ public sealed class RunSession : IDisposable
                 {
                     lock (_gate)
                     {
-                        if (!Target.IsLocal && type == "setBreakpoints" && msg["file"]?.GetValue<string>() is { } bpFile)
-                            msg["file"] = Target.ToTarget(Path.GetFullPath(Path.Combine(_root ?? "", bpFile)));
+                        if ((_map != null || !Target.IsLocal) && type == "setBreakpoints" && msg["file"]?.GetValue<string>() is { } bpFile)
+                            msg["file"] = ToRemote(Path.GetFullPath(Path.Combine(_root ?? "", bpFile)));
                         // Run to Cursor names the file as the page does, relative to the project
                         if (type == "runTo" && msg["file"]?.GetValue<string>() is { } toFile)
-                            msg["file"] = Target.ToTarget(Path.GetFullPath(Path.Combine(_root ?? "", toFile)));
+                            msg["file"] = ToRemote(Path.GetFullPath(Path.Combine(_root ?? "", toFile)));
                         string json = msg.ToJsonString();
-                        if (_channel == null) _pending.Add(json); else WriteRawLocked(json);
+                        if (_serving) { RememberLocked(type!, msg, json); if (_channel != null) WriteRawLocked(json); }
+                        else if (_channel == null) _pending.Add(json); else WriteRawLocked(json);
                     }
                 }
                 break;
@@ -524,6 +525,7 @@ public sealed class RunSession : IDisposable
 
     void Kill()
     {
+        if (_serving) { StopServing(); return; }
         if (_attached)
         {
             // a program the debugger was put into goes on running: the debugger takes itself out

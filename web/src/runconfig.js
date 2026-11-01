@@ -206,6 +206,22 @@ export function setupRunConfigurations({ currentFile }) {
                 flask: [field('Application', text('app', 'app'), 'The module or file of the Flask app (flask --app).'), field('Host', text('host', '127.0.0.1')), field('Port', text('port', '5000')), check('Debug mode', 'reload', 'flask run --debug: the reloader and the debugger page.')],
                 pytest: [field('Target', text('target', 'tests/ or tests/test_a.py::test_x'), 'A folder, a file or one test; empty for all.')],
             }[c.kind] ?? [field('Script', script)];
+            if (c.kind === 'debugserver') {
+                // the IDE listens; a program started elsewhere calls pm_debug.connect(...) (the snippet shows when it listens)
+                const maps = document.createElement('textarea');
+                maps.rows = 4;
+                maps.spellcheck = false;
+                maps.placeholder = 'C:\\proj\\src=/app/src, one per line (local=remote)';
+                maps.value = c.mappings ?? '';
+                maps.oninput = () => { c.mappings = maps.value; };
+                form.append(field('Name', name), field('Kind', kind),
+                    field('Listen on', text('host', '127.0.0.1'), '127.0.0.1 for a program on this computer, * for every network interface (another computer or a container).'),
+                    field('Port', text('port', '5678'), '0 picks a free port.'),
+                    field('The program reaches this computer as', text('connectHost', 'empty: this computer\'s name'), 'Goes into the snippet to put in the program: an address of this computer that the program can reach.'),
+                    field('Path mappings', maps, 'Which folder of this computer is which folder on the machine the program runs on: local=remote. A relative local folder is in the project. Without mappings the files are taken to be the same on both sides.'),
+                    check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'), check('Open the Run panel when started', 'openPanel'));
+                return;
+            }
             if (c.kind === 'compound') {
                 // the others it starts together: a box for each configuration that can be started beside it
                 const chosenNames = new Set((c.members ?? '').split(/\r?\n/).map((n) => n.trim()).filter(Boolean));
