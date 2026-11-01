@@ -1879,10 +1879,22 @@ describe('git: the Log graph, its filters and actions, and the toolbar on a chan
         assert.equal(await page.evaluate(`[...document.querySelectorAll('#git-log .gl .ref.tag')].some((r) => r.textContent === 'v2')`), true);
         assert.equal(await page.evaluate(`document.querySelector('#git-log .gl .ref.current')?.textContent`), 'main');
 
-        // filters: the author, then the words, then a branch; a filtered list has no graph
+        // filters: the author, then a path, then the words, then a branch; a filtered list has its graph too
         await setField('git-log-author', 'zed');
         await page.waitFor(`${rowCount} === 1`, 10000, 'the author filter');
-        assert.equal(await page.evaluate(`document.querySelectorAll('#git-log .gl .graph').length`), 0);
+        assert.equal(await page.evaluate(`document.querySelectorAll('#git-log .gl .graph circle').length`), 1);
+        await page.evaluate(`${$('git-log-clear')}.click()`);
+        await page.waitFor(`${rowCount} >= 4`, 10000, 'the cleared filter');
+        await setField('git-log-paths', 'main2.txt');
+        await page.waitFor(`${rowCount} === 1`, 10000, 'the path filter');
+        assert.match(await page.evaluate(`document.querySelector('#git-log .gl .subject').textContent`), /main work/);
+        assert.equal(await page.evaluate(`document.querySelectorAll('#git-log .gl .graph circle').length`), 1);
+        await setField('git-log-author', 'zed');
+        await page.waitFor(`${rowCount} === 0`, 10000, 'the path and the author together');
+        await page.evaluate(`${$('git-log-clear')}.click()`);
+        await page.waitFor(`${rowCount} >= 4`, 10000, 'the cleared filter');
+        await setField('git-log-author', 'zed');
+        await page.waitFor(`${rowCount} === 1`, 10000, 'the author filter again');
         assert.match(await page.evaluate(`document.querySelector('#git-log .gl .subject').textContent`), /topic work/);
         await page.evaluate(`${$('git-log-clear')}.click()`);
         await page.waitFor(`${rowCount} >= 4`, 10000, 'the cleared filter');

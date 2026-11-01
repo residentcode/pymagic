@@ -94,6 +94,36 @@ public class GitLogTests
     }
 
     [Fact]
+    public void ANarrowedLogJoinsEachCommitToTheNearestOneThatIsShown()
+    {
+        if (!HasGit) return;
+        using var b = new Box();
+        b.Commit("a.txt", "1", "ann one", "Ann <ann@example.com>");
+        b.Commit("b.txt", "1", "bob one", "Bob <bob@example.com>");
+        b.Commit("a.txt", "2", "ann two", "Ann <ann@example.com>");
+        b.Commit("b.txt", "2", "bob two", "Bob <bob@example.com>");
+        var git = b.Git();
+        string H(string subject) => git.Log(null, 50, 0, null).First(c => c.Subject == subject).Hash;
+
+        // by author: Ann's second commit has Bob's first as its parent, which is not in the list, so it points at Ann's first
+        var ann = git.Log(null, 50, 0, new GitLogFilter(false, null, "Ann", null, null, null));
+        Assert.Equal("ann two|ann one", Subjects(ann));
+        Assert.Equal(H("ann one"), string.Join(",", ann[0].Parents));
+        Assert.Equal(0, ann[1].Parents.Count);
+        // by path (a file, no rename following): the same for the commits that changed b.txt
+        var bFile = git.Log(null, 50, 0, new GitLogFilter(false, null, null, null, null, null, "b.txt"));
+        Assert.Equal("bob two|bob one", Subjects(bFile));
+        Assert.Equal(H("bob one"), string.Join(",", bFile[0].Parents));
+        // a page of the list keeps the parents it would have had in one piece
+        var page = git.Log(null, 1, 0, new GitLogFilter(false, null, "Ann", null, null, null));
+        Assert.Equal(H("ann one"), string.Join(",", page[0].Parents));
+        // an unfiltered log keeps its real parents
+        Assert.Equal(H("bob one"), string.Join(",", git.Log(null, 50, 0, null).First(c => c.Subject == "ann two").Parents));
+        // a path must be a path
+        Assert.True(Throws(() => git.Log(null, 50, 0, new GitLogFilter(false, null, null, null, null, null, "--all"))));
+    }
+
+    [Fact]
     public void ABranchStartsAtACommitAndACommitCanBeCheckedOut()
     {
         if (!HasGit) return;

@@ -941,6 +941,7 @@ export function setupGit(deps) {
             branch: $('git-log-branch').value,
             author: $('git-log-author').value,
             text: $('git-log-text').value,
+            paths: $('git-log-paths').value,
             since: $('git-log-since').value,
             until: $('git-log-until').value,
         };
@@ -992,11 +993,11 @@ export function setupGit(deps) {
     for (const id of ['git-log-branch', 'git-log-since', 'git-log-until'])
         $(id).onchange = () => void loadLog(true);
     let filterTimer = 0;
-    for (const id of ['git-log-author', 'git-log-text'])
+    for (const id of ['git-log-author', 'git-log-text', 'git-log-paths'])
         $(id).oninput = () => { clearTimeout(filterTimer); filterTimer = setTimeout(() => void loadLog(true), 300); };
     $('git-log-clear').onclick = () => {
         $('git-log-branch').value = '';
-        for (const id of ['git-log-author', 'git-log-text', 'git-log-since', 'git-log-until'])
+        for (const id of ['git-log-author', 'git-log-text', 'git-log-paths', 'git-log-since', 'git-log-until'])
             $(id).value = '';
         void loadLog(true);
     };

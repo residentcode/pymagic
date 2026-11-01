@@ -18,7 +18,7 @@ public sealed record GitCommit(string Hash, string ShortHash, string Author, str
 
 public sealed record GitChangedFile(string Status, string Path, string? OldPath);
 
-public sealed record GitLogFilter(bool All, string? Branch, string? Author, string? Text, string? Since, string? Until);
+public sealed record GitLogFilter(bool All, string? Branch, string? Author, string? Text, string? Since, string? Until, string? Paths = null);
 public sealed record GitCommitDetail(GitCommit Commit, string Body, List<GitChangedFile> Files);
 
 public sealed record GitBlameLine(string Hash, string Author, long Time, string Summary);
@@ -257,25 +257,81 @@ public sealed partial class GitRepository
     {
         limit = Math.Clamp(limit, 1, 500);
         skip = Math.Max(0, skip);
-        var args = new List<string> { "log", $"--max-count={limit}", $"--skip={skip}", "--date=iso-strict", "--format=" + CommitFormat + "%x1e" };
+        var rev = new List<string>();      // which commits: every branch or one
+        var narrow = new List<string>();   // what narrows them: people, words, dates
+        string? pathTail = null;
         if (filter != null)
         {
-            if (filter.All) args.Add("--all");
-            else if (!string.IsNullOrEmpty(filter.Branch)) args.Add(CheckBranch(filter.Branch));
-            if (!string.IsNullOrEmpty(filter.Author)) { args.Add("-i"); args.Add("--author=" + NoBreak(filter.Author)); }
-            if (!string.IsNullOrEmpty(filter.Text)) { args.Add("-i"); args.Add("--fixed-strings"); args.Add("--grep=" + NoBreak(filter.Text)); }
-            if (!string.IsNullOrEmpty(filter.Since)) { if (!DatePattern.IsMatch(filter.Since)) throw new GitException("a date is written 2026-01-31"); args.Add("--since=" + filter.Since + " 00:00:00"); }
-            if (!string.IsNullOrEmpty(filter.Until)) { if (!DatePattern.IsMatch(filter.Until)) throw new GitException("a date is written 2026-01-31"); args.Add("--until=" + filter.Until + " 23:59:59"); }
+            if (filter.All) rev.Add("--all");
+            else if (!string.IsNullOrEmpty(filter.Branch)) rev.Add(CheckBranch(filter.Branch));
+            if (!string.IsNullOrEmpty(filter.Author)) { narrow.Add("-i"); narrow.Add("--author=" + NoBreak(filter.Author)); }
+            if (!string.IsNullOrEmpty(filter.Text)) { narrow.Add("-i"); narrow.Add("--fixed-strings"); narrow.Add("--grep=" + NoBreak(filter.Text)); }
+            if (!string.IsNullOrEmpty(filter.Since)) { if (!DatePattern.IsMatch(filter.Since)) throw new GitException("a date is written 2026-01-31"); narrow.Add("--since=" + filter.Since + " 00:00:00"); }
+            if (!string.IsNullOrEmpty(filter.Until)) { if (!DatePattern.IsMatch(filter.Until)) throw new GitException("a date is written 2026-01-31"); narrow.Add("--until=" + filter.Until + " 23:59:59"); }
+            if (!string.IsNullOrWhiteSpace(filter.Paths)) pathTail = CheckPath(filter.Paths.Trim());
         }
+        bool narrowed = narrow.Count > 0 || pathTail != null;
+        var args = new List<string> { "log", $"--max-count={limit}", $"--skip={skip}", "--date=iso-strict", "--format=" + CommitFormat + "%x1e" };
+        args.AddRange(rev);
+        args.AddRange(narrow);
         if (path == null) args.Add("--topo-order");
         if (path != null) { args.Add("--follow"); args.Add("--"); args.Add(CheckPath(path)); }
+        else if (pathTail != null) { args.Add("--"); args.Add(pathTail); }
         var r = Run(args.ToArray());
         if (r.Code != 0)
         {
             if (r.Err.Contains("does not have any commits yet") || r.Err.Contains("unknown revision")) return new List<GitCommit>();
             throw new GitException(Message(r));
         }
-        return r.Out.Split('\x1e', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim('\n', '\r')).Where(x => x.Length > 0).Select(ParseCommit).ToList();
+        var commits = r.Out.Split('\x1e', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim('\n', '\r')).Where(x => x.Length > 0).Select(ParseCommit).ToList();
+        return narrowed && path == null ? WithShownParents(commits, rev, narrow, pathTail) : commits;
+    }
+
+    /// <summary>Most commits a narrowed log looks through to find the shown ancestor of a commit.</summary>
+    const int ParentScanLimit = 200000;
+
+    /// <summary>
+    /// A log narrowed by people, words, dates or a path shows only some commits, so a commit's real parent is often not in the list. Each commit's parents
+    /// are replaced by the nearest commits that are shown (as <c>git log --parents</c> does for a path), which is what a graph of the list needs.
+    /// </summary>
+    List<GitCommit> WithShownParents(List<GitCommit> page, List<string> rev, List<string> narrow, string? paths)
+    {
+        if (page.Count == 0) return page;
+        var shownArgs = new List<string> { "log", "--max-count=" + ParentScanLimit, "--format=%H" };
+        shownArgs.AddRange(rev);
+        shownArgs.AddRange(narrow);
+        if (paths != null) { shownArgs.Add("--"); shownArgs.Add(paths); }
+        var shownRun = Run(shownArgs.ToArray());
+        if (shownRun.Code != 0) return page;
+        var shown = shownRun.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).ToHashSet(StringComparer.Ordinal);
+        var allArgs = new List<string> { "log", "--topo-order", "--max-count=" + ParentScanLimit, "--format=%H %P" };
+        allArgs.AddRange(rev);
+        var allRun = Run(allArgs.ToArray());
+        if (allRun.Code != 0) return page;
+        var lines = allRun.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var near = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        // oldest first, so a commit's parents are done before it
+        for (int i = lines.Length - 1; i >= 0; i--)
+        {
+            var parts = lines[i].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            string hash = parts[0];
+            if (shown.Contains(hash)) { near[hash] = new List<string> { hash }; continue; }
+            var found = new List<string>();
+            foreach (var p in parts.Skip(1))
+                if (near.TryGetValue(p, out var up))
+                    foreach (var h in up) if (!found.Contains(h) && found.Count < 8) found.Add(h);
+            near[hash] = found;
+        }
+        var result = new List<GitCommit>();
+        foreach (var c in page)
+        {
+            var parents = new List<string>();
+            foreach (var p in c.Parents)
+                if (near.TryGetValue(p, out var up))
+                    foreach (var h in up) if (!parents.Contains(h)) parents.Add(h);
+            result.Add(c with { Parents = parents });
+        }
+        return result;
     }
 
     /// <summary>One commit with its message and the files it changed (against its first parent).</summary>

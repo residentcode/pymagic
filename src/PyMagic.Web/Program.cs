@@ -1904,8 +1904,8 @@ app.MapGet("/api/git/file", async (string path, string? rev) =>
     catch (GitException e) { return Results.BadRequest(new { error = e.Message }); }
 });
 
-app.MapGet("/api/git/log", (string? path, int? limit, int? skip, bool? all, string? branch, string? author, string? text, string? since, string? until) =>
-    GitCall(r => r.Log(string.IsNullOrEmpty(path) ? null : path, limit ?? 100, skip ?? 0, new GitLogFilter(all == true, branch, author, text, since, until))));
+app.MapGet("/api/git/log", (string? path, int? limit, int? skip, bool? all, string? branch, string? author, string? text, string? since, string? until, string? paths) =>
+    GitCall(r => r.Log(string.IsNullOrEmpty(path) ? null : path, limit ?? 100, skip ?? 0, new GitLogFilter(all == true, branch, author, text, since, until, paths))));
 app.MapGet("/api/git/commit", (string hash) => GitCall(r => r.Show(hash)));
 app.MapGet("/api/git/blame", (string path) => GitCall(r => r.Blame(path)));
 app.MapGet("/api/git/branches", () => GitCall(r => r.Branches()));

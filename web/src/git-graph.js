@@ -77,9 +77,10 @@ export function logQuery(f, limit, skip) {
     if (f.path) q.set('path', f.path);
     if (f.branch === '*') q.set('all', 'true');
     else if (f.branch) q.set('branch', f.branch);
-    for (const k of ['author', 'text', 'since', 'until']) if (f[k]?.trim()) q.set(k, f[k].trim());
+    for (const k of ['author', 'text', 'paths', 'since', 'until']) if (f[k]?.trim()) q.set(k, f[k].trim());
     return q.toString();
 }
 
-/** The graph is drawn only when every commit of the history is shown: a filter on people, words or dates leaves holes in it. */
-export const graphFits = (f) => !f.path && !f.author?.trim() && !f.text?.trim() && !f.since && !f.until;
+/** The graph is drawn for every filter but the one on the current file (`path`, which follows renames and so has no parents to draw): the engine
+ *  replaces the parents of a narrowed list by the nearest commits that are shown. */
+export const graphFits = (f) => !f.path;

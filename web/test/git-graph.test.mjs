@@ -63,8 +63,10 @@ test('the query leaves out empty fields and asks for all branches with *', () =>
     assert.equal(logQuery({ branch: 'dev' }, 10, 0), 'limit=10&skip=0&branch=dev');
 });
 
-test('the graph is drawn only for an unfiltered history', () => {
+test('the graph is drawn for every filter but the one that follows the current file', () => {
     assert.equal(graphFits({ branch: '*' }), true);
-    assert.equal(graphFits({ author: 'x' }), false);
+    assert.equal(graphFits({ author: 'x' }), true);
+    assert.equal(graphFits({ paths: 'src' }), true);
     assert.equal(graphFits({ path: 'a.py' }), false);
+    assert.equal(logQuery({ paths: ' src/app ' }, 10, 0), 'limit=10&skip=0&paths=src%2Fapp');
 });
