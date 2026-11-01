@@ -1,7 +1,7 @@
 // Checks of web/src/deploy-model.js: `node web/test/deploy.test.mjs` (tests/PyMagic.Tests/WebScriptTests.cs runs it).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultAction, actionsFor, describeServer, mappingText, parseMappings, sizeText, parentOf } from '../src/deploy-model.js';
+import { defaultAction, actionsFor, defaultPort, deleteQuestion, describeServer, mappingText, parseMappings, sizeText, parentOf } from '../src/deploy-model.js';
 
 test('what a sync proposes by default', () => {
     assert.equal(defaultAction('local-only'), 'upload');
@@ -18,6 +18,16 @@ test('a server in words', () => {
     assert.equal(describeServer({ type: 'sftp', host: 'example.org', port: 2222, user: 'me' }), 'SFTP me@example.org:2222');
     assert.equal(describeServer({ type: 'ftp', host: 'ftp.site.org', port: 21, user: '' }), 'FTP ftp.site.org');
     assert.equal(describeServer({ type: 'folder', root: 'D:/share' }), 'a folder D:/share');
+    assert.equal(describeServer({ type: 'ftps', host: 'ftp.site.org', port: 21, user: 'me' }), 'FTPS me@ftp.site.org');
+    assert.equal(describeServer({ type: 'ftps', host: 'ftp.site.org', port: 990, user: '' }), 'FTPS ftp.site.org:990');
+    assert.equal(defaultPort('ftps'), 21);
+    assert.equal(defaultPort('ftp'), 21);
+    assert.equal(defaultPort('sftp'), 22);
+});
+
+test('the question before a delete on a server says what goes', () => {
+    assert.equal(deleteQuestion({ name: 'a.py', isDir: false }, 'live', 'site/pkg'), 'Delete /site/pkg/a.py on live? This cannot be undone.');
+    assert.equal(deleteQuestion({ name: 'pkg', isDir: true }, 'live', ''), 'Delete the folder /pkg on live, with everything in it? This cannot be undone.');
 });
 
 test('mappings as lines, and back', () => {

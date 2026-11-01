@@ -214,7 +214,7 @@ app.MapPut("/api/macros", async (HttpRequest req) =>
 });
 
 // Deployment: servers the project is uploaded to (a folder, FTP or SFTP), and upload, download, compare and sync
-object ServerJson(DeployServer sv) => new { id = sv.Id, name = sv.Name, type = sv.Type, host = sv.Host, port = sv.Port, user = sv.User, root = sv.Root, keyFile = sv.KeyFile, uploadOnSave = sv.UploadOnSave, mappings = sv.Mappings, excluded = sv.Excluded, hostKey = sv.HostKey, hasPassword = DeployStore.PasswordOf(root, sv.Id).Length > 0 };
+object ServerJson(DeployServer sv) => new { id = sv.Id, name = sv.Name, type = sv.Type, host = sv.Host, port = sv.Port, user = sv.User, root = sv.Root, keyFile = sv.KeyFile, uploadOnSave = sv.UploadOnSave, mappings = sv.Mappings, excluded = sv.Excluded, hostKey = sv.HostKey, deleteOnDelete = sv.DeleteOnDelete, hasPassword = DeployStore.PasswordOf(root, sv.Id).Length > 0, hasPassphrase = DeployStore.PassphraseOf(root, sv.Id).Length > 0 };
 IResult DeployFail(Exception e) => Results.Json(new { error = e is ServiceException ? e.Message : e is System.Net.WebException we && we.Response is System.Net.FtpWebResponse fr ? fr.StatusDescription.Trim() : e.Message });
 string BrowsePath(DeployServer sv, string path) => sv.Type == "folder" ? path.Trim('/') : string.Join("/", new[] { sv.Root.Trim('/'), path.Trim('/') }.Where(x => x.Length > 0));
 var deployLog = new List<object>();
@@ -231,7 +231,8 @@ app.MapPost("/api/deploy/servers", async (HttpRequest req) =>
         var sv = DeployStore.Parse(body, existing?.Id);
         if (existing != null && existing.Host == sv.Host && existing.Port == sv.Port && existing.User == sv.User) sv = sv with { HostKey = body["forgetKey"]?.GetValue<bool>() == true ? "" : existing.HostKey };
         string? password = body["password"]?.GetValue<string>();
-        DeployStore.Save(root, sv, password);                       // kept first, so a host key learned while testing lands in the saved record
+        string? passphrase = body["passphrase"]?.GetValue<string>();
+        DeployStore.Save(root, sv, password, passphrase);           // kept first, so a host key learned while testing lands in the saved record
         if (body["test"]?.GetValue<bool>() != false)
         {
             try { using var remote = Deployment.Open(root, DeployStore.Find(root, sv.Id)!); remote.List(BrowsePath(sv, "")); }
@@ -312,6 +313,15 @@ app.MapPost("/api/deploy/sync", async (HttpRequest req) =>
         return Results.Json(new { results });
     }
     catch (Exception e) when (e is ServiceException or System.Net.WebException or Renci.SshNet.Common.SshException or IOException) { return DeployFail(e); }
+});
+// {server, path}: a file or folder of the server by its path in the server-files browser (under the server's root); the page asks first
+app.MapPost("/api/deploy/delete", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    if (DeployStore.Find(root, body?["server"]?.GetValue<string>() ?? "") is not { } sv) return Results.NotFound();
+    var r = Deployment.DeleteRemote(root, sv, body?["path"]?.GetValue<string>() ?? "");
+    DeployNote(sv.Name, "delete " + r.Path, r.Ok, r.Error);
+    return r.Ok ? Results.Json(new { deleted = r.Path }) : Results.Json(new { error = r.Error });
 });
 app.MapGet("/api/deploy/log", () => { lock (deployLog) return Results.Json(deployLog.AsEnumerable().Reverse().ToList()); });
 
@@ -666,9 +676,13 @@ app.MapPost("/api/fs", async (HttpRequest req) =>
             {
                 string full = ResolveInRoot(body!["path"]!.GetValue<string>());
                 if (IsInsideGit(full)) return Results.BadRequest(new { error = "not inside .git" });
-                if (Directory.Exists(full)) Directory.Delete(full, true);
-                else if (File.Exists(full)) File.Delete(full);
-                else return Results.NotFound();
+                // the files that go, for a server set to delete what is deleted here (found before they are gone)
+                var gone = Directory.Exists(full) ? Directory.EnumerateFiles(full, "*", SearchOption.AllDirectories).Take(2000).Select(f => Path.GetRelativePath(root, f).Replace('\\', '/')).ToList()
+                    : File.Exists(full) ? new List<string> { Path.GetRelativePath(root, full).Replace('\\', '/') } : null;
+                if (gone == null) return Results.NotFound();
+                if (Directory.Exists(full)) Directory.Delete(full, true); else File.Delete(full);
+                foreach (var sv in DeployStore.Load(root).Where(x => x.DeleteOnDelete).ToList())
+                    _ = Task.Run(() => { try { foreach (var r in Deployment.DeleteForLocal(root, sv, gone)) DeployNote(sv.Name, "delete " + r.Path, r.Ok, r.Error); } catch (Exception e) { DeployNote(sv.Name, "delete", false, e.Message); } });
                 return Results.NoContent();
             }
         }

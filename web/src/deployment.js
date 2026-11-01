@@ -3,7 +3,7 @@
 // transfers (Deployment.cs); deploy-model.js says what a sync proposes and how things are told.
 import * as monaco from 'monaco-editor';
 import { showTab } from './panel';
-import { actionsFor, defaultAction, describeServer, mappingText, parentOf, parseMappings, sizeText, STATUS_TEXT } from './deploy-model.js';
+import { actionsFor, defaultAction, defaultPort, deleteQuestion, describeServer, mappingText, parentOf, parseMappings, sizeText, STATUS_TEXT } from './deploy-model.js';
 import { toast } from './toast';
 
 const $ = (id) => document.getElementById(id);
@@ -62,10 +62,24 @@ export function setupDeployment({ editor, currentFile, askText, reloadFromDisk, 
                 Object.assign(document.createElement('span'), { className: 'dep-time', textContent: new Date(e.modified).toLocaleString() }),
                 Object.assign(document.createElement('span'), { className: 'dep-local', textContent: e.local ? '↔ ' + e.local : '' }));
             row.title = e.isDir ? 'Open the folder' : e.local ? 'Double-click: compare with the file of the project' : 'No mapping covers this file';
+            const del = Object.assign(document.createElement('button'), { className: 'dep-del', textContent: '✕', title: `Delete ${e.name} on the server (asks first)` });
+            del.onclick = (ev) => { ev.stopPropagation(); void remove(e, path); };
+            del.ondblclick = (ev) => ev.stopPropagation();
+            row.append(del);
             row.onclick = () => { if (e.isDir) void browse(path ? `${path}/${e.name}` : e.name); };
             row.ondblclick = () => { if (!e.isDir && e.local) void compare(e.local); };
             box.append(row);
         }
+    }
+
+    /** Deletes a file or folder on the server, after asking; nothing else (the project's own file stays). */
+    async function remove(entry, dir) {
+        const s = server();
+        if (!s || !window.confirm(deleteQuestion(entry, s.name, dir))) return;
+        const r = await post('/api/deploy/delete', { server: s.id, path: dir ? `${dir}/${entry.name}` : entry.name });
+        if (r.error) { toast(r.error, true); return; }
+        toast(`Deleted ${entry.name} on ${s.name}.`);
+        void browse(browsing);
     }
 
     // ------------------------------------------------------------ transfers
@@ -217,7 +231,7 @@ export function setupDeployment({ editor, currentFile, askText, reloadFromDisk, 
         };
         const input = (value = '', type = 'text') => Object.assign(document.createElement('input'), { value, type, spellcheck: false, autocomplete: 'off' });
         const type = document.createElement('select');
-        type.append(new Option('Folder', 'folder'), new Option('FTP', 'ftp'), new Option('SFTP', 'sftp'));
+        type.append(new Option('Folder', 'folder'), new Option('FTP', 'ftp'), new Option('FTPS (FTP over TLS)', 'ftps'), new Option('SFTP', 'sftp'));
         type.value = existing?.type ?? 'sftp';
         field('type', 'Kind', type);
         field('name', 'Name', input(existing?.name ?? ''), 'Optional: how the server is listed');
@@ -225,13 +239,16 @@ export function setupDeployment({ editor, currentFile, askText, reloadFromDisk, 
         field('port', 'Port', input(String(existing?.port ?? 22)));
         field('user', 'User', input(existing?.user ?? ''));
         field('password', 'Password', input('', 'password'), existing?.hasPassword ? 'Leave empty to keep the one saved' : 'Kept in .pymagic/deployment.private.json: keep that file out of version control');
-        field('keyFile', 'Key file', input(existing?.keyFile ?? ''), 'SFTP only: a private key file (the password above then opens the key)');
+        field('keyFile', 'Key file', input(existing?.keyFile ?? ''), 'SFTP only: a private key file (full path, ~/… or from the project). With a key, the password above is not used');
+        field('passphrase', 'Key passphrase', input('', 'password'), existing?.hasPassphrase ? 'Leave empty to keep the one saved' : 'If the key is protected. Kept in .pymagic/deployment.private.json, never in deployment.json');
         field('root', 'Folder', input(existing?.root ?? ''), 'The folder on the server everything below goes into (for a folder server, the folder itself)');
         const maps = Object.assign(document.createElement('textarea'), { rows: 3, value: (existing?.mappings ?? [{ local: '', remote: '' }]).map(mappingText).join('\n'), spellcheck: false });
         field('mappings', 'Mappings', maps, 'One per line: a folder of the project → a folder of the server (. is the whole project)');
         field('excluded', 'Not sent', input((existing?.excluded ?? []).join(', ')), 'Names and patterns that never go up (*.log, secrets), besides .git, __pycache__, .venv and the like');
         const onSave = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!existing?.uploadOnSave });
         field('uploadOnSave', 'On save', onSave, 'Upload a file to this server whenever it is saved');
+        const delOnDelete = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!existing?.deleteOnDelete });
+        field('deleteOnDelete', 'Delete on server', delOnDelete, 'Off by default. When a file is deleted in the project, delete its copy on this server too (files only, never a folder of the server)');
         const forget = Object.assign(document.createElement('input'), { type: 'checkbox' });
         if (existing?.hostKey) field('forgetKey', 'New host key', forget, 'Forget the remembered key of the server (after it was set up again)');
         const error = Object.assign(document.createElement('div'), { className: 'db-form-error' });
@@ -249,8 +266,8 @@ export function setupDeployment({ editor, currentFile, askText, reloadFromDisk, 
             f.user.closest('label').hidden = t === 'folder';
             f.password.closest('label').hidden = t === 'folder';
             f.keyFile.closest('label').hidden = t !== 'sftp';
-            f.root.closest('label').firstChild.textContent = t === 'folder' ? 'Folder' : 'Remote folder';
-            if (!existing) f.port.value = t === 'ftp' ? '21' : '22';
+            f.passphrase.closest('label').hidden = t !== 'sftp';            f.root.closest('label').firstChild.textContent = t === 'folder' ? 'Folder' : 'Remote folder';
+            if (!existing) f.port.value = String(defaultPort(t));
         };
         type.onchange = show;
         show();
@@ -263,8 +280,10 @@ export function setupDeployment({ editor, currentFile, askText, reloadFromDisk, 
             const body = {
                 id: existing?.id, type: type.value, name: f.name.value, host: f.host.value, port: f.port.value, user: f.user.value, root: f.root.value, keyFile: f.keyFile.value,
                 uploadOnSave: onSave.checked, mappings: parseMappings(maps.value), excluded: f.excluded.value.split(',').map((x) => x.trim()).filter(Boolean), forgetKey: forget.checked,
+                deleteOnDelete: delOnDelete.checked,
             };
             if (f.password.value || !existing) body.password = f.password.value;
+            if (f.passphrase.value || !existing) body.passphrase = f.passphrase.value;
             const answer = await post('/api/deploy/servers', body);
             ok.disabled = false;
             if (answer.error) { error.textContent = answer.error; return; }

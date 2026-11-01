@@ -14,6 +14,7 @@ public class DeploymentTests
     static DeployServer Folder(string remoteRoot, params DeployMapping[] mappings) =>
         new("folder-x", "x", "folder", "", 0, "", remoteRoot, "", false, mappings.Length == 0 ? new() { new DeployMapping("", "") } : mappings.ToList(), new(), "");
 
+    static string Msg(Action a) { try { a(); } catch (ServiceException e) { return e.Message; } return "(no exception)"; }
     static void Put(string root, string rel, string text) { string p = Path.Combine(root, rel); Directory.CreateDirectory(Path.GetDirectoryName(p)!); File.WriteAllText(p, text); }
 
     // ------------------------------------------------------------ mappings
@@ -165,12 +166,14 @@ public class DeploymentTests
         readonly Thread _thread;
         volatile bool _stop;
         public int Port => ((IPEndPoint)_control.LocalEndpoint).Port;
-        public MiniFtp(string root) { _root = root; _control.Start(); _thread = new Thread(Accept) { IsBackground = true }; _thread.Start(); }
+        readonly System.Security.Cryptography.X509Certificates.X509Certificate2? _cert;
+        public int TlsSessions, ProtectedData, StoredFiles;
+        public MiniFtp(string root, System.Security.Cryptography.X509Certificates.X509Certificate2? cert = null) { _root = root; _cert = cert; _control.Start(); _thread = new Thread(Accept) { IsBackground = true }; _thread.Start(); }
         void Accept()
         {
             while (!_stop)
             {
-                try { var c = _control.AcceptTcpClient(); new Thread(() => Session(c)) { IsBackground = true }.Start(); }
+                try { var c = _control.AcceptTcpClient(); new Thread(() => { try { Session(c); } catch (Exception e) when (e is IOException or System.Security.Authentication.AuthenticationException or SocketException or ObjectDisposedException) { /* a client that gave up */ } }) { IsBackground = true }.Start(); }
                 catch (SocketException) { return; }
                 catch (ObjectDisposedException) { return; }
             }
@@ -179,11 +182,12 @@ public class DeploymentTests
         void Session(TcpClient client)
         {
             using var _ = client;
-            using var stream = client.GetStream();
+            Stream stream = client.GetStream();
             var reader = new StreamReader(stream, Encoding.UTF8);
             var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\r\n" };
             string cwd = "/";
-            TcpListener? data = null;
+            TcpListener? data = null; bool protP = false;
+            Stream Data(TcpClient dc) { Stream s = dc.GetStream(); if (!protP) return s; Interlocked.Increment(ref ProtectedData); var ssl = new System.Net.Security.SslStream(s, false); ssl.AuthenticateAsServer(_cert!); return ssl; }
             void Reply(string s) => writer.WriteLine(s);
             Reply("220 mini");
             string? line;
@@ -192,6 +196,15 @@ public class DeploymentTests
                 string cmd = line.Split(' ')[0].ToUpperInvariant(), arg = line.Length > cmd.Length ? line[(cmd.Length + 1)..] : "";
                 switch (cmd)
                 {
+                    case "AUTH" when _cert != null && arg.ToUpperInvariant() is "TLS" or "TLS-C":
+                    {
+                        Reply("234 go ahead"); Interlocked.Increment(ref TlsSessions);
+                        var ssl = new System.Net.Security.SslStream(stream, false); ssl.AuthenticateAsServer(_cert); stream = ssl;
+                        reader = new StreamReader(stream, Encoding.UTF8); writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\r\n" };
+                        break;
+                    }
+                    case "PBSZ": Reply("200 ok"); break;
+                    case "PROT": protP = arg.Trim().ToUpperInvariant() == "P"; Reply("200 ok"); break;
                     case "USER": Reply("331 password"); break;
                     case "PASS": Reply("230 ok"); break;
                     case "OPTS": case "TYPE": case "MODE": case "STRU": Reply("200 ok"); break;
@@ -209,7 +222,7 @@ public class DeploymentTests
                         if (!Directory.Exists(d)) { Reply("550 no"); break; }
                         Reply("150 listing");
                         using (var dc = data!.AcceptTcpClient())
-                        using (var w = new StreamWriter(dc.GetStream(), new UTF8Encoding(false)) { NewLine = "\r\n" })
+                        using (var w = new StreamWriter(Data(dc), new UTF8Encoding(false)) { NewLine = "\r\n" })
                             foreach (var i in new DirectoryInfo(d).EnumerateFileSystemInfos())
                             {
                                 string when = i.LastWriteTimeUtc.ToString("MMM dd HH:mm", System.Globalization.CultureInfo.InvariantCulture);
@@ -223,7 +236,7 @@ public class DeploymentTests
                         string f = Map(cwd, arg);
                         if (!File.Exists(f)) { Reply("550 no"); break; }
                         Reply("150 sending");
-                        using (var dc = data!.AcceptTcpClient()) { var bytes = File.ReadAllBytes(f); dc.GetStream().Write(bytes, 0, bytes.Length); }
+                        using (var dc = data!.AcceptTcpClient()) { var bytes = File.ReadAllBytes(f); using var ds = Data(dc); ds.Write(bytes, 0, bytes.Length); }
                         Reply("226 done");
                         break;
                     }
@@ -231,7 +244,7 @@ public class DeploymentTests
                     {
                         string f = Map(cwd, arg);
                         Reply("150 receiving");
-                        using (var dc = data!.AcceptTcpClient()) { using var ms = new MemoryStream(); dc.GetStream().CopyTo(ms); Directory.CreateDirectory(Path.GetDirectoryName(f)!); File.WriteAllBytes(f, ms.ToArray()); }
+                        using (var dc = data!.AcceptTcpClient()) { using var ms = new MemoryStream(); { using var ds = Data(dc); try { ds.CopyTo(ms); } catch (IOException) { /* a client that closes its TLS data connection without a goodbye */ } }; Interlocked.Increment(ref StoredFiles); Directory.CreateDirectory(Path.GetDirectoryName(f)!); File.WriteAllBytes(f, ms.ToArray()); }
                         Reply("226 done");
                         break;
                     }
@@ -321,6 +334,205 @@ public class DeploymentTests
             // a wrong password says so
             DeployStore.Save(project, kept, "wrong password");
             Assert.Throws<ServiceException>(() => Deployment.Open(project, kept));
+        }
+        finally { Directory.Delete(project, true); }
+    }
+
+    // ------------------------------------------------------------ FTPS (explicit TLS), against MiniFtp with a certificate made here
+
+    static System.Security.Cryptography.X509Certificates.X509Certificate2 SelfSigned()
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        var request = new System.Security.Cryptography.X509Certificates.CertificateRequest("CN=localhost", rsa, System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        using var cert = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+        return new System.Security.Cryptography.X509Certificates.X509Certificate2(cert.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pfx));
+    }
+
+    [Fact]
+    public void FtpsEncryptsTheControlAndTheDataConnectionAndChecksTheCertificate()
+    {
+        string share = Temp("ftps");
+        var saved = ServicePointManager.ServerCertificateValidationCallback;
+        try
+        {
+            using var cert = SelfSigned();
+            using var ftp = new MiniFtp(share, cert);
+            // a certificate this computer does not trust is refused (nothing is sent)
+            ServicePointManager.ServerCertificateValidationCallback = null;
+            using (var strict = new FtpRemote("127.0.0.1", ftp.Port, "anonymous", "", tls: true))
+                Assert.Contains("certificate", Msg(() => strict.List("")));
+            Assert.Equal(0, ftp.StoredFiles);
+            // once it is trusted (the test says so for this one certificate), everything works over TLS
+            ServicePointManager.ServerCertificateValidationCallback = (_, c, _, _) => c is { } && c.GetCertHashString() == cert.GetCertHashString();
+            string project = Temp("ftpsproj");
+            try
+            {
+                Put(project, "pkg/mod.py", "x = 2\n");
+                var server = new DeployServer("ftps-x", "x", "ftps", "127.0.0.1", ftp.Port, "anonymous", "/site", "", false, new() { new DeployMapping("", "") }, new(), "");
+                var up = Deployment.Upload(project, server, new[] { "pkg" }); Assert.True(up.All(r => r.Ok), "upload " + string.Join(";", up.Select(r => r.Error)));
+                Assert.Equal("x = 2\n", File.ReadAllText(Path.Combine(share, "site", "pkg", "mod.py")));
+                Assert.True(Deployment.Compare(project, server, "pkg/mod.py").Same);
+                File.Delete(Path.Combine(project, "pkg", "mod.py"));
+                Assert.True(Deployment.Download(project, server, new[] { "pkg/mod.py" }).All(r => r.Ok));
+                Assert.Equal("x = 2\n", File.ReadAllText(Path.Combine(project, "pkg", "mod.py")));
+                Assert.True(Deployment.DeleteRemote(project, server, "pkg/mod.py").Ok);
+                Assert.True(!File.Exists(Path.Combine(share, "site", "pkg", "mod.py")));
+                // the server was asked for TLS on the control connection and for protected data connections
+                Assert.True(ftp.TlsSessions >= 1 && ftp.ProtectedData >= 1, $"tls {ftp.TlsSessions}, data {ftp.ProtectedData}");
+            }
+            finally { Directory.Delete(project, true); }
+        }
+        finally { ServicePointManager.ServerCertificateValidationCallback = saved; Directory.Delete(share, true); }
+    }
+
+    [Fact]
+    public void APlainFtpClientDoesNotUseTls()
+    {
+        string share = Temp("ftpplain");
+        try
+        {
+            using var cert = SelfSigned();
+            using var ftp = new MiniFtp(share, cert);
+            using var plain = new FtpRemote("127.0.0.1", ftp.Port, "anonymous", "");
+            plain.Write("a.txt", Encoding.UTF8.GetBytes("a"));
+            Assert.Equal(0, ftp.TlsSessions);
+        }
+        finally { Directory.Delete(share, true); }
+    }
+
+    // ------------------------------------------------------------ deleting on a server
+
+    [Fact]
+    public void AFileOrFolderOfAServerIsDeletedByItsPathAndTheTopIsNot()
+    {
+        string share = Temp("del"), project = Temp("delproj");
+        try
+        {
+            Put(share, "site/a.txt", "a"); Put(share, "site/dir/b.txt", "b"); Put(share, "keep.txt", "k");
+            var server = Folder(share);
+            Assert.True(Deployment.DeleteRemote(project, server, "site/a.txt").Ok);
+            Assert.True(!File.Exists(Path.Combine(share, "site", "a.txt")));
+            Assert.True(Deployment.DeleteRemote(project, server, "site/dir").Ok);
+            Assert.True(!Directory.Exists(Path.Combine(share, "site", "dir")));
+            Assert.True(Directory.Exists(Path.Combine(share, "site")) && File.Exists(Path.Combine(share, "keep.txt")));
+            // what is not there, the top, a way out of the server
+            Assert.True(!Deployment.DeleteRemote(project, server, "site/nope.txt").Ok);
+            Assert.True(!Deployment.DeleteRemote(project, server, "").Ok && !Deployment.DeleteRemote(project, server, "/").Ok);
+            Assert.True(!Deployment.DeleteRemote(project, server, "../x").Ok && !Deployment.DeleteRemote(project, server, "site/../..").Ok);
+            Assert.True(File.Exists(Path.Combine(share, "keep.txt")));
+            // a server with a root: the path is below it
+            Put(share, "srv/app/x.txt", "x");
+            var rooted = new DeployServer("ftp-y", "y", "folder", "", 0, "", share, "", false, new() { new DeployMapping("", "") }, new(), "");
+            Assert.True(Deployment.DeleteRemote(project, rooted, "srv/app/x.txt").Ok);
+            Assert.True(!File.Exists(Path.Combine(share, "srv", "app", "x.txt")));
+        }
+        finally { Directory.Delete(project, true); Directory.Delete(share, true); }
+    }
+
+    [Fact]
+    public void ADeleteInTheProjectReachesTheServerOnlyWhenTheServerWasSetToAndOnlyForFiles()
+    {
+        string share = Temp("deld"), project = Temp("deldproj");
+        try
+        {
+            Put(share, "a.py", "a"); Put(share, "b.py", "b"); Put(share, "sub/c.py", "c"); Put(share, "x.log", "l"); Put(share, "outside/d.py", "d");
+            var off = Folder(share, new DeployMapping("", ""));
+            Assert.True(!(off.DeleteOnDelete));
+            Assert.Equal(0, Deployment.DeleteForLocal(project, off, new[] { "a.py" }).Count);
+            Assert.True(File.Exists(Path.Combine(share, "a.py")));
+            var on = off with { DeleteOnDelete = true, Excluded = new() { "*.log" } };
+            var results = Deployment.DeleteForLocal(project, on, new[] { "a.py", "sub/c.py", "x.log", "not_there.py", ".git/config", "sub" });
+            Assert.Equal("a.py,sub/c.py", string.Join(",", results.Select(r => r.Path)));
+            Assert.True(results.All(r => r.Ok));
+            Assert.True(!File.Exists(Path.Combine(share, "a.py")) && !File.Exists(Path.Combine(share, "sub", "c.py")));
+            // an excluded file, a file only the server had, and a folder name are left alone
+            Assert.True(File.Exists(Path.Combine(share, "x.log")) && File.Exists(Path.Combine(share, "b.py")) && Directory.Exists(Path.Combine(share, "sub")));
+            // a mapping limits it: only what the project's src folder maps to
+            var narrow = on with { Mappings = new() { new DeployMapping("src", "outside") } };
+            Assert.Equal(1, Deployment.DeleteForLocal(project, narrow, new[] { "src/d.py", "b.py" }).Count);
+            Assert.True(!File.Exists(Path.Combine(share, "outside", "d.py")) && File.Exists(Path.Combine(share, "b.py")));
+            // the setting is read from the form, and defaults off
+            Assert.True(!(DeployStore.Parse(new JsonObject { ["type"] = "folder", ["root"] = share }).DeleteOnDelete));
+            Assert.True(DeployStore.Parse(new JsonObject { ["type"] = "folder", ["root"] = share, ["deleteOnDelete"] = true }).DeleteOnDelete);
+        }
+        finally { Directory.Delete(project, true); Directory.Delete(share, true); }
+    }
+
+    // ------------------------------------------------------------ FTPS in the form, a key file and its passphrase
+
+    [Fact]
+    public void AnFtpsServerIsAKindOfItsOwnAndAPassphraseIsKeptWithThePassword()
+    {
+        string root = Temp("keystore");
+        try
+        {
+            var ftps = DeployStore.Parse(new JsonObject { ["type"] = "FTPS", ["host"] = "ftp.example.org" });
+            Assert.Equal("ftps", ftps.Type);
+            Assert.Equal(21, ftps.Port);
+            Assert.Equal("anonymous", ftps.User);
+            var sftp = DeployStore.Parse(new JsonObject { ["type"] = "sftp", ["host"] = "h", ["user"] = "me", ["keyFile"] = " ~/.ssh/id_ed25519 " });
+            Assert.Equal("~/.ssh/id_ed25519", sftp.KeyFile);
+            DeployStore.Save(root, sftp, "pw", "the passphrase");
+            string visible = File.ReadAllText(Path.Combine(root, ".pymagic", "deployment.json"));
+            Assert.True(!visible.Contains("the passphrase") && !visible.Contains("pw\""), "the settings file holds neither");
+            Assert.Equal("the passphrase", DeployStore.PassphraseOf(root, sftp.Id));
+            Assert.Equal("pw", DeployStore.PasswordOf(root, sftp.Id));
+            // saved without them: both stay; an empty passphrase takes only the passphrase away
+            DeployStore.Save(root, sftp with { Name = "n" }, null, null);
+            Assert.Equal("the passphrase", DeployStore.PassphraseOf(root, sftp.Id));
+            DeployStore.Save(root, sftp, null, "");
+            Assert.Equal("", DeployStore.PassphraseOf(root, sftp.Id));
+            Assert.Equal("pw", DeployStore.PasswordOf(root, sftp.Id));
+            DeployStore.Save(root, sftp, null, "again");
+            DeployStore.Remove(root, sftp.Id);
+            Assert.Equal("", DeployStore.PassphraseOf(root, sftp.Id));
+            // a key file: ~ is the home folder, a relative path is from the project
+            Assert.Equal(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh", "k"), Deployment.KeyPath(root, "~/.ssh/k"));
+            Assert.Equal(Path.GetFullPath(Path.Combine(root, "keys", "k")), Deployment.KeyPath(root, "keys/k"));
+            Assert.Equal("", Deployment.KeyPath(root, "  "));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void ASftpKeyFileIsReadWithItsPassphraseBeforeAnythingIsSent()
+    {
+        string project = Temp("keyfile");
+        try
+        {
+            var missing = new DeployServer("k1", "k", "sftp", "127.0.0.1", 1, "me", "/", "nokey", false, new() { new DeployMapping("", "") }, new(), "");
+            Assert.Contains("not there", Msg(() => Deployment.Open(project, missing)));
+            string key = Path.Combine(project, "id_test");
+            var gen = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ssh-keygen", $"-q -t ed25519 -N secretphrase -f \"{key}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true });
+            if (gen == null) return;
+            gen.WaitForExit(20000);
+            if (gen.ExitCode != 0 || !File.Exists(key)) return;       // no ssh-keygen here: the rest is not checked
+            var server = missing with { KeyFile = "id_test" };          // relative: from the project
+            DeployStore.Save(project, server, null, "wrong one");
+            Assert.Contains("key file could not be read", Msg(() => Deployment.Open(project, server)));
+            // the right passphrase gets as far as connecting (port 1 is closed), so the key was opened
+            DeployStore.Save(project, server, null, "secretphrase");
+            Assert.Contains("Could not connect", Msg(() => Deployment.Open(project, server)));
+        }
+        finally { Directory.Delete(project, true); }
+    }
+
+    // against a server that PYMAGIC_TEST_SFTP_KEY names ("host|port|user|keyfile|passphrase"; the public key is in the server's authorized_keys)
+    [Fact]
+    public void SftpLogsInWithAKeyFile()
+    {
+        string? spec = Environment.GetEnvironmentVariable("PYMAGIC_TEST_SFTP_KEY");
+        if (spec == null) return;
+        var p = spec.Split('|');
+        string project = Temp("sftpkey");
+        try
+        {
+            Put(project, "k.txt", "key login");
+            var server = new DeployServer("sftp-key", "x", "sftp", p[0], int.Parse(p[1]), p[2], "/site_key", p[3], false, new() { new DeployMapping("", "") }, new(), "");
+            DeployStore.Save(project, server, "", p.Length > 4 ? p[4] : "");
+            Assert.True(Deployment.Upload(project, server, new[] { "k.txt" }).All(r => r.Ok), "upload with the key");
+            Assert.True(Deployment.Compare(project, DeployStore.Find(project, "sftp-key")!, "k.txt").Same);
+            Assert.True(Deployment.DeleteRemote(project, server, "k.txt").Ok);
         }
         finally { Directory.Delete(project, true); }
     }

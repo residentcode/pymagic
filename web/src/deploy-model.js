@@ -21,7 +21,18 @@ export function actionsFor(status) {
 /** A server in a line: "me@example.org (SFTP)", "FTP ftp.site.org", "a folder D:/share". */
 export function describeServer(s) {
     if (s.type === 'folder') return `a folder ${s.root}`;
-    return `${s.type === 'sftp' ? 'SFTP' : 'FTP'} ${s.user ? s.user + '@' : ''}${s.host}${(s.type === 'sftp' && s.port !== 22) || (s.type === 'ftp' && s.port !== 21) ? ':' + s.port : ''}`;
+    return `${{ sftp: 'SFTP', ftps: 'FTPS' }[s.type] ?? 'FTP'} ${s.user ? s.user + '@' : ''}${s.host}${(s.type === 'sftp' && s.port !== 22) || (s.type !== 'sftp' && s.port !== 21) ? ':' + s.port : ''}`;
+}
+
+/** The default port of a kind of server. */
+export function defaultPort(type) { return type === 'sftp' ? 22 : 21; }
+
+/** The question asked before something is deleted on a server: what goes, where, and that a folder takes what is in it. */
+export function deleteQuestion(entry, serverName, path) {
+    const where = '/' + (path ? path + '/' : '') + entry.name;
+    return entry.isDir
+        ? `Delete the folder ${where} on ${serverName}, with everything in it? This cannot be undone.`
+        : `Delete ${where} on ${serverName}? This cannot be undone.`;
 }
 
 /** The mappings as "src → /app/src" lines, and back. A mapping with nothing is the whole project at the server's root. */
