@@ -598,3 +598,12 @@ li.mark-resources .fname, li.mark-resources .folder { color: var(--teal, #6cc4c4
 .md-body li.md-task > ul, .md-body li.md-task > ol { margin-top: .2em; }
 #scratch-box { min-height: 96px; }
 #scratch-list { min-height: 40px; }
+
+/* macros */
+#macro-state { color: #e06c75; font-weight: 600; animation: macro-blink 1.2s ease-in-out infinite; }
+@keyframes macro-blink { 50% { opacity: .45; } }
+.macro-box { width: min(760px, 94vw); height: min(480px, 80vh); }
+.macro-list { overflow: auto; padding: 6px 0; }
+.macro-row { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.macro-info { flex: 1; min-width: 0; } .macro-name { font-weight: 600; } .macro-steps { color: var(--dim); font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.macro-key { min-width: 96px; }

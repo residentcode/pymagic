@@ -55,6 +55,7 @@ import { setupInjections } from './injection';
 import { setupSpelling } from './spell';
 import { setupMarkdownPreview } from './mdpreview';
 import { setupMarkdownTools } from './mdtools';
+import { setupMacros } from './macros';
 import { setupFileActions, fileTypes } from './fileactions';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
@@ -1139,6 +1140,7 @@ async function main() {
     setupInjections({ database });
     setupMarkdownPreview({ editor, currentFile: () => currentRel, openFile, askText: (...a) => explorer.askText(...a) });
     setupMarkdownTools({ editor, currentFile: () => currentRel, relOfModel: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+    setupMacros({ editor, askText: (...a) => explorer.askText(...a) });
     setupSpelling({ relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     // code actions that need the page (not just a text edit) arrive as commands
     monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name) => {

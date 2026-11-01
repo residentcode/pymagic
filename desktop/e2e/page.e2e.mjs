@@ -45,6 +45,7 @@ const FILES = {
     'typo.py': '# Recieve the mesage here\n\n\ndef fetch_mesage():\n    return 1\n',
     'demo.md': '# Demo\n\nA [guide](docs/guide.md) and [setup](docs/guide.md#setup) and **bold**.\n\n| Name | Qty |\n|:--|--:|\n| pen | 2 |\n| notebook | 12 |\n\n- [ ] todo\n- [x] done\n\n```mermaid\ngraph TD\n  A[Start] --> B{Ok?}\n  B -->|yes| C[Done]\n```\n\n## Second\n\ntext\n',
     'demo.rst': 'Title\n=====\n\nA *word*.\n',
+    'macro.py': 'x = 1\n',
     'hist.py': 'def f():\n    return 0\n',
     'intent.py': "name = 'x'\nprint('Hello ' + name + '!')\nvalue = 255\n",
     'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\nN = re.compile(f"{PATTERN.pattern}[cc]")\n',
@@ -157,6 +158,67 @@ describe('the editor and the language server', () => {
         await page.evaluate(`window.pymagic.editor.getAction('editor.action.formatDocument').run()`);
         const text = await page.waitFor(`(() => { const t = window.pymagic.editor.getValue(); return t.includes("name = 'pen'") ? t : null; })()`, 15000, 'the formatted text');
         assert.equal(text, "url = '/shop/about/'\nname = 'pen'\nsaid = \"it's\"\n");
+    });
+});
+
+describe('macros', () => {
+    const press = async (key, { text, code, vk, modifiers = 0 } = {}) => {
+        await page.send('Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', key, code, windowsVirtualKeyCode: vk, text, modifiers });
+        await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk, modifiers });
+    };
+    const typeText = async (s) => { for (const ch of s) await press(ch, { text: ch, code: 'Key' + ch.toUpperCase(), vk: ch.toUpperCase().charCodeAt(0) }); };
+    const action = (id) => page.evaluate(`window.pymagic.editor.getAction(${JSON.stringify(id)}).run()`);
+    const content = () => page.evaluate(`window.pymagic.editor.getModel().getValue()`);
+
+    test('typing and editing keys are recorded, kept under a name and played back', async () => {
+        await open('macro.py');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 2, column: 1 }); ed.focus(); })()`);
+        await action('pymagic.macro.toggle');
+        await page.waitFor(`document.getElementById('macro-state') && !document.getElementById('macro-state').hidden`, 5000, 'the recording mark');
+        await typeText('hi');
+        await press('Enter', { text: '\r', code: 'Enter', vk: 13 });
+        await press('Backspace', { code: 'Backspace', vk: 8 });
+        await action('pymagic.macro.toggle');                                    // stops, and asks for a name
+        await page.waitFor(`document.querySelector('.ask-box input')`, 5000, 'the question for the name');
+        await page.evaluate(`(() => { const i = document.querySelector('.ask-box input'); i.value = 'greet'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+        await page.waitFor(`fetch('/api/macros').then((r) => r.json()).then((m) => m.length === 1)`, 5000, 'the saved macro');
+        assert.deepEqual(await page.evaluate(`fetch('/api/macros').then((r) => r.json())`), [{ name: 'greet', key: '', steps: [{ k: 'text', text: 'hi\n' }, { k: 'cmd', id: 'deleteLeft' }] }]);
+        assert.equal(await content(), 'x = 1\nhi');
+        // played back at the end of that line
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 2, column: 3 }); ed.focus(); })()`);
+        await action('pymagic.macro.playLast');
+        assert.equal(await content(), 'x = 1\nhihi');
+    });
+
+    test('a saved macro is given a key and runs from it', async () => {
+        await open('macro.py');
+        await action('pymagic.macro.manage');
+        await page.waitFor(`document.querySelector('.macro-key')`, 5000, 'the dialog');
+        await page.evaluate(`document.querySelector('.macro-key').click()`);
+        await press('1', { text: undefined, code: 'Digit1', vk: 49, modifiers: 2 | 1 });
+        await page.waitFor(`document.querySelector('.macro-key')?.textContent === 'Ctrl+Alt+1'`, 5000, 'the key shown');
+        assert.equal((await page.evaluate(`fetch('/api/macros').then((r) => r.json())`))[0].key, 'Ctrl+Alt+1');
+        await page.key(27, 'Escape');
+        await page.waitFor(`!document.querySelector('.macro-box')`, 5000, 'the dialog to close');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 2, column: 5 }); ed.focus(); })()`);
+        await press('1', { code: 'Digit1', vk: 49, modifiers: 2 | 1 });
+        await page.waitFor(`window.pymagic.editor.getModel().getValue() === 'x = 1\\nhihihi'`, 5000, 'the macro played from its key');
+    });
+
+    test('the macro played many times, and deleted', async () => {
+        await open('macro.py');
+        await action('pymagic.macro.manage');
+        await page.waitFor(`document.querySelector('.macro-row')`, 5000, 'the dialog');
+        await page.evaluate(`[...document.querySelectorAll('.macro-row button')].find((b) => b.textContent === 'Play N times…').click()`);
+        await page.waitFor(`document.querySelector('.ask-box input')`, 5000, 'the question');
+        await page.evaluate(`(() => { const i = document.querySelector('.ask-box input'); i.value = '3'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+        await page.waitFor(`window.pymagic.editor.getModel().getValue() === 'x = 1\\nhihihihihihi'`, 5000, 'three more');
+        await page.evaluate(`window.pymagic.editor.trigger('e2e', 'undo', {})`);
+        await action('pymagic.macro.manage');
+        await page.waitFor(`document.querySelector('.macro-row')`, 5000, 'the dialog');
+        await page.evaluate(`[...document.querySelectorAll('.macro-row button')].find((b) => b.textContent === 'Delete').click()`);
+        await page.waitFor(`fetch('/api/macros').then((r) => r.json()).then((m) => m.length === 0)`, 5000, 'the macro gone');
+        await page.key(27, 'Escape');
     });
 });
 

@@ -193,6 +193,26 @@ app.MapPost("/api/rst", async (HttpRequest req) =>
     catch (ServiceException e) { return Results.Json(new { error = e.Message }); }
 });
 
+// the macros of the project (.pymagic/macros.json): [{name, key, steps}]
+app.MapGet("/api/macros", () =>
+{
+    string file = Path.Combine(root, ".pymagic", "macros.json");
+    try { return File.Exists(file) ? Results.Text(File.ReadAllText(file), "application/json") : Results.Text("[]", "application/json"); }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.Text("[]", "application/json"); }
+});
+app.MapPut("/api/macros", async (HttpRequest req) =>
+{
+    using var reader = new StreamReader(req.Body, Encoding.UTF8);
+    string text = await reader.ReadToEndAsync();
+    if (text.Length > 2_000_000) return Results.StatusCode(413);
+    try { if (JsonNode.Parse(text) is not JsonArray) return Results.BadRequest("a list of macros"); }
+    catch (System.Text.Json.JsonException) { return Results.BadRequest("not JSON"); }
+    string file = Path.Combine(root, ".pymagic", "macros.json");
+    Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+    await File.WriteAllTextAsync(file, text, new UTF8Encoding(false));
+    return Results.NoContent();
+});
+
 app.MapGet("/api/info", () => new
 {
     root,
