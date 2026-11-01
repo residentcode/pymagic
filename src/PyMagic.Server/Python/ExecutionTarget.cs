@@ -35,6 +35,7 @@ public abstract class ExecutionTarget
         if (python.Length == 0) return null;
         if (head.StartsWith("wsl:", StringComparison.Ordinal) && head.Length > 4) return (new WslTarget(head[4..]), python);
         if (head.StartsWith("docker:", StringComparison.Ordinal) && head.Length > 7) return (new DockerTarget(head[7..]), python);
+        if (head.StartsWith("compose:", StringComparison.Ordinal) && head.Length > 8 && ComposeTarget.FromHead(head[8..]) is { } compose) return (compose, python);
         if (head.StartsWith("ssh:", StringComparison.Ordinal) && head.Length > 4 && SshTarget.FromHead(head[4..]) is { } ssh) return (ssh, python);
         return null;
     }
@@ -230,7 +231,8 @@ public sealed class DockerTarget : ExecutionTarget
     string Workspace_ => (Project ?? DefaultProject) is { } project ? Path.GetFullPath(project) : (_workspace ??= Path.GetTempPath());
     string? _workspace;
 
-    public override ProcessStartInfo Start(string python, string workDir, IEnumerable<string> args, IReadOnlyDictionary<string, string>? env = null, IReadOnlyList<string>? mounts = null)
+    /// <summary>Settles which folder is /workspace and which helper folders are /pymagic/&lt;n&gt;; returns that folder and the working directory inside the container.</summary>
+    internal (string Share, string Cwd) PrepareShare(string workDir, IReadOnlyList<string>? mounts)
     {
         if (Project == null && DefaultProject == null && _workspace == null) _workspace = Path.GetFullPath(workDir);
         string share = Workspace_;
@@ -241,6 +243,14 @@ public sealed class DockerTarget : ExecutionTarget
         // a folder outside the project (a throw-away one for asking pip) cannot be entered: work in /workspace
         string cwd = ToTarget(workDir);
         if (!cwd.StartsWith(DockerTarget.Workspace, StringComparison.Ordinal)) cwd = DockerTarget.Workspace;
+        return (share, cwd);
+    }
+
+    internal IReadOnlyList<string> Mounts => _mounts;
+
+    public override ProcessStartInfo Start(string python, string workDir, IEnumerable<string> args, IReadOnlyDictionary<string, string>? env = null, IReadOnlyList<string>? mounts = null)
+    {
+        var (share, cwd) = PrepareShare(workDir, mounts);
 
         var psi = new ProcessStartInfo("docker") { WorkingDirectory = Directory.Exists(workDir) ? workDir : Path.GetTempPath() };
         foreach (var a in new[] { "run", "--rm", "-i", "--add-host", "host.docker.internal:host-gateway", "-v", $"{share}:{Workspace}", "-w", cwd })
@@ -317,7 +327,7 @@ public sealed class DockerTarget : ExecutionTarget
         return failed;
     }
 
-    static string? Docker(params string[] args)
+    internal static string? Docker(params string[] args)
     {
         var psi = new ProcessStartInfo("docker") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
         foreach (var a in args) psi.ArgumentList.Add(a);

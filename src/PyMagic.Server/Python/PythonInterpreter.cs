@@ -45,7 +45,7 @@ public sealed record PythonInterpreter(
         {
             string where = Kind switch
             {
-                "wsl" or "docker" => Target.Name,
+                "wsl" or "docker" or "compose" => Target.Name,
                 "venv" or "conda" => System.IO.Path.GetFileName(Prefix.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : Source,
                 "uv" => "uv",
                 "pyenv" => "pyenv",
