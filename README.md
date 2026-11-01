@@ -69,7 +69,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - ~~Lines that hold a multi-line string (`"""..."""` as an argument, `"""...""".format(...)`, a docstring passed to a call) are left as written; black 24-26 splits them by its own rules (the call's closing bracket on a line of its own, a trailing comma after the string): the 15 of those 192 files that still differ, 274 lines, all of this kind~~ (done, item 218: all 192 files now come out as black 26.10.1 writes them).
 
 **Run, debug and tests**
-- Debugger: pausing a running program, attaching to a running process, breakpoints added while a frame is already running (they only count in new calls) (10); the stacks of other threads (76); setting attributes and items of objects, watches that expand, exception filters by type, function and data breakpoints (21).
+- Debugger: ~~pausing a running program, attaching to a running process, breakpoints added while a frame is already running (they only count in new calls) (10); the stacks of other threads (76)~~ (done, item 219; attaching was item 160); ~~setting attributes and items of objects, watches that expand, exception filters by type, function and data breakpoints (21)~~ (done, item 220; exception filters by type were item 158's exception breakpoints per class). A data breakpoint on a local of a generator ends at its first `yield`, as its frame returns there.
 - Test runner: debugging a test, stopping a test run, `unittest` subtests as their own nodes, tests in classes whose bases live in other files (11).
 - ~~Coverage: branch coverage, combining runs, exporting a report, running one test with coverage (52)~~ (done, item 191).
 - Automated tests of the page itself in a real browser; the checks in PyMagic.exe are scripted by hand for now, beside the page's Node tests of its pure modules (9).
@@ -158,4 +158,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 218 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 220 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

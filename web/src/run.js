@@ -6,7 +6,7 @@ import { showTab } from './panel';
 import { editBreakpoint, isPlain } from './bpdialog';
 import { ansiReader } from './ansi';
 import { colouredSpans } from './terminal';
-import { inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem, declarationLine, historyStep } from './debug-model.js';
+import { inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem, declarationLine, historyStep, framesOfStop, threadHeadings } from './debug-model.js';
 import { openMenu } from './menu';
 import { toast } from './toast';
 const $ = (id) => document.getElementById(id);
@@ -210,6 +210,7 @@ export function setupRun(deps) {
         $('b-debug').querySelector('.lbl').textContent = paused ? 'Resume' : 'Debug';
         $('b-debug').querySelector('use').setAttribute('href', paused ? '#i-run' : '#i-debug');
         $('b-stop').disabled = !active;
+        $('b-pause').disabled = !active || !debugging || paused;
         for (const id of ['b-over', 'b-into', 'b-out'])
             $(id).disabled = !paused;
         $('runstate').textContent = !active ? '' : paused ? 'paused' : debugging ? 'debugging…' : profiling ? 'profiling…' : 'running…';
@@ -270,7 +271,7 @@ export function setupRun(deps) {
         const f = frames[index];
         if (!f)
             return;
-        document.querySelectorAll('#frames div').forEach((d, i) => d.classList.toggle('sel', i === index));
+        document.querySelectorAll('#frames div.frame').forEach((d, i) => d.classList.toggle('sel', i === index));
         clearCurrentLine();
         const rel = relOfAbsolute(f.file);
         if (rel) {
@@ -365,15 +366,19 @@ export function setupRun(deps) {
                 v.value = r.value ?? v.value;
             };
         }
-        if (scopeRef !== undefined) {
+        // a variable of the frame, or a member of a value (an attribute, a dict's item, a list's item): tuples and sets cannot be changed
+        const editRef = scopeRef !== undefined ? scopeRef
+            : source && parent?.type !== 'Return values' && !['tuple', 'set', 'frozenset', 'str', 'bytes'].includes(parent?.type) ? source.ref : undefined;
+        const member = scopeRef === undefined;
+        if (editRef !== undefined) {
             val.title = 'Double-click or F2 to change the value; right-click for more';
-            val.ondblclick = () => editVariable(val, scopeRef, v);
+            val.ondblclick = () => editVariable(val, editRef, v, member);
         }
         const isName = parent?.expr === null && expr !== null;
         head.onkeydown = (e) => {
-            if (e.key === 'F2' && scopeRef !== undefined) {
+            if (e.key === 'F2' && editRef !== undefined) {
                 e.preventDefault();
-                editVariable(val, scopeRef, v);
+                editVariable(val, editRef, v, member);
             }
             else if (e.key === 'F4' && !e.shiftKey && isName) {
                 e.preventDefault();
@@ -387,7 +392,7 @@ export function setupRun(deps) {
         head.oncontextmenu = (e) => {
             e.preventDefault();
             openMenu({ x: e.clientX, y: e.clientY }, [
-                ...valueItems(expr, v.value, scopeRef !== undefined ? () => editVariable(val, scopeRef, v) : null),
+                ...valueItems(expr, v.value, editRef !== undefined ? () => editVariable(val, editRef, v, member) : null),
                 '-',
                 { label: 'Jump to source', key: 'F4', run: () => void jumpToDeclaration(v.name), disabled: !isName },
                 { label: 'Jump to type source', key: 'Shift+F4', run: () => void jumpToTypeSource(expr), disabled: !expr },
@@ -443,6 +448,7 @@ export function setupRun(deps) {
             { label: 'Copy value', run: () => void fullValue(expr, shown).then((t) => navigator.clipboard.writeText(t)).then(() => toast('Value copied'), () => toast('Could not copy')) },
             { label: 'Compare with clipboard', run: () => void compareValue(expr, shown) },
             { label: 'Add to watches', run: () => addWatch(expr), disabled: !expr },
+            { label: 'Break when value changes', run: () => void addDataBreak(expr), disabled: !expr || !paused },
             ...(setValue ? ['-', { label: 'Set value…', key: 'F2', run: setValue }] : []),
         ];
     }
@@ -581,8 +587,9 @@ export function setupRun(deps) {
         wrap.appendChild(note);
         dialog(`${expr} — Data View`, wrap);
     }
-    /** Replaces the shown value by an input; Enter assigns the expression typed there to the variable. */
-    function editVariable(valueEl, scopeRef, v) {
+    /** Replaces the shown value by an input; Enter assigns the expression typed there to the variable, or to the member
+     * of the value above it (`member`), which is then shown in place without folding the tree up again. */
+    function editVariable(valueEl, ref, v, member = false) {
         const input = document.createElement('input');
         input.className = 'edit';
         input.value = v.value;
@@ -595,10 +602,21 @@ export function setupRun(deps) {
             if (done)
                 return;
             done = true;
+            let r = null;
             if (apply && run && paused) {
-                const r = await run.ask({ type: 'setVariable', ref: scopeRef, name: v.name, expression: input.value });
+                r = await run.ask({ type: 'setVariable', ref, frameId: selectedFrame, name: v.name, expression: input.value });
                 if (r.error)
                     logLine(`${v.name} = ${input.value}`, r.error);
+            }
+            if (member) {
+                if (r && !r.error) {
+                    v.value = r.value;
+                    valueEl.textContent = r.value;
+                }
+                input.replaceWith(valueEl);
+                if (r && !r.error && inline)
+                    void showInline(frames[selectedFrame], inline.model);
+                return;
             }
             await loadVariables();
             void refreshWatches();
@@ -648,10 +666,51 @@ export function setupRun(deps) {
         if (text?.trim())
             changeWatches(watches.map((w, i) => (i === index ? { ...w, expression: text.trim() } : w)));
     }
+    // ------------------------------------------------------------ data breakpoints (Break when value changes)
+    let dataBreaks = [];   // [{ key, expression }] of this run: the helper forgets them when the program ends
+    async function addDataBreak(expression) {
+        if (!run || !paused || !expression)
+            return;
+        const r = await run.ask({ type: 'setDataBreak', frameId: selectedFrame, expression });
+        if (r.error) {
+            toast(r.error);
+            return;
+        }
+        dataBreaks = [...dataBreaks, { key: r.key, expression }];
+        toast(`The program stops when ${expression} changes (now ${r.value})`);
+        void refreshWatches();
+    }
+    function removeDataBreak(key) {
+        run?.send({ type: 'clearDataBreak', key });
+        dataBreaks = dataBreaks.filter((d) => d.key !== key);
+        void refreshWatches();
+    }
+    function dataBreakRows(holder) {
+        for (const d of dataBreaks) {
+            const row = document.createElement('div');
+            row.className = 'w databreak';
+            row.title = 'A data breakpoint: the program stops at the line after the one that changes this value';
+            const name = document.createElement('span');
+            name.className = 'wx';
+            name.textContent = '◆ ' + d.expression;
+            const note = document.createElement('span');
+            note.className = 'wv wn';
+            note.textContent = 'stops when it changes';
+            const del = document.createElement('span');
+            del.className = 'wd';
+            del.textContent = '✕';
+            del.title = 'Remove the data breakpoint';
+            del.onclick = () => removeDataBreak(d.key);
+            row.append(name, note, del);
+            holder.appendChild(row);
+        }
+    }
+    const openWatches = new Set();   // the expressions of the watches opened into their members, kept open across stops
     /** Evaluates every watch in the selected frame (expressions only: a watch never assigns); paused ones are not evaluated. */
     async function refreshWatches() {
         const holder = $('watches');
         holder.textContent = '';
+        dataBreakRows(holder);
         for (const [index, watch] of watches.entries()) {
             const { expression } = watch;
             const row = document.createElement('div');
@@ -703,8 +762,26 @@ export function setupRun(deps) {
             else {
                 value.textContent = '= ' + r.result;
                 value.title = r.valueType;
+                if (r.ref > 0)
+                    expandableWatch(row, expression, r);
             }
         }
+    }
+    /** A watch whose value has members opens into them, as a variable does; it stays open at the next stops. */
+    function expandableWatch(row, expression, r) {
+        const caret = document.createElement('span');
+        caret.className = 'caret';
+        row.prepend(caret);
+        const li = document.createElement('div');
+        li.className = 'wtree';
+        row.after(li);
+        attachChildren(row, li, r.ref, openWatches.has(expression), undefined, { expr: expression, type: r.valueType });
+        caret.addEventListener('click', () => {
+            if (openWatches.has(expression))
+                openWatches.delete(expression);
+            else
+                openWatches.add(expression);
+        });
     }
     const watchAdd = $('watch-add');
     watchAdd.onkeydown = (e) => {
@@ -727,16 +804,28 @@ export function setupRun(deps) {
     };
     void refreshWatches();
     // ------------------------------------------------------------ frames and messages
+    let stoppedThread = null;
     function renderFrames() {
         const holder = $('frames');
         holder.textContent = '';
+        // the other threads' stacks follow the stopped thread's, each under its name
+        const headings = threadHeadings(frames, stoppedThread);
         frames.forEach((f, i) => {
+            if (headings.has(i)) {
+                const head = document.createElement('div');
+                head.className = 'thread';
+                head.textContent = headings.get(i);
+                holder.appendChild(head);
+            }
             const row = document.createElement('div');
+            row.className = 'frame';
             const rel = relOfAbsolute(f.file) ?? f.file.split(/[\\/]/).pop() ?? f.file;
             row.innerHTML = '<span class="fn"></span> <span class="loc"></span>';
             row.querySelector('.fn').textContent = f.name;
             row.querySelector('.loc').textContent = `${rel}:${f.line}`;
             row.onclick = () => void showFrame(i);
+            if (f.thread)
+                row.title = `Thread ${f.thread}: its frame while the program is paused (stepping goes on in the stopped thread)`;
             holder.appendChild(row);
         });
     }
@@ -763,7 +852,13 @@ export function setupRun(deps) {
                 break;
             case 'stopped':
                 paused = true;
-                frames = m.frames;
+                clearTimeout(pauseTimer);
+                frames = framesOfStop(m);
+                stoppedThread = m.thread ?? null;
+                if (m.reason === 'pause')
+                    append('Paused\n', 'info');
+                if (m.reason === 'data')
+                    append(`Stopped: ${m.message}\n`, 'info');
                 if (m.reason === 'exception')
                     append(`Paused on exception: ${m.message}\n`, 'err');
                 if (m.thread && m.thread !== 'MainThread')
@@ -772,6 +867,11 @@ export function setupRun(deps) {
                 showTab('debug');
                 setButtons();
                 void showFrame(0);
+                break;
+            case 'dataBreakEnded':
+                dataBreaks = dataBreaks.filter((d) => d.key !== m.key);
+                append(`The data breakpoint on ${m.expression} ended with its function's call\n`, 'info');
+                void refreshWatches();
                 break;
             case 'running':
                 paused = false;
@@ -800,6 +900,7 @@ export function setupRun(deps) {
     function finish() {
         run?.close();
         run = null;
+        dataBreaks = [];
         paused = false;
         frames = [];
         clearCurrentLine();
@@ -944,7 +1045,7 @@ export function setupRun(deps) {
         openBrowser = !!extra.openBrowser;
         followLogs((extra.logFiles ?? '').split(',').map((s) => s.trim()).filter(Boolean));
         run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
-            exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value,
+            exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value, functionBreaks: functionNames(),
             envFiles: extra.envFiles, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots });
         run.onMessage = handle;
         // only this run's connection counts: an earlier one closing late (Before launch) must not end the next run
@@ -969,6 +1070,21 @@ export function setupRun(deps) {
         muteBox.checked = localStorage.getItem('pymagic.mutedBreakpoints') === '1';
     }
     catch { /* storage unavailable */ }
+    // function breakpoints by name, kept with the project
+    const fnBox = $('fn-breaks');
+    const FN_KEY = 'pymagic.functionBreakpoints:' + rootNorm;
+    const functionNames = () => fnBox.value.split(/[\s,]+/).filter(Boolean);
+    try {
+        fnBox.value = localStorage.getItem(FN_KEY) ?? '';
+    }
+    catch { /* storage unavailable */ }
+    fnBox.onchange = () => {
+        try {
+            localStorage.setItem(FN_KEY, fnBox.value);
+        }
+        catch { /* storage unavailable */ }
+        run?.send({ type: 'setFunctionBreaks', names: functionNames() });
+    };
     const sendExceptionBreak = () => run?.send({ type: 'setExceptionBreak', mode: raisedBox.checked ? 'raised' : 'uncaught', classes: exceptionClasses() });
     raisedBox.onchange = () => {
         try {
@@ -1013,7 +1129,7 @@ export function setupRun(deps) {
     $('frames-copy').onclick = () => {
         if (!frames.length)
             return;
-        void navigator.clipboard.writeText(stackText(frames)).then(() => toast('Call stack copied'), () => toast('Could not copy'));
+        void navigator.clipboard.writeText(stackText(frames.filter((f) => !f.thread))).then(() => toast('Call stack copied'), () => toast('Could not copy'));
     };
     // ------------------------------------------------------------ stepping to a place
     /** The editor the cursor is in: the main one, or a side of a split. */
@@ -1039,7 +1155,7 @@ export function setupRun(deps) {
             toast(r.error);
             return;
         }
-        frames = r.frames;
+        frames = [...framesOfStop(r), ...frames.filter((f) => f.thread)];
         renderFrames();
         await showFrame(0);
     }
@@ -1182,6 +1298,19 @@ export function setupRun(deps) {
     $('b-profile').onclick = () => void start(false, true);
     $('b-debug').onclick = () => (paused ? resume('continue') : void start(true));
     $('b-stop').onclick = () => { if (afterExit) stoppedByUser = true; run?.send({ type: 'stop' }); };
+    /** Pause: the program stops at its next line of Python; one waiting outside Python (input(), a socket) stops when it comes back. */
+    let pauseTimer = 0;
+    function pause() {
+        if (!run || !debugging || paused)
+            return;
+        run.send({ type: 'pause' });
+        clearTimeout(pauseTimer);
+        pauseTimer = window.setTimeout(() => {
+            if (run && !paused)
+                toast('The program is waiting outside Python (for input, a socket or a lock); it pauses when it runs Python again.');
+        }, 3000);
+    }
+    $('b-pause').onclick = pause;
     $('b-over').onclick = () => resume('next');
     $('b-into').onclick = () => resume('stepIn');
     $('b-out').onclick = () => resume('stepOut');
@@ -1348,6 +1477,7 @@ export function setupRun(deps) {
             evaluate: () => evaluateWindow(expressionOf(focused)),
             forceStepInto: () => forceStep('stepIn'), forceStepOver: () => forceStep('next'),
             attach: () => void attachToProcess(), running: () => run !== null,
+            pause, canPause: () => run !== null && debugging && !paused,
         },
     };
 }

@@ -58,7 +58,7 @@ public class RunTests
             int id = ++_id;
             body["type"] = type; body["id"] = id;
             Session.Handle(body);
-            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", "values" => "values", "jump" => "jumped", "table" => "table", "setName" => "setName", "reprOf" => "reprOf", "typeSource" => "typeSource", "consoleExec" or "consoleRunFile" => "consoleDone", "consoleVars" => "consoleVars", "consoleComplete" => "consoleCompletions", _ => "evaluated" };
+            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", "setDataBreak" => "dataBreakSet", "values" => "values", "jump" => "jumped", "table" => "table", "setName" => "setName", "reprOf" => "reprOf", "typeSource" => "typeSource", "consoleExec" or "consoleRunFile" => "consoleDone", "consoleVars" => "consoleVars", "consoleComplete" => "consoleCompletions", _ => "evaluated" };
             return Next(e => e["type"]?.GetValue<string>() == reply && e["id"]?.GetValue<int>() == id);
         }
 
@@ -509,6 +509,7 @@ public class RunTests
         var stopped = h.Type("stopped");
         Assert.Equal(4, Line(stopped));
         Assert.Equal("worker-1", stopped["thread"]!.GetValue<string>());
+        Assert.Equal(1, stopped["frames"]!.AsArray().Count);   // threading's startup frames are not shown under work()
         Assert.Equal("7", EvalInt(h, "n"));
         h.Command("next");
         Assert.Equal(5, Line(h.Type("stopped")));
@@ -516,6 +517,252 @@ public class RunTests
         h.Command("continue");
         h.Type("exited");
         Assert.Contains("joined", h.AllOutput());
+    }
+
+    // ------------------------------------------------------------ item 219: pause, breakpoints in running frames, the other threads
+
+    const string Spin =
+        "import time\n" +                    // 1
+        "def spin():\n" +                    // 2
+        "    count = 0\n" +                  // 3
+        "    while count < 400:\n" +         // 4
+        "        count += 1\n" +             // 5
+        "        time.sleep(0.05)\n" +       // 6
+        "    return count\n" +               // 7
+        "print('started', flush=True)\n" +   // 8
+        "spin()\n";                          // 9
+
+    [Fact]
+    public void PauseStopsARunningProgramAndABreakpointAddedLaterStopsInTheRunningCall()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("spin.py", Spin);
+        h.Session.StartWithBreakpoints(h.Root, "spin.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray>());
+        h.Next(e => e["type"]?.GetValue<string>() == "output" && e["text"]!.GetValue<string>().Contains("started"));
+        Thread.Sleep(300);
+        h.Command("pause");
+        var paused = h.Type("stopped");
+        Assert.Equal("pause", paused["reason"]!.GetValue<string>());
+        Assert.Equal("spin", paused["frames"]![0]!["name"]!.GetValue<string>());
+        Assert.True(Line(paused) is >= 4 and <= 6, "paused in the loop, at line " + Line(paused));
+        int before = int.Parse(EvalInt(h, "count"));
+        h.Command("continue");
+        h.Type("running");
+
+        // spin() was entered before any breakpoint existed: its frame was not traced, yet the new one stops in it
+        h.Session.Handle(new JsonObject { ["type"] = "setBreakpoints", ["file"] = "spin.py", ["lines"] = new JsonArray(5) });
+        var hit = h.Type("stopped");
+        Assert.Equal("breakpoint", hit["reason"]!.GetValue<string>());
+        Assert.Equal(5, Line(hit));
+        Assert.True(int.Parse(EvalInt(h, "count")) >= before, "the same call goes on");
+        h.Command("stop");
+        h.Type("exited");
+    }
+
+    [Fact]
+    public void PauseInLibraryCodeStopsThereAfterASecond()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        string lib = Path.Combine(h.Root, ".venv", "Lib", "site-packages");
+        Directory.CreateDirectory(lib);
+        File.WriteAllText(Path.Combine(lib, "slowlib.py"), "import time\ndef serve():\n    while True:\n        time.sleep(0.05)\n");
+        h.Script("server.py", "import sys\nsys.path.insert(0, '.venv/Lib/site-packages')\nimport slowlib\nprint('started', flush=True)\nslowlib.serve()\n");
+        h.Session.StartWithBreakpoints(h.Root, "server.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray>());
+        h.Next(e => e["type"]?.GetValue<string>() == "output" && e["text"]!.GetValue<string>().Contains("started"));
+        h.Command("pause");
+        var paused = h.Type("stopped");
+        Assert.Equal("pause", paused["reason"]!.GetValue<string>());
+        Assert.Equal("serve", paused["frames"]![0]!["name"]!.GetValue<string>());
+        Assert.Equal("<module>", paused["frames"]![1]!["name"]!.GetValue<string>());
+        h.Command("stop");
+        h.Type("exited");
+    }
+
+    [Fact]
+    public void TheOtherThreadsStacksAreSentWithAStopAndTheirFramesCanBeAsked()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("two.py",
+            "import threading, time\n" +                                  // 1
+            "stop = False\n" +                                            // 2
+            "def worker(limit):\n" +                                      // 3
+            "    while not stop:\n" +                                     // 4
+            "        time.sleep(0.01)\n" +                                // 5
+            "t = threading.Thread(target=worker, args=(42,), name='spinner')\n" +  // 6
+            "t.start()\n" +                                               // 7
+            "time.sleep(0.2)\n" +                                         // 8
+            "x = 1\n" +                                                   // 9
+            "stop = True\n" +                                             // 10
+            "t.join()\n");                                                // 11
+        h.Session.StartWithBreakpoints(h.Root, "two.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray> { ["two.py"] = new JsonArray(9) });
+        var stopped = h.Type("stopped");
+        Assert.Equal(9, Line(stopped));
+        var threads = stopped["threads"]!.AsArray();
+        var spinner = threads.Single(t => t!["name"]!.GetValue<string>() == "spinner")!;
+        var top = spinner["frames"]![0]!;
+        Assert.Equal("worker", top["name"]!.GetValue<string>());
+        Assert.True(top["line"]!.GetValue<int>() is 4 or 5, "the worker's own line, not the debugger's");
+        Assert.Equal(1, spinner["frames"]!.AsArray().Count);
+        int id = top["id"]!.GetValue<int>();
+        Assert.True(id >= stopped["frames"]!.AsArray().Count, "its ids follow the stopped thread's frames");
+        Assert.Equal("42", h.Request("evaluate", new JsonObject { ["frameId"] = id, ["expression"] = "limit" })["result"]!.GetValue<string>());
+        var scopes = h.Request("scopes", new JsonObject { ["frameId"] = id })["scopes"]!.AsArray();
+        Assert.True(scopes.Any(s => s!["name"]!.GetValue<string>() == "Locals"), "a thread's frame has its locals");
+        h.Command("continue");
+        h.Type("exited");
+    }
+
+    [Fact]
+    public void PauseStopsTheMainThreadWhenItRunsPython()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("busy.py",
+            "import threading, time\n" +
+            "def worker():\n    while True:\n        time.sleep(0.001)\n" +
+            "threading.Thread(target=worker, name='busy', daemon=True).start()\n" +
+            "print('started', flush=True)\n" +
+            "while True:\n    time.sleep(0.05)\n");
+        h.Session.StartWithBreakpoints(h.Root, "busy.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray>());
+        h.Next(e => e["type"]?.GetValue<string>() == "output" && e["text"]!.GetValue<string>().Contains("started"));
+        h.Command("pause");
+        var paused = h.Type("stopped");
+        Assert.Equal("MainThread", paused["thread"]!.GetValue<string>());
+        Assert.Equal("busy", paused["threads"]![0]!["name"]!.GetValue<string>());
+        h.Command("stop");
+        h.Type("exited");
+    }
+
+    // ------------------------------------------------------------ item 220: members, function and data breakpoints
+
+    const string Shop =
+        "import json\n" +                                        // 1
+        "class Order:\n" +                                       // 2
+        "    def __init__(self):\n" +                            // 3
+        "        self.total = 10\n" +                            // 4
+        "        self.items = ['a']\n" +                         // 5
+        "    def add(self, item, price):\n" +                    // 6
+        "        self.items.append(item)\n" +                    // 7
+        "        self.total += price\n" +                        // 8
+        "        return self.total\n" +                          // 9
+        "o = Order()\n" +                                        // 10
+        "prices = {'a': 1, 'b': 2}\n" +                          // 11
+        "pair = (1, 2)\n" +                                      // 12
+        "x = 0\n" +                                              // 13
+        "o.add('b', 5)\n" +                                      // 14
+        "o.add('c', 7)\n" +                                      // 15
+        "print('result', o.total, o.items, prices, json.dumps(prices))\n";  // 16
+
+    static int RefOf(Harness h, string expression) => h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = expression, ["evalOnly"] = true })["ref"]!.GetValue<int>();
+
+    [Fact]
+    public void MembersOfObjectsDictsAndListsCanBeChanged()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("shop.py", Shop);
+        h.Session.StartWithBreakpoints(h.Root, "shop.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray> { ["shop.py"] = new JsonArray(13) });
+        h.Type("stopped");
+        int order = RefOf(h, "o");
+        h.Request("variables", new JsonObject { ["ref"] = order });
+        var total = h.Request("setVariable", new JsonObject { ["ref"] = order, ["frameId"] = 0, ["name"] = "total", ["expression"] = "100 + len(prices)" });
+        Assert.Equal("102", total["value"]!.GetValue<string>());
+        int dict = RefOf(h, "prices");
+        h.Request("variables", new JsonObject { ["ref"] = dict });
+        Assert.Equal("'changed'", h.Request("setVariable", new JsonObject { ["ref"] = dict, ["frameId"] = 0, ["name"] = "'b'", ["expression"] = "'changed'" })["value"]!.GetValue<string>());
+        int items = h.Request("variables", new JsonObject { ["ref"] = order })["items"]!.AsArray().Single(i => i!["name"]!.GetValue<string>() == "items")!["ref"]!.GetValue<int>();
+        h.Request("variables", new JsonObject { ["ref"] = items });
+        h.Request("setVariable", new JsonObject { ["ref"] = items, ["frameId"] = 0, ["name"] = "0", ["expression"] = "'first'" });
+        int pair = RefOf(h, "pair");
+        h.Request("variables", new JsonObject { ["ref"] = pair });
+        var refused = h.Request("setVariable", new JsonObject { ["ref"] = pair, ["frameId"] = 0, ["name"] = "0", ["expression"] = "5" });
+        Assert.Contains("tuple cannot be changed", refused["error"]!.GetValue<string>());
+        h.Command("continue");
+        h.Type("exited");
+        Assert.Contains("result 114 ['first', 'b', 'c'] {'a': 1, 'b': 'changed'}", h.AllOutput());
+    }
+
+    [Fact]
+    public void FunctionBreakpointsStopAtTheFirstLineOfACallByName()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("shop.py", Shop);
+        h.Session.Handle(new JsonObject { ["type"] = "setFunctionBreaks", ["names"] = new JsonArray("Order.add", "json.dumps") });
+        h.Session.StartWithBreakpoints(h.Root, "shop.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray>());
+        var first = h.Type("stopped");
+        Assert.Equal("add", first["frames"]![0]!["name"]!.GetValue<string>());
+        Assert.Equal(7, Line(first));
+        Assert.Equal("'b'", EvalInt(h, "item"));
+        h.Command("continue");
+        Assert.Equal("'c'", (h.Type("stopped") is var second && Line(second) == 7 ? EvalInt(h, "item") : "wrong line"));
+        h.Command("continue");
+        var library = h.Type("stopped");   // json.dumps is library code: named, it stops there too
+        Assert.Equal("dumps", library["frames"]![0]!["name"]!.GetValue<string>());
+        Assert.True(library["frames"]![0]!["file"]!.GetValue<string>().EndsWith("__init__.py"), "json's own file");
+        h.Command("continue");
+        h.Type("exited");
+    }
+
+    [Fact]
+    public void DataBreakpointsStopAfterTheLineThatChangesTheValue()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("shop.py", Shop);
+        h.Session.StartWithBreakpoints(h.Root, "shop.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray> { ["shop.py"] = new JsonArray(13) });
+        h.Type("stopped");
+        var set = h.Request("setDataBreak", new JsonObject { ["frameId"] = 0, ["expression"] = "o.total" });
+        Assert.Equal("10", set["value"]!.GetValue<string>());
+        Assert.True(h.Request("setDataBreak", new JsonObject { ["frameId"] = 0, ["expression"] = "x + 1" })["error"] != null, "an expression that is not a name, attribute or item is refused");
+        h.Command("continue");
+        var changed = h.Type("stopped");
+        Assert.Equal("data", changed["reason"]!.GetValue<string>());
+        Assert.Equal("o.total changed: 10 -> 15", changed["message"]!.GetValue<string>());
+        Assert.Equal(9, Line(changed));   // the line after `self.total += price`, in add()
+        h.Request("setDataBreak", new JsonObject { ["frameId"] = 0, ["expression"] = "self.items" });   // a list changed in place
+        h.Command("continue");
+        var again = h.Type("stopped");
+        Assert.Equal("self.items changed: ['a', 'b'] -> ['a', 'b', 'c']", again["message"]!.GetValue<string>());
+        Assert.Equal(8, Line(again));
+        h.Session.Handle(new JsonObject { ["type"] = "clearDataBreak", ["key"] = set["key"]!.GetValue<int>() });
+        h.Command("continue");
+        h.Type("exited");   // o.total changed again (22), but its data breakpoint was removed
+    }
+
+    [Fact]
+    public void ADataBreakpointOnALocalEndsWithItsCall()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("loc.py", "def f():\n    n = 1\n    n = 2\n    return n\nf()\nf()\nprint('done')\n");
+        h.Session.StartWithBreakpoints(h.Root, "loc.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray> { ["loc.py"] = new JsonArray(3) });
+        h.Type("stopped");
+        h.Request("setDataBreak", new JsonObject { ["frameId"] = 0, ["expression"] = "n" });
+        h.Command("continue");
+        var changed = h.Type("stopped");
+        Assert.Equal("n changed: 1 -> 2", changed["message"]!.GetValue<string>());
+        h.Command("continue");
+        Assert.Equal("n", h.Type("dataBreakEnded")["expression"]!.GetValue<string>());
+        var bp = h.Type("stopped");   // the second call stops at the breakpoint only, not for its own n
+        Assert.Equal("breakpoint", bp["reason"]!.GetValue<string>());
+        h.Command("continue");
+        h.Type("exited");
+    }
+
+    [Fact]
+    public void TheDebuggedProgramIsItsOwnMainModule()
+    {
+        // found with python -m calendar under the debugger: enum.global_enum puts the members into sys.modules["__main__"]
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("glob.py", "import sys, enum\n\n@enum.global_enum\nclass Month(enum.IntEnum):\n    JANUARY = 1\n\nmarker = 5\nprint('ok', JANUARY.name, sys.modules['__main__'].marker, __name__)\n");
+        h.Session.StartWithBreakpoints(h.Root, "glob.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray>());
+        Assert.Equal(0, h.Type("exited")["code"]!.GetValue<int>());
+        Assert.Contains("ok JANUARY 5 __main__", h.AllOutput());
     }
 
     [Fact]

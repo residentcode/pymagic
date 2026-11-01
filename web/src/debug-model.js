@@ -148,3 +148,21 @@ export function historyStep(history, index, by) {
 export function stackText(frames) {
     return frames.map((f) => `${f.name}, ${f.file}:${f.line}`).join('\n');
 }
+/** The frames of a stop as one list for the Frames pane: the stopped thread's, then each other thread's (with its name
+ * as `thread`), in the order of their ids, so that a frame's index is the id the helper knows it by. */
+export function framesOfStop(stopped) {
+    const own = (stopped.frames ?? []).map((f) => ({ ...f, thread: null }));
+    const others = (stopped.threads ?? []).flatMap((t) => t.frames.map((f) => ({ ...f, thread: t.name })));
+    return [...own, ...others].sort((a, b) => a.id - b.id);
+}
+/** The heading rows of the Frames pane: before the first frame of each thread, when other threads are shown. */
+export function threadHeadings(frames, stoppedThread) {
+    if (!frames.some((f) => f.thread))
+        return new Map();
+    const headings = new Map();
+    frames.forEach((f, i) => {
+        if (i === 0 || frames[i - 1].thread !== f.thread)
+            headings.set(i, f.thread === null ? `${stoppedThread ?? 'MainThread'} (stopped)` : f.thread);
+    });
+    return headings;
+}

@@ -16,7 +16,7 @@ public sealed class RunSession : IDisposable
 {
     static readonly HashSet<string> DebugCommands = new()
     {
-        "setBreakpoints", "setExceptionBreak", "mute", "continue", "next", "stepIn", "stepInto", "stepOut", "runTo", "jump", "scopes", "variables",
+        "setBreakpoints", "setExceptionBreak", "setFunctionBreaks", "setDataBreak", "clearDataBreak", "mute", "pause", "continue", "next", "stepIn", "stepInto", "stepOut", "runTo", "jump", "scopes", "variables",
         "values", "table", "evaluate", "setVariable", "setName", "reprOf", "typeSource", "setLoadPolicy",
         "consoleExec", "consoleRunFile", "consoleVars", "consoleComplete",
     };
@@ -404,8 +404,14 @@ public sealed class RunSession : IDisposable
                 var msg = JsonNode.Parse(text);
                 if (msg == null) continue;
                 // the debugger names files as its target does (/mnt/c/proj/a.py in WSL): the editor knows them as paths of this machine
-                if (!Target.IsLocal && msg["frames"] is JsonArray frames)
-                    foreach (var f in frames) if (f is JsonObject fo && fo["file"]?.GetValue<string>() is { } file) fo["file"] = Target.ToHost(file);
+                if (!Target.IsLocal)
+                {
+                    var all = new List<JsonNode?>();
+                    if (msg["frames"] is JsonArray frames) all.AddRange(frames);
+                    if (msg["threads"] is JsonArray threads)
+                        foreach (var t in threads) if (t?["frames"] is JsonArray tf) all.AddRange(tf);
+                    foreach (var f in all) if (f is JsonObject fo && fo["file"]?.GetValue<string>() is { } file) fo["file"] = Target.ToHost(file);
+                }
                 _emit(msg);
             }
             // the helper hung up: close our end now (a tunnel through ssh keeps the session alive until both ends are closed)

@@ -146,6 +146,7 @@
       <button id="b-push" class="iconbtn" title="Push this branch to its upstream (Git)"><svg class="i"><use href="#i-up"/></svg></button>
       </span>
       <button id="b-tests" class="optional" title="Test explorer (Ctrl+Shift+F10 runs the test at the cursor)"><svg class="i"><use href="#i-tests"/></svg><span class="lbl lbl-opt">Tests</span></button>
+      <button id="b-pause" title="Pause the program where it is" disabled>Pause</button>
       <button id="b-over" title="Step over (F10)" disabled>Step over</button>
       <button id="b-into" title="Step into (F11)" disabled>Step into</button>
       <button id="b-out" title="Step out (Shift+F11)" disabled>Step out</button>
@@ -196,6 +197,7 @@
       <div id="debug-tab" class="tab">
         <div class="col" id="frames-col"><h2>Frames <button id="frames-copy" class="mini" title="Copy the call stack">Copy</button></h2><label id="exc-label" title="Stop at every exception raised in your code, also the ones that are caught"><input type="checkbox" id="exc-raised"> Break on raised exceptions</label>
           <input id="exc-classes" placeholder="Only these, e.g. ValueError, KeyError" title="Break on raised exceptions only for these classes and their subclasses (empty: every exception)" autocomplete="off" spellcheck="false">
+          <input id="fn-breaks" placeholder="Break on functions, e.g. json.dumps, Order.total" title="Function breakpoints: a call of a function of one of these names stops at its first line, library functions too (a name, Class.method, or module.function)" autocomplete="off" spellcheck="false">
           <label id="mute-label" title="Breakpoints neither stop nor log while muted"><input type="checkbox" id="bp-mute"> Mute breakpoints</label>
           <label id="policy-label" title="On demand: the values of objects are computed only when clicked (for objects whose repr is slow)">Values <select id="load-policy"><option value="all">load all</option><option value="onDemand">on demand</option></select></label><div class="body" id="frames"></div></div>
         <div class="col" id="vars-col"><h2>Variables</h2><div class="body" id="vars"></div></div>

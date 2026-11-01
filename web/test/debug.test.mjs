@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/debug-model.js', import.meta.url), 'utf8');
 const { codeOf, namesOf, inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem,
-    declarationLine, historyStep } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+    declarationLine, historyStep, framesOfStop, threadHeadings } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 test('codeOf: comments and the text of strings are left out', () => {
     assert.equal(codeOf('x = "a # b"  # note'), 'x = "     "  ');
@@ -100,4 +100,20 @@ test('moveItem: one place up or down, stopping at the ends', () => {
     assert.deepEqual(moveItem(['a', 'b', 'c'], 2, -1), ['a', 'c', 'b']);
     assert.deepEqual(moveItem(['a', 'b', 'c'], 0, -1), ['a', 'b', 'c']);
     assert.deepEqual(moveItem(['a', 'b', 'c'], 0, 1), ['b', 'a', 'c']);
+});
+
+test("framesOfStop: the stopped thread's frames, then the other threads', each frame at the index of its id", () => {
+    const frames = framesOfStop({
+        frames: [{ id: 0, name: 'f', line: 3 }, { id: 1, name: '<module>', line: 9 }],
+        threads: [{ name: 'spinner', frames: [{ id: 2, name: 'worker', line: 4 }] }, { name: 'w2', frames: [{ id: 3, name: 'g', line: 1 }, { id: 4, name: 'run', line: 2 }] }],
+    });
+    assert.deepEqual(frames.map((f) => f.id), [0, 1, 2, 3, 4]);
+    assert.deepEqual(frames.map((f) => f.thread), [null, null, 'spinner', 'w2', 'w2']);
+    assert.deepEqual(framesOfStop({ frames: [{ id: 0, name: 'f', line: 1 }] }).map((f) => f.thread), [null]);
+});
+
+test('threadHeadings: one heading before each thread, none when only the stopped thread is shown', () => {
+    const frames = framesOfStop({ frames: [{ id: 0 }, { id: 1 }], threads: [{ name: 'spinner', frames: [{ id: 2 }, { id: 3 }] }] });
+    assert.deepEqual([...threadHeadings(frames, 'MainThread')], [[0, 'MainThread (stopped)'], [2, 'spinner']]);
+    assert.equal(threadHeadings(framesOfStop({ frames: [{ id: 0 }] }), 'MainThread').size, 0);
 });

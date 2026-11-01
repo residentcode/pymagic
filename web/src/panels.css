@@ -15,6 +15,7 @@
 .bp-glyph.bp-cond { border-radius: 2px; transform: rotate(45deg) scale(.85); } .bp-glyph.bp-log { background: var(--amber); border-radius: 2px; }
 #frames div { padding: 1px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #frames div:hover { background: var(--hover); } #frames div.sel { background: var(--accent); color: #fff; }
+#frames div.thread { cursor: default; color: var(--dim); font-size: 11px; padding-top: 4px; text-transform: none; } #frames div.thread:hover { background: none; }
 #frames .loc { color: var(--dim); } #frames .sel .loc { color: var(--on-accent-dim); }
 #vars ul { list-style: none; margin: 0; padding-left: 14px; } #vars > ul { padding-left: 4px; }
 #vars li > div { padding: 0 4px; white-space: nowrap; }
@@ -295,7 +296,7 @@
 .debug-inline::after { color: var(--violet); font-style: italic; opacity: .85; white-space: pre; }
 .bp-muted .bp-glyph { opacity: .35; }
 #mute-label { display: block; padding: 2px 10px; color: var(--dim); font-size: 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-#exc-classes { display: block; width: calc(100% - 20px); margin: 2px 10px 4px; font-size: 12px; }
+#exc-classes, #fn-breaks { display: block; width: calc(100% - 20px); margin: 2px 10px 4px; font-size: 12px; }
 #frames-col h2 .mini { float: right; font-size: 11px; padding: 0 6px; }
 /* the debugger's value dialog, Data View, Evaluate windows, watches and breakpoints that wait for another */
 .value-box { max-width: min(900px, 90vw); }
@@ -312,6 +313,7 @@
 .eval-out { margin: 6px 8px 8px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
 .eval-out.e { color: var(--red); }
 .w.paused .wx { opacity: .55; text-decoration: line-through; }
+#watches .databreak .wx { color: var(--red); } #watches .w .caret { cursor: pointer; } #watches .wtree > ul { margin: 0 0 0 14px; }
 #watches-col.drop { outline: 1px dashed var(--violet); outline-offset: -3px; }
 .bp-glyph.bp-after { box-shadow: 0 0 0 2px var(--amber) inset; }
 /* values loaded on demand, JSON as a tree, the console's printed output and its box */

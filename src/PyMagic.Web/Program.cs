@@ -1149,6 +1149,8 @@ app.Map("/run", async (HttpContext ctx) =>
                     session.Handle(new JsonObject { ["type"] = "mute", ["on"] = true });
                 if (msg["loadPolicy"]?.GetValue<string>() is "onDemand")
                     session.Handle(new JsonObject { ["type"] = "setLoadPolicy", ["policy"] = "onDemand" });
+                if (msg["functionBreaks"] is JsonArray { Count: > 0 } functions)
+                    session.Handle(new JsonObject { ["type"] = "setFunctionBreaks", ["names"] = functions.DeepClone() });
             }
             else if (msg["type"]?.GetValue<string>() == "console")
             {
