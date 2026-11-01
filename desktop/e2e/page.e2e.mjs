@@ -42,6 +42,7 @@ const FILES = {
     'docs/guide.md': '# Guide\n\n## Setup\n',
     'shop_lib.py': 'def total(prices):\n    return sum(prices)\n',
     'inj.py': 'import re\n\n# language=json\nCONFIG = \'{"a": 1}\'\nQUERY = "SELECT id, name FROM item WHERE price > 1"\nHALF = "SELECT  FROM item"\nPATTERN = re.compile(r"^(\\d+)-[a-z]{2}$")\n',
+    'typo.py': '# Recieve the mesage here\n\n\ndef fetch_mesage():\n    return 1\n',
     'hist.py': 'def f():\n    return 0\n',
     'intent.py': "name = 'x'\nprint('Hello ' + name + '!')\nvalue = 255\n",
     'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\nN = re.compile(f"{PATTERN.pattern}[cc]")\n',
@@ -154,6 +155,36 @@ describe('the editor and the language server', () => {
         await page.evaluate(`window.pymagic.editor.getAction('editor.action.formatDocument').run()`);
         const text = await page.waitFor(`(() => { const t = window.pymagic.editor.getValue(); return t.includes("name = 'pen'") ? t : null; })()`, 15000, 'the formatted text');
         assert.equal(text, "url = '/shop/about/'\nname = 'pen'\nsaid = \"it's\"\n");
+    });
+});
+
+describe('spelling', () => {
+    const typos = () => page.evaluate(`(() => { const m = window.pymagic.editor.getModel(); return window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.source === 'Spelling').map((x) => x.startLineNumber + ':' + x.message); })()`);
+    const fix = async (line, column, choose) => {
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: ${line}, column: ${column} }); ed.focus(); ed.getAction('editor.action.quickFix').run(); })()`);
+        await page.waitFor(`[...document.querySelectorAll('.action-widget .monaco-list-row')].some((r) => r.textContent.includes(${JSON.stringify(choose)}))`, 15000, 'the menu with ' + choose);
+        const at = await page.evaluate(`(() => { const r = [...document.querySelectorAll('.action-widget .monaco-list-row')].find((x) => x.textContent.includes(${JSON.stringify(choose)})); const b = r.getBoundingClientRect(); return { x: b.left + 20, y: b.top + b.height / 2 }; })()`);
+        await page.click(at.x, at.y);
+        await sleep(600);
+    };
+
+    test('typos in a comment and in a name are marked by Windows\' spell checker', async () => {
+        await open('typo.py');
+        const found = await page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); const f = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.source === 'Spelling').map((x) => x.startLineNumber + ':' + x.message); return f.length >= 3 ? f : null; })()`, 30000, 'the typos');
+        assert.deepEqual(found.slice().sort(), ["1:Typo: In word 'Recieve'", "1:Typo: In word 'mesage'", "4:Typo: In word 'mesage'"].sort());
+    });
+
+    test('Alt+Enter on a typo offers the right word, which replaces it', async () => {
+        await open('typo.py');
+        await fix(1, 4, "replace 'Recieve' with 'Receive'");
+        assert.equal(await page.evaluate(`window.pymagic.editor.getModel().getLineContent(1)`), '# Receive the mesage here');
+    });
+
+    test('a word can be saved to the project\'s dictionary, and is no typo anywhere after that', async () => {
+        await open('typo.py');
+        await fix(1, 15, "Save 'mesage' to the project's dictionary");
+        await page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); return !window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).some((x) => x.source === 'Spelling'); })()`, 20000, 'the typos to go');
+        assert.match(readFileSync(join(app.root, '.pymagic', 'dictionary.txt'), 'utf8'), /^mesage$/m);
     });
 });
 

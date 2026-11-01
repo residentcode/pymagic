@@ -55,6 +55,7 @@ const PAGES = [
         { key: 'codeVision', label: 'Usages and inheritors above functions and classes', type: 'bool', hint: 'A click lists them.' },
         { key: 'codeVisionAuthor', label: 'Who wrote most of each function and class', type: 'bool', hint: 'From Git blame; only in a Git repository.' },
         { key: 'hintParams', label: 'Parameter names before arguments', type: 'bool', hint: 'Also the names of @pytest.mark.parametrize values and of positional class patterns in match.' },
+        { key: 'spelling', label: 'Spell check', type: 'bool', hint: "Typos in comments, strings and names of Python files and in Markdown and text, checked by the spell checker of Windows; Alt+Enter on one suggests the word or saves it to the project's dictionary." },
         { key: 'hintTypes', label: 'Inferred types', type: 'bool', hint: 'The return type of a function without one, the type of a variable when its value does not show it, and each call of a method chain.' },
     ]],
     ['tabs', 'Editor tabs', [

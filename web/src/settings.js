@@ -33,6 +33,7 @@ export const DEFAULTS = {
     hintParams: true,         // the names of parameters before arguments
     hintTypes: true,          // inferred return and variable types, the types along a method chain
     callParens: true,         // completing a function or method writes its parentheses too, `area()` or `area(|)`
+    spelling: true,           // typos in comments, strings, names and Markdown, marked as hints (Windows' own spell checker)
     quotes: 'single',         // single | double | preserve: the quotes the formatter gives strings when the project's pyproject.toml, ruff.toml or .editorconfig does not say
 };
 

@@ -148,6 +148,25 @@ app.MapPost("/api/scratches/rename", async (HttpRequest req) =>
     catch (UnauthorizedAccessException) { return Results.BadRequest("That is not the name of a scratch file."); }
 });
 
+// spelling: Windows' own spell checker for the words of a file, and the project's dictionary (.pymagic/dictionary.txt)
+string? spellDefault = null;
+string SpellLanguage(string? lang) => string.IsNullOrWhiteSpace(lang) ? (spellDefault ??= Spelling.DefaultLanguage()) : lang;
+app.MapGet("/api/spell", (string? lang) => Results.Json(new { available = Spelling.Available(SpellLanguage(lang)), language = SpellLanguage(lang), words = Spelling.ProjectWords(root).OrderBy(w => w).ToList() }));
+app.MapPost("/api/spell", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    var words = (body?["words"] as JsonArray)?.Select(w => w?.GetValue<string>() ?? "").Take(3000).ToList() ?? new List<string>();
+    string language = SpellLanguage(body?["lang"]?.GetValue<string>());
+    return Results.Json(new { language, bad = Spelling.Misspelled(root, language, words) });
+});
+app.MapGet("/api/spell/suggest", (string word, string? lang) => Results.Json(Spelling.Suggest(SpellLanguage(lang), word)));
+app.MapPost("/api/spell/dictionary", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    try { Spelling.AddWord(root, body?["word"]?.GetValue<string>() ?? ""); return Results.NoContent(); }
+    catch (ArgumentException) { return Results.BadRequest("That is not a word."); }
+});
+app.MapDelete("/api/spell/dictionary", (string word) => Spelling.RemoveWord(root, word) ? Results.NoContent() : Results.NotFound());
 app.MapGet("/api/info", () => new
 {
     root,
