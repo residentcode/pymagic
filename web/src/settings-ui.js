@@ -55,6 +55,8 @@ const PAGES = [
         { key: 'codeVision', label: 'Usages and inheritors above functions and classes', type: 'bool', hint: 'A click lists them.' },
         { key: 'codeVisionAuthor', label: 'Who wrote most of each function and class', type: 'bool', hint: 'From Git blame; only in a Git repository.' },
         { key: 'hintParams', label: 'Parameter names before arguments', type: 'bool', hint: 'Also the names of @pytest.mark.parametrize values and of positional class patterns in match.' },
+        { key: 'grammar', label: 'Grammar check', type: 'bool', hint: "The sentences of comments, docstrings, Markdown and the commit message, checked by LanguageTool: a Java program that runs on this computer only. Turning it on offers to download it once (about 250 MB) and needs Java." },
+        { key: 'grammarLanguage', label: 'Grammar language', type: 'choice', options: [['en-US', 'English (US)'], ['en-GB', 'English (UK)'], ['de-DE', 'German'], ['fr', 'French'], ['es', 'Spanish'], ['it', 'Italian'], ['pt-PT', 'Portuguese'], ['nl', 'Dutch']], hint: 'The language of the sentences.' },
         { key: 'spelling', label: 'Spell check', type: 'bool', hint: "Typos in comments, strings and names of Python files and in Markdown and text, checked by the spell checker of Windows; Alt+Enter on one suggests the word or saves it to the project's dictionary." },
         { key: 'hintTypes', label: 'Inferred types', type: 'bool', hint: 'The return type of a function without one, the type of a variable when its value does not show it, and each call of a method chain.' },
     ]],

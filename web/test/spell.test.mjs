@@ -70,3 +70,15 @@ test('which files, and replacements written like the word', () => {
     assert.equal(likeOriginal('RECIEVE', 'receive'), 'RECEIVE');
     assert.equal(likeOriginal('recieve', 'receive'), 'receive');
 });
+
+test('prose for the grammar check: comment blocks, sentences in strings, paragraphs', async () => {
+    const { proseSegments } = await import('../src/spell-model.js');
+    const text = ['# This is the first line', '# of one comment block.', 'x = 1  # noqa: E501 skip this one entirely', '', 'def f():', '    """Does a thing for you.', '', '    Args:', '        a: nothing here', '    """', '    key = "short"', '    return "A sentence with enough words in it"'].join('\n');
+    const segs = proseSegments(text, 'python');
+    assert.deepEqual(segs.map((s) => s.text), ['This is the first line\nof one comment block.', 'Does a thing for you.', 'A sentence with enough words in it']);
+    // every character of a piece knows its place in the file
+    for (const s of segs) for (let i = 0; i < s.text.length; i++) if (s.text[i] !== '\n') assert.equal(text[s.map[i]], s.text[i]);
+    const md = proseSegments('# Title here now\n\nA paragraph that goes on\nover two lines with `code`.\n\n```\nnot prose at all here\n```\n\n- a list item with words\n', 'text');
+    assert.deepEqual(md.map((s) => s.text), ['A paragraph that goes on\nover two lines with xxxxxx.', 'a list item with words']);
+    for (const s of md) assert.ok(s.map.length === s.text.length);
+});

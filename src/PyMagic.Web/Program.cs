@@ -315,6 +315,35 @@ app.MapPost("/api/deploy/sync", async (HttpRequest req) =>
 });
 app.MapGet("/api/deploy/log", () => { lock (deployLog) return Results.Json(deployLog.AsEnumerable().Reverse().ToList()); });
 
+// grammar: LanguageTool, downloaded once and run as a small server on this machine (see Grammar)
+object GrammarStatus(string? lang) => new
+{
+    installed = Grammar.InstalledFolder() != null, java = Grammar.JavaVersion(), running = Grammar.Running, folder = Grammar.Folder, url = Grammar.DownloadUrl,
+    installing = new { phase = Grammar.Installing.Phase, bytes = Grammar.Installing.Bytes, total = Grammar.Installing.Total, error = Grammar.Installing.Error },
+    ignored = Grammar.IgnoredRules(root),
+};
+app.MapGet("/api/grammar", (string? lang) => Results.Json(GrammarStatus(lang)));
+app.MapPost("/api/grammar/install", () => { Grammar.StartInstall(); return Results.Json(GrammarStatus(null)); });
+// {text, lang?}: the problems of one piece of prose, without the rules this project switched off
+app.MapPost("/api/grammar/check", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    string text = body?["text"]?.GetValue<string>() ?? "";
+    string lang = body?["lang"]?.GetValue<string>() is { Length: > 0 } l && l.All(c => char.IsLetter(c) || c == '-') ? l : "en-US";
+    if (text.Length > 20000) return Results.BadRequest("too long");
+    try { return Results.Json(new { matches = await Grammar.Check(text, lang, Grammar.IgnoredRules(root)) }); }
+    catch (ServiceException e) { return Results.Json(new { error = e.Message }); }
+});
+app.MapPost("/api/grammar/ignore", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    try { Grammar.IgnoreRule(root, body?["rule"]?.GetValue<string>() ?? ""); return Results.NoContent(); }
+    catch (ArgumentException) { return Results.BadRequest("not a rule"); }
+});
+app.MapDelete("/api/grammar/ignore", (string rule) => Grammar.UnignoreRule(root, rule) ? Results.NoContent() : Results.NotFound());
+app.MapPost("/api/grammar/stop", () => { Grammar.Stop(); return Results.NoContent(); });
+app.Lifetime.ApplicationStopping.Register(Grammar.Stop);
+
 app.MapGet("/api/info", () => new
 {
     root,

@@ -47,6 +47,7 @@ const FILES = {
     'demo.rst': 'Title\n=====\n\nA *word*.\n',
     'macro.py': 'x = 1\n',
     'which.py': 'import sys\nprint("exe", sys.prefix)\n',
+    'gram.md': 'This are a test of the grammar checker.\n\nI has a apple at home today.\n',
     'hist.py': 'def f():\n    return 0\n',
     'intent.py': "name = 'x'\nprint('Hello ' + name + '!')\nvalue = 255\n",
     'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\nN = re.compile(f"{PATTERN.pattern}[cc]")\n',
@@ -406,6 +407,43 @@ describe('Markdown and reStructuredText', () => {
         const shown = await preview(`b.textContent`);
         assert.ok(/pip install docutils/.test(shown) || /Title/.test(shown), shown);
         if (/pip install docutils/.test(shown)) assert.ok(shown.includes('A *word*.'), 'the text is shown as it is');
+    });
+});
+
+describe('grammar', { skip: !process.env.PYMAGIC_LANGUAGETOOL && 'LanguageTool is not installed (PYMAGIC_LANGUAGETOOL)' }, () => {
+    const marks = () => page.evaluate(`(() => { const m = window.pymagic.editor.getModel(); return window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.source === 'Grammar').map((x) => x.startLineNumber + ':' + x.message); })()`);
+
+    test('sentences of a Markdown file are checked by LanguageTool once the setting is on', async () => {
+        await open('gram.md');
+        await page.evaluate(`window.pymagic.changeSetting({ grammar: true })`);
+        const found = await page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); const f = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.source === 'Grammar'); return f.length >= 2 ? f.map((x) => x.startLineNumber + ':' + x.code) : null; })()`, 90000, 'LanguageTool to start and answer');
+        assert.ok(found.some((f) => f.startsWith('1:')) && found.some((f) => f.startsWith('3:')), found.join(','));
+    });
+
+    test('Alt+Enter offers the suggestion, which replaces the words; a rule can be ignored for the project', async () => {
+        await open('gram.md');
+        const before = await marks();
+        assert.ok(before.length >= 2, before.join('|'));
+        const menu = async (line, column, choose) => {
+            await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: ${line}, column: ${column} }); ed.focus(); ed.getAction('editor.action.quickFix').run(); })()`);
+            await page.waitFor(`[...document.querySelectorAll('.action-widget .monaco-list-row')].some((r) => r.textContent.includes(${JSON.stringify(choose)}))`, 15000, 'the menu with ' + choose).catch(async (e) => { console.log('ROWS', JSON.stringify(await page.evaluate(`[...document.querySelectorAll('.action-widget .monaco-list-row')].map((r) => r.textContent)`)), 'at', '+line+', '+column+'); throw e; });
+            const at = await page.evaluate(`(() => { const r = [...document.querySelectorAll('.action-widget .monaco-list-row')].find((x) => x.textContent.includes(${JSON.stringify(choose)})); const b = r.getBoundingClientRect(); return { x: b.left + 20, y: b.top + b.height / 2 }; })()`);
+            await page.click(at.x, at.y);
+            await sleep(700);
+        };
+        await menu(1, 7, "Grammar: replace with 'is'");
+        assert.match(await page.evaluate(`window.pymagic.editor.getModel().getLineContent(1)`), /^This is a test/);
+        // the rule of the other sentence is switched off for the project
+        const rule = (await marks()).find((m) => m.startsWith('3:'));
+        assert.ok(rule);
+        const target = await page.evaluate(`(() => { const m = window.pymagic.editor.getModel(); const x = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).find((x) => x.source === 'Grammar' && x.startLineNumber === 3); return { column: x.startColumn + 1, code: x.code }; })()`);
+        const column = target.column;
+        await menu(3, column, 'Ignore the rule');
+        for (let i = 0; i < 30 && !existsSync(join(app.root, '.pymagic', 'grammar-ignore.txt')); i++) await sleep(300);
+        assert.ok(readFileSync(join(app.root, '.pymagic', 'grammar-ignore.txt'), 'utf8').trim().length > 3);
+        await page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); return !window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).some((x) => x.source === 'Grammar' && x.code === ${JSON.stringify(target.code)}); })()`, 30000, 'that rule to go');
+        assert.ok(readFileSync(join(app.root, '.pymagic', 'grammar-ignore.txt'), 'utf8').includes(target.code));
+        await page.evaluate(`window.pymagic.changeSetting({ grammar: false })`);
     });
 });
 

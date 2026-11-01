@@ -53,6 +53,7 @@ import { setupHistory } from './history';
 import { setupScratches } from './scratches';
 import { setupInjections } from './injection';
 import { setupSpelling } from './spell';
+import { setupGrammar } from './grammar';
 import { setupMarkdownPreview } from './mdpreview';
 import { setupMarkdownTools } from './mdtools';
 import { setupMacros } from './macros';
@@ -62,7 +63,7 @@ import { setupRunAnything } from './runanything';
 import { setupFileActions, fileTypes } from './fileactions';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
-import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings, withoutCallParens, onSettings } from './settings';
+import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings, withoutCallParens, onSettings, change as changeSetting } from './settings';
 import { requote } from './quotes-model';
 // each language service runs in its worker; the rest share the editor's
 self.MonacoEnvironment = {
@@ -974,7 +975,7 @@ async function main() {
     applySettings(monaco, THEMES, editor);
     $('build').textContent = buildLabel();
     notebook = setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, lsp, formatEngine: () => formatOptions().pymagicEngine, rootUri: () => rootUri, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
-    window.pymagic = { editor, monaco, openFile, notebook };
+    window.pymagic = { editor, monaco, openFile, notebook, changeSetting };
     const common = {
         editor,
         modelFor: ensureModel,
@@ -1147,6 +1148,7 @@ async function main() {
     setupServices({ providers: [() => runHooks.services(), () => pyConsole.services(), () => terminal.services()] });
     setupRunAnything({ runConfigs, runHooks, editor });
     setupMacros({ editor, askText: (...a) => explorer.askText(...a) });
+    setupGrammar({ relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     setupSpelling({ relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     // code actions that need the page (not just a text edit) arrive as commands
     monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name) => {

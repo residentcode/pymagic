@@ -119,3 +119,74 @@ export function likeOriginal(original, replacement) {
     if (/^[A-Z]/.test(original)) return replacement[0].toUpperCase() + replacement.slice(1);
     return replacement;
 }
+
+// ------------------------------------------------------------------------------------------------------------------ prose for the grammar check
+
+/** A piece of prose for the grammar check: its text, and `map[i]`, where the i-th character of it is in the source. */
+function segmentOf(parts) {
+    let text = '';
+    const map = [];
+    parts.forEach((p, k) => {
+        if (k > 0) { text += '\n'; map.push(p.at - 1); }
+        text += p.text;
+        for (let i = 0; i < p.text.length; i++) map.push(p.at + i);
+    });
+    return { text, map };
+}
+
+const DIRECTIVE = /^\s*(?:noqa|type:|pylint|ruff|fmt:|language=|lang=|-\*-|!|pragma|isort|mypy|pyright|todo|fixme)/i;
+
+/**
+ * The prose of a file as pieces a grammar checker can read, with where they came from: for Python the comments (a block of lines is one
+ * piece) and the strings and docstrings that are sentences (paragraphs apart), for Markdown and text the paragraphs.
+ */
+export function proseSegments(text, kind) {
+    const out = [];
+    if (kind === 'python') {
+        const { strings, comments } = scanPython(text);
+        const injected = new Set(findInjections(text).map((i) => i.start));
+        let block = [], lastLine = -2;
+        const flush = () => { if (block.length) out.push(segmentOf(block)); block = []; };
+        for (const c of comments) {
+            const line = text.slice(0, c.start).split('\n').length;
+            if (DIRECTIVE.test(c.text) || !/[A-Za-z]{3,}\s+[A-Za-z]{2,}/.test(c.text)) { flush(); lastLine = line; continue; }
+            if (line !== lastLine + 1) flush();
+            const lead = /^\s?/.exec(c.text)[0].length;
+            block.push({ text: c.text.slice(lead), at: c.start + 1 + lead });
+            lastLine = line;
+        }
+        flush();
+        for (const s of strings) {
+            if (s.prefix.includes('b') || s.prefix.includes('f') || injected.has(s.bodyStart)) continue;
+            const body = text.slice(s.bodyStart, s.bodyEnd).replace(/\[nrt'"\]/g, '  ');
+            if (!/\S+\s+\S+\s+\S+\s+\S+/.test(body)) continue;      // a sentence has some words
+            // paragraphs of a docstring are apart
+            let at = 0;
+            for (const para of body.split(/\n\s*\n/)) {
+                const start = body.indexOf(para, at);
+                at = start + para.length;
+                if (!/[A-Za-z]{3,}\s+[A-Za-z]{2,}\s+\S+/.test(para) || /^\s*(Args|Returns|Raises|Parameters|Yields|:param|:return|>>>)/.test(para)) continue;
+                const lines = [];
+                let off = start;
+                for (const l of para.split('\n')) { lines.push({ text: l.trim(), at: s.bodyStart + off + (l.length - l.trimStart().length) }); off += l.length + 1; }
+                out.push(segmentOf(lines.filter((l) => l.text)));
+            }
+        }
+    } else {
+        let fence = false, block = [], offset = 0;
+        const flush = () => { if (block.length) out.push(segmentOf(block)); block = []; };
+        for (const line of text.split('\n')) {
+            if (/^\s*(```|~~~)/.test(line)) { fence = !fence; flush(); }
+            else if (fence || /^( {4}|\t)/.test(line) || /^\s*(#|\||[-*+]\s*$|>|\[)/.test(line) && !/^\s*[-*+>]\s+\S/.test(line)) flush();
+            else if (!line.trim()) flush();
+            else {
+                const clean = line.replace(/`[^`]*`/g, (m) => 'x'.repeat(m.length)).replace(/\]\([^)]*\)/g, (m) => ' '.repeat(m.length)).replace(/https?:\/\/\S+/g, (m) => 'x'.repeat(m.length));
+                const lead = /^\s*(?:[-*+>]\s+|\d+[.)]\s+)?\s*/.exec(clean)[0].length;
+                block.push({ text: clean.slice(lead).trimEnd(), at: offset + lead });
+            }
+            offset += line.length + 1;
+        }
+        flush();
+    }
+    return out.filter((s) => /[A-Za-z]{3,}\s+[A-Za-z]{2,}/.test(s.text));
+}

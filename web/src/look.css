@@ -633,3 +633,7 @@ li.mark-resources .fname, li.mark-resources .folder { color: var(--teal, #6cc4c4
 .dep-sync-row { display: flex; align-items: center; gap: 12px; padding: 4px 14px; } .dep-sync-row select { width: 110px; }
 .dep-sync-row.local-only .dep-state, .dep-sync-row.local-newer .dep-state { color: #98c379; } .dep-sync-row.remote-only .dep-state, .dep-sync-row.remote-newer .dep-state { color: #61afef; }
 .dep-state { min-width: 150px; } .dep-same { margin-left: auto; color: var(--dim); font-size: 12px; }
+
+#git-grammar { font-size: 12px; color: var(--dim); margin-top: 4px; }
+.git-grammar-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; flex-wrap: wrap; }
+.git-grammar-row button { padding: 0 6px; }
