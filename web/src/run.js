@@ -1023,6 +1023,7 @@ export function setupRun(deps) {
         } };
         setButtons();
     }
+    let lastLaunch = null;          // what the program that runs (or ran last) was started with, for the Services window
     async function launch(rel, debug, profile, args, extra = {}) {
         if (run)
             return false;
@@ -1045,6 +1046,7 @@ export function setupRun(deps) {
         openBrowser = !!extra.openBrowser;
         followLogs((extra.logFiles ?? '').split(',').map((s) => s.trim()).filter(Boolean));
         testsRun = !!extra.tests;
+        lastLaunch = { rel, debug, profile, args, extra, started: Date.now(), label: extra.module ? `python -m ${extra.module}` : extra.tests ? 'tests' : (rel ?? 'a program') };
         run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, tests: extra.tests, profileTests: extra.profileTests, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
             exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value, functionBreaks: functionNames(),
             envFiles: extra.envFiles, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots });
@@ -1467,6 +1469,22 @@ export function setupRun(deps) {
     window.addEventListener('pymagic:stopDebugTests', () => { if (run && testsRun) run.send({ type: 'stop' }); });
     return {
         onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null,
+        /** `python -m module args`; false when a run is going. */
+        runModule: (module, args = [], debug = false) => launch(null, debug, false, args, { module }),
+        /** The program that is running, as a service of the Services window: stopped, restarted (started again as it was) or shown. */
+        services: () => (run === null || !lastLaunch ? [] : [{
+            id: 'run', group: 'Run', name: lastLaunch.label, started: lastLaunch.started,
+            state: paused ? 'paused' : debugging ? 'debugging' : profiling ? 'profiling' : 'running',
+            show: () => showTab('output'),
+            stop: () => { if (afterExit) stoppedByUser = true; run?.send({ type: 'stop' }); },
+            restart: async () => {
+                const again = lastLaunch;
+                run?.send({ type: 'stop' });
+                for (let i = 0; i < 50 && run !== null; i++) await new Promise((ok) => setTimeout(ok, 100));
+                // the window that asked stays where it is: the panel does not jump to Output
+                if (run === null) await launch(again.rel, again.debug, again.profile, again.args, { ...again.extra, openPanel: false });
+            },
+        }]),
         attach,
         /** The breakpoint commands of the editor (F9, Shift+F9), for the menus. */
         breakpoints: {

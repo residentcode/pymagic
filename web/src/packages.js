@@ -294,4 +294,5 @@ export function setupPackages() {
         void load(); });
     // another panel asks for packages (the Database panel's driver): installed here, the log in the Packages tab
     window.addEventListener('pymagic:installPackages', (e) => void run('install', e.detail));
+    window.addEventListener('pymagic:uninstallPackages', (e) => void run('uninstall', e.detail));
 }

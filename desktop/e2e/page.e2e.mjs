@@ -161,6 +161,50 @@ describe('the editor and the language server', () => {
     });
 });
 
+describe('Services and Run Anything', () => {
+    const rows = () => page.evaluate(`[...document.querySelectorAll('#services-list .svc-row')].map((r) => r.querySelector('.svc-name').textContent + '|' + r.querySelector('.svc-state').textContent.split(' ')[0])`);
+    const button = (label) => page.evaluate(`[...document.querySelectorAll('#services-list .svc-row button')].find((b) => b.textContent === ${JSON.stringify(label)}).click()`);
+
+    test('a running program is listed, restarted and stopped from the Services window', async () => {
+        await open('loop.py');
+        await page.evaluate(`${$('b-run')}.click()`);
+        await page.waitFor(`${$('output')}.textContent.includes('started')`, 20000, 'the program to start');
+        await page.evaluate(`${$('t-services')}.click()`);
+        await page.waitFor(`[...document.querySelectorAll('#services-list .svc-name')].some((n) => n.textContent === 'loop.py')`, 10000, 'the program in the list');
+        assert.ok((await rows()).includes('loop.py|running'), (await rows()).join(','));
+        assert.equal(await page.evaluate(`document.getElementById('services-count').textContent`), '1');
+        // restarted: the output is made again and the same program runs
+        await page.evaluate(`${$('output')}.textContent = ''`);
+        await button('Restart');
+        await page.waitFor(`${$('output')}.textContent.includes('started')`, 20000, 'the program to start again');
+        await page.waitFor(`[...document.querySelectorAll('#services-list .svc-name')].some((n) => n.textContent === 'loop.py')`, 10000, 'it in the list again');
+        await button('Stop');
+        await page.waitFor(`![...document.querySelectorAll('#services-list .svc-name')].some((n) => n.textContent === 'loop.py')`, 15000, 'the program to leave the list');
+    });
+
+    test('Control twice opens Run Anything, which runs a script and a module', async () => {
+        const tap = async () => {
+            await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17, modifiers: 2 });
+            await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17 });
+        };
+        await open('calc.py');
+        await tap();
+        await tap();
+        await page.waitFor(`document.querySelector('.ra-box input')`, 10000, 'the box');
+        await page.evaluate(`(() => { const i = document.querySelector('.ra-box input'); i.value = 'calc'; i.dispatchEvent(new Event('input')); })()`);
+        await page.waitFor(`[...document.querySelectorAll('.ra-row .ra-label')].some((l) => l.textContent === 'calc.py')`, 10000, 'calc.py suggested');
+        await page.evaluate(`document.querySelector('.ra-box input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
+        await page.waitFor(`${$('output')}.textContent.includes('"total": 6')`, 30000, 'the script run');
+        await page.waitFor(`!${$('b-stop')}.disabled === false`, 20000, 'the run to end');
+        // a module, typed whole
+        await page.evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'A', ctrlKey: true, shiftKey: true, bubbles: true }))`);
+        await page.evaluate(`window.pymagic.editor.getAction('pymagic.runAnything').run()`);
+        await page.waitFor(`document.querySelector('.ra-box input')`, 10000, 'the box again');
+        await page.evaluate(`(() => { const i = document.querySelector('.ra-box input'); i.value = 'python -m calendar 2026 1'; i.dispatchEvent(new Event('input')); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+        await page.waitFor(`${$('output')}.textContent.includes('January 2026')`, 30000, 'the module run');
+    });
+});
+
 describe('macros', () => {
     const press = async (key, { text, code, vk, modifiers = 0 } = {}) => {
         await page.send('Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', key, code, windowsVirtualKeyCode: vk, text, modifiers });

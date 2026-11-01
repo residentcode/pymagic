@@ -200,5 +200,12 @@ export function setupPythonConsole(deps) {
             precondition: 'editorLangId == python', run: () => { const rel = deps.relOf(ed.getModel()); if (rel) void runFile(rel); } });
     }
     attach(editor);
-    return { attach, execute, runFile, show: () => { showTab('pyconsole'); void start(); input.focus(); } };
+    return { attach, execute, runFile,
+        /** The console, when it is started, as a service of the Services window. */
+        services: () => (client === null ? [] : [{
+            id: 'pyconsole', group: 'Consoles', name: 'Python console', state: 'running', show: () => { showTab('pyconsole'); input.focus(); },
+            stop: () => { client?.send({ type: 'stop' }); client?.close(); client = null; ready = null; pending = ''; },
+            restart: () => { $('pyc-restart').click(); },
+        }]),
+        show: () => { showTab('pyconsole'); void start(); input.focus(); } };
 }

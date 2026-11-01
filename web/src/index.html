@@ -186,6 +186,7 @@
         <span class="gsep"></span>
         <button id="t-search" title="Search"><svg class="i"><use href="#i-search"/></svg><span class="lbl">Search</span></button>
         <button id="t-git" title="Git"><svg class="i"><use href="#i-branch"/></svg><span class="lbl">Git</span></button>
+        <button id="t-services" title="Services: what is running, and each one stopped, restarted or shown"><svg class="i"><use href="#i-output"/></svg><span class="lbl">Services</span><span id="services-count" class="badge" hidden></span></button>
         <button id="t-history" title="Local history"><svg class="i"><use href="#i-clock"/></svg><span class="lbl">History</span></button>
         <button id="t-packages" title="Packages"><svg class="i"><use href="#i-cube"/></svg><span class="lbl">Packages</span></button>
         <button id="t-tpreview" title="The live preview of the open template: its page on the running server"><svg class="i"><use href="#i-web"/></svg><span class="lbl">Preview</span></button>
@@ -498,6 +499,17 @@
         <div class="col" id="pyc-side">
           <div class="listbar"><span>Variables</span></div>
           <div class="body" id="pyc-vars"></div>
+        </div>
+      </div>
+      <div id="services-tab" class="tab">
+        <div class="col" id="services-main">
+          <div class="listbar">
+            <span id="services-title">Services</span>
+            <span class="spacer" style="flex:1"></span>
+            <button id="svc-stop-all" title="Stop everything that can be stopped">Stop all</button>
+            <button id="svc-refresh" title="Read what is running again"><svg class="i"><use href="#i-refresh"/></svg></button>
+          </div>
+          <div class="body" id="services-list"></div>
         </div>
       </div>
       <div id="history-tab" class="tab">

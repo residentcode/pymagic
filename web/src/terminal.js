@@ -361,5 +361,13 @@ export function setupTerminal() {
     }).catch(() => { root = ''; });
 
     // a new terminal that starts in a folder of the project (Open In > Terminal of the tree and the tabs)
-    return { openAt: (folder) => { showTab('terminal'); create(undefined, folder); } };
+    return {
+        openAt: (folder) => { showTab('terminal'); create(undefined, folder); },
+        /** The terminals with a shell in them, as services of the Services window. */
+        services: () => groups.flatMap((g) => g.panes.filter((p) => p.alive).map((p) => ({
+            id: `terminal-${p.id ?? g.id}`, group: 'Terminals', name: `${g.name}${g.panes.length > 1 ? ` (${g.panes.indexOf(p) + 1})` : ''} · ${p.shellName ?? 'shell'}`, state: 'running',
+            show: () => { showTab('terminal'); select(g); p.xterm.focus(); },
+            stop: () => closePane(p),
+        }))),
+    };
 }

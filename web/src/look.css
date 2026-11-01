@@ -607,3 +607,18 @@ li.mark-resources .fname, li.mark-resources .folder { color: var(--teal, #6cc4c4
 .macro-row { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
 .macro-info { flex: 1; min-width: 0; } .macro-name { font-weight: 600; } .macro-steps { color: var(--dim); font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .macro-key { min-width: 96px; }
+
+/* Services and Run Anything */
+.svc-group { padding: 8px 14px 3px; color: var(--dim); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.svc-row { display: flex; align-items: center; gap: 10px; padding: 5px 14px; cursor: pointer; }
+.svc-row:hover { background: var(--hover); }
+.svc-dot { width: 9px; height: 9px; border-radius: 50%; background: #98c379; flex: none; }
+.svc-dot.paused { background: #e5c07b; } .svc-dot.debugging, .svc-dot.profiling { background: #61afef; }
+.svc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.svc-state { color: var(--dim); font-size: 12px; }
+.svc-row button.danger { color: var(--bad-strong, #e5534b); }
+.ra-box { width: min(640px, 92vw); } .ra-box input { font-size: 15px; padding: 8px 10px; }
+.ra-list { max-height: 320px; overflow: auto; margin-top: 8px; }
+.ra-row { display: flex; align-items: baseline; gap: 12px; padding: 5px 10px; cursor: pointer; border-radius: 6px; }
+.ra-row.active { background: var(--sel-soft); } .ra-label { font-weight: 600; } .ra-detail { margin-left: auto; color: var(--dim); font-size: 12px; }
+#t-services .badge { margin-left: 4px; background: var(--accent); color: #fff; border-radius: 9px; padding: 0 6px; font-size: 11px; }
