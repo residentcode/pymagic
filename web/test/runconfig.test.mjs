@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { read, startOf, parseEnv, formatEnv, uniqueName, blank, splitShared } from '../src/runconfig-model.js';
+import { read, startOf, parseEnv, formatEnv, uniqueName, blank, splitShared, compoundMembers, KINDS } from '../src/runconfig-model.js';
 
 test('what is stored is read into well-formed configurations, the broken ones left out', () => {
     const { configurations, selected } = read({
@@ -72,4 +72,24 @@ test('a Django server: its settings, a test server with fixtures, all the code d
     const t = startOf({ ...blank('t', 'djangoTests'), target: 'shop.tests.ItemTests', failfast: true });
     assert.deepEqual(t.tests, { ids: ['shop.tests.ItemTests'], framework: 'django', settings: undefined, failfast: true });
     assert.equal(read({ configurations: [{ name: 'x', kind: 'djangoTests', failfast: true, before: 'migrate' }] }).configurations[0].before, 'migrate');
+});
+
+test('a compound names the configurations it starts together; the ones that cannot be started are left out with the reason', () => {
+    const { configurations } = read({ configurations: [
+        { name: 'api', kind: 'fastapi' }, { name: 'worker', script: 'worker.py' }, { name: 'tests', kind: 'djangoTests' },
+        { name: 'other', kind: 'compound', members: 'api' },
+        { name: 'all', kind: 'compound', members: 'api\r\nworker\n\n api \nall\nother\ntests\nghost' },
+    ] });
+    const all = configurations.find((c) => c.name === 'all');
+    assert.ok(KINDS.some(([k]) => k === 'compound'));
+    assert.equal(all.kind, 'compound');
+    const { members, skipped } = compoundMembers(all, (n) => configurations.find((c) => c.name === n) ?? null);
+    assert.deepEqual(members.map((c) => c.name), ['api', 'worker']);   // in the order named, once each
+    assert.deepEqual(skipped.map((k) => k.name), ['all', 'other', 'tests', 'ghost']);
+    assert.match(skipped[0].why, /itself/);
+    assert.match(skipped[1].why, /another compound/);
+    assert.match(skipped[2].why, /Tests panel/);
+    assert.match(skipped[3].why, /no such/);
+    assert.deepEqual(compoundMembers(blank('x', 'compound'), () => null), { members: [], skipped: [] });
+    assert.equal(blank('x', 'compound').members, '');
 });

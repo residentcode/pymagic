@@ -206,6 +206,30 @@ export function setupRunConfigurations({ currentFile }) {
                 flask: [field('Application', text('app', 'app'), 'The module or file of the Flask app (flask --app).'), field('Host', text('host', '127.0.0.1')), field('Port', text('port', '5000')), check('Debug mode', 'reload', 'flask run --debug: the reloader and the debugger page.')],
                 pytest: [field('Target', text('target', 'tests/ or tests/test_a.py::test_x'), 'A folder, a file or one test; empty for all.')],
             }[c.kind] ?? [field('Script', script)];
+            if (c.kind === 'compound') {
+                // the others it starts together: a box for each configuration that can be started beside it
+                const chosenNames = new Set((c.members ?? '').split(/\r?\n/).map((n) => n.trim()).filter(Boolean));
+                const pick = document.createElement('div');
+                pick.className = 'rc-members';
+                const others = draft.filter((o) => o !== c && o.kind !== 'compound' && o.kind !== 'djangoTests');
+                if (!others.length) pick.textContent = 'Add the configurations to start together first.';
+                for (const o of others) {
+                    const label = document.createElement('label');
+                    label.style.display = 'block';
+                    const box = document.createElement('input');
+                    box.type = 'checkbox';
+                    box.checked = chosenNames.has(o.name);
+                    box.onchange = () => {
+                        if (box.checked) chosenNames.add(o.name); else chosenNames.delete(o.name);
+                        c.members = [...chosenNames].join('\n');
+                    };
+                    label.append(box, ' ' + o.name);
+                    pick.append(label);
+                }
+                form.append(field('Name', name), field('Kind', kind), field('Run together', pick, 'Each one runs on its own and has its own row in the Services window, to stop or restart; without the debugger.'),
+                    check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'), check('Open the Run panel when started', 'openPanel'));
+                return;
+            }
             form.append(
                 field('Name', name),
                 field('Kind', kind),
@@ -242,6 +266,7 @@ export function setupRunConfigurations({ currentFile }) {
         ok.onclick = () => {
             const names = draft.map((c) => c.name.trim());
             if (names.some((n) => !n) || new Set(names).size !== names.length) { window.alert('Every configuration needs a name of its own.'); return; }
+            if (draft.some((c) => c.kind === 'compound' && !c.members.split(/\r?\n/).some((n) => n.trim()))) { window.alert('A compound configuration needs at least one configuration to start.'); return; }
             if (draft.some((c) => (c.kind === 'script' || c.kind === 'django') && !c.script)) { window.alert('Every script configuration needs its script.'); return; }
             if (draft.some((c) => c.kind === 'module' && !/^[A-Za-z_][\w]*(\.[A-Za-z_][\w]*)*$/.test(c.module))) { window.alert('A module configuration needs a module name, such as http.server.'); return; }
             list = draft.map((c) => ({ ...c, name: c.name.trim() }));

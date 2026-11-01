@@ -2,7 +2,7 @@
 import { splitArguments } from './django-model.js';
 
 /** The kinds of configuration, as PyCharm's: [kind, label]. */
-export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m)'], ['django', 'Django server'], ['djangoTests', 'Django tests'], ['fastapi', 'FastAPI (uvicorn)'], ['flask', 'Flask server'], ['pytest', 'pytest']];
+export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m)'], ['django', 'Django server'], ['djangoTests', 'Django tests'], ['fastapi', 'FastAPI (uvicorn)'], ['flask', 'Flask server'], ['pytest', 'pytest'], ['compound', 'Compound (several together)']];
 
 /** The settings beside name, script, args, cwd and env, with their defaults (strings and switches). */
 const DEFAULTS = {
@@ -11,6 +11,8 @@ const DEFAULTS = {
     // Django: the settings module, a test server with fixtures, the browser opened once the server is up, debugging only the project's code,
     // log files shown in the console, another configuration run first, and --failfast for the tests
     settings: '', testServer: false, fixtures: '', openBrowser: false, justMyCode: true, logFiles: '', before: '', failfast: false,
+    // Compound: the names of the configurations it starts together, one per line
+    members: '',
 };
 
 /** A configuration: { name, kind, script (a file of the project), module, app, host, port, target, reload, args (as typed), cwd (a folder of the project,
@@ -40,6 +42,26 @@ export function read(stored) {
     }
     const chosen = typeof stored?.selected === 'string' && seen.has(stored.selected) ? stored.selected : null;
     return { configurations: list, selected: chosen };
+}
+
+/** The configurations a compound starts together, one by one in the order named: {members, skipped}. A name that is no configuration, the compound itself, another compound
+ * and the tests (they have their own panel) are skipped, each with the reason. `find(name)` gives a configuration by name. */
+export function compoundMembers(c, find) {
+    const members = [];
+    const skipped = [];
+    const seen = new Set();
+    for (const raw of String(c?.members ?? "").split(/\r?\n/)) {
+        const name = raw.trim();
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        const m = find(name);
+        if (!m) skipped.push({ name, why: 'there is no such configuration' });
+        else if (m.name === c.name) skipped.push({ name, why: 'a compound cannot start itself' });
+        else if (m.kind === 'compound') skipped.push({ name, why: 'a compound cannot start another compound' });
+        else if (m.kind === 'djangoTests') skipped.push({ name, why: 'tests run in the Tests panel' });
+        else members.push(m);
+    }
+    return { members, skipped };
 }
 
 /** What the start message of a run carries for this configuration: a file or a module, its arguments, and the run's settings. */

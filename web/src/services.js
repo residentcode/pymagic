@@ -1,5 +1,6 @@
 // The Services window (a tab of the dock): every program, console and terminal that is running, in one place, each one shown, restarted or stopped.
-// The modules that start things say what runs with a `services()` function: a list of {id, group, name, state, started?, show, stop?, restart?}.
+// The modules that start things say what runs with a `services()` function: a list of {id, group, name, state, started?, detail?, done?, show, stop?, restart?, groupActions?}.
+// `done` is something that has ended but stays listed (a member of a compound) so it can be started again: it is not counted. `groupActions` ({label, title, run}) are buttons of the group's heading.
 import { showTab } from './panel';
 import { toast } from './toast';
 import { elapsed } from './services-model.js';
@@ -15,8 +16,9 @@ export function setupServices({ providers }) {
         const list = $('services-list');
         const found = gather();
         const badge = $('services-count');
-        badge.textContent = found.length ? String(found.length) : '';
-        badge.hidden = !found.length;
+        const counted = found.filter((s) => !s.done).length;
+        badge.textContent = counted ? String(counted) : '';
+        badge.hidden = !counted;
         if (!active()) return;
         list.replaceChildren();
         if (!found.length) {
@@ -33,7 +35,17 @@ export function setupServices({ providers }) {
                 group = s.group;
                 const head = document.createElement('div');
                 head.className = 'svc-group';
-                head.textContent = group;
+                const title = document.createElement('span');
+                title.textContent = group;
+                head.append(title);
+                for (const a of s.groupActions ?? []) {
+                    const b = document.createElement('button');
+                    b.className = 'mini';
+                    b.textContent = a.label;
+                    b.title = a.title;
+                    b.onclick = () => { void Promise.resolve(a.run()).then(() => setTimeout(draw, 250)); };
+                    head.append(b);
+                }
                 list.append(head);
             }
             const row = document.createElement('div');
@@ -47,7 +59,7 @@ export function setupServices({ providers }) {
             name.textContent = s.name;
             const state = document.createElement('span');
             state.className = 'svc-state';
-            state.textContent = s.state + (s.started ? ` · ${elapsed(now - s.started)}` : '');
+            state.textContent = s.state + (s.started ? ` · ${elapsed(now - s.started)}` : '') + (s.detail ? ` · ${s.detail}` : '');
             row.append(dot, name, state);
             const button = (label, title, run, cls) => {
                 const b = document.createElement('button');

@@ -109,6 +109,9 @@ before(async () => {
     writeFileSync(join(root, '.pymagic', 'run-configurations.json'), JSON.stringify({ selected: null, configurations: [
         { name: 'which python', kind: 'script', script: 'which.py', interpreter: altPython },
         { name: 'missing python', kind: 'script', script: 'which.py', interpreter: join(root, 'no', 'such', 'python.exe') },
+        { name: 'loop a', kind: 'script', script: 'loop.py' },
+        { name: 'loop b', kind: 'script', script: 'loop.py' },
+        { name: 'loop pair', kind: 'compound', members: 'loop a\nloop b' },
     ] }));
     app = await launch(root);
     page = app.page;
@@ -869,5 +872,47 @@ describe('an interpreter of its own for a run configuration', () => {
     test('the configuration\'s form offers the interpreters of the project', async () => {
         const options = await page.evaluate(`fetch('/api/interpreters').then((r) => r.json()).then((l) => l.length)`);
         assert.ok(options >= 1);
+    });
+});
+
+// last: this chooses the compound configuration, which stays chosen
+describe('a compound run configuration in the Services window', () => {
+    const rows = () => page.evaluate(`[...document.querySelectorAll('#services-list .svc-row')].map((r) => r.querySelector('.svc-name').textContent + '|' + r.querySelector('.svc-state').textContent.split(' ')[0])`);
+    const head = (label) => page.evaluate(`[...document.querySelectorAll('#services-list .svc-group button')].find((b) => b.textContent === ${JSON.stringify(label)}).click()`);
+    const rowButton = (name, label) => page.evaluate(`[...document.querySelectorAll('#services-list .svc-row')].find((r) => r.querySelector('.svc-name').textContent === ${JSON.stringify(name)}).querySelectorAll('button').forEach((b) => b.textContent === ${JSON.stringify(label)} && b.click())`);
+    const states = async () => (await rows()).join(',');
+
+    test('Run starts every member, each its own row; one is stopped alone, then all, then all are started again', async () => {
+        await page.evaluate(`window.pymagic.editor.getAction('pymagic.runAnything').run()`);
+        await page.waitFor(`document.querySelector('.ra-box input')`, 10000, 'the box');
+        await page.evaluate(`(() => { const i = document.querySelector('.ra-box input'); i.value = 'loop pair'; i.dispatchEvent(new Event('input')); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+        await page.waitFor(`${$('output')}.textContent.includes('[loop a] started') && ${$('output')}.textContent.includes('[loop b] started')`, 30000, 'both members to print');
+        await page.evaluate(`${$('t-services')}.click()`);
+        await page.waitFor(`document.querySelectorAll('#services-list .svc-row').length === 2`, 10000, 'two rows');
+        assert.deepEqual((await rows()).sort(), ['loop a|running', 'loop b|running']);
+        assert.equal(await page.evaluate(`document.getElementById('services-count').textContent`), '2');
+        assert.ok(await page.evaluate(`document.querySelector('#services-list .svc-group').textContent.includes('loop pair')`));
+        // one member stopped by itself: the other goes on
+        await rowButton('loop a', 'Stop');
+        await page.waitFor(`[...document.querySelectorAll('#services-list .svc-row')].some((r) => r.querySelector('.svc-name').textContent === 'loop a' && r.querySelector('.svc-state').textContent.startsWith('finished'))`, 20000, 'loop a to finish');
+        assert.ok((await rows()).includes('loop b|running'), await states());
+        assert.equal(await page.evaluate(`document.getElementById('services-count').textContent`), '1');
+        // all stopped, all started again
+        await head('Stop all');
+        await page.waitFor(`[...document.querySelectorAll('#services-list .svc-state')].every((s) => s.textContent.startsWith('finished'))`, 20000, 'all to finish');
+        await page.evaluate(`${$('output')}.textContent = ''`);
+        await head('Start all');
+        await page.waitFor(`${$('output')}.textContent.includes('[loop a] started') && ${$('output')}.textContent.includes('[loop b] started')`, 30000, 'both started again');
+        await page.waitFor(`[...document.querySelectorAll('#services-list .svc-state')].length === 2 && [...document.querySelectorAll('#services-list .svc-state')].every((s) => s.textContent.startsWith('running'))`, 10000, 'both rows running');
+        // a restart of one
+        await page.evaluate(`${$('output')}.textContent = ''`);
+        await rowButton('loop b', 'Restart');
+        await page.waitFor(`${$('output')}.textContent.includes('[loop b] started')`, 30000, 'loop b to start again');
+        assert.ok(!(await page.evaluate(`${$('output')}.textContent`)).includes('[loop a] started'));
+        // the Stop button of the toolbar stops them all; Close takes the group away
+        await page.evaluate(`${$('b-stop')}.click()`);
+        await page.waitFor(`[...document.querySelectorAll('#services-list .svc-state')].every((s) => s.textContent.startsWith('finished'))`, 20000, 'all to finish again');
+        await head('Close');
+        await page.waitFor(`document.querySelectorAll('#services-list .svc-row').length === 0`, 10000, 'the group to be gone');
     });
 });

@@ -1,6 +1,6 @@
 // Run and debug: toolbar, output panel, breakpoints in the gutter, stepping, frames, variables and evaluate.
 import * as monaco from 'monaco-editor';
-import { startOf } from './runconfig-model.js';
+import { compoundMembers, startOf } from './runconfig-model.js';
 import { RunClient } from './runclient';
 import { showTab } from './panel';
 import { editBreakpoint, isPlain } from './bpdialog';
@@ -183,6 +183,8 @@ export function setupRun(deps) {
         model.onDidChangeContent(() => { persist(); });
     }
     let run = null;
+    // the members of compounds that are running or have run (name -> entry), each with a run of its own beside the Run panel's one
+    const sides = new Map();
     let debugging = false;
     let paused = false;
     let frames = [];
@@ -209,7 +211,7 @@ export function setupRun(deps) {
         $('b-debug').disabled = active && !paused;
         $('b-debug').querySelector('.lbl').textContent = paused ? 'Resume' : 'Debug';
         $('b-debug').querySelector('use').setAttribute('href', paused ? '#i-run' : '#i-debug');
-        $('b-stop').disabled = !active;
+        $('b-stop').disabled = !active && ![...sides.values()].some((e) => e.live);
         $('b-pause').disabled = !active || !debugging || paused;
         for (const id of ['b-over', 'b-into', 'b-out'])
             $(id).disabled = !paused;
@@ -939,6 +941,10 @@ export function setupRun(deps) {
         if (run)
             return;
         const chosen = deps.runConfig?.();
+        if (chosen?.kind === 'compound') {
+            await startCompound(chosen, debug || profile);
+            return;
+        }
         if (chosen) {
             const s = startOf(chosen);
             // Django tests (and the like) go to the Tests panel and its tree
@@ -1059,6 +1065,85 @@ export function setupRun(deps) {
         } };
         setButtons();
         return true;
+    }
+    // ------------------------------------------------------------ compound configurations
+    // A compound starts several configurations together. Each member runs on a connection of its own (without the debugger), its lines in the Output
+    // marked with its name, and each is a row of the Services window to stop or restart.
+    function sayFor(entry, text, cls = '') {
+        let out = '';
+        for (const part of text.split(/(?<=\n)/)) {
+            if (entry.lineStart) out += `[${entry.name}] `;
+            out += part;
+            entry.lineStart = part.endsWith('\n');
+        }
+        append(out, cls);
+    }
+    function endSide(entry, code) {
+        entry.live = false;
+        entry.code = code;
+        entry.client?.close();
+        entry.client = null;
+        setButtons();
+    }
+    function launchSide(entry) {
+        const s = startOf(entry.config);
+        const client = new RunClient({ type: 'start', file: s.file, module: s.module, args: s.args, env: s.env, cwd: s.cwd, envFiles: s.envFiles, interpreter: s.interpreter,
+            uv: s.uv, uvPath: s.uvPath, contentRoots: s.contentRoots, sourceRoots: s.sourceRoots, allCode: s.allCode, debug: false, profile: false, breakpoints: {}, exceptionBreak: 'uncaught' });
+        entry.client = client;
+        entry.live = true;
+        entry.code = null;
+        entry.started = Date.now();
+        entry.lineStart = true;
+        client.onMessage = (m) => {
+            if (entry.client !== client) return;
+            if (m.type === 'started') sayFor(entry, `Running (pid ${m.pid})\n`, 'info');
+            else if (m.type === 'output') sayFor(entry, m.text, m.stream === 'stderr' ? 'err' : '');
+            else if (m.type === 'error') { sayFor(entry, m.message + '\n', 'err'); endSide(entry, null); }
+            else if (m.type === 'exited') { sayFor(entry, `\nProcess finished with exit code ${m.code}\n`, 'info'); endSide(entry, m.code); }
+        };
+        client.onClose = () => { if (entry.client === client) { sayFor(entry, '\nConnection to the host lost.\n', 'err'); endSide(entry, null); } };
+        setButtons();
+    }
+    const stopSide = (entry) => { if (entry.live) entry.client?.send({ type: 'stop' }); };
+    async function restartSide(entry) {
+        stopSide(entry);
+        for (let i = 0; i < 50 && entry.live; i++) await new Promise((ok) => setTimeout(ok, 100));
+        if (!entry.live) launchSide(entry);
+    }
+    const groupOf = (group) => [...sides.values()].filter((e) => e.group === group);
+    /** Starts the members of a compound that are not running; the running ones are left. */
+    async function startCompound(compound, withDebugger = false) {
+        const { members, skipped } = compoundMembers(compound, (name) => deps.runConfigByName?.(name) ?? null);
+        if (compound.openPanel !== false) showTab('output');
+        if (withDebugger) append('A compound runs its configurations without the debugger.\n', 'info');
+        for (const k of skipped) append(`${compound.name}: ${k.name} is left out, ${k.why}.\n`, 'err');
+        if (!members.length) { append(`${compound.name}: there is no configuration to start.\n`, 'err'); return; }
+        await deps.saveAll();
+        for (const [name, e] of sides) if (e.group === compound.name && !e.live && !members.some((m) => m.name === name)) sides.delete(name);
+        for (const c of members) {
+            let entry = sides.get(c.name);
+            if (entry?.live) continue;
+            if (!entry) { entry = { name: c.name, live: false }; sides.set(c.name, entry); }
+            entry.config = c;
+            entry.group = compound.name;
+            launchSide(entry);
+        }
+    }
+    /** The members of compounds, as rows of the Services window: each stopped or restarted by itself, the group started or stopped as a whole. */
+    function sideServices() {
+        return [...sides.values()].map((e) => ({
+            id: 'side:' + e.name, group: 'Compound ' + e.group, name: e.name,
+            state: e.live ? 'running' : 'finished', started: e.live ? e.started : undefined,
+            detail: e.live ? undefined : e.code === null ? 'did not run' : `exit code ${e.code}`, done: !e.live,
+            show: () => showTab('output'),
+            stop: e.live ? () => stopSide(e) : undefined,
+            restart: () => restartSide(e),
+            groupActions: [
+                { label: 'Start all', title: 'Start the members that are not running', run: () => { for (const o of groupOf(e.group)) if (!o.live) launchSide(o); } },
+                { label: 'Stop all', title: 'Stop every member of this compound', run: () => { for (const o of groupOf(e.group)) stopSide(o); } },
+                { label: 'Close', title: 'Take the finished members out of the list', run: () => { for (const o of groupOf(e.group)) if (!o.live) sides.delete(o.name); } },
+            ],
+        }));
     }
     const raisedBox = $('exc-raised');
     try {
@@ -1300,7 +1385,7 @@ export function setupRun(deps) {
     $('b-run').onclick = () => void start(false);
     $('b-profile').onclick = () => void start(false, true);
     $('b-debug').onclick = () => (paused ? resume('continue') : void start(true));
-    $('b-stop').onclick = () => { if (afterExit) stoppedByUser = true; run?.send({ type: 'stop' }); };
+    $('b-stop').onclick = () => { if (afterExit) stoppedByUser = true; run?.send({ type: 'stop' }); for (const e of sides.values()) stopSide(e); };
     /** Pause: the program stops at its next line of Python; one waiting outside Python (input(), a socket) stops when it comes back. */
     let pauseTimer = 0;
     function pause() {
@@ -1472,7 +1557,7 @@ export function setupRun(deps) {
         /** `python -m module args`; false when a run is going. */
         runModule: (module, args = [], debug = false) => launch(null, debug, false, args, { module }),
         /** The program that is running, as a service of the Services window: stopped, restarted (started again as it was) or shown. */
-        services: () => (run === null || !lastLaunch ? [] : [{
+        services: () => [...(run === null || !lastLaunch ? [] : [{
             id: 'run', group: 'Run', name: lastLaunch.label, started: lastLaunch.started,
             state: paused ? 'paused' : debugging ? 'debugging' : profiling ? 'profiling' : 'running',
             show: () => showTab('output'),
@@ -1484,7 +1569,7 @@ export function setupRun(deps) {
                 // the window that asked stays where it is: the panel does not jump to Output
                 if (run === null) await launch(again.rel, again.debug, again.profile, again.args, { ...again.extra, openPanel: false });
             },
-        }]),
+        }]), ...sideServices()],
         attach,
         /** The breakpoint commands of the editor (F9, Shift+F9), for the menus. */
         breakpoints: {
