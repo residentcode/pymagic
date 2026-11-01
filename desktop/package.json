@@ -7,7 +7,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "icon": "electron icon/make-icon.js"
+    "icon": "electron icon/make-icon.js",
+    "e2e": "node --test e2e/page.e2e.mjs"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",

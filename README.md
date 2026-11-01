@@ -34,6 +34,7 @@ src/PyMagic.Web             pymagic-web: static files, /api/info, /api/files, /a
 web/src                     main.js (Monaco providers, files, diagnostics), lsp.js (JSON-RPC client), index.html;  cd web && npm install && npm run build
 examples/demo               small project with deliberate mistakes for trying the editor
 tests/PyMagic.Tests       dependency-free test runner:  dotnet run --project tests/PyMagic.Tests
+desktop/e2e               the page in PyMagic.exe, driven over the DevTools protocol:  node --test desktop/e2e/page.e2e.mjs (build the exe first)
                           corpus check:  dotnet tests/PyMagic.Tests/bin/Debug/net9.0/PyMagic.Tests.dll corpus <dir>
 ```
 
@@ -72,7 +73,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Debugger: ~~pausing a running program, attaching to a running process, breakpoints added while a frame is already running (they only count in new calls) (10); the stacks of other threads (76)~~ (done, item 219; attaching was item 160); ~~setting attributes and items of objects, watches that expand, exception filters by type, function and data breakpoints (21)~~ (done, item 220; exception filters by type were item 158's exception breakpoints per class). A data breakpoint on a local of a generator ends at its first `yield`, as its frame returns there.
 - ~~Test runner: debugging a test, stopping a test run, `unittest` subtests as their own nodes, tests in classes whose bases live in other files (11)~~ (done, item 221). Under pytest the subtests of a test are not split (pytest reports the test once); a test inherited from another file is placed on its class's line.
 - ~~Coverage: branch coverage, combining runs, exporting a report, running one test with coverage (52)~~ (done, item 191).
-- Automated tests of the page itself in a real browser; the checks in PyMagic.exe are scripted by hand for now, beside the page's Node tests of its pure modules (9).
+- ~~Automated tests of the page itself in a real browser; the checks in PyMagic.exe are scripted by hand for now, beside the page's Node tests of its pure modules (9)~~ (done, item 222: `node --test desktop/e2e/page.e2e.mjs` after building the exe). They are not part of the C# test run, which does not build the exe.
 
 **Git, packages and interpreters**
 - Git: pushing tags (72); choosing lines from the editor's gutter, moving single lines between changelists (73); a merge result built from three editors, picking lines inside one side, conflicts of binary files (116); interactive rebase's *edit*, `--rebase-merges`, rebasing onto another branch, reordering by dragging (117).
@@ -154,8 +155,8 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 **Checked** (the old notes of a To check list, looked at again on 31 October 2026; what is still open is in the lists above)
 - Parser: ~~store-context validation and finer error messages (2)~~ (done, item 198: targets Python refuses, brackets never closed or mismatched, in Python's words). Scopes: ~~`__all__`, `try/except ImportError` fallbacks, definitions under conditions (3)~~ (done, item 198: star imports follow `__all__`, a name `__all__` lists must exist, a failed import beside its fallback takes the fallback's type, a class defined two ways under a condition only misses what neither has; functions under conditions were already right).
 - Typeshed: ~~`__init__.pyi` re-exports of `import a as a`, `__all__ +=`, overloads with an explicit `self`~~ (done, item 198); a cache of parsed stubs on disk (7) is in *Type engine* above.
-- ~~Black's last corner cases (22, 43, 75)~~ (done, item 199); automated tests of the page in a real browser (9) are open, in *Run, debug and tests* above.
+- ~~Black's last corner cases (22, 43, 75)~~ (done, item 199); ~~automated tests of the page in a real browser (9)~~ (done, item 222).
 
 ## Work done
 
-The 221 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 222 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
