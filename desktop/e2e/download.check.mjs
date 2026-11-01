@@ -8,6 +8,7 @@ import { launch, project, sleep } from './app.mjs';
 const FILES = {
     'package.json': '{\n  "name": "ok-name",\n  "scripts": {\n    "t": 1\n  },\n  "private": "yes"\n}\n',
     'pyproject.toml': '[project]\nname = 5\n',
+    '.github/workflows/ci.yml': 'on:\n  push:\n    branches: main\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n',
 };
 const markers = `(() => { const m = window.pymagic.editor.getModel(); return window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.code === 'schema').map((x) => x.startLineNumber + ': ' + x.message); })()`;
 
@@ -24,14 +25,21 @@ async function session(answer) {
         asked: await page.evaluate('window.__asked'),
         text: await page.evaluate('window.__text'),
         first: await page.evaluate(markers),
-        kept: ['package', 'pyproject'].map((n) => existsSync(join(root, '.pymagic', 'schemas', n + '.json'))),
+        kept: ['package', 'pyproject', 'workflow'].map((n) => existsSync(join(root, '.pymagic', 'schemas', n + '.json'))),
     };
     if (answer) {
         await page.evaluate(`window.pymagic.openFile('pyproject.toml')`);
         await sleep(4000);
         result.second = await page.evaluate(markers);
+        for (let i = 0; i < 4; i++) {
+            await page.evaluate(`window.pymagic.openFile('.github/workflows/ci.yml')`);
+            await sleep(3000);
+            if ((await page.evaluate('window.pymagic.editor.getModel().uri.toString()')).endsWith('ci.yml')) break;
+        }
+        result.model = await page.evaluate('window.pymagic.editor.getModel().uri.toString()');
+        result.workflow = await page.evaluate(markers);
         result.askedAfter = await page.evaluate('window.__asked');
-        result.kept = ['package', 'pyproject'].map((n) => existsSync(join(root, '.pymagic', 'schemas', n + '.json')));
+        result.kept = ['package', 'pyproject', 'workflow'].map((n) => existsSync(join(root, '.pymagic', 'schemas', n + '.json')));
     }
     await app.close();
     return result;
@@ -43,7 +51,8 @@ assert.equal(yes.asked, 1, 'asked once');
 assert.match(yes.text, /json\.schemastore\.org/);
 assert.ok(yes.first.some((m) => m.startsWith('4: ')), 'scripts.t marked');
 assert.ok(yes.first.some((m) => m.startsWith('6: ')), 'private marked');
-assert.deepEqual(yes.kept, [true, true]);
+assert.deepEqual(yes.kept, [true, true, true]);
+assert.deepEqual(yes.workflow, ['3: Should be array, not string']);
 assert.deepEqual(yes.second, ['2: Should be string, not integer']);
 assert.equal(yes.askedAfter, 1, 'not asked again for the second file');
 
@@ -51,5 +60,5 @@ const no = await session(false);
 console.log(JSON.stringify(no, null, 1));
 assert.equal(no.asked, 1);
 assert.deepEqual(no.first, []);
-assert.deepEqual(no.kept, [false, false]);
+assert.deepEqual(no.kept, [false, false, false]);
 console.log('download flow ok');

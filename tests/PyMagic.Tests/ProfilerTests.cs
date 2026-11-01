@@ -53,7 +53,7 @@ public class ProfilerTests
     }
 
     static JsonObject? Function(JsonObject profile, string name) =>
-        profile["functions"]!.AsArray().Select(f => (JsonObject)f!).FirstOrDefault(f => f["name"]!.GetValue<string>() == name && !f["builtin"]!.GetValue<bool>());
+        profile["functions"]!.AsArray().Select(f => (JsonObject)f!).FirstOrDefault(f => (f["name"]!.GetValue<string>() == name || f["name"]!.GetValue<string>().EndsWith("." + name)) && !f["builtin"]!.GetValue<bool>());   // yappi names a method Class.method
 
     const string Busy =
         "import sys\n\n\n" +
@@ -135,7 +135,7 @@ public class ProfilerTests
             var outer = Function(profile!, "outer")!;
             var callee = outer["callees"]!.AsArray().Single(c => c!["name"]!.GetValue<string>() == "inner")!;
             Assert.Equal(30, callee["calls"]!.GetValue<int>());
-            Assert.Equal("cprofile", profile!["engine"]!.GetValue<string>());
+            Assert.True(profile!["engine"]!.GetValue<string>() is "cprofile" or "yappi");
             Assert.True(File.Exists(RunSession.ProfileStatsPath(root)), "the raw pstats are kept");
             var snapshots = ProfileSnapshots.List(root);
             Assert.Equal(1, snapshots.Count);
@@ -157,6 +157,19 @@ public class ProfilerTests
             Assert.Throws<ServiceException>(() => ProfileSnapshots.Open(root, PythonExe, copy));
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void YappiMeasuresEveryThreadWhenTheInterpreterHasIt()
+    {
+        if (!HavePython) return;
+        var check = Process.Start(new ProcessStartInfo(PythonExe, "-c \"import yappi\"") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true });
+        if (check == null || !check.WaitForExit(20000) || check.ExitCode != 0) return;
+        var (profile, _, code) = Profile(Project("import threading\n\n\ndef work():\n    return sum(i * i for i in range(300000))\n\n\ndef job():\n    work()\n\n\nt = threading.Thread(target=job)\nt.start()\nt.join()\n"));
+        Assert.Equal(0, code);
+        Assert.Equal("yappi", profile!["engine"]!.GetValue<string>());
+        Assert.True(Function(profile, "job") != null, "the function that ran in the thread");
+        Assert.True(profile["threads"]!.AsArray().Count >= 2, "the main thread and the other");
     }
 
     [Fact]

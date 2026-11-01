@@ -1,14 +1,17 @@
-// package.json and pyproject.toml checked against their JSON Schema from SchemaStore. The schema is downloaded once, after the user says
+// package.json, pyproject.toml and GitHub workflows checked against their JSON Schema from SchemaStore. The schema is downloaded once, after the user says
 // yes, and kept in the project's .pymagic/schemas; without it nothing is checked and nothing is fetched (schema-model.js validates).
 import * as monaco from 'monaco-editor';
+import { parse as parseYaml } from 'yaml';
 import { validate, locate } from './schema-model';
 
 const OWNER = 'pymagic-schema';
 const ASKED = 'pymagic.schemaAsked';
 
-/** Which schema checks a project file, by its name: 'package' | 'pyproject' | null. */
+/** Which schema checks a project file, by its path: 'package' | 'pyproject' | 'workflow' | null. */
 export function schemaOf(rel) {
-    const name = rel.split('/').pop().toLowerCase();
+    const lower = rel.toLowerCase();
+    const name = lower.split('/').pop();
+    if (/(^|\/)\.github\/workflows\/[^/]+\.ya?ml$/.test(lower)) return 'workflow';
     return name === 'package.json' ? 'package' : name === 'pyproject.toml' ? 'pyproject' : null;
 }
 
@@ -26,7 +29,7 @@ export function setupSchemaCheck(deps) {
         if (res?.ok) { kept.set(name, await res.json()); return kept.get(name); }
         if (answer === null && remembered() === 'no') answer = false;
         if (answer === null) {
-            answer = window.confirm('Check package.json and pyproject.toml against their JSON Schema?\n\nPyMagic downloads the schemas once from json.schemastore.org (SchemaStore) and keeps them in .pymagic/schemas of this project. Nothing else is sent.');
+            answer = window.confirm('Check package.json, pyproject.toml and GitHub workflows against their JSON Schema?\n\nPyMagic downloads each schema once from json.schemastore.org (SchemaStore) and keeps them in .pymagic/schemas of this project. Nothing else is sent.');
             remember(answer ? 'yes' : 'no');
         }
         if (!answer) return null;
@@ -39,6 +42,9 @@ export function setupSchemaCheck(deps) {
     async function dataOf(name, text) {
         if (name === 'package') {
             try { return JSON.parse(text); } catch { return undefined; }     // the editor's own JSON checks say what is wrong
+        }
+        if (name === 'workflow') {
+            try { return parseYaml(text, { prettyErrors: false }); } catch { return undefined; }   // filecheck says what is wrong with the YAML
         }
         const res = await fetch('/api/toml', { method: 'POST', body: text }).catch(() => null);
         const parsed = res?.ok ? await res.json() : null;

@@ -34,7 +34,11 @@ export function validate(data, schema, limit = 200) {
             if (ok === 0) {
                 // the branches that fit the value's type say what is wrong; the others only say it is the wrong type
                 const near = results.filter((r) => !r.some((p) => p.path.length === path.length && /^Should be /.test(p.message)));
-                if (near.length === 1) out.push(...near[0]);
+                // with several, the branch that fits best is the one meant (a job with a wrong `runs-on` is a normal job, not a reusable one)
+                // (a property the branch does not know, or one it requires, counts for more than a wrong value: that branch is the wrong one)
+                const score = (r) => r.filter((p) => p.key || p.missing).length * 1000 + r.length;
+                const best = [...near].sort((x, y) => score(x) - score(y));
+                if (near.length === 1 || (near.length > 1 && score(best[0]) < score(best[1]))) out.push(...best[0]);
                 else out.push({ path, message: describeMismatch(value, branches, schema), generic: true });
             } else if (node.oneOf && ok > 1 && !node.anyOf) {
                 out.push({ path, message: 'Matches more than one of the allowed forms' });
@@ -54,7 +58,7 @@ export function validate(data, schema, limit = 200) {
             if (node.minLength !== undefined && value.length < node.minLength) out.push({ path, message: `Should have at least ${node.minLength} characters` });
             if (node.maxLength !== undefined && value.length > node.maxLength) out.push({ path, message: `Should have at most ${node.maxLength} characters` });
             if (node.pattern) {
-                try { if (!new RegExp(node.pattern, 'u').test(value)) out.push({ path, message: `Should match ${node.pattern}` }); } catch { /* a pattern JavaScript cannot read */ }
+                try { if (!new RegExp(node.pattern, 'u').test(value)) out.push({ path, message: node.pattern.includes('\\$\\{\\{') ? 'Should be a ${{ expression }}' : `Should match ${node.pattern}` }); } catch { /* a pattern JavaScript cannot read */ }
             }
         }
         if (typeof value === 'number') {
@@ -89,7 +93,8 @@ export function validate(data, schema, limit = 200) {
     };
     walk(data, schema, [], 0);
     // "matches no allowed form" adds nothing when a problem inside the value already says what is wrong
-    return out.filter((p) => !p.generic || !out.some((q) => q !== p && q.path.length > p.path.length && p.path.every((k, i) => q.path[i] === k)));
+    const seen = new Set();
+    return out.filter((p) => { const k = JSON.stringify([p.path, p.message]); return !seen.has(k) && seen.add(k); }).filter((p) => !p.generic || !out.some((q) => q !== p && q.path.length > p.path.length && p.path.every((k, i) => q.path[i] === k)));
 }
 
 function describeMismatch(value, branches, schema) {

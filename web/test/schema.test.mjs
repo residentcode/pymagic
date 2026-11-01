@@ -61,3 +61,14 @@ test('where a problem is in the text', () => {
     assert.deepEqual(locate(json, { path: ['scripts', 'test'] }), { line: 3, start: 5, end: 9 });
     assert.deepEqual(locate('a = 1\n', { path: ['zzz'] }), { line: 1, start: 1, end: 2 });
 });
+
+test('of several forms, the one that fits is reported (a normal job, not a reusable one)', () => {
+    const jobs = { oneOf: [
+        { type: 'object', required: ['runs-on'], additionalProperties: false, properties: { 'runs-on': { type: 'string' }, steps: { type: 'array' } } },
+        { type: 'object', required: ['uses'], additionalProperties: false, properties: { uses: { type: 'string' } } },
+    ] };
+    assert.deepEqual(msgs({ 'runs-on': 5, steps: [] }, jobs), ['runs-on: Should be string, not integer']);
+    assert.deepEqual(msgs({ uses: 5 }, jobs), ['uses: Should be string, not integer']);
+    // a pattern that is a ${{ expression }} gets a plain message
+    assert.deepEqual(msgs('x', { type: 'string', pattern: '^\\$\\{\\{.*\\}\\}$' }), ['' + ': Should be a ${{ expression }}']);
+});
