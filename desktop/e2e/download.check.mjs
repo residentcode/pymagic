@@ -11,6 +11,10 @@ const FILES = {
     'docker-compose.yml': 'services:\n  web:\n    image: 5\n    restart_policy: always\n',
     '.gitlab-ci.yml': 'stages: build\n',
     '.pre-commit-config.yaml': 'fail_fast: sometimes\n',
+    'mkdocs.yml': 'site_name: 5\nnav: home\n',
+    '.github/dependabot.yml': 'version: 3\nupdates: []\n',
+    'codecov.yml': 'coverage: yes\n',
+    'tox.toml': 'env_list = "py312"\n',
     '.github/workflows/ci.yml': 'on:\n  push:\n    branches: main\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n',
 };
 const markers = `(() => { const m = window.pymagic.editor.getModel(); return window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.code === 'schema').map((x) => x.startLineNumber + ': ' + x.message); })()`;
@@ -28,7 +32,7 @@ async function session(answer) {
         asked: await page.evaluate('window.__asked'),
         text: await page.evaluate('window.__text'),
         first: await page.evaluate(markers),
-        kept: ['package', 'pyproject', 'workflow', 'compose', 'gitlab', 'precommit'].map((n) => existsSync(join(root, '.pymagic', 'schemas', n + '.json'))),
+        kept: ['package', 'pyproject', 'workflow', 'compose', 'gitlab', 'precommit', 'mkdocs', 'dependabot', 'codecov', 'tox'].map((n) => existsSync(join(root, '.pymagic', 'schemas', n + '.json'))),
     };
     if (answer) {
         await page.evaluate(`window.pymagic.openFile('pyproject.toml')`);
@@ -41,7 +45,7 @@ async function session(answer) {
         }
         result.model = await page.evaluate('window.pymagic.editor.getModel().uri.toString()');
         result.workflow = await page.evaluate(markers);
-        for (const file of ['docker-compose.yml', '.gitlab-ci.yml', '.pre-commit-config.yaml']) {
+        for (const file of ['docker-compose.yml', '.gitlab-ci.yml', '.pre-commit-config.yaml', 'mkdocs.yml', '.github/dependabot.yml', 'codecov.yml', 'tox.toml']) {
             for (let i = 0; i < 4; i++) {
                 await page.evaluate(`window.pymagic.openFile('${file}')`);
                 await sleep(3500);
@@ -50,7 +54,7 @@ async function session(answer) {
             (result.more ??= {})[file] = await page.evaluate(markers);
         }
         result.askedAfter = await page.evaluate('window.__asked');
-        result.kept = ['package', 'pyproject', 'workflow', 'compose', 'gitlab', 'precommit'].map((n) => existsSync(join(root, '.pymagic', 'schemas', n + '.json')));
+        result.kept = ['package', 'pyproject', 'workflow', 'compose', 'gitlab', 'precommit', 'mkdocs', 'dependabot', 'codecov', 'tox'].map((n) => existsSync(join(root, '.pymagic', 'schemas', n + '.json')));
     }
     await app.close();
     return result;
@@ -62,9 +66,13 @@ assert.equal(yes.asked, 1, 'asked once');
 assert.match(yes.text, /schemastore\.org/);
 assert.ok(yes.first.some((m) => m.startsWith('4: ')), 'scripts.t marked');
 assert.ok(yes.first.some((m) => m.startsWith('6: ')), 'private marked');
-assert.deepEqual(yes.kept, [true, true, true, true, true, true]);
+assert.deepEqual(yes.kept, Array(10).fill(true));
 assert.deepEqual(yes.more['docker-compose.yml'], ['3: Should be string, not integer', '4: The property restart_policy is not allowed here']);
 assert.deepEqual(yes.more['.gitlab-ci.yml'], ['1: Should be array, not string']);
+assert.deepEqual(yes.more['mkdocs.yml'], ['1: Should be string, not integer', '2: Should be array, not string']);
+assert.deepEqual(yes.more['.github/dependabot.yml'], ['1: Should be 2']);
+assert.deepEqual(yes.more['codecov.yml'], ['1: Should be object, not string']);
+assert.deepEqual(yes.more['tox.toml'], ['1: Should be array, not string']);
 assert.deepEqual(yes.more['.pre-commit-config.yaml'], ['1: The property repos is required', '1: Should be boolean, not string']);
 assert.deepEqual(yes.workflow, ['3: Should be array, not string']);
 assert.deepEqual(yes.second, ['2: Should be string, not integer']);
@@ -74,5 +82,5 @@ const no = await session(false);
 console.log(JSON.stringify(no, null, 1));
 assert.equal(no.asked, 1);
 assert.deepEqual(no.first, []);
-assert.deepEqual(no.kept, [false, false, false, false, false, false]);
+assert.deepEqual(no.kept, Array(10).fill(false));
 console.log('download flow ok');

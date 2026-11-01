@@ -18,6 +18,10 @@ public static class Schemas
         ["compose"] = "https://raw.githubusercontent.com/compose-spec/compose-go/master/schema/compose-spec.json",
         ["gitlab"] = "https://gitlab.com/gitlab-org/gitlab-foss/-/raw/master/app/assets/javascripts/editor/schema/ci.json",
         ["precommit"] = "https://www.schemastore.org/pre-commit-config.json",
+        ["mkdocs"] = "https://www.schemastore.org/mkdocs-1.6.json",
+        ["dependabot"] = "https://www.schemastore.org/dependabot-2.0.json",
+        ["codecov"] = "https://www.schemastore.org/codecov.json",
+        ["tox"] = "https://raw.githubusercontent.com/tox-dev/tox/main/src/tox/tox.schema.json",
     };
 
     public static string FolderOf(string root) => Path.Combine(root, ".pymagic", "schemas");

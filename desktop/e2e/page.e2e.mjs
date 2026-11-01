@@ -29,6 +29,10 @@ const FILES = {
     '.gitlab-ci.yml': 'stages: build\n',
     '.pymagic/schemas/precommit.json': '{"type":"object","properties":{"fail_fast":{"type":"boolean"}}}',
     '.pre-commit-config.yaml': 'fail_fast: sometimes\n',
+    '.pymagic/schemas/mkdocs.json': '{"type":"object","properties":{"site_name":{"type":"string"}}}',
+    'mkdocs.yml': 'site_name: 5\n',
+    '.pymagic/schemas/tox.json': '{"type":"object","properties":{"env_list":{"type":"array"}}}',
+    'tox.toml': 'env_list = "py312"\n',
     'package.json': '{\n  "name": "Bad Name",\n  "scripts": {\n    "t": 1\n  }\n}\n',
     'pyproject.toml': '[project]\nname = 5\n',
     'broken.toml':'[tool]\nname = "x"\nname = "y"\nflag = True\n',
@@ -324,6 +328,8 @@ describe('file checks', () => {
         assert.deepEqual(await schema('docker-compose.yml'), ['3:5 Should be string, not integer', '4:5 The property extra is not allowed here']);
         assert.deepEqual(await schema('.gitlab-ci.yml'), ['1:1 Should be array, not string']);
         assert.deepEqual(await schema('.pre-commit-config.yaml'), ['1:1 Should be boolean, not string']);
+        assert.deepEqual(await schema('mkdocs.yml'), ['1:1 Should be string, not integer']);
+        assert.deepEqual(await schema('tox.toml'), ['1:1 Should be array, not string']);
     });
 
     test('a Markdown link to a missing file is marked, an anchor that exists is not', async () => {

@@ -39,8 +39,8 @@ public class SchemaTests
     [Fact]
     public void EverySchemaHasAnHttpsAddressAndOnlyTheKnownOnesAreKept()
     {
-        Assert.Equal(6, Schemas.Urls.Count);
-        foreach (var name in new[] { "package", "pyproject", "workflow", "compose", "gitlab", "precommit" })
+        Assert.Equal(10, Schemas.Urls.Count);
+        foreach (var name in new[] { "package", "pyproject", "workflow", "compose", "gitlab", "precommit", "mkdocs", "dependabot", "codecov", "tox" })
             Assert.True(Schemas.Urls.TryGetValue(name, out var url) && url.StartsWith("https://"), name);
     }
 

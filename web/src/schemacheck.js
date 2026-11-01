@@ -1,13 +1,13 @@
-// package.json, pyproject.toml, GitHub workflows, docker-compose, GitLab CI and pre-commit files checked against their JSON Schema from SchemaStore. The schema is downloaded once, after the user says
+// package.json, pyproject.toml, GitHub workflows, docker-compose, GitLab CI, pre-commit, mkdocs, dependabot, codecov and tox files checked against their JSON Schema from SchemaStore. The schema is downloaded once, after the user says
 // yes, and kept in the project's .pymagic/schemas; without it nothing is checked and nothing is fetched (schema-model.js validates).
 import * as monaco from 'monaco-editor';
 import { parse as parseYaml } from 'yaml';
 import { validate, locate } from './schema-model';
 
 const OWNER = 'pymagic-schema';
-const ASKED = 'pymagic.schemaAsked2';   // the question grew (more schemas, more hosts): an earlier answer does not count
+const ASKED = 'pymagic.schemaAsked3';   // the question grew (more schemas, more hosts): an earlier answer does not count
 
-/** Which schema checks a project file, by its path: 'package' | 'pyproject' | 'workflow' | 'compose' | 'gitlab' | 'precommit' | null. */
+/** Which schema checks a project file, by its path: 'package' | 'pyproject' | 'workflow' | 'compose' | 'gitlab' | 'precommit' | 'mkdocs' | 'dependabot' | 'codecov' | 'tox' | null. */
 export function schemaOf(rel) {
     const lower = rel.toLowerCase();
     const name = lower.split('/').pop();
@@ -15,6 +15,10 @@ export function schemaOf(rel) {
     if (/^(docker-)?compose(\.[^/]+)?\.ya?ml$/.test(name)) return 'compose';
     if (/(^|\.)gitlab-ci\.ya?ml$/.test(name)) return 'gitlab';
     if (/^\.pre-commit-config\.ya?ml$/.test(name)) return 'precommit';
+    if (/^mkdocs\.ya?ml$/.test(name)) return 'mkdocs';
+    if (/(^|\/)\.github\/dependabot\.ya?ml$/.test(lower)) return 'dependabot';
+    if (/^\.?codecov\.ya?ml$/.test(name)) return 'codecov';
+    if (name === 'tox.toml') return 'tox';
     return name === 'package.json' ? 'package' : name === 'pyproject.toml' ? 'pyproject' : null;
 }
 
@@ -32,7 +36,7 @@ export function setupSchemaCheck(deps) {
         if (res?.ok) { kept.set(name, await res.json()); return kept.get(name); }
         if (answer === null && remembered() === 'no') answer = false;
         if (answer === null) {
-            answer = window.confirm('Check package.json, pyproject.toml, GitHub workflows, docker-compose, GitLab CI and pre-commit files against their JSON Schema?\n\nPyMagic downloads each schema once, when such a file is opened, from SchemaStore (json.schemastore.org, www.schemastore.org) or the project that owns it (raw.githubusercontent.com, gitlab.com), and keeps it in .pymagic/schemas of this project. Nothing else is sent.');
+            answer = window.confirm('Check package.json, pyproject.toml, GitHub workflows, docker-compose, GitLab CI, pre-commit, mkdocs, dependabot, codecov and tox files against their JSON Schema?\n\nPyMagic downloads each schema once, when such a file is opened, from SchemaStore (json.schemastore.org, www.schemastore.org) or the project that owns it (raw.githubusercontent.com, gitlab.com), and keeps it in .pymagic/schemas of this project. Nothing else is sent.');
             remember(answer ? 'yes' : 'no');
         }
         if (!answer) return null;
@@ -42,16 +46,18 @@ export function setupSchemaCheck(deps) {
         return kept.get(name);
     }
 
-    async function dataOf(name, text) {
-        if (name === 'package') {
-            try { return JSON.parse(text); } catch { return undefined; }     // the editor's own JSON checks say what is wrong
+    /** The file's text as data, by its extension: JSON, TOML (read by Python) or YAML; undefined when it does not parse (the other checks say why). */
+    async function dataOf(rel, text) {
+        const lower = rel.toLowerCase();
+        if (lower.endsWith('.json')) {
+            try { return JSON.parse(text); } catch { return undefined; }
         }
-        if (name === 'workflow' || name === 'compose' || name === 'gitlab' || name === 'precommit') {
-            try { return parseYaml(text, { prettyErrors: false }); } catch { return undefined; }   // filecheck says what is wrong with the YAML
+        if (lower.endsWith('.toml')) {
+            const res = await fetch('/api/toml', { method: 'POST', body: text }).catch(() => null);
+            const parsed = res?.ok ? await res.json() : null;
+            return parsed && !parsed.error ? parsed : undefined;
         }
-        const res = await fetch('/api/toml', { method: 'POST', body: text }).catch(() => null);
-        const parsed = res?.ok ? await res.json() : null;
-        return parsed && !parsed.error ? parsed : undefined;                // filecheck says what is wrong with the TOML
+        try { return parseYaml(text, { prettyErrors: false }); } catch { return undefined; }
     }
 
     async function check(model) {
@@ -61,7 +67,7 @@ export function setupSchemaCheck(deps) {
         const text = model.getValue();
         const schema = await schemaFor(name);
         if (!schema || model.isDisposed()) return;
-        const data = await dataOf(name, text);
+        const data = await dataOf(rel, text);
         if (model.isDisposed()) return;
         const problems = data === undefined ? [] : validate(data, schema);
         monaco.editor.setModelMarkers(model, OWNER, problems.map((p) => {
