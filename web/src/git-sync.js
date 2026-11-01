@@ -92,7 +92,9 @@ export function setupGitSync({ git, deps }) {
         if (!operation) return;
         $('git-op-text').textContent = conflicts.length
             ? `${names[operation]} in progress: ${conflicts.length} file${conflicts.length === 1 ? '' : 's'} with conflicts`
-            : `${names[operation]} in progress: every conflict is resolved, continue to finish it`;
+            : operation === 'rebase'
+                ? 'Rebase in progress: stopped to edit a commit (or every conflict is resolved): change it, commit with Amend, then Continue'
+                : `${names[operation]} in progress: every conflict is resolved, continue to finish it`;
         $('git-op-continue').disabled = conflicts.length > 0;
         const box = $('git-conflicts');
         box.replaceChildren();
@@ -102,15 +104,30 @@ export function setupGitSync({ git, deps }) {
             // during a rebase "ours" is the branch being rebased onto, which is the other way round to a merge
             const oursTitle = operation === 'rebase' ? 'The version of the branch you are rebasing onto' : 'Your version (the branch you are on)';
             const theirsTitle = operation === 'rebase' ? 'The version of your commit being replayed' : 'The version that comes in';
-            row.append(
+            const textOnly = [
                 button('Resolve…', 'Settle each conflict of the file in the merge editor', () => merge(path)),
-                button('Ours', oursTitle, () => resolve(path, 'ours')),
-                button('Theirs', theirsTitle, () => resolve(path, 'theirs')),
                 button('Compare', 'Ours against theirs side by side', () => compare(path)),
                 button('Edit', 'Open the file with its conflict markers', () => deps.openFile(path)),
+            ];
+            row.append(
+                textOnly[0],
+                button('Ours', oursTitle, () => resolve(path, 'ours')),
+                button('Theirs', theirsTitle, () => resolve(path, 'theirs')),
+                textOnly[1], textOnly[2],
                 button('Resolved', 'The file as it is now is what you want', () => markResolved(path)),
             );
             box.append(row);
+            // a binary file has no text to compare or merge: only a side can be taken
+            void api('/api/git/conflict?path=' + encodeURIComponent(path)).then((s) => {
+                if (!s.binary || !row.isConnected) return;
+                for (const b of textOnly) b.remove();
+                const gone = (has) => (has ? '' : ' (this side has no such file)');
+                row.querySelector('.path').title = 'Binary file: take one side';
+                row.insertBefore(el('span', 'dim', 'binary file: take a side'), row.children[1]);
+                const [ours, theirs] = row.querySelectorAll('button');
+                ours.title += gone(s.hasOurs);
+                theirs.title += gone(s.hasTheirs);
+            }).catch(() => { /* the buttons stay */ });
         }
     }
 
@@ -259,6 +276,51 @@ export function setupGitSync({ git, deps }) {
         await paint();
     });
 
+    // ---- rebasing onto another branch, and comparing two branches
+
+    async function rebaseOnto(current, branch, close) {
+        if (!window.confirm(`Replay ${current} on top of ${branch}? Its commits get new hashes.`)) return;
+        const keepMerges = window.confirm(`Keep the merge commits of ${current} (--rebase-merges)?\n\nOK keeps them, Cancel flattens them into a straight line.`);
+        const r = await run('Rebase', () => act({ op: 'rebaseOnto', branch, keepMerges }));
+        if (r) { close(); toast(r.conflicts ? 'Stopped on conflicts: resolve them in the Git tab' : `Rebased onto ${branch}`); }
+    }
+
+    function compareBranches(a, b) {
+        dialog(`${a} against ${b}`, async (body, close) => {
+            let c;
+            try { c = await api(`/api/git/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`); } catch (e) { body.append(el('div', 'ask-hint', String(e.message ?? e))); return; }
+            const section = (title) => body.append(el('div', 'ask-hint', title));
+            const commitRows = (list) => {
+                if (!list.length) { const none = el('div', 'gs-row'); none.append(el('span', 'dim', 'None.')); body.append(none); }
+                for (const x of list) { const row = el('div', 'gs-row'); row.append(el('span', 'dim', x.shortHash), el('span', 'what', x.subject), el('span', 'dim', x.author)); body.append(row); }
+            };
+            section(`Only in ${a} (${c.onlyA.length})`);
+            commitRows(c.onlyA);
+            section(`Only in ${b} (${c.onlyB.length})`);
+            commitRows(c.onlyB);
+            section(`Files that differ, ${a} to ${b} (${c.files.length})`);
+            if (!c.files.length) { const none = el('div', 'gs-row'); none.append(el('span', 'dim', 'The two branches have the same files.')); body.append(none); }
+            for (const f of c.files) {
+                const row = el('div', 'gs-row');
+                row.append(el('span', 'dim', f.status), el('span', 'path', f.oldPath ? `${f.oldPath} → ${f.path}` : f.path));
+                row.title = 'Click to see the difference';
+                row.onclick = async () => {
+                    try {
+                        const at = async (rev, rel) => {
+                            const res = await fetch(`/api/git/file?path=${encodeURIComponent(rel)}&rev=${encodeURIComponent(rev)}`);
+                            return res.status === 200 ? await res.text() : '';
+                        };
+                        const before = f.status === 'A' ? '' : await at(c.hashA, f.oldPath ?? f.path);
+                        const after = f.status === 'D' ? '' : await at(c.hashB, f.path);
+                        close();
+                        git.showDiff(`${f.path} — ${a} (left) against ${b} (right)`, before, after, f.path);
+                    } catch (e) { toast(String(e.message ?? e), true); }
+                };
+                body.append(row);
+            }
+        });
+    }
+
     // ---- branches and tags
 
     $('git-manage').onclick = () => dialog('Branches & tags', async (body, close) => {
@@ -284,6 +346,8 @@ export function setupGitSync({ git, deps }) {
                 if (name !== b.current) {
                     row.append(
                         button('Merge into current', `Join ${name} into ${b.current}`, () => change(() => act({ op: 'merge', branch: name, noFf: noFf.checked }), `Merged ${name}`)),
+                        button('Rebase current onto', `Replay ${b.current} on top of ${name}`, () => rebaseOnto(b.current, name, close)),
+                        button('Compare', `What differs between ${b.current} and ${name}`, () => compareBranches(b.current, name)),
                         button('Delete', 'Remove the branch (git refuses one with work that is not merged)', async () => {
                             try { await act({ op: 'deleteBranch', name, force: false }); toast('Deleted ' + name); await git.refresh(); await paint(); return; } catch (e) {
                                 if (!/not fully merged/i.test(String(e.message))) { message.textContent = String(e.message ?? e); return; }
@@ -305,6 +369,8 @@ export function setupGitSync({ git, deps }) {
                     const row = el('div', 'gs-row');
                     row.append(el('span', 'what', name),
                         button('Merge into current', '', () => change(() => act({ op: 'merge', branch: name, noFf: noFf.checked }), `Merged ${name}`)),
+                        button('Rebase current onto', `Replay ${b.current} on top of ${name}`, () => rebaseOnto(b.current, name, close)),
+                        button('Compare', `What differs between ${b.current} and ${name}`, () => compareBranches(b.current, name)),
                         button('Check out', 'Make a local branch that follows it', () => change(() => act({ op: 'checkoutRemote', branch: name }), 'Checked out ' + name)));
                     sections.append(row);
                 }
@@ -314,9 +380,15 @@ export function setupGitSync({ git, deps }) {
             for (const t of tags) {
                 const row = el('div', 'gs-row');
                 row.append(el('span', '', t.name), el('span', 'what dim', `${t.hash} ${t.subject}`),
-                    button('Delete', '', () => change(() => act({ op: 'deleteTag', name: t.name }), 'Tag deleted')));
+                    button('Push', 'Send the tag to the remote (nothing is forced)', () => change(() => act({ op: 'pushTag', name: t.name }), `Pushed ${t.name}`)),
+                    button('Delete', '', () => change(() => act({ op: 'deleteTag', name: t.name }), 'Tag deleted')),
+                    button('Delete on remote', 'Take the tag off the remote; the local tag stays', async () => {
+                        if (window.confirm(`Delete the tag ${t.name} on the remote? Others who have it keep their copy.`))
+                            await change(() => act({ op: 'deleteRemoteTag', name: t.name }), `Deleted ${t.name} on the remote`);
+                    }));
                 sections.append(row);
             }
+            if (tags.length) sections.append(button('Push all tags', 'Send every tag the remote does not have', () => change(() => act({ op: 'pushAllTags' }), 'Pushed all tags')));
             sections.append(button('New tag on HEAD…', '', async () => {
                 const name = window.prompt('Tag name:');
                 if (!name) return;

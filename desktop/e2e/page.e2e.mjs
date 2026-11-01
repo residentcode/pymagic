@@ -1346,3 +1346,72 @@ describe('a notebook: merge and split, tags, Run Section, the Variables window a
         assert.equal(await nbState(`s.selected`), 3);
     });
 });
+
+// last: this turns the project folder into a Git repository
+describe('branches: comparing, rebasing onto another, and pushing tags', () => {
+    const git = (...args) => {
+        const r = spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8' });
+        assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+        return r.stdout;
+    };
+    test('the Branches & tags window compares two branches, rebases onto one and pushes a tag', async () => {
+        git('init', '-q', '-b', 'main');
+        git('config', 'user.name', 'Tester');
+        git('config', 'user.email', 'tester@example.com');
+        git('config', 'core.autocrlf', 'false');
+        git('add', '-A');
+        git('commit', '-q', '-m', 'start');
+        git('switch', '-q', '-c', 'other');
+        writeFileSync(join(projectRoot, 'other_only.txt'), 'other\n');
+        git('add', '-A');
+        git('commit', '-q', '-m', 'only on other');
+        git('switch', '-q', 'main');
+        writeFileSync(join(projectRoot, 'main_only.txt'), 'main\n');
+        git('add', '-A');
+        git('commit', '-q', '-m', 'only on main');
+        const remote = mkdtempSync(join(tmpdir(), 'pymagic-e2e-remote-git-'));
+        assert.equal(spawnSync('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: remote }).status, 0);
+        git('remote', 'add', 'origin', remote);
+        git('push', '-q', '-u', 'origin', 'main');
+        git('tag', 'v1');
+
+        await page.evaluate(`window.confirm = () => true`);
+        const openManage = async () => {
+            await page.evaluate(`${$('t-git')}.click()`);
+            await page.evaluate(`${$('git-manage')}.click()`);
+            await page.waitFor(`document.querySelector('.ask-box .gs-row')`, 15000, 'the Branches & tags window');
+        };
+        const clickIn = (rowText, label) => page.evaluate(`(() => {
+            const row = [...document.querySelectorAll('.ask-box .gs-row')].find((r) => r.textContent.includes(${JSON.stringify(rowText)}));
+            const b = [...row.querySelectorAll('button')].find((x) => x.textContent === ${JSON.stringify(label)});
+            b.click(); return true; })()`);
+
+        // compare
+        await openManage();
+        await clickIn('other', 'Compare');
+        await page.waitFor(`document.querySelectorAll('.ask-box').length === 2 && document.body.textContent.includes('Only in main (1)')`, 15000, 'the comparison');
+        const text = await page.evaluate(`document.body.textContent`);
+        assert.match(text, /only on main/);
+        assert.match(text, /only on other/);
+        assert.match(text, /other_only\.txt/);
+        assert.match(text, /main_only\.txt/);
+        await page.evaluate(`[...document.querySelectorAll('.ask-box .gs-row')].find((r) => r.textContent.includes('other_only.txt')).click()`);
+        await page.waitFor(`${$('git-diff')}.classList.contains('open')`, 10000, 'the diff');
+        assert.match(await page.evaluate(`${$('git-diff-title')}.textContent`), /other_only\.txt .{1,3} main \(left\) against other \(right\)/);
+        await page.evaluate(`${$('git-diff-close')}.click()`);
+
+        // the tag goes to the remote
+        await openManage();
+        await clickIn('v1', 'Push');
+        await page.waitFor(`document.body.textContent.includes('Pushed v1') || true`, 2000).catch(() => { });
+        for (let i = 0; i < 30 && !git('ls-remote', '--tags', 'origin').includes('refs/tags/v1'); i++) await sleep(300);
+        assert.match(git('ls-remote', '--tags', 'origin'), /refs\/tags\/v1/);
+
+        // rebase main onto other
+        await page.evaluate(`document.querySelectorAll('.ask-shade').forEach((s) => s.remove())`);
+        await openManage();
+        await clickIn('other', 'Rebase current onto');
+        for (let i = 0; i < 40 && !git('log', '--format=%s').includes('only on other'); i++) await sleep(300);
+        assert.equal(git('log', '--format=%s').trim().split('\n').join(' | '), 'only on main | only on other | start');
+    });
+});

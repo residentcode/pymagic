@@ -11,7 +11,14 @@ public sealed record GitTag(string Name, string Hash, string Subject);
 /// <summary>What a merge, pull, cherry-pick, revert or stash apply did: its output, whether it stopped on conflicts, and the operation still waiting for you.</summary>
 public sealed record GitResult(string Output, bool Conflicts, string? Operation);
 
-public sealed record GitConflictStages(string? Base, string? Ours, string? Theirs);
+public sealed record GitConflictStages(string? Base, string? Ours, string? Theirs)
+{
+    /// <summary>The file is binary: the texts above are empty and the only way to settle it is to take a side.</summary>
+    public bool Binary { get; init; }
+    public bool HasBase { get; init; }
+    public bool HasOurs { get; init; }
+    public bool HasTheirs { get; init; }
+}
 
 /// <summary>Remotes, branch management, merges, conflicts, stashes, tags and commit actions.</summary>
 public sealed partial class GitRepository
@@ -221,7 +228,11 @@ public sealed partial class GitRepository
             var r = Run("show", $":{n}:{_prefix}{p}");
             return r.Code == 0 ? r.Out : null;
         }
-        return new GitConflictStages(Stage(1), Stage(2), Stage(3));
+        string? b1 = Stage(1), o = Stage(2), t = Stage(3);
+        // a file with a NUL in it is binary: its bytes are no text to compare or to merge, only a side to take
+        bool binary = (b1?.Contains('\0') ?? false) || (o?.Contains('\0') ?? false) || (t?.Contains('\0') ?? false);
+        if (binary) return new GitConflictStages(null, null, null) { Binary = true, HasBase = b1 != null, HasOurs = o != null, HasTheirs = t != null };
+        return new GitConflictStages(b1, o, t) { HasBase = b1 != null, HasOurs = o != null, HasTheirs = t != null };
     }
 
     // ------------------------------------------------------------ stash

@@ -4,6 +4,7 @@
 export const ACTIONS = [
     ['pick', 'Pick', 'Keep the commit as it is'],
     ['reword', 'Reword', 'Keep the changes, write the message again'],
+    ['edit', 'Edit', 'Stop after replaying it, so the commit can be changed; then Continue'],
     ['squash', 'Squash', 'Join into the commit above, and join the messages'],
     ['fixup', 'Fixup', 'Join into the commit above, and drop this message'],
     ['drop', 'Drop', 'Leave the commit out'],
@@ -63,6 +64,6 @@ export function summary(rows, commits) {
     const then = commits.map((c) => c.hash).filter((h) => now.includes(h));
     const moved = now.filter((h, i) => then[i] !== h).length;
     if (moved > 0) parts.push(`${moved} moved`);
-    for (const [a, word] of [['reword', 'reworded'], ['squash', 'squashed'], ['fixup', 'fixed up'], ['drop', 'dropped']]) if (count(a)) parts.push(`${count(a)} ${word}`);
+    for (const [a, word] of [['reword', 'reworded'], ['edit', 'to edit'], ['squash', 'squashed'], ['fixup', 'fixed up'], ['drop', 'dropped']]) if (count(a)) parts.push(`${count(a)} ${word}`);
     return parts.join(', ');
 }
