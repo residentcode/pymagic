@@ -7,6 +7,7 @@ import { toast } from './toast';
 import { openRebase } from './rebase';
 import { Lanes, graphFits, logQuery, parseRefs, rowShapes } from './git-graph';
 import { changedLines, counts, hunkState, numbering, payload, selectAll, selectNone, stateOf, toggleHunk, toggleLine } from './hunks';
+import { commitList, commitPaths, groupFiles, linesOfChange, partialPaths } from './changelist-model';
 const $ = (id) => document.getElementById(id);
 async function api(url, init) {
     const res = await fetch(url, init);
@@ -67,6 +68,8 @@ const agoIso = (iso) => ago(Date.parse(iso) / 1000);
 export function setupGit(deps) {
     const { editor } = deps;
     let status = { available: false };
+    let lists = null; // { active, lists: [{ name, files }] } from /api/git/changelists
+    let commitChoice = ''; // the changelist the Commit button commits from ('' follows the active one)
     const baseText = new Map(); // rel -> text at HEAD (null: the file is not there)
     let hunks = [];
     let hunksFor = '';
@@ -93,6 +96,13 @@ export function setupGit(deps) {
         }
         catch (e) {
             status = { available: false, reason: String(e.message ?? e) };
+        }
+        lists = null;
+        if (status.available) {
+            try {
+                lists = await api('/api/git/changelists');
+            }
+            catch { /* the lists are an addition: without them every file is in the one default list */ }
         }
         baseText.clear();
         for (const rel of Array.from(partial.keys()))
@@ -153,7 +163,7 @@ export function setupGit(deps) {
             empty.textContent = status.hasCommits === false ? 'Nothing here yet. Create a file to start.' : 'No changes.';
             box.append(empty);
         }
-        for (const f of files) {
+        const fileRow = (f) => {
             const row = document.createElement('div');
             row.className = 'gc';
             const box1 = document.createElement('input');
@@ -194,14 +204,129 @@ export function setupGit(deps) {
             roll.textContent = '↶';
             roll.title = 'Roll back this file to the last commit (cannot be undone)';
             roll.onclick = (ev) => { ev.stopPropagation(); void rollback([f]); };
-            row.append(box1, st, path, lines, roll);
+            const move = document.createElement('button');
+            move.className = 'roll move';
+            move.textContent = '⇄';
+            move.title = 'Move this file to another changelist';
+            move.onclick = (ev) => { ev.stopPropagation(); moveMenu(ev, f); };
+            row.append(box1, st, path, lines, move, roll);
             row.onclick = () => void showChange(f);
             row.ondblclick = () => { if (f.worktree !== 'D' && f.index !== 'D')
                 void deps.openFile(f.path); };
-            box.append(row);
+            return row;
+        };
+        const groups = groupFiles(files, lists);
+        for (const g of groups) {
+            box.append(listHeader(g));
+            for (const f of g.files)
+                box.append(fileRow(f));
         }
+        paintCommitList(groups);
         syncAll();
     }
+    // ------------------------------------------------------------------ changelists
+    /** Changes a list (create, rename, delete, active, move), then reads everything again. */
+    async function listAction(body) {
+        try {
+            await post('/api/git/changelist', body);
+        }
+        catch (e) {
+            toast(String(e.message ?? e), true);
+        }
+        await refresh();
+    }
+    function listHeader(g) {
+        const head = document.createElement('div');
+        head.className = 'gc-list';
+        head.dataset.list = g.name;
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'git-active-list';
+        radio.checked = g.active;
+        radio.title = 'New changes go into this list';
+        radio.onchange = () => { commitChoice = g.name; void listAction({ op: 'active', name: g.name }); };
+        const name = document.createElement('span');
+        name.className = 'name';
+        name.textContent = `${g.name} (${g.files.length})`;
+        name.title = g.active ? 'The active changelist: new changes go into it' : 'A changelist';
+        head.append(radio, name);
+        const button = (label, title, on) => {
+            const b = document.createElement('button');
+            b.textContent = label;
+            b.title = title;
+            b.onclick = (ev) => { ev.stopPropagation(); on(); };
+            head.append(b);
+        };
+        button('Shelve', 'Put the files of this list away on the shelf and take them out of the working tree', () => window.dispatchEvent(new CustomEvent('pymagic:shelve', { detail: { paths: g.files.map((f) => f.path), list: g.name } })));
+        if (!g.isDefault) {
+            button('Rename', 'Rename this changelist', () => {
+                const next = window.prompt('New name for the changelist:', g.name);
+                if (next && next.trim() && next.trim() !== g.name)
+                    void listAction({ op: 'rename', name: g.name, newName: next.trim() });
+            });
+            button('Delete', 'Delete this changelist; its files go back to the default one', () => void listAction({ op: 'delete', name: g.name }));
+        }
+        return head;
+    }
+    function moveMenu(ev, f) {
+        closePopup();
+        popup = document.createElement('div');
+        popup.className = 'git-popup';
+        const title = document.createElement('div');
+        title.className = 'meta';
+        title.textContent = `Move ${f.path} to:`;
+        popup.append(title);
+        const current = groupFiles(status.files ?? [], lists).find((g) => g.files.some((x) => x.path === f.path))?.name;
+        for (const l of lists?.lists ?? [{ name: 'Changes' }]) {
+            const b = document.createElement('button');
+            b.textContent = l.name;
+            b.disabled = l.name === current;
+            b.onclick = () => { closePopup(); void listAction({ op: 'move', paths: [f.path], name: l.name }); };
+            popup.append(b);
+        }
+        const fresh = document.createElement('button');
+        fresh.textContent = 'New changelist…';
+        fresh.onclick = async () => {
+            closePopup();
+            const name = window.prompt('Name of the new changelist:');
+            if (!name || !name.trim())
+                return;
+            try {
+                await post('/api/git/changelist', { op: 'create', name: name.trim() });
+                await post('/api/git/changelist', { op: 'move', paths: [f.path], name: name.trim() });
+            }
+            catch (e) {
+                toast(String(e.message ?? e), true);
+            }
+            await refresh();
+        };
+        popup.append(fresh);
+        popup.style.left = `${Math.min(ev.clientX, window.innerWidth - 220)}px`;
+        popup.style.top = `${Math.min(ev.clientY, window.innerHeight - 200)}px`;
+        document.body.append(popup);
+    }
+    /** The "commit from" choice: one option per list. */
+    function paintCommitList(groups) {
+        const select = $('git-cl-commit');
+        const chosen = commitList(lists, commitChoice);
+        select.replaceChildren();
+        for (const g of groups) {
+            const o = document.createElement('option');
+            o.value = g.name;
+            o.textContent = `${g.name} (${g.files.length})`;
+            select.append(o);
+        }
+        select.value = chosen;
+        select.parentElement.style.display = groups.length > 1 ? '' : 'none';
+    }
+    $('git-cl-commit').onchange = () => { commitChoice = $('git-cl-commit').value; };
+    $('git-cl-new').onclick = async () => {
+        const name = window.prompt('Name of the new changelist:');
+        if (!name || !name.trim())
+            return;
+        commitChoice = name.trim();
+        await listAction({ op: 'create', name: name.trim(), active: true });
+    };
     function syncAll() {
         const all = $('git-all');
         const files = status.files ?? [];
@@ -237,12 +362,16 @@ export function setupGit(deps) {
     const result = (text, bad = false) => { $('git-result').textContent = text; $('git-result').className = bad ? 'bad' : ''; };
     async function commit() {
         const amend = $('git-amend').checked;
-        const paths = (status.files ?? []).filter((f) => !unchecked.has(f.path) && !partial.has(f.path)).map((f) => f.path);
+        // only the files of the changelist chosen beside the button
+        const list = commitList(lists, commitChoice);
+        const files = status.files ?? [];
+        const paths = commitPaths(files, lists, list, unchecked, partial);
+        const partialOfList = partialPaths(files, lists, list, partial);
         const message = $('git-message').value;
         const chosen = {};
-        for (const [rel, p] of partial)
-            chosen[rel] = payload(p.sel);
-        if (!amend && paths.length === 0 && partial.size === 0) {
+        for (const rel of partialOfList)
+            chosen[rel] = payload(partial.get(rel).sel);
+        if (!amend && paths.length === 0 && partialOfList.length === 0) {
             result('Select the files to commit.', true);
             return;
         }
@@ -254,8 +383,9 @@ export function setupGit(deps) {
         $('git-commit').disabled = true;
         try {
             await deps.saveAll();
-            const { hash } = await post('/api/git/commit', { paths, message, amend, ...(partial.size ? { partial: chosen } : {}) });
-            partial.clear();
+            const { hash } = await post('/api/git/commit', { paths, message, amend, changelist: list, ...(partialOfList.length ? { partial: chosen } : {}) });
+            for (const rel of partialOfList)
+                partial.delete(rel);
             $('git-message').value = '';
             $('git-amend').checked = false;
             result('');
@@ -346,7 +476,7 @@ export function setupGit(deps) {
         const k = counts(diff, sel);
         $('git-lines-count').textContent = `${k.chosen} of ${k.total} changed lines`;
     }
-    async function chooseLines(f) {
+    async function chooseLines(f, change) {
         let diff;
         try {
             await deps.saveAll();
@@ -361,7 +491,9 @@ export function setupGit(deps) {
             return;
         }
         const known = partial.get(f.path);
-        const sel = known && known.sel.id === diff.id ? known.sel : unchecked.has(f.path) ? selectNone(diff) : selectAll(diff);
+        // from a change bar of the editor: just the lines of that change are chosen
+        const sel = change ? { id: diff.id, hunks: linesOfChange(diff, change) }
+            : known && known.sel.id === diff.id ? known.sel : unchecked.has(f.path) ? selectNone(diff) : selectAll(diff);
         choosing = { f, diff, sel };
         $('git-lines-title').textContent = `${f.path} — choose what to commit`;
         $('git-lines').classList.add('open');
@@ -653,7 +785,22 @@ export function setupGit(deps) {
             next.onclick = () => { closePopup(); goToChange(ed, hunksOf, 1, true, hunkLine(ed, h)); };
             undo.className = 'git-revert-change';
             diff.className = 'git-show-diff';
-            popup.append(undo, diff, prev, next);
+            const pick = document.createElement('button');
+            pick.textContent = 'Commit lines…';
+            pick.title = 'Choose just these lines for the next commit';
+            pick.onclick = () => {
+                closePopup();
+                const model = ed.getModel();
+                const rel = model && deps.relOf(model);
+                const entry = rel && fileStatus(rel);
+                if (!entry) {
+                    toast('This file has no change against the last commit.', true);
+                    return;
+                }
+                showTab('git');
+                void chooseLines(entry, h);
+            };
+            popup.append(undo, diff, pick, prev, next);
             popup.style.left = `${Math.max(0, Math.min(x, window.innerWidth - 360))}px`;
             popup.style.top = `${Math.max(0, Math.min(y, window.innerHeight - 220))}px`;
             document.body.append(popup);
@@ -1171,5 +1318,5 @@ export function setupGit(deps) {
     $('git-annotate').checked = annotate;
     $('git-inline').checked = inline;
     void refresh();
-    return { refresh, showDiff, attach, status: () => status };
+    return { refresh, showDiff, attach, status: () => status, changelists: () => lists, unchecked: () => unchecked, partial: () => partial, commitList: () => commitList(lists, commitChoice) };
 }

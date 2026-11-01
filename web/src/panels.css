@@ -613,3 +613,10 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 .pr-confirm-what { margin-top: 10px; color: var(--dim); } .pr-confirm-request { font-family: var(--mono); font-size: 12px; word-break: break-all; margin: 4px 0; }
 .pr-confirm-body { font-family: var(--mono); font-size: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; max-height: 240px; overflow: auto; white-space: pre-wrap; margin: 4px 0; }
 .pr-form { width: 560px; max-width: 94vw; } .pr-form textarea { width: 100%; font-family: inherit; margin-top: 6px; }
+/* changelists and the shelf in the Git tab */
+#git-cl-new, #git-shelf-new { background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 0 8px; font: inherit; font-weight: normal; cursor: pointer; } #git-cl-new:hover, #git-shelf-new:hover { background: var(--hover); }
+.gc-list { display: flex; gap: 6px; align-items: baseline; padding: 2px 8px; font-weight: 600; background: var(--panel); border-top: 1px solid var(--line); } .gc-list .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-list button { background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 0 6px; font: inherit; font-weight: normal; font-size: 11.5px; cursor: pointer; } .gc-list button:hover { background: var(--hover); }
+.gc .move { margin-left: 0; }
+#git-commit-bar select { background: var(--panel); color: var(--fg); border: 1px solid var(--line); font: inherit; max-width: 14em; }
+.shelf-patch { font: 12.5px Consolas, monospace; white-space: pre-wrap; word-break: break-all; } .shelf-patch .sp-add { background: rgba(76,187,108,.16); } .shelf-patch .sp-del { background: rgba(229,83,75,.16); } .shelf-patch .sp-hunk { color: var(--accent, #6aa9ff); } .shelf-patch .sp-head { color: var(--dim); font-weight: 600; } .shelf-patch .sp-ctx { color: var(--dim); }

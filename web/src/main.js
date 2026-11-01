@@ -33,6 +33,7 @@ import { setupHttpClient } from './http';
 import { setupNotebook } from './notebook';
 import { buildInfo, buildLabel } from './build-info.js';
 import { setupGitSync } from './git-sync';
+import { setupGitShelf } from './git-shelf';
 import { setupExplorer } from './explorer';
 import { setupTabs } from './tabs';
 import { setupSplit } from './split';
@@ -1065,6 +1066,7 @@ async function main() {
         reloadAll: reloadAllFromDisk,
     });
     setupGitSync({ git, deps: { saveAll: common.saveAll, reloadAll: reloadAllFromDisk, openFile, monaco } });
+    setupGitShelf({ git, deps: { saveAll: common.saveAll, reloadAll: reloadAllFromDisk } });
     const hierarchy = setupHierarchy({
         editor, lsp, openFile, modelForUri,
         uriOf: (model) => serverUri.get(model),
