@@ -51,6 +51,7 @@ import { setupRecent } from './recent';
 import { setupRunConfigurations } from './runconfig';
 import { setupHistory } from './history';
 import { setupScratches } from './scratches';
+import { setupInjections } from './injection';
 import { setupFileActions, fileTypes } from './fileactions';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
@@ -1131,7 +1132,8 @@ async function main() {
     setupSchemaCheck(common);
     setupProfiler({ ...common, askText: (...a) => explorer.askText(...a) });
     setupHttpClient({ ...common, root: info.root, askText: (...a) => explorer.askText(...a) });
-    setupDatabase({ ...common, askText: (...a) => explorer.askText(...a), runScript: (rel, args) => runHooks.runScript(rel, args) });
+    const database = setupDatabase({ ...common, askText: (...a) => explorer.askText(...a), runScript: (rel, args) => runHooks.runScript(rel, args) });
+    setupInjections({ database });
     // code actions that need the page (not just a text edit) arrive as commands
     monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name) => {
         window.dispatchEvent(new CustomEvent('pymagic:install', { detail: name }));

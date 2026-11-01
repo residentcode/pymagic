@@ -572,5 +572,13 @@ export function setupDatabase(deps) {
 
     $('t-database').onclick = () => { showTab('database'); void loadSources(); };
     setMode('table');
-    return { show: () => { showTab('database'); void loadSources(); } };
+    return {
+        show: () => { showTab('database'); void loadSources(); },
+        /** The tables and views of the chosen data source (the first when none is chosen), for SQL completed elsewhere. */
+        async objects() {
+            if (!sources.length) await loadSources();
+            const path = sourceBox.value || sources.find((s) => s.exists)?.path;
+            return path ? await loadSchema(path) : [];
+        },
+    };
 }

@@ -41,6 +41,7 @@ const FILES = {
     'notes.md': '# Notes\n\nSee [the guide](docs/nope.md) and [here](#notes).\n\n[g](docs/guide.md#nowhere) [h](docs/guide.md#setup)\n',
     'docs/guide.md': '# Guide\n\n## Setup\n',
     'shop_lib.py': 'def total(prices):\n    return sum(prices)\n',
+    'inj.py': 'import re\n\n# language=json\nCONFIG = \'{"a": 1}\'\nQUERY = "SELECT id, name FROM item WHERE price > 1"\nHALF = "SELECT  FROM item"\nPATTERN = re.compile(r"^(\\d+)-[a-z]{2}$")\n',
     'hist.py': 'def f():\n    return 0\n',
     'intent.py': "name = 'x'\nprint('Hello ' + name + '!')\nvalue = 255\n",
     'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\nN = re.compile(f"{PATTERN.pattern}[cc]")\n',
@@ -153,6 +154,38 @@ describe('the editor and the language server', () => {
         await page.evaluate(`window.pymagic.editor.getAction('editor.action.formatDocument').run()`);
         const text = await page.waitFor(`(() => { const t = window.pymagic.editor.getValue(); return t.includes("name = 'pen'") ? t : null; })()`, 15000, 'the formatted text');
         assert.equal(text, "url = '/shop/about/'\nname = 'pen'\nsaid = \"it's\"\n");
+    });
+});
+
+describe('language injections', () => {
+    const classes = () => page.evaluate(`(() => { const m = window.pymagic.editor.getModel(); const out = {}; for (const d of m.getAllDecorations()) for (const c of (d.options.inlineClassName ?? '').split(' ')) if (c.startsWith('inj-')) out[c] = (out[c] ?? 0) + 1; return out; })()`);
+
+    test('SQL, JSON and a regular expression in strings are coloured by their own languages', async () => {
+        await open('inj.py');
+        const found = await page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); const out = {}; for (const d of m.getAllDecorations()) for (const c of (d.options.inlineClassName ?? '').split(' ')) if (c.startsWith('inj-')) out[c] = (out[c] ?? 0) + 1; return out['inj-kw'] >= 3 && out['inj-re-quantifier'] ? out : null; })()`, 20000, 'the injected languages');
+        assert.ok(found['inj-sql'] >= 2, JSON.stringify(found));      // QUERY and HALF, by their keywords
+        assert.ok(found['inj-json'] === 1, JSON.stringify(found));    // by the comment above
+        assert.ok(found['inj-regex'] === 1 && found['inj-re-group'] >= 2 && found['inj-re-class'] === 1 && found['inj-re-anchor'] === 2, JSON.stringify(found));
+    });
+
+    test('SQL in a string is completed with the columns of the data source', async () => {
+        await open('inj.py');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; const line = ed.getModel().getLinesContent().findIndex((l) => l.startsWith('HALF')) + 1; ed.setPosition({ lineNumber: line, column: 'HALF = "SELECT '.length + 1 }); ed.focus(); ed.trigger('e2e', 'editor.action.triggerSuggest', {}); })()`);
+        await page.waitFor(`[...document.querySelectorAll('.suggest-widget .monaco-list-row')].some((r) => r.textContent.includes('price'))`, 20000, 'the columns of item');
+        await page.key(27, 'Escape');
+    });
+
+    test('Edit Injected Fragment opens the SQL in a window of its own and writes it back with its quotes', async () => {
+        await open('inj.py');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; const line = ed.getModel().getLinesContent().findIndex((l) => l.startsWith('QUERY')) + 1; ed.setPosition({ lineNumber: line, column: 14 }); ed.focus(); ed.getAction('pymagic.injection.edit').run(); })()`);
+        await page.waitFor(`document.querySelector('.inj-window .monaco-editor')`, 10000, 'the window');
+        assert.match(await page.evaluate(`document.querySelector('.inj-window .hist-diff-title').textContent`), /SQL fragment/);
+        await page.evaluate(`(() => { const inner = window.pymagic.monaco.editor.getEditors().find((e) => document.querySelector('.inj-window').contains(e.getDomNode())); inner.setValue('SELECT "id", name\\nFROM item'); })()`);
+        await page.evaluate(`[...document.querySelectorAll('.inj-window button')].find((b) => b.textContent === 'OK').click()`);
+        await page.waitFor(`!document.querySelector('.inj-window')`, 5000, 'the window to close');
+        const line = await page.evaluate(`window.pymagic.editor.getModel().getLinesContent().find((l) => l.startsWith('QUERY'))`);
+        assert.equal(line, 'QUERY = "SELECT \\"id\\", name\\nFROM item"');
+        await page.evaluate(`window.pymagic.editor.trigger('e2e', 'undo', {})`);
     });
 });
 

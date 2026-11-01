@@ -550,3 +550,18 @@ li.mark-resources .fname, li.mark-resources .folder { color: var(--teal, #6cc4c4
 .scratch-row.current { background: var(--sel-soft); }
 .scratch-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scratch-when { color: var(--faint); font-size: 11px; }
+
+/* language injections in Python strings */
+.inj-frag { background: color-mix(in srgb, var(--accent) 7%, transparent); border-radius: 3px; }
+.inj-kw, .inj-re-group { color: #c678dd !important; }
+.inj-str { color: #98c379 !important; }
+.inj-num { color: #d19a66 !important; }
+.inj-com { color: var(--faint) !important; font-style: italic; }
+.inj-attr { color: #e5c07b !important; }
+.inj-op { color: #56b6c2 !important; }
+.inj-re-escape { color: #56b6c2 !important; }
+.inj-re-class { color: #d19a66 !important; }
+.inj-re-quantifier { color: #e06c75 !important; font-weight: 600; }
+.inj-re-anchor { color: #e5c07b !important; font-weight: 600; }
+.inj-re-alternation { color: #e06c75 !important; }
+.inj-window { width: min(900px, 94vw); height: min(520px, 80vh); }
