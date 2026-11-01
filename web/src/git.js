@@ -5,6 +5,7 @@ import { diffLines } from './preview';
 import { showTab } from './panel';
 import { toast } from './toast';
 import { openRebase } from './rebase';
+import { Lanes, graphFits, logQuery, parseRefs, rowShapes } from './git-graph';
 import { changedLines, counts, hunkState, numbering, payload, selectAll, selectNone, stateOf, toggleHunk, toggleLine } from './hunks';
 const $ = (id) => document.getElementById(id);
 async function api(url, init) {
@@ -101,6 +102,7 @@ export function setupGit(deps) {
         paintFileList();
         void paint();
         void loadBranches();
+        void fillLogBranches();
         window.dispatchEvent(new Event('pymagic:git-refreshed'));
         if (annotate)
             void loadBlame();
@@ -581,6 +583,39 @@ export function setupGit(deps) {
             const h = hunkAt(ed, hunksOf(), e.target.position.lineNumber);
             if (!h)
                 return;
+            const ev = e.event.browserEvent;
+            showHunkPopup(ed, hunksOf, h, ev.clientX + 8, ev.clientY);
+        });
+        for (const [id, label, dir] of [['git-next-change', 'Go to next change', 1], ['git-prev-change', 'Go to previous change', -1]])
+            ed.addAction({ id, label, run: () => { goToChange(ed, hunksOf, dir, false); } });
+    }
+    /** The first line of a change (a deletion has no lines: the one below it). */
+    const hunkLine = (ed, h) => Math.min(h.newStart + 1, ed.getModel()?.getLineCount() ?? 1);
+    /** Moves the cursor to the next or previous change of `ed` (around the end of the file); with `popup`, shows its toolbar there. */
+    function goToChange(ed, hunksOf, dir, withPopup, from) {
+        const list = hunksOf().slice().sort((a, b) => a.newStart - b.newStart);
+        if (!list.length) {
+            toast('No changes in this file');
+            return;
+        }
+        const here = from ?? ed.getPosition()?.lineNumber ?? 1;
+        const lines = list.map((h) => hunkLine(ed, h));
+        let at = dir > 0 ? lines.findIndex((l) => l > here) : lines.map((l, i) => (l < here ? i : -1)).filter((i) => i >= 0).pop() ?? -1;
+        if (at < 0)
+            at = dir > 0 ? 0 : list.length - 1;
+        const h = list[at];
+        ed.setPosition({ lineNumber: lines[at], column: 1 });
+        ed.revealLineInCenterIfOutsideViewport(lines[at]);
+        ed.focus();
+        if (withPopup) {
+            const node = ed.getDomNode()?.getBoundingClientRect();
+            const vis = ed.getScrolledVisiblePosition({ lineNumber: lines[at], column: 1 });
+            if (node && vis)
+                showHunkPopup(ed, hunksOf, h, node.left + 70, node.top + vis.top + vis.height);
+        }
+    }
+    function showHunkPopup(ed, hunksOf, h, x, y) {
+        {
             closePopup();
             const kind = hunkKind(h);
             popup = document.createElement('div');
@@ -606,12 +641,23 @@ export function setupGit(deps) {
                 if (rel)
                     showDiff(`${rel} — working copy against the last commit`, (await headText(rel)) ?? '', model.getValue(), rel);
             };
-            popup.append(undo, diff);
-            const ev = e.event.browserEvent;
-            popup.style.left = `${Math.min(ev.clientX + 8, window.innerWidth - 360)}px`;
-            popup.style.top = `${Math.min(ev.clientY, window.innerHeight - 220)}px`;
+            const prev = document.createElement('button');
+            prev.textContent = '↑';
+            prev.title = 'Previous change';
+            prev.className = 'git-prev-change';
+            prev.onclick = () => { closePopup(); goToChange(ed, hunksOf, -1, true, hunkLine(ed, h)); };
+            const next = document.createElement('button');
+            next.textContent = '↓';
+            next.title = 'Next change';
+            next.className = 'git-next-change';
+            next.onclick = () => { closePopup(); goToChange(ed, hunksOf, 1, true, hunkLine(ed, h)); };
+            undo.className = 'git-revert-change';
+            diff.className = 'git-show-diff';
+            popup.append(undo, diff, prev, next);
+            popup.style.left = `${Math.max(0, Math.min(x, window.innerWidth - 360))}px`;
+            popup.style.top = `${Math.max(0, Math.min(y, window.innerHeight - 220))}px`;
             document.body.append(popup);
-        });
+        }
     }
     hunkPopups(editor, () => hunks);
     // ------------------------------------------------------------------ blame
@@ -737,6 +783,76 @@ export function setupGit(deps) {
     });
     // ------------------------------------------------------------------ history
     let logTicket = 0; // only the newest request may fill the list: refreshes overlap
+    let logLanes = new Lanes();
+    let logWidth = 1;
+    let logRemotes = [];
+    const SVG = 'http://www.w3.org/2000/svg';
+    /** The filters of the Log tab as the query wants them. */
+    function logFilter() {
+        return {
+            path: $('git-file-log').checked ? deps.currentRel() : '',
+            branch: $('git-log-branch').value,
+            author: $('git-log-author').value,
+            text: $('git-log-text').value,
+            since: $('git-log-since').value,
+            until: $('git-log-until').value,
+        };
+    }
+    /** The lanes of one row as an SVG: a dot for the commit and a line for each lane passing or joining. */
+    function graphCell(shape) {
+        const { lines, dot } = rowShapes(shape, 14, 20);
+        const cell = document.createElement('span');
+        cell.className = 'graph';
+        const svg = document.createElementNS(SVG, 'svg');
+        svg.setAttribute('width', String(shape.width * 14 + 8));
+        svg.setAttribute('height', '20');
+        for (const l of lines) {
+            const p = document.createElementNS(SVG, 'path');
+            p.setAttribute('d', l.x1 === l.x2 ? `M${l.x1} ${l.y1}V${l.y2}` : `M${l.x1} ${l.y1}C${l.x1} ${(l.y1 + l.y2) / 2} ${l.x2} ${(l.y1 + l.y2) / 2} ${l.x2} ${l.y2}`);
+            p.setAttribute('stroke', l.color);
+            p.setAttribute('stroke-width', '1.6');
+            p.setAttribute('fill', 'none');
+            svg.append(p);
+        }
+        const c = document.createElementNS(SVG, 'circle');
+        c.setAttribute('cx', String(dot.x));
+        c.setAttribute('cy', String(dot.y));
+        c.setAttribute('r', '3.6');
+        c.setAttribute('fill', dot.color);
+        c.setAttribute('class', 'dot');
+        svg.append(c);
+        cell.append(svg);
+        return cell;
+    }
+    /** The branch list of the filter (every local and remote branch) and the names of the remotes for the badges. */
+    async function fillLogBranches() {
+        try {
+            const b = await api('/api/git/branches');
+            const select = $('git-log-branch');
+            const keep = select.value;
+            const names = [...b.local, ...(b.remote ?? [])];
+            select.replaceChildren(...[['', 'current branch'], ['*', 'all branches'], ...names.map((n) => [n, n])].map(([v, t]) => {
+                const o = document.createElement('option');
+                o.value = v;
+                o.textContent = t;
+                return o;
+            }));
+            select.value = names.includes(keep) || keep === '*' ? keep : '';
+            logRemotes = [...new Set((b.remote ?? []).map((n) => n.split('/')[0]))];
+        }
+        catch { /* the list stays as it was */ }
+    }
+    for (const id of ['git-log-branch', 'git-log-since', 'git-log-until'])
+        $(id).onchange = () => void loadLog(true);
+    let filterTimer = 0;
+    for (const id of ['git-log-author', 'git-log-text'])
+        $(id).oninput = () => { clearTimeout(filterTimer); filterTimer = setTimeout(() => void loadLog(true), 300); };
+    $('git-log-clear').onclick = () => {
+        $('git-log-branch').value = '';
+        for (const id of ['git-log-author', 'git-log-text', 'git-log-since', 'git-log-until'])
+            $(id).value = '';
+        void loadLog(true);
+    };
     async function loadLog(reset) {
         if (reset) {
             logSkip = 0;
@@ -746,12 +862,19 @@ export function setupGit(deps) {
         if (logEnd || !status.available)
             return;
         const ticket = ++logTicket;
-        const rel = $('git-file-log').checked ? deps.currentRel() : '';
+        const filter = logFilter();
+        if (logSkip === 0) {
+            logLanes = new Lanes();
+            logWidth = 1;
+        }
+        const drawGraph = graphFits(filter);
         let commits;
         try {
-            commits = await api(`/api/git/log?limit=60&skip=${logSkip}` + (rel ? '&path=' + encodeURIComponent(rel) : ''));
+            commits = await api('/api/git/log?' + logQuery(filter, 60, logSkip));
         }
-        catch {
+        catch (e) {
+            if (logSkip === 0)
+                toast(String(e.message ?? e), true);
             return;
         }
         if (ticket !== logTicket)
@@ -764,6 +887,11 @@ export function setupGit(deps) {
             const row = document.createElement('div');
             row.className = 'gl';
             row.dataset.hash = c.hash;
+            if (drawGraph) {
+                const shape = logLanes.add(c);
+                logWidth = Math.max(logWidth, shape.width);
+                row.append(graphCell(shape));
+            }
             const hash = document.createElement('span');
             hash.className = 'hash';
             hash.textContent = c.shortHash;
@@ -775,7 +903,12 @@ export function setupGit(deps) {
             if (c.refs) {
                 const r = document.createElement('span');
                 r.className = 'refs';
-                r.textContent = `(${c.refs.replace(/HEAD -> /, '')})`;
+                for (const ref of parseRefs(c.refs, logRemotes)) {
+                    const b = document.createElement('span');
+                    b.className = `ref ${ref.kind}${ref.current ? ' current' : ''}`;
+                    b.textContent = ref.name;
+                    r.append(b);
+                }
                 row.append(r);
             }
             const who = document.createElement('span');
@@ -785,6 +918,7 @@ export function setupGit(deps) {
             row.onclick = () => void selectCommit(c.hash);
             box.append(row);
         }
+        box.style.setProperty('--gw', `${drawGraph ? Math.min(logWidth, 12) * 14 + 6 : 0}px`);
         if (!commits.length && reset) {
             const none = document.createElement('div');
             none.className = 'gl';
@@ -818,6 +952,9 @@ export function setupGit(deps) {
             const acts = document.createElement('div');
             acts.className = 'git-acts';
             for (const [label, title, run] of [
+                ['Copy hash', 'Copy the full hash of this commit', () => copyHash(hash)],
+                ['New branch here…', 'Make a branch that starts at this commit', () => branchHere(hash)],
+                ['Checkout', 'Look at this commit (a detached HEAD) or, when a branch points at it, switch to that branch', () => checkoutCommit(hash)],
                 ['Revert', 'Make a new commit that undoes this one', () => commitAction({ op: 'revert', hash }, 'Reverted')],
                 ['Cherry-pick', 'Apply this commit on top of the current branch', () => commitAction({ op: 'cherryPick', hash }, 'Cherry-picked')],
                 ['Reset to here…', 'Move the current branch to this commit', () => resetTo(hash)],
@@ -880,6 +1017,42 @@ export function setupGit(deps) {
         if (mode.trim() === 'hard' && !window.confirm('A hard reset throws away every change that is not committed, and the commits after this one.\n\nContinue?'))
             return;
         await commitAction({ op: 'reset', hash, mode: mode.trim() }, `Reset (${mode.trim()}) to ${hash.slice(0, 7)}`);
+    }
+    async function copyHash(hash) {
+        try {
+            await navigator.clipboard.writeText(hash);
+            toast(`Copied ${hash.slice(0, 7)}`);
+        }
+        catch {
+            toast('Could not copy', true);
+        }
+    }
+    async function branchHere(hash) {
+        const name = window.prompt(`Name of the new branch, starting at ${hash.slice(0, 7)}:`);
+        if (!name)
+            return;
+        const go = window.confirm(`Switch to ${name.trim()} now?\n\nOK: switch to it    Cancel: only make it`);
+        await commitAction({ op: 'createBranchAt', name: name.trim(), hash, checkout: go }, `Branch ${name.trim()} made`);
+    }
+    async function checkoutCommit(hash) {
+        const row = Array.from($('git-log').children).find((r) => r.dataset.hash === hash);
+        const branch = Array.from(row?.querySelectorAll('.ref.branch:not(.current)') ?? []).map((x) => x.textContent).find((n) => !n.includes('/') || !logRemotes.includes(n.split('/')[0]));
+        if (branch) {
+            try {
+                await deps.saveAll();
+                await post('/api/git/checkout', { branch });
+                await deps.reloadAll();
+                toast(`Switched to ${branch}`);
+            }
+            catch (e) {
+                toast(String(e.message ?? e), true);
+            }
+            logEnd = false;
+            $('git-log').replaceChildren();
+            await refresh();
+            return;
+        }
+        await commitAction({ op: 'checkoutCommit', hash }, `Checked out ${hash.slice(0, 7)} (detached HEAD)`);
     }
     async function tagCommit(hash) {
         const name = window.prompt(`Tag for ${hash.slice(0, 7)}:`);
@@ -969,7 +1142,7 @@ export function setupGit(deps) {
     };
     $('git-new-name').onkeydown = (ev) => { if (ev.key === 'Enter')
         $('git-new').click(); };
-    $('git-refresh').onclick = () => void refresh();
+    $('git-refresh').onclick = () => { logEnd = false; $('git-log').replaceChildren(); void refresh(); };
     $('git-init').onclick = async () => {
         try {
             await post('/api/git/init', {});

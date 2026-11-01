@@ -83,6 +83,11 @@
 #git-commit-bar { display: flex; gap: 10px; align-items: center; padding: 0 8px 6px; } #git-result { color: var(--dim); } #git-result.bad { color: var(--red); }
 .gl { display: flex; gap: 8px; padding: 1px 8px; cursor: pointer; white-space: nowrap; } .gl:hover { background: var(--hover); } .gl.sel { background: var(--sel); }
 .gl .hash { font-family: Consolas, monospace; color: var(--accent); } .gl .subject { overflow: hidden; text-overflow: ellipsis; flex: 1; } .gl .who { color: var(--dim); } .gl .refs { color: var(--warn); }
+#git-log-filter { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px 8px; border-bottom: 1px solid var(--line); } #git-log-filter input { width: 90px; min-width: 0; } #git-log-filter input[type=date] { width: 120px; } #git-log-filter select { max-width: 130px; }
+#git-log { --gw: 22px; } .gl { height: 20px; align-items: center; padding-top: 0; padding-bottom: 0; }
+.gl .graph { flex: none; width: var(--gw); height: 20px; display: block; overflow: hidden; margin-right: -2px; } .gl .graph svg { display: block; }
+.gl .refs { display: inline-flex; gap: 3px; } .gl .ref { font-size: 11px; padding: 0 5px; border-radius: 8px; border: 1px solid var(--line-strong, var(--line)); color: var(--fg); }
+.gl .ref.branch { border-color: var(--good); } .gl .ref.remote { border-color: var(--info); } .gl .ref.tag { border-color: var(--warn); } .gl .ref.current { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
 #git-detail .msg { padding: 4px 8px; white-space: pre-wrap; } #git-detail .meta { padding: 2px 8px; color: var(--dim); }
 .git-bar-added { background: var(--good); width: 3px !important; margin-left: 3px; cursor: pointer; }
 .git-bar-modified { background: var(--info); width: 3px !important; margin-left: 3px; cursor: pointer; }

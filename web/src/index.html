@@ -308,6 +308,14 @@
             </div>
             <div id="git-right">
               <div class="git-head"><span>History</span><label><input type="checkbox" id="git-file-log"> current file</label></div>
+              <div id="git-log-filter">
+                <select id="git-log-branch" title="Which branch's commits to show"><option value="">current branch</option><option value="*">all branches</option></select>
+                <input id="git-log-author" placeholder="author" title="Part of an author's name or e-mail" autocomplete="off" spellcheck="false">
+                <input id="git-log-text" placeholder="message" title="Words in the commit message" autocomplete="off" spellcheck="false">
+                <input id="git-log-since" type="date" title="Commits from this day">
+                <input id="git-log-until" type="date" title="Commits up to this day">
+                <button id="git-log-clear" title="Clear the filters">Clear</button>
+              </div>
               <div id="git-log"></div>
               <div id="git-detail"></div>
             </div>

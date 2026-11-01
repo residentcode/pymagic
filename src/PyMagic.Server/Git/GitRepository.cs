@@ -18,6 +18,7 @@ public sealed record GitCommit(string Hash, string ShortHash, string Author, str
 
 public sealed record GitChangedFile(string Status, string Path, string? OldPath);
 
+public sealed record GitLogFilter(bool All, string? Branch, string? Author, string? Text, string? Since, string? Until);
 public sealed record GitCommitDetail(GitCommit Commit, string Body, List<GitChangedFile> Files);
 
 public sealed record GitBlameLine(string Hash, string Author, long Time, string Summary);
@@ -245,11 +246,28 @@ public sealed partial class GitRepository
     }
 
     /// <summary>Commits, newest first; of one file when a path is given (following renames).</summary>
-    public List<GitCommit> Log(string? path, int limit, int skip)
+    public List<GitCommit> Log(string? path, int limit, int skip) => Log(path, limit, skip, null);
+
+    static readonly Regex DatePattern = new(@"^\d{4}-\d{2}-\d{2}$", RegexOptions.Compiled);
+
+    static string NoBreak(string text) => text.Replace("\0", "").Replace("\n", " ").Replace("\r", " ");
+
+    /// <summary>The same with the Log tab's filters: every branch or one, an author, words of the message, a date range. Without a path the order is topological, so a graph can be drawn from it.</summary>
+    public List<GitCommit> Log(string? path, int limit, int skip, GitLogFilter? filter)
     {
         limit = Math.Clamp(limit, 1, 500);
         skip = Math.Max(0, skip);
         var args = new List<string> { "log", $"--max-count={limit}", $"--skip={skip}", "--date=iso-strict", "--format=" + CommitFormat + "%x1e" };
+        if (filter != null)
+        {
+            if (filter.All) args.Add("--all");
+            else if (!string.IsNullOrEmpty(filter.Branch)) args.Add(CheckBranch(filter.Branch));
+            if (!string.IsNullOrEmpty(filter.Author)) { args.Add("-i"); args.Add("--author=" + NoBreak(filter.Author)); }
+            if (!string.IsNullOrEmpty(filter.Text)) { args.Add("-i"); args.Add("--fixed-strings"); args.Add("--grep=" + NoBreak(filter.Text)); }
+            if (!string.IsNullOrEmpty(filter.Since)) { if (!DatePattern.IsMatch(filter.Since)) throw new GitException("a date is written 2026-01-31"); args.Add("--since=" + filter.Since + " 00:00:00"); }
+            if (!string.IsNullOrEmpty(filter.Until)) { if (!DatePattern.IsMatch(filter.Until)) throw new GitException("a date is written 2026-01-31"); args.Add("--until=" + filter.Until + " 23:59:59"); }
+        }
+        if (path == null) args.Add("--topo-order");
         if (path != null) { args.Add("--follow"); args.Add("--"); args.Add(CheckPath(path)); }
         var r = Run(args.ToArray());
         if (r.Code != 0)
@@ -397,4 +415,16 @@ public sealed partial class GitRepository
     public void Checkout(string branch) => RunOrThrow("switch", CheckBranch(branch));
 
     public void CreateBranch(string name) => RunOrThrow("switch", "-c", CheckBranch(name));
+
+    /// <summary>A new branch starting at a commit (and checked out when asked).</summary>
+    public void CreateBranchAt(string name, string hash, bool checkout)
+    {
+        CheckBranch(name);
+        CheckRevision(hash);
+        if (checkout) RunOrThrow("switch", "-c", name, hash);
+        else RunOrThrow("branch", name, hash);
+    }
+
+    /// <summary>Looks at a commit with a detached HEAD; git refuses it when it would lose changes.</summary>
+    public void CheckoutCommit(string hash) => RunOrThrow("switch", "--detach", CheckRevision(hash));
 }
