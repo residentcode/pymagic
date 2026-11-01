@@ -53,6 +53,8 @@ import { setupHistory } from './history';
 import { setupScratches } from './scratches';
 import { setupInjections } from './injection';
 import { setupSpelling } from './spell';
+import { setupMarkdownPreview } from './mdpreview';
+import { setupMarkdownTools } from './mdtools';
 import { setupFileActions, fileTypes } from './fileactions';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
@@ -1135,6 +1137,8 @@ async function main() {
     setupHttpClient({ ...common, root: info.root, askText: (...a) => explorer.askText(...a) });
     const database = setupDatabase({ ...common, askText: (...a) => explorer.askText(...a), runScript: (rel, args) => runHooks.runScript(rel, args) });
     setupInjections({ database });
+    setupMarkdownPreview({ editor, currentFile: () => currentRel, openFile, askText: (...a) => explorer.askText(...a) });
+    setupMarkdownTools({ editor, currentFile: () => currentRel, relOfModel: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     setupSpelling({ relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     // code actions that need the page (not just a text edit) arrive as commands
     monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name) => {

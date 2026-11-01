@@ -565,3 +565,36 @@ li.mark-resources .fname, li.mark-resources .folder { color: var(--teal, #6cc4c4
 .inj-re-anchor { color: #e5c07b !important; font-weight: 600; }
 .inj-re-alternation { color: #e06c75 !important; }
 .inj-window { width: min(900px, 94vw); height: min(520px, 80vh); }
+
+/* the Markdown and reStructuredText preview */
+#md-toggle { margin: 4px 8px 4px auto; align-self: center; padding: 2px 10px; }
+#md-toggle.on { background: var(--sel-soft); color: var(--accent-text); }
+.md-pane { flex: 0 0 44%; min-width: 260px; max-width: 70%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg); }
+.md-pane[hidden] { display: none; }
+.md-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.md-title { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md-body { flex: 1; overflow: auto; padding: 16px 24px 48px; line-height: 1.65; position: relative; }
+.md-body h1, .md-body h2 { padding-bottom: .25em; border-bottom: 1px solid var(--line); }
+.md-body h1 { font-size: 1.8em; margin: .8em 0 .5em; } .md-body h2 { font-size: 1.45em; margin: 1em 0 .5em; } .md-body h3 { font-size: 1.2em; margin: 1em 0 .4em; }
+.md-body p { margin: .6em 0; } .md-body p.tight { margin: 0; }
+.md-body code { font-family: var(--mono); font-size: .9em; background: var(--raised); padding: .1em .35em; border-radius: 4px; }
+.md-body pre { background: var(--raised); padding: 12px 14px; border-radius: 8px; overflow: auto; border: 1px solid var(--line); }
+.md-body pre code { background: none; padding: 0; }
+.md-body blockquote { margin: .8em 0; padding: 0 1em; color: var(--dim); border-left: 3px solid var(--accent); }
+.md-body table { border-collapse: collapse; margin: .8em 0; } .md-body th, .md-body td { border: 1px solid var(--line-strong); padding: 5px 12px; } .md-body th { background: var(--panel); }
+.md-body img { max-width: 100%; } .md-body hr { border: 0; border-top: 1px solid var(--line); margin: 1.4em 0; }
+.md-body a { color: var(--accent-text); cursor: pointer; text-decoration: none; } .md-body a:hover { text-decoration: underline; }
+.md-body li.md-task { list-style: none; margin-left: -1.2em; } .md-body li.md-task input { margin-right: .5em; }
+.md-body [data-line] { cursor: text; }
+.md-note-line { color: var(--dim); font-size: 12px; margin-bottom: 6px; }
+.md-mermaid { margin: .8em 0; overflow: auto; }
+.md-diagram text { font: 13px var(--ui-font, sans-serif); fill: var(--fg); }
+.md-node rect, .md-node polygon, .md-node ellipse { fill: var(--panel); stroke: var(--accent); stroke-width: 1.4; }
+.md-edge { stroke: var(--dim); stroke-width: 1.5; fill: none; } .md-edge.dashed { stroke-dasharray: 5 4; } .md-edge.thick { stroke-width: 3; }
+.md-arrowhead { fill: var(--dim); } .md-edge-label-bg { fill: var(--bg); } .md-edge-label { font-size: 12px !important; fill: var(--dim) !important; }
+.md-lifeline { stroke: var(--line-strong); stroke-dasharray: 4 4; } .md-note { fill: var(--raised); stroke: var(--line-strong); }
+
+.md-body li.md-task > p { display: inline; margin: 0; }
+.md-body li.md-task > ul, .md-body li.md-task > ol { margin-top: .2em; }
+#scratch-box { min-height: 96px; }
+#scratch-list { min-height: 40px; }

@@ -43,6 +43,8 @@ const FILES = {
     'shop_lib.py': 'def total(prices):\n    return sum(prices)\n',
     'inj.py': 'import re\n\n# language=json\nCONFIG = \'{"a": 1}\'\nQUERY = "SELECT id, name FROM item WHERE price > 1"\nHALF = "SELECT  FROM item"\nPATTERN = re.compile(r"^(\\d+)-[a-z]{2}$")\n',
     'typo.py': '# Recieve the mesage here\n\n\ndef fetch_mesage():\n    return 1\n',
+    'demo.md': '# Demo\n\nA [guide](docs/guide.md) and [setup](docs/guide.md#setup) and **bold**.\n\n| Name | Qty |\n|:--|--:|\n| pen | 2 |\n| notebook | 12 |\n\n- [ ] todo\n- [x] done\n\n```mermaid\ngraph TD\n  A[Start] --> B{Ok?}\n  B -->|yes| C[Done]\n```\n\n## Second\n\ntext\n',
+    'demo.rst': 'Title\n=====\n\nA *word*.\n',
     'hist.py': 'def f():\n    return 0\n',
     'intent.py': "name = 'x'\nprint('Hello ' + name + '!')\nvalue = 255\n",
     'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\nN = re.compile(f"{PATTERN.pattern}[cc]")\n',
@@ -155,6 +157,82 @@ describe('the editor and the language server', () => {
         await page.evaluate(`window.pymagic.editor.getAction('editor.action.formatDocument').run()`);
         const text = await page.waitFor(`(() => { const t = window.pymagic.editor.getValue(); return t.includes("name = 'pen'") ? t : null; })()`, 15000, 'the formatted text');
         assert.equal(text, "url = '/shop/about/'\nname = 'pen'\nsaid = \"it's\"\n");
+    });
+});
+
+describe('Markdown and reStructuredText', () => {
+    const preview = (js) => page.evaluate(`(() => { const b = document.querySelector('.md-body'); return ${js}; })()`);
+
+    test('the preview shows headings, a table, task boxes, a link and a Mermaid flowchart, and follows the typing', async () => {
+        await open('demo.md');
+        await page.evaluate(`${$('md-toggle')}.click()`);
+        await page.waitFor(`document.querySelector('.md-pane:not([hidden]) .md-body h1')`, 15000, 'the preview');
+        assert.equal(await preview(`b.querySelector('h1').textContent`), 'Demo');
+        assert.deepEqual(await preview(`[...b.querySelectorAll('tr')].map((r) => [...r.children].map((c) => c.textContent).join('|'))`), ['Name|Qty', 'pen|2', 'notebook|12']);
+        assert.equal(await preview(`b.querySelector('td:nth-child(2)').style.textAlign`), 'right');
+        assert.deepEqual(await preview(`[...b.querySelectorAll('li.md-task input')].map((i) => i.checked)`), [false, true]);
+        assert.deepEqual(await preview(`[...b.querySelectorAll('svg.md-diagram text')].map((t) => t.textContent)`), ['yes', 'Start', 'Ok?', 'Done']);
+        assert.equal(await preview(`b.querySelectorAll('svg.md-diagram .md-node').length`), 3);
+        await page.evaluate(`window.pymagic.editor.executeEdits('e2e', [{ range: { startLineNumber: 3, startColumn: 1, endLineNumber: 3, endColumn: 1 }, text: 'Typed just now.\\\\n\\\\n' }])`);
+        await page.waitFor(`document.querySelector('.md-body')?.textContent.includes('Typed just now.')`, 5000, 'the preview to follow the typing');
+        await page.evaluate(`window.pymagic.editor.trigger('e2e', 'undo', {})`);
+    });
+
+    test('a link in the preview opens the file in the editor', async () => {
+        await open('demo.md');
+        await page.waitFor(`document.querySelector('.md-body a[data-href="docs/guide.md"]')`, 10000, 'the link');
+        await page.evaluate(`document.querySelector('.md-body a[data-href="docs/guide.md"]').click()`);
+        await page.waitFor(`window.pymagic.editor.getModel().getValue().startsWith('# Guide')`, 10000, 'guide.md in the editor');
+    });
+
+    test('the Structure view lists the headings of a Markdown file', async () => {
+        await open('demo.md');
+        await page.evaluate(`${$('r-structure')}.click()`);
+        await page.waitFor(`[...document.querySelectorAll('#structure li')].map((l) => l.textContent).join('|').includes('Second')`, 10000, 'the headings');
+        assert.match(await page.evaluate(`[...document.querySelectorAll('#structure li')].map((l) => l.textContent).join('|')`), /Demo.*Second/);
+        await page.evaluate(`document.getElementById('r-files')?.click() ?? document.querySelector('#rail button').click()`);
+    });
+
+    test('links are completed with the project\'s files and the headings of the target', async () => {
+        await open('demo.md');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; const m = ed.getModel(); const end = m.getLineCount(); ed.executeEdits('e2e', [{ range: { startLineNumber: end, startColumn: m.getLineMaxColumn(end), endLineNumber: end, endColumn: m.getLineMaxColumn(end) }, text: '\\\\n[x](docs/gui' }]); ed.setPosition({ lineNumber: end + 1, column: '[x](docs/gui'.length + 1 }); ed.focus(); ed.trigger('e2e', 'editor.action.triggerSuggest', {}); })()`);
+        await page.waitFor(`[...document.querySelectorAll('.suggest-widget .monaco-list-row')].some((r) => r.textContent.includes('docs/guide.md'))`, 15000, 'the file offered');
+        await page.key(27, 'Escape');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; const m = ed.getModel(); const end = m.getLineCount(); ed.executeEdits('e2e', [{ range: { startLineNumber: end, startColumn: 1, endLineNumber: end, endColumn: m.getLineMaxColumn(end) }, text: '[x](docs/guide.md#' }]); ed.setPosition({ lineNumber: end, column: '[x](docs/guide.md#'.length + 1 }); ed.trigger('e2e', 'editor.action.triggerSuggest', {}); })()`);
+        await page.waitFor(`[...document.querySelectorAll('.suggest-widget .monaco-list-row')].some((r) => r.textContent.includes('setup'))`, 15000, 'the heading offered');
+        await page.key(27, 'Escape');
+        await page.evaluate(`window.pymagic.editor.trigger('e2e', 'undo', {}); window.pymagic.editor.trigger('e2e', 'undo', {})`);
+    });
+
+    test('Format Tables lines the pipes up', async () => {
+        await open('demo.md');
+        await page.evaluate(`window.pymagic.editor.getAction('pymagic.markdown.formatTables').run()`);
+        const lines = await page.evaluate(`window.pymagic.editor.getModel().getLinesContent().slice(4, 8)`);
+        assert.deepEqual(lines, ['| Name     | Qty |', '| :------- | --: |', '| pen      |   2 |', '| notebook |  12 |']);
+        await page.evaluate(`window.pymagic.editor.trigger('e2e', 'undo', {})`);
+    });
+
+    test('Export to HTML writes a page of its own next to the document', async () => {
+        await open('demo.md');
+        await page.evaluate(`window.pymagic.editor.getAction('pymagic.markdown.export').run()`);
+        await page.waitFor(`document.querySelector('.ask-box input')`, 10000, 'the question');
+        await page.evaluate(`(() => { const i = document.querySelector('.ask-box input'); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+        await page.waitFor(`false || true`, 500);
+        const written = join(app.root, 'demo.html');
+        for (let i = 0; i < 20 && !existsSync(written); i++) await sleep(300);
+        const html = readFileSync(written, 'utf8');
+        assert.match(html, /<h1 id="demo">Demo<\/h1>/);
+        assert.match(html, /<table>/);
+        assert.match(html, /<svg class="md-diagram"/);
+        assert.ok(!html.includes('data-line'));
+    });
+
+    test('a reStructuredText file is previewed through docutils, or says what is missing', async () => {
+        await open('demo.rst');
+        await page.waitFor(`document.querySelector('.md-body')?.textContent.length > 0`, 15000, 'the preview');
+        const shown = await preview(`b.textContent`);
+        assert.ok(/pip install docutils/.test(shown) || /Title/.test(shown), shown);
+        if (/pip install docutils/.test(shown)) assert.ok(shown.includes('A *word*.'), 'the text is shown as it is');
     });
 });
 

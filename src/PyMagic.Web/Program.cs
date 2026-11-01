@@ -167,6 +167,32 @@ app.MapPost("/api/spell/dictionary", async (HttpRequest req) =>
     catch (ArgumentException) { return Results.BadRequest("That is not a word."); }
 });
 app.MapDelete("/api/spell/dictionary", (string word) => Spelling.RemoveWord(root, word) ? Results.NoContent() : Results.NotFound());
+// an image of the project, as bytes, for the Markdown preview (the other files are text)
+app.MapGet("/api/raw", (string path) =>
+{
+    try
+    {
+        string full = ResolveInRoot(path);
+        string? type = Path.GetExtension(full).ToLowerInvariant() switch
+        {
+            ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".gif" => "image/gif", ".webp" => "image/webp", ".svg" => "image/svg+xml", ".bmp" => "image/bmp", ".ico" => "image/x-icon", _ => null,
+        };
+        if (type == null) return Results.StatusCode(415);
+        var info = new FileInfo(full);
+        if (!info.Exists) return Results.NotFound();
+        if (info.Length > 20 * 1024 * 1024) return Results.StatusCode(413);
+        return Results.File(File.ReadAllBytes(full), type);
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.NotFound(); }
+});
+// reStructuredText as HTML by docutils, when the project's Python has it: {text}
+app.MapPost("/api/rst", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    try { return Results.Json(Databases.Ask(DatabasePython(), new JsonObject { ["text"] = body?["text"]?.GetValue<string>() ?? "" }, 30000, "pm_rst.py")); }
+    catch (ServiceException e) { return Results.Json(new { error = e.Message }); }
+});
+
 app.MapGet("/api/info", () => new
 {
     root,

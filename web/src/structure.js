@@ -1,5 +1,6 @@
 // The Structure view of the sidebar: the classes, functions, methods and variables of the open file as a tree, from the language server. A click goes
 // there; the one the cursor is in is marked while "follow the cursor" is on.
+import { markdownSymbols } from './markdown-doc.js';
 const $ = (id) => document.getElementById(id);
 
 // LSP symbol kinds -> a letter for the badge and the class that colours it
@@ -8,6 +9,7 @@ const KIND = {
     12: ['ƒ', 'fn'], 13: ['v', 'var'], 14: ['K', 'const'], 22: ['e', 'const'], 23: ['S', 'class'], 26: ['T', 'class'],
     // the Django view (the logical structure)
     'dj-model': ['M', 'class'], 'dj-serializer': ['S', 'class'], 'dj-view': ['V', 'fn'], 'dj-admin': ['A', 'class'], 'dj-form': ['F', 'class'],
+    'md-heading': ['#', 'class'],
     'dj-signal': ['⚡', 'fn'], 'dj-field': ['f', 'var'], 'dj-relation': ['→', 'var'], 'dj-nested': ['S', 'class'], 'dj-endpoint': ['⇄', 'const'],
 };
 
@@ -45,6 +47,8 @@ export function setupStructure({ editor, lsp, uriOf, visible, actions }) {
 
     async function refresh() {
         const model = editor.getModel();
+        // a Markdown file's structure is its headings
+        if (model && model.getLanguageId() === 'markdown') { symbols = markdownSymbols(model.getValue()); ticket++; draw(); return; }
         const uri = model && uriOf(model);
         if (!uri) { symbols = []; draw(); return; }
         const mine = ++ticket;
