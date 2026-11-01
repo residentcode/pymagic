@@ -436,10 +436,20 @@
 /* the Python console */
 #pyconsole-tab.active { display: flex; }
 #pyc-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-#pyc-output { flex: 1; margin: 0; padding: 6px 10px; overflow: auto; white-space: pre-wrap; font: 12px Consolas, monospace; }
-#pyc-output .pyc-echo { color: var(--accent); }
-#pyc-output .err { color: var(--red); }
-#pyc-output .info { color: var(--dim); }
+#pyc-views { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pyc-out { flex: 1; margin: 0; padding: 6px 10px; overflow: auto; white-space: pre-wrap; font: 12px Consolas, monospace; }
+.pyc-out[hidden] { display: none; }
+.pyc-out .pyc-echo { color: var(--accent); }
+.pyc-out .err { color: var(--red); }
+.pyc-out .info { color: var(--dim); }
+#pyc-tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+#pyc-new { padding: 0 8px; }
+#pyc-queue { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 2px 8px; border-top: 1px solid var(--line); font: 11.5px Consolas, monospace; color: var(--dim); }
+#pyc-queue[hidden] { display: none; }
+#pyc-queue .pyc-run { color: var(--warn); }
+#pyc-queue .pyc-wait { display: inline-flex; gap: 4px; align-items: center; border: 1px solid var(--line); border-radius: 3px; padding: 0 3px 0 6px; }
+#pyc-queue .pyc-wait button { border: 0; background: transparent; color: var(--dim); padding: 0 3px; cursor: pointer; }
+#pyc-queue .pyc-wait button:hover { color: var(--fg); }
 #pyc-input { margin: 4px 8px 8px; resize: vertical; min-height: 36px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: 12px Consolas, monospace; }
 #pyc-side { width: 280px; border-left: 1px solid var(--line); display: flex; flex-direction: column; }
 #pyc-vars { overflow: auto; font: 12px Consolas, monospace; }

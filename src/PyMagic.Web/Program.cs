@@ -1629,7 +1629,7 @@ app.Map("/run", async (HttpContext ctx) =>
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
                 string? startup = msg["startup"]?.GetValue<string>() is { Length: > 0 } st ? st : null;
                 if (startup != null) ResolveInRoot(startup);
-                session.StartConsole(root, startup, msg["django"]?.GetValue<bool>() == true);
+                session.StartConsole(root, startup, msg["django"]?.GetValue<bool>() == true, msg["ipython"]?.GetValue<bool>() == true);
             }
             else if (msg["type"]?.GetValue<string>() == "attach" && msg["pid"]?.GetValue<int>() is int attachPid)
             {

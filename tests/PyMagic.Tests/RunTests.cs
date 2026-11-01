@@ -164,6 +164,64 @@ public class RunTests
     }
 
     [Fact]
+    public void AnIPythonConsoleWithoutIPythonSaysSoAndStaysThePlainConsole()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Session.StartConsole(h.Root, null, ipython: true);
+        var ready = h.Type("consoleReady");
+        h.Request("consoleExec", new JsonObject { ["code"] = "x = 6 * 7" });
+        h.Request("consoleExec", new JsonObject { ["code"] = "x" });
+        string output = h.AllOutput();
+        if (ready["ipython"] == null)
+        {
+            Assert.Contains("IPython is not installed", output);
+            Assert.Contains("42", output);
+        }
+        else
+            Assert.Contains("IPython " + ready["ipython"]!.GetValue<string>(), output);   // this PC has IPython: it is the shell
+    }
+
+    /// <summary>A stand-in for IPython (just the few calls the console makes) in the project folder, which is on the console's path: this checks the wiring, not IPython.</summary>
+    [Fact]
+    public void WithIPythonTheConsoleRunsCellsInItsShellAndAsksItToComplete()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        Directory.CreateDirectory(Path.Combine(h.Root, "IPython", "core"));
+        Directory.CreateDirectory(Path.Combine(h.Root, "traitlets"));
+        h.Script("IPython/__init__.py", "__version__ = '0.0-fake'\n");
+        h.Script("IPython/core/__init__.py", "");
+        h.Script("traitlets/__init__.py", "");
+        h.Script("traitlets/config.py", "class _Any:\n    def __getattr__(self, name):\n        v = _Any()\n        object.__setattr__(self, name, v)\n        return v\n\n\nclass Config(_Any):\n    pass\n");
+        h.Script("IPython/core/interactiveshell.py",
+            "import codeop\n\n\nclass _Transformer:\n    def check_complete(self, source):\n        last = source.splitlines()[-1] if source.strip() else ''\n        if not source.endswith('\\n') and (last.rstrip().endswith(':') or last.startswith((' ', '\\t'))):\n            return ('incomplete', None)     # as IPython: an indented block goes on until an empty line\n        try:\n            c = codeop.compile_command(source, '<fake>', 'exec')\n        except SyntaxError:\n            return ('invalid', None)\n        return ('incomplete' if c is None else 'complete', None)\n\n\n" +
+            "class InteractiveShell:\n    _instance = None\n\n    def __init__(self, config=None):\n        self.user_ns = {'__name__': '__main__', 'In': [], 'Out': {}, '_i': ''}\n        self.user_ns_hidden = {'In', 'Out'}\n        self.input_transformer_manager = _Transformer()\n        self.count = 0\n\n" +
+            "    @classmethod\n    def instance(cls, config=None):\n        if cls._instance is None:\n            cls._instance = cls(config)\n        return cls._instance\n\n" +
+            "    def run_cell(self, source, store_history=False):\n        self.count += 1\n        if source.startswith('%magic'):\n            print('magic ran')\n            return\n        try:\n            try:\n                value = eval(source, self.user_ns)\n            except SyntaxError:\n                exec(source, self.user_ns)\n            else:\n                if value is not None:\n                    print('Out[%d]: %r' % (self.count, value))\n        except Exception as e:\n            print('fake traceback', type(e).__name__)\n\n" +
+            "    def complete(self, text, line=None, cursor_pos=None):\n        return text, [k for k in self.user_ns if k.startswith(text)]\n");
+        h.Session.StartConsole(h.Root, null, ipython: true);
+        var ready = h.Type("consoleReady");
+        Assert.Equal("0.0-fake", ready["ipython"]!.GetValue<string>());
+        h.Request("consoleExec", new JsonObject { ["code"] = "total = 21" });
+        h.Request("consoleExec", new JsonObject { ["code"] = "total * 2" });
+        h.Request("consoleExec", new JsonObject { ["code"] = "%magic" });
+        Assert.True(h.Request("consoleExec", new JsonObject { ["code"] = "def f():\n    return 1" })["more"]!.GetValue<bool>(), "a block goes on until an empty line");
+        Assert.True(!h.Request("consoleExec", new JsonObject { ["code"] = "def f():\n    return 1\n" })["more"]!.GetValue<bool>());
+        h.Request("consoleExec", new JsonObject { ["code"] = "f() + 1" });
+        var names = h.Request("consoleVars", new JsonObject())["vars"]!.AsArray().Select(v => v!["name"]!.GetValue<string>()).ToList();
+        Assert.True(names.Contains("total") && names.Contains("f") && !names.Contains("In") && !names.Contains("Out") && !names.Contains("_i"), string.Join(",", names));
+        var done = h.Request("consoleComplete", new JsonObject { ["text"] = "print(tot" });
+        Assert.Equal("tot", done["word"]!.GetValue<string>());
+        Assert.True(done["items"]!.AsArray().Any(i => i!.GetValue<string>() == "total"));
+        string output = h.AllOutput();
+        Assert.Contains("IPython 0.0-fake", output);
+        Assert.Contains("Out[2]: 42", output);
+        Assert.Contains("magic ran", output);
+        Assert.Contains("Out[5]: 2", output);
+    }
+
+    [Fact]
     public void ABreakpointInADjangoTemplateStopsWithItsVariables()
     {
         if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_DJANGO") is not { Length: > 0 } python) return;

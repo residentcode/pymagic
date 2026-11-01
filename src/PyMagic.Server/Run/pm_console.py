@@ -6,6 +6,8 @@ The host sends JSON lines over a local TCP socket, as to the debugger:
   consoleRunFile  {id, path}       run a file in the console's names (Run File in Python Console). Answer: consoleDone {id}
   consoleVars     {id}             the console's names. Answer: consoleVars {id, vars: [{name, type, value}]}
   consoleComplete {id, text}       the completions of the last word. Answer: consoleCompletions {id, items}
+With --ipython the code runs in IPython's InteractiveShell (magics, Out[n]) when IPython is installed; if it is not, a note is
+printed and the console is the plain one.
 What the code prints goes to this program's output, which the host shows.
 """
 import argparse
@@ -28,6 +30,24 @@ class Console:
         self.go = threading.Event()
         self.names = {"__name__": "__main__", "__builtins__": builtins, "__doc__": None}
         self.compiler = codeop.CommandCompiler()
+        self.shell = None        # IPython's InteractiveShell when --ipython found IPython
+
+    def use_ipython(self):
+        """Makes this console IPython's shell (magics, Out[n], its completion); False, with a note, when IPython is not installed."""
+        try:
+            import IPython
+            from IPython.core.interactiveshell import InteractiveShell
+            from traitlets.config import Config
+        except ImportError:
+            print("IPython is not installed in this Python (pip install ipython): this is the plain console")
+            return None
+        config = Config()
+        config.InteractiveShell.colors = "NoColor"      # the output is shown as plain text
+        config.InteractiveShell.autoindent = False
+        self.shell = InteractiveShell.instance(config=config)
+        self.names = self.shell.user_ns                 # the names, the variables list and run-file all go through the shell's namespace
+        print("IPython %s" % IPython.__version__)
+        return IPython.__version__
 
     def send(self, message):
         data = (json.dumps(message) + "\n").encode("utf-8")
@@ -59,6 +79,12 @@ class Console:
 
     def run_code(self, source, filename="<console>"):
         """Runs what was typed; False when it is not a complete statement yet."""
+        if self.shell is not None:
+            status = self.shell.input_transformer_manager.check_complete(source)[0]
+            if status == "incomplete" and not source.endswith("\n"):
+                return False        # a block goes on until an empty line, as at IPython's prompt
+            self.shell.run_cell(source, store_history=True)
+            return True
         try:
             code = self.compiler(source, filename, "single")
         except (OverflowError, SyntaxError, ValueError):
@@ -125,9 +151,12 @@ class Console:
 
     def variables(self):
         out = []
+        hidden = set(getattr(self.shell, "user_ns_hidden", ()) or ()) | {"In", "Out", "get_ipython", "exit", "quit"} if self.shell is not None else set()
         for name, value in sorted(self.names.items()):
             if name.startswith("__") or type(value).__name__ == "module":
                 continue
+            if self.shell is not None and (name in hidden or name.startswith("_")):
+                continue            # IPython's own names (_, _i, _ih, Out, In...)
             try:
                 text = repr(value)
             except Exception as e:
@@ -143,6 +172,13 @@ class Console:
         word = text
         for stop in " \t\n()[]{},:;=+-*/%<>!&|^~\"'":
             word = word.rsplit(stop, 1)[-1]
+        if self.shell is not None:
+            try:
+                # IPython completes magics, paths and attributes of what it knows; its answers are whole words
+                _, matches = self.shell.complete(word, text, len(text))
+                return {"word": word, "items": [m for m in matches if isinstance(m, str)][:200]}
+            except Exception:
+                pass
         items = []
         for i in range(200):
             try:
@@ -182,6 +218,7 @@ def main():
     parser.add_argument("--root", required=True)
     parser.add_argument("--startup", default=None, help="a script run first in the console's names")
     parser.add_argument("--django", action="store_true", help="set Django up first, as manage.py shell does (the Django console)")
+    parser.add_argument("--ipython", action="store_true", help="IPython's shell, when IPython is installed")
     options = parser.parse_args()
     sock = socket.create_connection((options.host, options.port))
     console = Console(sock)
@@ -192,12 +229,13 @@ def main():
     if options.root not in sys.path:
         sys.path.insert(0, options.root)
     print("Python %s on %s" % (sys.version.split()[0], sys.platform))
+    ipython = console.use_ipython() if options.ipython else None
     if options.django:
         console.setup_django(options.root)
     if options.startup and os.path.isfile(options.startup):
         console.run_file(options.startup)
     sys.stdout.flush()
-    console.send({"type": "consoleReady"})
+    console.send({"type": "consoleReady", "ipython": ipython})
     console.loop()
 
 

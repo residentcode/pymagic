@@ -66,11 +66,12 @@ public sealed partial class RunSession : IDisposable
             breakpoints?.ToDictionary(kv => kv.Key, kv => new JsonArray(kv.Value.Select(l => (JsonNode)l).ToArray())));
 
     /// <summary>The Python console: an interpreter that keeps its names, sent code by the page (pm_console.py), with a starting script when given.</summary>
-    public void StartConsole(string root, string? startupScript = null, bool django = false)
+    public void StartConsole(string root, string? startupScript = null, bool django = false, bool ipython = false)
     {
         _root = root;
         var leading = new List<string>();
         if (django) leading.Add("--django");
+        if (ipython) leading.Add("--ipython");   // IPython's shell when the interpreter has IPython, the plain console (and a note) when not
         if (startupScript != null && File.Exists(Path.Combine(root, startupScript)))
         {
             leading.Add("--startup");

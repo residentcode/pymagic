@@ -993,6 +993,61 @@ describe('a debug server a program started elsewhere connects back to', () => {
     });
 });
 
+// last: the consoles use the project's interpreter, which the check above sets to a container when Docker is here, so this runs before it
+describe('the Python console: several consoles, a queue of commands, IPython', () => {
+    const type = (code) => page.evaluate(`(() => { const i = document.getElementById('pyc-input'); i.value = ${JSON.stringify(code)}; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+    const shown = () => page.evaluate(`[...document.querySelectorAll('.pyc-out')].filter((o) => !o.hidden).map((o) => o.textContent).join('')`);
+    const vars = () => page.evaluate(`[...document.querySelectorAll('#pyc-vars .pyc-name')].map((n) => n.textContent).join(',')`);
+
+    test('a command given while another runs waits in the queue, can be taken out, and the rest run in order', async () => {
+        await page.evaluate(`document.getElementById('t-pyconsole').click()`);
+        await page.waitFor(`[...document.querySelectorAll('.pyc-out')].some((o) => !o.hidden && o.textContent.includes('Python 3'))`, 30000, 'the console banner');
+        await type('import time; time.sleep(4)');
+        await sleep(600);
+        await type('first = 1');
+        await type('second = 2');
+        await page.waitFor(`document.querySelectorAll('#pyc-queue .pyc-wait').length === 2`, 5000, 'two waiting commands');
+        assert.equal(await page.evaluate(`document.getElementById('pyc-queue').hidden`), false);
+        assert.match(await page.evaluate(`document.getElementById('pyc-queue').textContent`), /Running import time; time\.sleep\(4\)/);
+        // the first waiting one is taken out
+        await page.evaluate(`document.querySelector('#pyc-queue .pyc-wait button').click()`);
+        await page.waitFor(`document.querySelectorAll('#pyc-queue .pyc-wait').length === 1`, 5000, 'one waiting command');
+        await page.waitFor(`document.getElementById('pyc-queue').hidden`, 30000, 'the queue to empty');
+        await page.waitFor(`[...document.querySelectorAll('#pyc-vars .pyc-name')].some((n) => n.textContent === 'second')`, 15000, 'the second command to run');
+        assert.equal(await vars(), 'second');
+        const text = await shown();
+        assert.ok(text.includes('>>> second = 2') && !text.includes('first = 1'), text);
+    });
+
+    test('another console has names of its own; the tabs switch between them', async () => {
+        await page.evaluate(`document.getElementById('pyc-new').click()`);
+        await page.waitFor(`document.querySelectorAll('#pyc-tabs .ttab').length === 2 && [...document.querySelectorAll('.pyc-out')].some((o) => !o.hidden && o.textContent.includes('Python 3'))`, 30000, 'the second console');
+        assert.equal(await page.evaluate(`[...document.querySelectorAll('#pyc-tabs .ttab-name')].map((n) => n.textContent).join('|')`), 'Python console|Python console (2)');
+        assert.equal(await vars(), '');
+        await type('other = 3');
+        await page.waitFor(`[...document.querySelectorAll('#pyc-vars .pyc-name')].some((n) => n.textContent === 'other')`, 15000, 'the name in the second console');
+        await page.evaluate(`document.querySelector('#pyc-tabs .ttab').click()`);
+        await page.waitFor(`[...document.querySelectorAll('#pyc-vars .pyc-name')].map((n) => n.textContent).join(',') === 'second'`, 5000, 'the first console\'s names again');
+        assert.ok((await shown()).includes('second = 2'));
+        // closing the second one leaves the first
+        await page.evaluate(`document.querySelectorAll('#pyc-tabs .ttab-close')[1].click()`);
+        await page.waitFor(`document.querySelectorAll('#pyc-tabs .ttab').length === 1`, 5000, 'one tab');
+        assert.equal(await vars(), 'second');
+    });
+
+    test('IPython ticked: the console starts again and says so when IPython is not in the project\'s Python', async () => {
+        const has = spawnSync('python', ['-c', 'import IPython'], { encoding: 'utf8' }).status === 0;
+        await page.evaluate(`document.getElementById('pyc-ipython').click()`);
+        await page.waitFor(`[...document.querySelectorAll('.pyc-out')].some((o) => !o.hidden && o.textContent.includes(${JSON.stringify(has ? 'IPython 8' : 'IPython is not installed')}))`, 30000, 'the IPython note');
+        assert.equal(await vars(), '');
+        await type('v = 6 * 7');
+        await type('v');
+        await page.waitFor(`[...document.querySelectorAll('.pyc-out')].some((o) => !o.hidden && o.textContent.includes('42'))`, 15000, 'the value');
+        await page.evaluate(`document.getElementById('pyc-ipython').click()`);
+        await page.waitFor(`!document.getElementById('pyc-ipython').checked`, 5000, 'the box unticked');
+    });
+});
+
 // last: the project's interpreter becomes a running container
 describe('Linux paths of a remote interpreter, a running container, and a terminal inside it', () => {
     const skip = hasDocker ? false : 'Docker or the python:3.12-slim image is not on this PC';

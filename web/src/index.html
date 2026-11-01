@@ -489,13 +489,16 @@
       <div id="pyconsole-tab" class="tab">
         <div class="col" id="pyc-main">
           <div class="listbar">
-            <span>Python console</span>
+            <div id="pyc-tabs"></div>
+            <button id="pyc-new" title="Another console, with names of its own">+</button>
             <span class="spacer" style="flex:1"></span>
+            <label title="Use IPython in this console when it is installed in the project's Python (magics such as %timeit, richer completion); the console starts again"><input type="checkbox" id="pyc-ipython"> IPython</label>
             <button id="pyc-clear" title="Clear the output">Clear</button>
             <button id="pyc-stop" title="Stop the console"><svg class="i"><use href="#i-stop"/></svg></button>
             <button id="pyc-restart" title="Start the console again (its names are lost)"><svg class="i"><use href="#i-refresh"/></svg> Restart</button>
           </div>
-          <pre class="body" id="pyc-output"></pre>
+          <div id="pyc-views"></div>
+          <div id="pyc-queue" hidden></div>
           <textarea id="pyc-input" rows="2" spellcheck="false" placeholder=">>> Python code (Enter runs it, Shift+Enter for another line)"></textarea>
         </div>
         <div class="col" id="pyc-side">
