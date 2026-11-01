@@ -210,11 +210,38 @@ public sealed class JupyterKernel : INotebookKernel
 
     // ------------------------------------------------------------ commands
 
+    static string Embedded(string name)
+    {
+        using var s = typeof(JupyterKernel).Assembly.GetManifestResourceStream(name) ?? throw new InvalidOperationException($"{name} is missing from the assembly");
+        using var reader = new StreamReader(s, Encoding.UTF8);
+        return reader.ReadToEnd().Replace("\r\n", "\n");
+    }
+
+    /// <summary>
+    /// The Python that runs a cell under the debugger of the IDE on a Jupyter server: the debugger (pm_debug.py) and the runner (pm_jdebug.py) are put in the kernel as modules
+    /// once, and the cell, with where to connect back to, goes to the runner as text. <paramref name="debug"/> is what the page sends: { host, port, token, file }.
+    /// </summary>
+    public static string DebugCode(string code, JsonNode debug)
+    {
+        static string B64(string text) => Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+        static string Lit(string text) => $"_pm_b64.b64decode('{B64(text)}').decode('utf-8')";
+        string host = debug["host"]?.GetValue<string>() ?? "127.0.0.1", token = debug["token"]?.GetValue<string>() ?? "", file = debug["file"]?.GetValue<string>() ?? "cell.py";
+        int port = debug["port"] is JsonValue p && p.TryGetValue<int>(out var n) ? n : 0;
+        return "import sys as _pm_sys, types as _pm_types, base64 as _pm_b64\n"
+            + $"for _pm_name, _pm_src in (('pm_debug', '{B64(Embedded("pm_debug.py"))}'), ('pm_jdebug', '{B64(Embedded("pm_jdebug.py"))}')):\n"
+            + "    if _pm_name not in _pm_sys.modules:\n"
+            + "        _pm_mod = _pm_types.ModuleType(_pm_name)\n"
+            + "        _pm_mod.__file__ = _pm_name + '.py'\n"
+            + "        _pm_sys.modules[_pm_name] = _pm_mod\n"
+            + "        exec(compile(_pm_b64.b64decode(_pm_src).decode('utf-8'), _pm_name + '.py', 'exec'), _pm_mod.__dict__)\n"
+            + $"_pm_sys.modules['pm_jdebug'].run_debugged({Lit(code)}, {Lit(file)}, {Lit(host)}, {port}, {Lit(token)}, globals(), get_ipython())\n";
+    }
+
     public void Execute(string id, string code, JsonNode? debug = null)
     {
         var msg = Message("execute_request", new JsonObject
         {
-            ["code"] = code, ["silent"] = false, ["store_history"] = true, ["user_expressions"] = new JsonObject(), ["allow_stdin"] = false, ["stop_on_error"] = true,
+            ["code"] = debug == null ? code : DebugCode(code, debug), ["silent"] = false, ["store_history"] = true, ["user_expressions"] = new JsonObject(), ["allow_stdin"] = false, ["stop_on_error"] = true,
         });
         _pending[msg["header"]!["msg_id"]!.GetValue<string>()] = new Pending(id);
         _outgoing.Writer.TryWrite(msg.ToJsonString());

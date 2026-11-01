@@ -270,6 +270,8 @@ def variables():
     for name, value in list(namespace.items()):
         if name in _HIDDEN or name.startswith("_"):
             continue
+        if name == "open" and value is not builtins.open and getattr(value, "__wrapped__", None) is builtins.open:
+            continue                  # IPython puts its own open() (a wrapper of the built-in one) among the names of the cells
         out.append({"name": name, "type": type(value).__name__, "value": short_repr(value), "size": size_of(value), "expandable": can_expand(value)})
         if len(out) >= 300:
             break

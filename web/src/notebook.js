@@ -5,7 +5,7 @@ import {
     ansiSegments, applyKernelMessage, changeType, clearOutputs, collapseCarriageReturns, deleteCell, describeOutput, insertCell,
     cellOfLine, lastExecutionCount, mergeCells, moveCell, notebookSymbols, offsetOfPosition, parseNotebook, parseTags, sectionOf, serializeNotebook,
     setSource, setTags, sourceOf, splitCell, tagsOf, virtualDocument, virtualLine,
-    BUILT_IN_SERVER, addServer, cellDebugFile, commonPrefix, completionTarget, needsMoreInput, normalizeServer, notebookSlug, notebookToHtml, parseCellDebugFile, parseServers,
+    BUILT_IN_SERVER, addServer, cellDebugFile, commonPrefix, completionTarget, isLocalServer, needsMoreInput, normalizeServer, notebookSlug, notebookToHtml, parseCellDebugFile, parseServers,
     pathKey, pathsToRefresh, pushHistory, stepHistory, variableRows,
 } from './notebook-model';
 import { blocksOf, inlineOf } from './markdown-lite';
@@ -708,7 +708,8 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
     async function debugCell(state, view) {
         if (!debugApi) { toast('The debugger is not ready yet', true); return; }
         if (view.cell.cell_type !== 'code') { toast('Only a code cell can be debugged'); return; }
-        if (state.server) { toast('Debug Cell works with the built-in kernel: a Jupyter server runs the cell somewhere the debugger cannot reach', true); return; }
+        // a Jupyter server on this computer connects back to the debugger of the IDE; one elsewhere cannot reach it (nothing here opens a way in)
+        if (state.server && !isLocalServer(state.server)) { toast('Debug Cell works on the built-in kernel and on a Jupyter server on this computer: the kernel of another computer cannot connect back to the debugger', true); return; }
         if (state.busy || view.running || view.queued || state.queue.length) { toast('Wait until the cells that are running are done'); return; }
         flush(state);
         select(state, indexOf(state, view), false);

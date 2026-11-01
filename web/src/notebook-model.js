@@ -469,6 +469,16 @@ export function normalizeServer(input) {
     return { id: input.id ?? url, name, url, token, kernel: String(input.kernel ?? '').trim() };
 }
 
+/**
+ * Whether a server runs on this computer (localhost, 127.x.x.x or ::1). Debug Cell needs that: the kernel connects back to the debugger of the IDE at
+ * 127.0.0.1, which only a server on this computer can reach.
+ */
+export function isLocalServer(server) {
+    let host;
+    try { host = new URL(String(server?.url ?? '')).hostname.toLowerCase(); } catch { return false; }
+    return host === 'localhost' || host === '[::1]' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
+}
+
 /** The saved servers from their JSON text (anything that is not a valid server is dropped). */
 export function parseServers(text) {
     let list;

@@ -2276,3 +2276,73 @@ describe('changelists, the shelf, and choosing lines from the editor gutter', ()
         assert.deepEqual(shelf[0].files.map((f) => f.path), ['cp_parts.py']);
     });
 });
+
+// last, and only when asked for: a notebook on a REAL Jupyter server. PYMAGIC_TEST_JUPYTER names the Python of an environment that has jupyter_server and ipykernel
+// (nothing here installs them). The server is started by this block, on this computer, with a token of its own.
+describe('a notebook on a real Jupyter server: Variables and Debug Cell', { skip: !process.env.PYMAGIC_TEST_JUPYTER }, () => {
+    const REL = 'nb_more.ipynb';
+    const TOKEN = 'tok-real-e2e';
+    const nb = (expr) => page.evaluate(`(() => { const s = window.pymagic.notebook.stateOf(${JSON.stringify(REL)}); return ${expr}; })()`);
+    let server, url;
+    before(async () => {
+        const port = await new Promise((ok) => { const probe = createServer(); probe.listen(0, '127.0.0.1', () => { const n = probe.address().port; probe.close(() => ok(n)); }); });
+        url = `http://127.0.0.1:${port}`;
+        server = spawn(process.env.PYMAGIC_TEST_JUPYTER, ['-m', 'jupyter_server', '--no-browser', '--ip=127.0.0.1', `--port=${port}`, '--ServerApp.port_retries=0', `--ServerApp.root_dir=${projectRoot}`],
+            { cwd: projectRoot, env: { ...process.env, PYTHONPATH: '', JUPYTER_TOKEN: TOKEN }, stdio: 'ignore' });   // (not the stand-in jupyter_server that the other tests put on PYTHONPATH)
+        let up = false;
+        for (let i = 0; i < 120 && !up; i++) {
+            await sleep(500);
+            try { up = (await fetch(url + '/api/kernelspecs', { headers: { Authorization: 'token ' + TOKEN } })).ok; } catch { /* not listening yet */ }
+        }
+        assert.ok(up, 'the Jupyter server did not start');
+    });
+    after(() => { try { server?.kill(); } catch { /* gone already */ } });
+
+    test('the notebook is put on the server, its variables are listed, and Debug Cell stops at a breakpoint, steps and runs on', async () => {
+        await open(REL);
+        await page.waitFor(`document.querySelector('#notebook.active .nb-cell')`, 15000, 'the notebook');
+        await nb(`(s.serverBtn.click(), 1)`);
+        await page.waitFor(`document.querySelector('.nb-servers #nb-server-url')`, 5000, 'the servers window');
+        await page.evaluate(`(() => { document.getElementById('nb-server-url').value = ${JSON.stringify(url)}; document.getElementById('nb-server-token').value = ${JSON.stringify(TOKEN)}; document.getElementById('nb-server-name').value = 'Real'; })()`);
+        await page.evaluate(`document.getElementById('nb-server-add').click()`);
+        await page.evaluate(`document.getElementById('nb-server-use').click()`);
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).serverBtn.textContent.includes('Real')`, 5000, 'the selector');
+
+        // the first cell runs on the server, and the names it left are asked of the kernel (the cells ran before, on the built-in kernel: their counts are cleared so that the wait is for this run)
+        await nb(`(s.nb.cells[0].execution_count = null, s.nb.cells[1].execution_count = null, s.nb.cells[1].outputs = [], 1)`);
+        await nb(`(s.views[0].el.querySelector('.nb-tools button').click(), 1)`);
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).nb.cells[0].execution_count`, 90000, 'the first cell on the server');
+        const names = await page.waitFor(`(() => { const t = window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).varsEl.textContent; return t.includes('Point') && t; })()`, 30000, 'the variables of the server');
+        assert.match(names, /Point/);
+        // exactly the names the cell made: none of IPython's own
+        assert.equal(await nb(`[...s.varsEl.querySelectorAll('tr[data-path]')].map((r) => r.querySelector('.nb-var-label').textContent).join()`), 'Point,d,p');
+
+        // Debug Cell on the cell with a breakpoint on line 2
+        await nb(`(s.views[1].el.__create(), 1)`);
+        await page.waitFor(`!!window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).views[1].editor`, 10000, 'the editor of the cell');
+        await nb(`(s.views[1].editor.setPosition({ lineNumber: 2, column: 1 }), s.views[1].editor.focus(), 1)`);
+        await page.key(120, 'F9');
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).views[1].editor.getModel().getLineDecorations(2).some((d) => d.options.glyphMarginClassName?.startsWith('bp-glyph'))`, 5000, 'the breakpoint');
+        await nb(`(s.views[1].el.querySelector('.nb-debug-btn').click(), 1)`);
+        await page.waitFor(`${$('runstate')}.textContent === 'paused'`, 90000, 'the stop in the cell, on the server');
+        assert.equal(await nb(`s.views[1].editor.getModel().getAllDecorations().filter((d) => d.options.className === 'debug-line').map((d) => d.range.startLineNumber).join()`), '2');
+        assert.match(await page.evaluate(`${$('frames')}.textContent`), /nb_more_ipynb\.cell2\.py/);
+        await page.waitFor(`(() => { const t = ${$('vars')}.textContent; return t.includes('a') && t.includes('4'); })()`, 15000, 'the variables of the stop');
+        await page.evaluate(`${$('b-over')}.click()`);
+        await page.waitFor(`${$('runstate')}.textContent === 'paused' && window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).views[1].editor.getModel().getAllDecorations().some((d) => d.options.className === 'debug-line' && d.range.startLineNumber === 3)`, 30000, 'the step to line 3');
+        // remove the breakpoint and resume: the cell runs to its end on the server
+        await nb(`(s.views[1].editor.setPosition({ lineNumber: 2, column: 1 }), s.views[1].editor.focus(), 1)`);
+        await page.key(120, 'F9');
+        await page.evaluate(`${$('b-debug')}.click()`);
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).nb.cells[1].execution_count`, 90000, 'the end of the cell');
+        assert.match(await nb(`s.nb.cells[1].outputs.map((o) => (o.text ?? []).join('')).join('')`), /c = 9/);
+        await page.waitFor(`${$('b-stop')}.disabled`, 15000, 'the end of the debug session');
+        // the names of the cell are the server's kernel's: the Variables window lists them
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).varsEl.textContent.includes('c')`, 30000, 'c in the variables');
+        // back to the built-in kernel for whatever follows
+        await nb(`(s.serverBtn.click(), 1)`);
+        await page.waitFor(`document.querySelector('.nb-servers .nb-server-row input')`, 5000, 'the servers window again');
+        await page.evaluate(`document.querySelector('.nb-servers .nb-server-row input').click()`);
+        await page.evaluate(`document.getElementById('nb-server-use').click()`);
+    });
+});
