@@ -186,7 +186,8 @@
         <span class="gsep"></span>
         <button id="t-search" title="Search"><svg class="i"><use href="#i-search"/></svg><span class="lbl">Search</span></button>
         <button id="t-git" title="Git"><svg class="i"><use href="#i-branch"/></svg><span class="lbl">Git</span></button>
-        <button id="t-deployment" title="Deployment: the servers the project goes to (a folder, FTP, SFTP), upload, download, compare and sync"><svg class="i"><use href="#i-web"/></svg><span class="lbl">Deployment</span></button>
+        <button id="t-prs" title="Pull requests: the pull requests (GitHub) or merge requests (GitLab) of the project's remote, reviewed and merged here"><svg class="i"><use href="#i-branch"/></svg><span class="lbl">Pull requests</span></button>
+        <button id="t-deployment"title="Deployment: the servers the project goes to (a folder, FTP, SFTP), upload, download, compare and sync"><svg class="i"><use href="#i-web"/></svg><span class="lbl">Deployment</span></button>
         <button id="t-services" title="Services: what is running, and each one stopped, restarted or shown"><svg class="i"><use href="#i-output"/></svg><span class="lbl">Services</span><span id="services-count" class="badge" hidden></span></button>
         <button id="t-history" title="Local history"><svg class="i"><use href="#i-clock"/></svg><span class="lbl">History</span></button>
         <button id="t-packages" title="Packages"><svg class="i"><use href="#i-cube"/></svg><span class="lbl">Packages</span></button>
@@ -504,6 +505,23 @@
         <div class="col" id="pyc-side">
           <div class="listbar"><span>Variables</span></div>
           <div class="body" id="pyc-vars"></div>
+        </div>
+      </div>
+      <div id="prs-tab" class="tab">
+        <div class="col" id="prs-main">
+          <div class="listbar">
+            <span id="pr-remote" class="pr-remote">Pull requests</span>
+            <input id="pr-token" type="password" autocomplete="off" spellcheck="false" placeholder="" title="">
+            <button id="pr-token-save" title="Keep this token on this computer, outside version control">Save token</button>
+            <button id="pr-token-forget" hidden title="Forget the kept token">Forget</button>
+            <span class="spacer" style="flex:1"></span>
+            <button id="pr-new" title="Open a request from the current branch (it is shown to you before anything is sent)">New…</button>
+            <button id="pr-refresh" title="Read the requests again"><svg class="i"><use href="#i-refresh"/></svg></button>
+          </div>
+          <div class="pr-split">
+            <div class="body pr-list" id="pr-list"></div>
+            <div class="body pr-detail" id="pr-detail"></div>
+          </div>
         </div>
       </div>
       <div id="deployment-tab" class="tab">

@@ -105,6 +105,7 @@ async function clickMargin(line) {
 }
 
 let echo;
+let forge;
 let altPython = '';
 let projectRoot = '';
 before(async () => {
@@ -143,10 +144,13 @@ before(async () => {
         { name: 'container boom', kind: 'script', script: 'tb_boom.py', interpreter: `docker:container=${CONTAINER}|python` },
     ] }));
     projectRoot = root;
+    // a GitHub of this run's own (a server on this computer): the engine is told to use it instead of api.github.com, which is never contacted
+    forge = await startFakeForge();
+    process.env.PYMAGIC_GITHUB_API = forge.base;
     app = await launch(root);
     page = app.page;
 });
-after(async () => { await app?.close(); echo?.close(); });
+after(async () => { await app?.close(); echo?.close(); forge?.close(); });
 // a test that failed half way leaves no program running for the next one
 afterEach(async () => {
     if (page && !(await page.evaluate(`${$('b-stop')}.disabled`))) {
@@ -1415,5 +1419,197 @@ describe('branches: comparing, rebasing onto another, and pushing tags', () => {
         await clickIn('other', 'Rebase current onto');
         for (let i = 0; i < 40 && !git('log', '--format=%s').includes('only on other'); i++) await sleep(300);
         assert.equal(git('log', '--format=%s').trim().split('\n').join(' | '), 'only on main | only on other | start');
+    });
+});
+
+// A GitHub of the test's own: the few calls the Pull Requests window makes, answered from memory, and everything it was sent written down.
+// The engine reaches it through PYMAGIC_GITHUB_API; the real github.com is never contacted, and the token below is made up for this run.
+const FORGE_TOKEN = 'e2e-fake-token-4711';
+function startFakeForge() {
+    const state = { requests: [], head: 'abc123def4567890', merged: false, base: '' };
+    const send = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
+    const pr = () => ({
+        number: 7, title: 'Add the cart', user: { login: 'ada' }, state: state.merged ? 'closed' : 'open', merged: state.merged, draft: false,
+        head: { ref: 'cart', sha: state.head }, base: { ref: 'main' }, html_url: 'https://github.com/acme/widgets/pull/7', updated_at: '2026-10-30T10:00:00Z',
+        body: 'Adds a cart to the shop.', mergeable: true,
+    });
+    const server = createServer((req, res) => {
+        let body = '';
+        req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+            const path = req.url.split('?')[0];
+            state.requests.push({ method: req.method, path, body, auth: req.headers.authorization ?? '' });
+            if (req.headers.authorization !== 'Bearer ' + FORGE_TOKEN) return send(res, 401, { message: 'Bad credentials' });
+            const repo = '/repos/acme/widgets';
+            const json = body ? JSON.parse(body) : {};
+            if (req.method === 'GET' && path === repo + '/pulls') return send(res, 200, [pr()]);
+            if (req.method === 'GET' && path === repo + '/pulls/7') return send(res, 200, pr());
+            if (req.method === 'GET' && path === repo + '/pulls/7/commits') return send(res, 200, [{ sha: 'c1c1c1c1c1', commit: { message: 'cart: the model\n\nmore', author: { name: 'Ada', date: '2026-10-29T09:00:00Z' } } }]);
+            if (req.method === 'GET' && path === repo + '/pulls/7/files') return send(res, 200, [{ filename: 'cart.py', status: 'modified', additions: 2, deletions: 1, patch: '@@ -1,2 +1,3 @@\n def total():\n-    return 0\n+    return len(items)\n+    # counted\n' }]);
+            if (req.method === 'GET' && path === repo + '/issues/7/comments') return send(res, 200, [{ user: { login: 'bob' }, body: 'Looks fine to me', created_at: '2026-10-30T11:00:00Z' }]);
+            if (req.method === 'GET' && path === repo + '/pulls/7/comments') return send(res, 200, []);
+            if (req.method === 'GET' && path === repo + '/commits/' + state.head + '/check-runs') return send(res, 200, { check_runs: [{ name: 'tests', status: 'completed', conclusion: 'success' }] });
+            if (req.method === 'GET' && path === repo + '/commits/' + state.head + '/status') return send(res, 200, { state: 'pending', statuses: [] });
+            if (req.method === 'POST' && path === repo + '/issues/7/comments') return send(res, 201, { id: 1, body: json.body });
+            if (req.method === 'POST' && path === repo + '/pulls') return send(res, 201, { ...pr(), number: 8, title: json.title });
+            if (req.method === 'PUT' && path === repo + '/pulls/7/merge') {
+                if (json.sha !== state.head) return send(res, 409, { message: 'Head branch was modified' });
+                state.merged = true;
+                return send(res, 200, { merged: true, sha: 'merged-sha' });
+            }
+            send(res, 404, { message: 'Not Found' });
+        });
+    });
+    return new Promise((ok) => server.listen(0, '127.0.0.1', () => {
+        state.base = `http://127.0.0.1:${server.address().port}`;
+        ok({ base: state.base, state, writes: () => state.requests.filter((r) => r.method !== 'GET'), close: () => server.close() });
+    }));
+}
+
+describe('pull requests: listing, reading, and the three outward actions behind a confirmation', () => {
+    const git = (...args) => {
+        const r = spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8' });
+        assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+        return r.stdout;
+    };
+    const click = (id) => page.evaluate(`${$(id)}.click()`);
+    const setValue = (id, value) => page.evaluate(`(() => { const e = document.getElementById(${JSON.stringify(id)}); e.value = ${JSON.stringify(value)}; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    const confirmText = () => page.evaluate(`document.querySelector('.pr-confirm')?.textContent ?? ''`);
+    const api = (url, body) => page.evaluate(`fetch(${JSON.stringify(url)}, ${body ? `{ method: 'POST', body: ${JSON.stringify(JSON.stringify(body))} }` : '{}'}).then((r) => r.json())`);
+
+    test('the remote is found, a token is asked for once and kept in the private file, and the open requests are listed', async () => {
+        // an address on github.com is only recorded: nothing here ever fetches from it, and the engine's calls go to the fake above
+        git('remote', 'add', 'forge', 'https://github.com/acme/widgets.git');
+        git('switch', '-q', '-c', 'cart');
+        writeFileSync(join(projectRoot, 'cart.txt'), 'cart\n');
+        git('add', '-A');
+        git('commit', '-q', '-m', 'Add the cart');
+        git('push', '-q', '-u', 'origin', 'cart');
+        await click('t-prs');
+        await page.waitFor(`document.getElementById('pr-remote').textContent === 'github.com/acme/widgets'`, 15000, 'the remote');
+        await page.waitFor(`document.getElementById('pr-list').textContent.includes('Type a personal access token')`, 10000, 'the question for a token');
+        assert.equal(forge.state.requests.length, 0, 'nothing is asked of the forge without a token');
+        await setValue('pr-token', FORGE_TOKEN);
+        await click('pr-token-save');
+        await page.waitFor(`document.querySelector('#pr-list .pr-row')`, 15000, 'the list');
+        const row = await page.evaluate(`document.querySelector('#pr-list .pr-row').textContent`);
+        assert.match(row, /#7/);
+        assert.match(row, /Add the cart/);
+        assert.match(row, /cart → main/);
+        assert.match(row, /ada/);
+        assert.equal(await page.evaluate(`document.getElementById('pr-token').value`), '', 'the field is emptied');
+        assert.ok(forge.state.requests.every((r) => r.method === 'GET' && r.auth === 'Bearer ' + FORGE_TOKEN));
+        // the token is in the private file, which git is told to ignore, and in no other file of the project's .pymagic folder
+        const priv = join(projectRoot, '.pymagic', 'pullrequests.private.json');
+        assert.ok(readFileSync(priv, 'utf8').includes(FORGE_TOKEN));
+        assert.ok(readFileSync(join(projectRoot, '.pymagic', '.gitignore'), 'utf8').split('\n').includes('pullrequests.private.json'));
+        assert.ok(!(await api('/api/pr/info').then((i) => JSON.stringify(i))).includes(FORGE_TOKEN), 'the page is never told the token');
+        assert.ok(!git('status', '--porcelain').includes('pullrequests'), 'the private file is not offered to git');
+    });
+
+    test('one request is shown in full, and a changed file opens as a side-by-side diff', async () => {
+        await page.evaluate(`document.querySelector('#pr-list .pr-row').click()`);
+        await page.waitFor(`document.getElementById('pr-detail').textContent.includes('Looks fine to me')`, 15000, 'the detail');
+        const text = await page.evaluate(`document.getElementById('pr-detail').textContent`);
+        assert.match(text, /Adds a cart to the shop\./);
+        assert.match(text, /cart: the model/);
+        assert.match(text, /cart\.py/);
+        assert.match(text, /\+2 −1/);
+        assert.match(text, /ada wants to merge cart into main/);
+        await page.evaluate(`document.querySelector('#pr-detail .pr-file').click()`);
+        await page.waitFor(`document.querySelector('.pr-diff-shade .monaco-diff-editor')`, 15000, 'the diff');
+        const sides = await page.waitFor(`(() => { const models = window.pymagic.monaco.editor.getModels().map((m) => m.getValue()); return models.some((t) => t.includes('return 0')) && models.some((t) => t.includes('return len(items)')) ? models : null; })()`, 10000, 'both sides');
+        assert.ok(sides.some((t) => t.includes('# counted')));
+        await page.evaluate(`document.querySelector('.pr-diff-shade .hist-diff-head button').click()`);
+        await page.waitFor(`!document.querySelector('.pr-diff-shade')`, 5000, 'the diff to close');
+    });
+
+    test('a comment shows the exact request first, sends nothing on Cancel, and is sent once on Send', async () => {
+        await click('pr-comment');
+        await page.waitFor(`document.getElementById('pr-comment-text')`, 5000, 'the form');
+        await setValue('pr-comment-text', 'Ship it, please.');
+        await page.evaluate(`[...document.querySelectorAll('.pr-form button')].find((b) => b.textContent.startsWith('Review')).click()`);
+        await page.waitFor(`document.querySelector('.pr-confirm')`, 10000, 'the confirmation');
+        const shown = await confirmText();
+        assert.match(shown, /POST .*\/repos\/acme\/widgets\/issues\/7\/comments/);
+        assert.match(shown, /"body": "Ship it, please\."/);
+        assert.equal(forge.writes().length, 0, 'nothing has been sent yet');
+        await page.evaluate(`document.querySelector('.pr-confirm-cancel').click()`);
+        await sleep(500);
+        assert.equal(forge.writes().length, 0, 'Cancel sends nothing');
+        // again, and Send
+        await page.evaluate(`[...document.querySelectorAll('.pr-form button')].find((b) => b.textContent.startsWith('Review')).click()`);
+        await page.waitFor(`document.querySelector('.pr-confirm-send')`, 10000, 'the confirmation again');
+        await page.evaluate(`document.querySelector('.pr-confirm-send').click()`);
+        await page.waitFor(`!document.querySelector('.pr-confirm') && !document.querySelector('.pr-form')`, 10000, 'the windows to close');
+        const sent = forge.writes();
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].path, '/repos/acme/widgets/issues/7/comments');
+        assert.deepEqual(JSON.parse(sent[0].body), { body: 'Ship it, please.' });
+    });
+
+    test('a request is created from the current branch, only after the exact request was shown', async () => {
+        await click('pr-new');
+        await page.waitFor(`document.getElementById('pr-new-title')`, 10000, 'the form');
+        assert.equal(await page.evaluate(`document.getElementById('pr-new-title').value`), 'Add the cart', 'the last commit is the starting title');
+        assert.ok((await page.evaluate(`[...document.querySelectorAll('#pr-new-base option')].map((o) => o.value)`)).includes('main'));
+        await setValue('pr-new-title', 'Cart for the shop');
+        await setValue('pr-new-base', 'main');
+        await setValue('pr-new-body', 'Adds the cart.');
+        const before = forge.writes().length;
+        await page.evaluate(`[...document.querySelectorAll('.pr-form button')].find((b) => b.textContent.startsWith('Review')).click()`);
+        await page.waitFor(`document.querySelector('.pr-confirm')`, 10000, 'the confirmation');
+        const shown = await confirmText();
+        assert.match(shown, /POST .*\/repos\/acme\/widgets\/pulls/);
+        assert.match(shown, /"head": "cart"/);
+        assert.match(shown, /"base": "main"/);
+        assert.match(shown, /"title": "Cart for the shop"/);
+        assert.equal(forge.writes().length, before, 'shown, not yet sent');
+        await page.evaluate(`document.querySelector('.pr-confirm-send').click()`);
+        await page.waitFor(`!document.querySelector('.pr-confirm')`, 10000, 'the window to close');
+        const made = forge.writes().at(-1);
+        assert.equal(made.path, '/repos/acme/widgets/pulls');
+        assert.deepEqual(JSON.parse(made.body), { title: 'Cart for the shop', body: 'Adds the cart.', head: 'cart', base: 'main', draft: false });
+    });
+
+    test('a merge is pinned to the commit that was looked at, and happens only on Send', async () => {
+        await page.evaluate(`document.querySelector('#pr-list .pr-row').click()`);
+        await page.waitFor(`document.getElementById('pr-merge') && !document.getElementById('pr-merge').disabled`, 15000, 'the Merge button');
+        await setValue('pr-method', 'squash');
+        await click('pr-merge');
+        await page.waitFor(`document.querySelector('.pr-confirm')`, 10000, 'the confirmation');
+        const shown = await confirmText();
+        assert.match(shown, /PUT .*\/repos\/acme\/widgets\/pulls\/7\/merge/);
+        assert.match(shown, /"merge_method": "squash"/);
+        assert.match(shown, new RegExp('"sha": "' + forge.state.head + '"'));
+        assert.ok(!forge.state.merged);
+        await page.evaluate(`document.querySelector('.pr-confirm-cancel').click()`);
+        await sleep(500);
+        assert.ok(!forge.state.merged, 'Cancel merges nothing');
+        await click('pr-merge');
+        await page.waitFor(`document.querySelector('.pr-confirm-send')`, 10000, 'the confirmation again');
+        await page.evaluate(`document.querySelector('.pr-confirm-send').click()`);
+        await page.waitFor(`!document.querySelector('.pr-confirm')`, 10000, 'the window to close');
+        assert.ok(forge.state.merged);
+        const put = forge.writes().at(-1);
+        assert.deepEqual(JSON.parse(put.body), { merge_method: 'squash', sha: forge.state.head });
+    });
+
+    test('the engine itself refuses what was not shown: an unknown token, and one used twice', async () => {
+        const before = forge.writes().length;
+        const bogus = await api('/api/pr/confirm', { token: 'ffffffffffffffffffffffffffffffff' });
+        assert.match(bogus.error, /not valid any more/);
+        const empty = await api('/api/pr/confirm', {});
+        assert.match(empty.error, /not valid any more/);
+        const prepared = await api('/api/pr/prepare', { action: 'comment', number: 7, body: 'Once only.' });
+        assert.ok(prepared.token, JSON.stringify(prepared));
+        assert.equal(forge.writes().length, before, 'preparing sends nothing');
+        const first = await api('/api/pr/confirm', { token: prepared.token });
+        assert.equal(first.ok, true);
+        const second = await api('/api/pr/confirm', { token: prepared.token });
+        assert.match(second.error, /not valid any more/);
+        assert.equal(forge.writes().length, before + 1, 'once');
+        // nothing was ever sent anywhere but the fake: every call it saw carried the made-up token
+        assert.ok(forge.state.requests.every((r) => r.auth === 'Bearer ' + FORGE_TOKEN));
     });
 });

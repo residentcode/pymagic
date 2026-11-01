@@ -1984,5 +1984,8 @@ app.MapPost("/api/git/action", async (HttpRequest req) =>
     });
 });
 
+// pull requests and merge requests of the remote (GitHub, GitLab): reading, and the outward actions behind a confirmation
+PullRequestRoutes.Map(app, root, FindGit, () => gitReason);
+
 Console.WriteLine($"PyMagic on http://127.0.0.1:{port}/   workspace: {root}   typeshed: {typeshed ?? "(bundled stubs)"}");
 app.Run();
