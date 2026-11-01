@@ -193,6 +193,23 @@
 .nb-tools button:hover { background: var(--hover); }
 .ansi-bold { font-weight: 700; } .ansi-red { color: var(--bad); } .ansi-green { color: var(--good); } .ansi-yellow { color: var(--warn); }
 .ansi-blue { color: var(--info); } .ansi-magenta { color: var(--violet); } .ansi-cyan { color: var(--teal); } .ansi-black { color: #888; } .ansi-white { color: #eee; }
+#db-tree-col { width: 26%; } #db-main { flex: 1; }
+#db-tree-col h2 .db-tools { margin-left: auto; display: flex; gap: 4px; }
+.db-node { display: flex; gap: 6px; align-items: baseline; padding: 1px 8px; cursor: pointer; white-space: nowrap; }
+.db-node:hover { background: var(--hover); } .db-node .caret { width: 10px; color: var(--dim); }
+.db-node .db-detail { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.db-source .db-name { font-weight: 600; } .db-table .db-name, .db-view .db-name { color: var(--sym); } .db-pk .db-name { text-decoration: underline; }
+.db-column, .db-index { cursor: default; } .db-empty { padding: 8px 10px; color: var(--dim); font-family: inherit; white-space: normal; }
+#db-bar .db-mode.active { background: var(--accent); color: #fff; } #db-data-bar { display: flex; gap: 4px; align-items: center; } #db-data-bar[hidden] { display: none; }
+#db-where { width: 260px; }
+#db-console { display: flex; flex-direction: column; border-bottom: 1px solid var(--line); } #db-console[hidden] { display: none; }
+#db-console-bar { display: flex; gap: 8px; align-items: center; padding: 3px 8px; } #db-sql { height: 110px; }
+#db-grid table { border-collapse: collapse; font-size: 12px; } #db-grid th, #db-grid td { border: 1px solid var(--line); padding: 1px 6px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+#db-grid thead th { position: sticky; top: 0; background: var(--panel); cursor: pointer; } #db-grid tbody th { color: var(--dim); cursor: pointer; font-weight: normal; }
+#db-grid tr.sel th { background: var(--accent); color: #fff; } #db-grid td.db-null { color: var(--dim); font-style: italic; }
+#db-grid td.db-changed { background: rgba(80, 140, 255, .18); } #db-grid tr.db-added td { background: rgba(80, 200, 120, .15); }
+#db-grid tr.db-deleted td { text-decoration: line-through; opacity: .55; } #db-grid .db-edit { width: 100%; font: inherit; box-sizing: border-box; }
+#db-status { padding: 2px 10px; color: var(--dim); font-size: 12px; border-top: 1px solid var(--line); } #db-status.err { color: var(--red); }
 #prof-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #prof-bar label { white-space: nowrap; }
 .cov-hit { border-left: 3px solid var(--good); margin-left: 3px; } .cov-miss { border-left: 3px solid var(--bad); margin-left: 3px; }

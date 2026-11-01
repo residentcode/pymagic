@@ -828,6 +828,44 @@ app.MapGet("/api/coverage", () =>
     catch (Exception e) when (e is IOException or System.Text.Json.JsonException) { return Results.NotFound(); }
 });
 
+// ---- the Database panel: the project's SQLite files, read and changed through the project's Python (sqlite3)
+
+string DatabasePython() => interpreters.Current is { Target.IsLocal: true } dbLocal ? dbLocal.Python : python ?? "python";
+
+app.MapGet("/api/db/sources", () => Results.Json(Databases.Find(root)));
+
+// a data source added by hand (a new file is made); {path} inside the project
+app.MapPost("/api/db/sources", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    try
+    {
+        string full = ResolveInRoot(body?["path"]?.GetValue<string>() ?? "");
+        Databases.AddSource(root, full, DatabasePython());
+        return Results.Json(Databases.Find(root));
+    }
+    catch (ServiceException e) { return Results.BadRequest(e.Message); }
+    catch (UnauthorizedAccessException) { return Results.BadRequest("The database has to be inside the project."); }
+});
+
+app.MapDelete("/api/db/sources", (string path) => { Databases.RemoveSource(root, path); return Results.Json(Databases.Find(root)); });
+
+// one request on a data source: {op: schema | rows | apply | run, path (from the project root), ...}; the answer has "error" when SQLite refused
+app.MapPost("/api/db", async (HttpRequest req) =>
+{
+    if (await JsonNode.ParseAsync(req.Body) is not JsonObject body || body["op"]?.GetValue<string>() is not ("schema" or "rows" or "apply" or "run"))
+        return Results.BadRequest("unknown request");
+    try
+    {
+        string full = ResolveInRoot(body["path"]?.GetValue<string>() ?? "");
+        if (!File.Exists(full) || !Databases.IsSqlite(full)) return Results.BadRequest("Not an SQLite database of the project.");
+        body["path"] = full;
+        return Results.Json(Databases.Ask(DatabasePython(), body));
+    }
+    catch (ServiceException e) { return Results.Json(new { error = e.Message }); }
+    catch (UnauthorizedAccessException) { return Results.BadRequest("The database has to be inside the project."); }
+});
+
 // what the last profiler run measured, from .pymagic/profile.json; "rel" is the path inside the project (null for other code)
 app.MapGet("/api/profile", () =>
 {

@@ -185,6 +185,7 @@
         <button id="t-history" title="Local history"><svg class="i"><use href="#i-clock"/></svg><span class="lbl">History</span></button>
         <button id="t-packages" title="Packages"><svg class="i"><use href="#i-cube"/></svg><span class="lbl">Packages</span></button>
         <button id="t-tpreview" title="The live preview of the open template: its page on the running server"><svg class="i"><use href="#i-web"/></svg><span class="lbl">Preview</span></button>
+        <button id="t-database" title="Database: the project's SQLite files, their tables and an SQL console"><svg class="i"><use href="#i-data"/></svg><span class="lbl">Database</span></button>
         <button id="t-routes" title="Endpoints"><svg class="i"><use href="#i-route"/></svg><span class="lbl">Endpoints</span></button>
         <button id="t-django" title="Django"><svg class="i"><use href="#i-layers"/></svg><span class="lbl">Django</span></button>
         <span class="spacer"></span>
@@ -340,6 +341,32 @@
             <button id="cov-clear" title="Forget the result and remove the marks">Clear</button>
           </div>
           <div class="body" id="cov-list"></div>
+        </div>
+      </div>
+      <div id="database-tab" class="tab">
+        <div class="col" id="db-tree-col"><h2>Data sources <span class="db-tools"><button id="db-add" class="mini" title="Add an SQLite file of the project (a new one is made)">+</button><button id="db-refresh" class="mini" title="Look for databases again and read their tables">⟳</button></span></h2><div class="body" id="db-tree"></div></div>
+        <div class="col" id="db-main">
+          <div class="listbar" id="db-bar">
+            <button id="db-mode-data" class="db-mode" title="The rows of the table double-clicked in the tree">Data</button>
+            <button id="db-mode-console" class="db-mode" title="An SQL console: Ctrl+Enter runs the statement at the cursor, or the selection">Console</button>
+            <span id="db-data-bar">
+              <input id="db-where" placeholder="WHERE …, Enter" title="A condition on the rows, as SQL (price &lt; 5 AND name LIKE 'p%')" autocomplete="off" spellcheck="false">
+              <button id="db-prev" title="The rows before">‹</button><button id="db-next" title="The next rows">›</button>
+              <button id="db-reload" title="Read the rows again">⟳</button>
+              <button id="db-add-row" title="A new row, filled by double-clicking its cells">+ Row</button>
+              <button id="db-delete-rows" title="Delete the rows chosen by their number (click again to keep them)">− Rows</button>
+              <button id="db-submit" class="primary" title="Write the changes to the database, all or none">Submit</button>
+              <button id="db-revert" title="Forget the changes not submitted">Revert</button>
+            </span>
+            <span class="spacer"></span>
+            <button id="db-copy-csv" title="Copy what the grid shows as CSV">Copy CSV</button>
+          </div>
+          <div id="db-console" hidden>
+            <div id="db-console-bar"><label>Source <select id="db-source"></select></label><button id="db-run" class="primary" title="Run the statement at the cursor, or the selection (Ctrl+Enter)">▶ Run</button></div>
+            <div id="db-sql"></div>
+          </div>
+          <div class="body" id="db-grid"></div>
+          <div id="db-status"></div>
         </div>
       </div>
       <div id="profiler-tab" class="tab">
