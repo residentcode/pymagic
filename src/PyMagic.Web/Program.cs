@@ -1052,7 +1052,7 @@ app.MapGet("/api/packages", async () =>
 });
 
 app.MapGet("/api/packages/outdated", async () =>
-    interpreters.Current is { } c ? Results.Json(await Task.Run(() => PackageManager.Outdated(c.Python, target: c.Target))) : Results.Json(Array.Empty<object>()));
+    interpreters.Current is { } c ? Results.Json(await Task.Run(() => PackageManager.Outdated(c.Python, target: c.Target, settings: PackageSettings.Load(root)))) : Results.Json(Array.Empty<object>()));
 
 app.MapGet("/api/packages/info", async (string name) =>
 {
@@ -1095,6 +1095,73 @@ app.MapGet("/api/pypi", async (string name) =>
         return Results.Json(result);
     }
     catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return Results.Json(new { error = "the package index is not reachable" }, statusCode: 502); }
+});
+// the package index settings of the project (.pymagic/packages.json): another index, extra indexes, trusted hosts, a proxy
+var camelCase = new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
+app.MapGet("/api/packages/settings", () => Results.Json(PackageSettings.Load(root), camelCase));
+app.MapPut("/api/packages/settings", async (HttpRequest req) =>
+{
+    try
+    {
+        var settings = await System.Text.Json.JsonSerializer.DeserializeAsync<PackageSettings>(req.Body, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new PackageSettings();
+        PackageSettings.Save(root, settings);
+        return Results.Json(PackageSettings.Load(root), camelCase);
+    }
+    catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
+    catch (System.Text.Json.JsonException) { return Results.BadRequest(new { error = "not a settings object" }); }
+});
+
+// the releases of a package, newest first (the package index's JSON, or `pip index versions` when the project names another index)
+app.MapGet("/api/packages/versions", async (string name) =>
+{
+    if (!PackageManager.IsSafeSpec(name) || name.IndexOfAny(new[] { '[', ',', '=', '<', '>', '!', '~', '*', '+' }) >= 0) return Results.BadRequest(new { error = "not a package name" });
+    var settings = PackageSettings.Load(root);
+    try
+    {
+        if (settings.IndexUrl.Length == 0 && settings.ExtraIndexUrls.Count == 0)
+        {
+            using var res = await pypi.GetAsync($"https://pypi.org/pypi/{Uri.EscapeDataString(name)}/json");
+            if (!res.IsSuccessStatusCode) return Results.NotFound();
+            return Results.Json(new { name, source = "pypi", versions = PackageVersions.FromPyPi(await res.Content.ReadAsStringAsync()) });
+        }
+        if (interpreters.Current is not { } c) return Results.BadRequest(new { error = "no interpreter selected" });
+        var (code, output, error) = await Task.Run(() => PackageManager.Exec(c.Python, PipCommands.WithIndex(new[] { "-m", "pip", "index", "versions", "--pre", "--disable-pip-version-check", name }, settings), 60000, c.Target));
+        if (code != 0) return Results.Json(new { error = error.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.Length > 0) ?? "pip could not list the versions" }, statusCode: 502);
+        return Results.Json(new { name, source = "pip", versions = PackageVersions.FromPipIndex(output) });
+    }
+    catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return Results.Json(new { error = "the package index is not reachable" }, statusCode: 502); }
+});
+
+// a path, git address or link to install from: what it is and what installing will do; the install itself needs the token given here
+app.MapPost("/api/packages/source", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    try
+    {
+        var check = PackageSource.Inspect(root, body?["source"]?.GetValue<string>() ?? "", body?["editable"]?.GetValue<bool>() == true);
+        return Results.Json(new { kind = check.Kind, source = check.Source, editable = check.Editable, title = check.Title, details = check.Details, warnings = check.Warnings, token = PackageSource.Issue(check) });
+    }
+    catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
+});
+
+// what the installed packages require of each other (from the interpreter's own metadata; nothing is downloaded)
+app.MapGet("/api/packages/tree", async (string? name, bool? reverse) =>
+{
+    if (interpreters.Current is not { } c) return Results.BadRequest(new { error = "no interpreter selected" });
+    if (name != null && !PackageManager.IsSafeSpec(name)) return Results.BadRequest(new { error = "not a package name" });
+    try
+    {
+        var dists = await Task.Run(() => DependencyTree.Read(c.Python, c.Target));
+        return Results.Json(new { count = dists.Count, roots = DependencyTree.Build(dists, name, reverse == true) }, camelCase);
+    }
+    catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
+});
+
+// the lock files of the project, and whether the tool that syncs an environment to each is there
+app.MapGet("/api/packages/locks", async () =>
+{
+    bool pipTools = interpreters.Current is { } c && (await Task.Run(() => PackageManager.List(c.Python, target: c.Target))).Packages.Any(p => PackageManager.Normalize(p.Name) == "pip-tools");
+    return Results.Json(LockFiles.Detect(root, LockFiles.Find, pipTools), camelCase);
 });
 // SchemaStore's schemas (package.json, pyproject.toml, GitHub workflows): kept ones, one kept one, and the download (the page asks the user first)
 app.MapGet("/api/schemas", () => Results.Json(Schemas.List(root)));
@@ -1671,16 +1738,36 @@ app.Map("/run", async (HttpContext ctx) =>
                 var pipArgs = new List<string>();
                 string module = "pip";
                 string? refusal = null;
+                bool startedProgram = false;
                 if (names.Any(n => !PackageManager.IsSafeSpec(n))) refusal = "a package name contains characters that are not allowed";
                 else switch (op)
                 {
                     case "install":
                         if (names.Count == 0) { refusal = "no packages given"; break; }
-                        pipArgs.AddRange(new[] { "install", "--disable-pip-version-check", "--no-input", "--progress-bar", "off" });
-                        if (msg["upgrade"]?.GetValue<bool>() == true) pipArgs.Add("--upgrade");
-                        if (msg["user"]?.GetValue<bool>() == true && !target.IsVenv) pipArgs.Add("--user");
-                        pipArgs.AddRange(names);
+                        pipArgs.AddRange(PipCommands.Install(names, msg["upgrade"]?.GetValue<bool>() == true, msg["user"]?.GetValue<bool>() == true, target.IsVenv, PackageSettings.Load(root)));
                         break;
+                    case "installSource":
+                    {
+                        // a path, git address or link: only the one that was shown and confirmed (the token of /api/packages/source)
+                        var checkedSource = PackageSource.Redeem(msg["token"]?.GetValue<string>());
+                        if (checkedSource == null || checkedSource.Source != (msg["source"]?.GetValue<string>() ?? "")) { refusal = "that source was not confirmed (or the confirmation is too old): check it again"; break; }
+                        pipArgs.AddRange(PipCommands.InstallSource(checkedSource, msg["user"]?.GetValue<bool>() == true, target.IsVenv, PackageSettings.Load(root)));
+                        break;
+                    }
+                    case "lockSync":
+                    {
+                        try
+                        {
+                            var installedNow = PackageManager.List(target.Python, target: target.Target).Packages;
+                            bool pipTools = installedNow.Any(p => PackageManager.Normalize(p.Name) == "pip-tools");
+                            var plan = LockFiles.MakePlan(root, msg["file"]?.GetValue<string>() ?? "", target.Python, target.Prefix, target.IsVenv, target.Target.IsLocal, LockFiles.Find, pipTools);
+                            packageOperation = true;
+                            session.StartProgram(root, plan.Program, plan.Args, plan.Env);
+                            startedProgram = true;
+                        }
+                        catch (ServiceException e) { refusal = e.Message; }
+                        break;
+                    }
                     case "uninstall":
                         if (names.Count == 0) { refusal = "no packages given"; break; }
                         pipArgs.AddRange(new[] { "uninstall", "-y", "--disable-pip-version-check" });
@@ -1702,6 +1789,7 @@ app.Map("/run", async (HttpContext ctx) =>
                     default: refusal = "unknown operation"; break;
                 }
                 if (refusal != null) { outbox.Add(new JsonObject { ["type"] = "error", ["message"] = refusal }.ToJsonString()); continue; }
+                if (startedProgram) continue;
                 packageOperation = true;
                 session.Python = target.Python; session.Target = target.Target;
                 session.StartModule(root, module, pipArgs);

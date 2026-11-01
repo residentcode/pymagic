@@ -6,7 +6,7 @@
 import { after, afterEach, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
@@ -982,5 +982,170 @@ describe('a debug server a program started elsewhere connects back to', () => {
             program.kill();
         }
         assert.equal(await clickMargin(2), false, 'a second click takes the breakpoint away');
+    });
+});
+
+// last again: this selects a throwaway environment as the project's interpreter
+describe('packages: index settings, versions, installing from a path, the dependency tree, lock files', () => {
+    let wheels = '';
+    let envPython = '';
+    let index;
+    let indexUrl = '';
+    const MAKE_WHEEL = [
+        'import sys, zipfile',
+        'out, name, version, requires = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]',
+        'info = f"{name}-{version}.dist-info"',
+        'z = zipfile.ZipFile(out, "w")',
+        'z.writestr(f"{name}/__init__.py", f"VERSION = {version!r}\\n")',
+        'meta = f"Metadata-Version: 2.1\\nName: {name}\\nVersion: {version}\\nSummary: made for the e2e test\\n"',
+        'meta += "".join(f"Requires-Dist: {r}\\n" for r in requires.split(";;") if r)',
+        'z.writestr(f"{info}/METADATA", meta)',
+        'z.writestr(f"{info}/WHEEL", "Wheel-Version: 1.0\\nGenerator: test\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n")',
+        'z.writestr(f"{info}/RECORD", f"{name}/__init__.py,,\\n{info}/METADATA,,\\n{info}/WHEEL,,\\n{info}/RECORD,,\\n")',
+        'z.close()',
+    ].join('\n');
+    const rows = () => page.evaluate(`[...document.querySelectorAll('#pk-table .pkrow:not(.head) > span:first-child')].map((s) => s.textContent)`);
+    const logDone = (what) => page.waitFor(`/Done\\.|exited with code/.test(${$('pk-log')}.textContent) && ${$('pk-log')}.textContent`, 120000, what);
+    const setValue = (id, value) => page.evaluate(`(() => { const e = ${$(id)}; e.value = ${JSON.stringify(value)}; e.dispatchEvent(new Event('input')); })()`);
+    const wsRequest = (message) => page.evaluate(`new Promise((ok) => { const ws = new WebSocket(location.origin.replace('http', 'ws') + '/run'); const seen = []; ws.onopen = () => ws.send(${JSON.stringify(JSON.stringify(message))}); ws.onmessage = (e) => { const m = JSON.parse(e.data); seen.push(m); if (m.type === 'error' || m.type === 'exited') { ws.close(); ok(m); } }; setTimeout(() => ok({ type: 'timeout', seen }), 20000); })`);
+
+    before(async () => {
+        wheels = mkdtempSync(join(tmpdir(), 'pymagic-e2e-wheels-'));
+        writeFileSync(join(wheels, 'make_wheel.py'), MAKE_WHEEL);
+        const make = (name, version, requires = '') => {
+            const r = spawnSync('python', [join(wheels, 'make_wheel.py'), join(wheels, `${name}-${version}-py3-none-any.whl`), name, version, requires], { encoding: 'utf8' });
+            assert.equal(r.status, 0, String(r.stderr));
+        };
+        make('e2elib', '1.0');
+        make('e2elib', '2.0');
+        make('e2eapp', '1.0', 'e2elib>=1;;e2eextra>=1; extra == "more"');
+        // an index of this test: the two releases of e2elib
+        index = createServer((req, res) => {
+            if (req.url.startsWith('/simple/e2elib')) {
+                res.writeHead(200, { 'Content-Type': 'text/html' });
+                res.end('<html><body><a href="/files/e2elib-1.0-py3-none-any.whl">e2elib-1.0-py3-none-any.whl</a><a href="/files/e2elib-2.0-py3-none-any.whl">e2elib-2.0-py3-none-any.whl</a></body></html>');
+            }
+            else if (req.url.startsWith('/files/') && existsSync(join(wheels, req.url.slice(7)))) {
+                res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+                res.end(readFileSync(join(wheels, req.url.slice(7))));
+            }
+            else {
+                res.writeHead(404);
+                res.end();
+            }
+        });
+        await new Promise((ok) => index.listen(0, '127.0.0.1', ok));
+        indexUrl = `http://127.0.0.1:${index.address().port}/simple`;
+        // a throwaway environment becomes the project's interpreter
+        const env = mkdtempSync(join(tmpdir(), 'pymagic-e2e-pkgenv-'));
+        const venv = spawnSync('python', ['-m', 'venv', env], { encoding: 'utf8' });
+        assert.equal(venv.status, 0, String(venv.stderr));
+        envPython = join(env, 'Scripts', 'python.exe');
+        const chosen = await page.evaluate(`fetch('/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: ${JSON.stringify(envPython)} }) }).then((r) => r.ok)`);
+        assert.ok(chosen, 'the environment can be selected');
+        await page.evaluate(`${$('t-packages')}.click()`);
+        await page.waitFor(`document.querySelectorAll('#pk-table .pkrow').length > 1`, 60000, 'the package list');
+    });
+    after(() => { index?.close(); });
+
+    test('index settings are checked, kept and shown again', async () => {
+        await page.evaluate(`${$('pk-config-open')}.click()`);
+        await page.waitFor(`!${$('pk-config')}.hidden`, 5000, 'the form');
+        await setValue('pk-index-url', '--find-links');
+        await page.evaluate(`${$('pk-config-save')}.click()`);
+        await page.waitFor(`${$('pk-config-msg')}.className === 'err' && ${$('pk-config-msg')}.textContent`, 10000, 'the refusal');
+        await setValue('pk-index-url', indexUrl);
+        await setValue('pk-trusted', '127.0.0.1:' + new URL(indexUrl).port);
+        await setValue('pk-proxy', '');
+        await page.evaluate(`${$('pk-config-save')}.click()`);
+        assert.match(await page.waitFor(`${$('pk-config-msg')}.textContent.startsWith('Saved: index') && ${$('pk-config-msg')}.textContent`, 10000, 'the saved message'), /index http:\/\/127\.0\.0\.1:\d+\/simple/);
+        const kept = await page.evaluate(`fetch('/api/packages/settings').then((r) => r.json())`);
+        assert.equal(kept.indexUrl, indexUrl);
+        assert.deepEqual(kept.trustedHosts, ['127.0.0.1:' + new URL(indexUrl).port]);
+        await page.evaluate(`${$('pk-config-close')}.click()`);
+    });
+
+    test('a path is checked and has to be confirmed; an install without the confirmation is refused', async () => {
+        const lib1 = join(wheels, 'e2elib-1.0-py3-none-any.whl');
+        // the host refuses an install of a source that was not confirmed
+        const forged = await wsRequest({ type: 'startPip', op: 'installSource', packages: [], source: lib1, token: 'forged' });
+        assert.equal(forged.type, 'error');
+        assert.match(forged.message, /not confirmed/);
+        assert.match((await wsRequest({ type: 'startPip', op: 'install', packages: ['--index-url=http://evil'] })).message, /not allowed/);
+        // the box does not install a path: it asks
+        await setValue('pk-install', lib1);
+        await page.evaluate(`${$('pk-go')}.click()`);
+        await page.waitFor(`!${$('pk-confirm')}.hidden && ${$('pk-confirm')}.textContent.includes('Install from a file')`, 15000, 'the confirmation');
+        assert.match(await page.evaluate(`${$('pk-confirm')}.textContent`), /wheel is installed as it is/);
+        assert.ok(!(await rows()).includes('e2elib'), 'nothing was installed yet');
+        await page.evaluate(`${$('pk-source-install')}.click()`);
+        await logDone('the install of the wheel');
+        await page.waitFor(`[...document.querySelectorAll('#pk-table .pkrow span:first-child')].some((s) => s.textContent === 'e2elib')`, 30000, 'e2elib in the list');
+        // a folder with nothing to build is explained
+        await page.evaluate(`${$('pk-source-open')}.click()`);
+        await page.waitFor(`!${$('pk-source')}.hidden`, 5000, 'the source form');
+        await setValue('pk-source-text', wheels);
+        await page.evaluate(`${$('pk-source-check')}.click()`);
+        await page.waitFor(`${$('pk-confirm')}.textContent.includes('no pyproject.toml')`, 10000, 'the explanation');
+        // e2eapp needs e2elib, which is there now: no index is asked
+        await setValue('pk-source-text', join(wheels, 'e2eapp-1.0-py3-none-any.whl'));
+        await page.evaluate(`${$('pk-source-check')}.click()`);
+        await page.waitFor(`document.getElementById('pk-source-install')`, 10000, 'the second confirmation');
+        await page.evaluate(`${$('pk-source-install')}.click()`);
+        await logDone('the install of the app');
+        await page.waitFor(`[...document.querySelectorAll('#pk-table .pkrow span:first-child')].some((s) => s.textContent === 'e2eapp')`, 30000, 'e2eapp in the list');
+    });
+
+    test('the dependency tree of the environment, and of one package both ways', async () => {
+        await page.evaluate(`${$('pk-tree')}.click()`);
+        await page.waitFor(`document.querySelector('#pk-table .pktree')`, 30000, 'the tree');
+        const texts = () => page.evaluate(`[...document.querySelectorAll('#pk-table .pktree')].map((d) => d.textContent.replace(/^[▾▸]?/, '').trim())`);
+        let shown = await texts();
+        assert.ok(shown.includes('e2eapp 1.0'), shown.join(' | '));
+        assert.ok(shown.some((t) => t.startsWith('e2elib 1.0') && t.endsWith('>=1')), 'e2eapp\'s requirement is listed below it: ' + shown.join(' | '));
+        // the requirement that belongs to an extra is not one here
+        assert.ok(!shown.some((t) => t.startsWith('e2eextra')));
+        await page.evaluate(`${$('pk-tree-back')}.click()`);
+        await page.waitFor(`document.querySelectorAll('#pk-table .pkrow').length > 1`, 5000, 'the list again');
+        // who needs e2elib
+        await page.evaluate(`[...document.querySelectorAll('#pk-table .pkrow')].find((r) => r.firstChild.textContent === 'e2elib').click()`);
+        await page.waitFor(`[...document.querySelectorAll('#pk-detail button')].some((b) => b.textContent === 'Required by tree')`, 15000, 'the detail buttons');
+        await page.evaluate(`[...document.querySelectorAll('#pk-detail button')].find((b) => b.textContent === 'Required by tree').click()`);
+        await page.waitFor(`document.querySelector('#pk-table .pktree') && document.getElementById('pk-treebar').textContent.includes('What needs e2elib')`, 30000, 'the reverse tree');
+        shown = await texts();
+        assert.deepEqual(shown.slice(0, 2).map((t) => t.replace(/\s+/g, ' ')), ['e2elib 1.0', 'e2eapp 1.0 >=1']);
+        await page.evaluate(`${$('pk-tree-back')}.click()`);
+    });
+
+    test('a version is chosen from the index named in the settings and installed', async () => {
+        await page.evaluate(`[...document.querySelectorAll('#pk-detail button')].find((b) => b.textContent === 'Versions…').click()`);
+        await page.waitFor(`document.getElementById('pk-version-select')?.options.length >= 2`, 90000, 'the versions of e2elib');
+        const labels = await page.evaluate(`[...document.getElementById('pk-version-select').options].map((o) => o.textContent)`);
+        assert.deepEqual(labels, ['2.0', '1.0 (installed)']);
+        await page.evaluate(`document.getElementById('pk-version-select').value = '2.0'`);
+        await page.evaluate(`document.getElementById('pk-version-install').click()`);
+        await logDone('the install of the chosen version');
+        await page.waitFor(`[...document.querySelectorAll('#pk-table .pkrow')].some((r) => r.children[0].textContent === 'e2elib' && r.children[1].textContent === '2.0')`, 30000, 'e2elib 2.0 in the list');
+    });
+
+    test('lock files are listed with their sync commands, and only a detected one can be synced', async () => {
+        writeFileSync(join(projectRoot, 'uv.lock'), 'version = 1\n');
+        writeFileSync(join(projectRoot, 'poetry.lock'), '# poetry\n');
+        try {
+            await page.evaluate(`${$('pk-refresh')}.click()`);
+            await page.waitFor(`document.querySelectorAll('#pk-locks .lockrow').length >= 2`, 15000, 'the lock files');
+            const found = await page.evaluate(`[...document.querySelectorAll('#pk-locks .lockrow')].map((r) => [r.dataset.file, r.querySelector('code').textContent, r.querySelector('button').disabled])`);
+            const api = await page.evaluate(`fetch('/api/packages/locks').then((r) => r.json())`);
+            assert.deepEqual(found.map((f) => f.slice(0, 2)), [['uv.lock', 'uv sync --frozen'], ['poetry.lock', 'poetry install --sync --no-interaction']]);
+            assert.deepEqual(found.map((f) => !f[2]), api.map((l) => l.available), 'a sync is offered exactly when the tool is there');
+            // the host only runs what it detected
+            const refused = await wsRequest({ type: 'startPip', op: 'lockSync', packages: [], file: 'nope.lock' });
+            assert.equal(refused.type, 'error');
+            assert.match(refused.message, /not a lock file of this project/);
+        }
+        finally {
+            rmSync(join(projectRoot, 'uv.lock'), { force: true });
+            rmSync(join(projectRoot, 'poetry.lock'), { force: true });
+        }
     });
 });
