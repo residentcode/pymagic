@@ -11,7 +11,7 @@ public class RstTests
     {
         try
         {
-            var p = Process.Start(new ProcessStartInfo("python", $"-c \"import {module}\"") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true });
+            var p = Process.Start(new ProcessStartInfo(Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python", $"-c \"import {module}\"") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true });
             return p != null && p.WaitForExit(20000) && p.ExitCode == 0;
         }
         catch { return false; }
@@ -20,7 +20,7 @@ public class RstTests
     [Fact]
     public void TheHelperAnswersWithHtmlOrSaysDocutilsIsMissing()
     {
-        var answer = Databases.Ask("python", new JsonObject { ["text"] = "Title\n=====\n\nA *word* and ``code``.\n\n.. raw:: html\n\n   <script>alert(1)</script>\n" }, 30000, "pm_rst.py");
+        var answer = Databases.Ask(Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python", new JsonObject { ["text"] = "Title\n=====\n\nA *word* and ``code``.\n\n.. raw:: html\n\n   <script>alert(1)</script>\n" }, 30000, "pm_rst.py");
         if (Has("docutils"))
         {
             string html = answer["html"]!.GetValue<string>();
