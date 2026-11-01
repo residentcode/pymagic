@@ -68,6 +68,17 @@ const FILES = {
 // a container that is already running, for the last checks (made there when Docker and the python:3.12-slim image are on this PC)
 const CONTAINER = 'pymagic-e2e-ctr-' + process.pid;
 const hasDocker = spawnSync('docker', ['image', 'inspect', 'python:3.12-slim'], { encoding: 'utf8' }).status === 0;
+// a notebook: a title, two code cells, a sub-heading and a cell under it
+FILES['nb_demo.ipynb'] = JSON.stringify({
+    cells: [
+        { cell_type: 'markdown', metadata: {}, source: ['# Intro'] },
+        { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ['x = 5\n', 'y = [1, 2]\n', 'z = x * 2'] },
+        { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ['print(z)'] },
+        { cell_type: 'markdown', metadata: {}, source: ['## Part'] },
+        { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ['w = 1'] },
+    ],
+    metadata: {}, nbformat: 4, nbformat_minor: 5,
+}, null, 1) + '\n';
 
 let app, page;
 const $ =(id) => `document.getElementById(${JSON.stringify(id)})`;
@@ -1279,5 +1290,59 @@ describe('packages: index settings, versions, installing from a path, the depend
             rmSync(join(projectRoot, 'uv.lock'), { force: true });
             rmSync(join(projectRoot, 'poetry.lock'), { force: true });
         }
+    });
+});
+
+// last: the notebook edits cells of the file and leaves it changed
+describe('a notebook: merge and split, tags, Run Section, the Variables window and the headings in Structure', () => {
+    const nbState = (expr) => page.evaluate(`(() => { const s = window.pymagic.notebook.stateOf('nb_demo.ipynb'); return ${expr}; })()`);
+    const cellsText = () => nbState(`s.nb.cells.map((c) => (Array.isArray(c.source) ? c.source.join('') : c.source))`);
+
+    test('a split cuts a cell at the cursor and a merge joins it again', async () => {
+        await open('nb_demo.ipynb');
+        await page.waitFor(`document.querySelector('#notebook.active .nb-cell')`, 15000, 'the notebook');
+        // the editor of the cell is made when it is in view; make it and put the cursor after the second line
+        await nbState(`(s.views[1].el.__create(), 1)`);
+        await page.waitFor(`!!window.pymagic.notebook.stateOf('nb_demo.ipynb').views[1].editor`, 10000, 'the cell editor');
+        await nbState(`(s.views[1].editor.setPosition({ lineNumber: 2, column: 11 }), 1)`);
+        await nbState(`(s.views[1].el.querySelector('.nb-split').click(), 1)`);
+        await page.waitFor(`window.pymagic.notebook.stateOf('nb_demo.ipynb').nb.cells.length === 6`, 10000, 'the split');
+        assert.deepEqual((await cellsText()).slice(1, 3), ['x = 5\ny = [1, 2]', 'z = x * 2']);
+        await nbState(`(s.views[1].el.querySelector('.nb-merge').click(), 1)`);
+        await page.waitFor(`window.pymagic.notebook.stateOf('nb_demo.ipynb').nb.cells.length === 5`, 10000, 'the merge');
+        assert.equal((await cellsText())[1], 'x = 5\ny = [1, 2]\n\nz = x * 2');
+        // put the cell back the way it was for the run below
+        await nbState(`(s.views[1].editor.executeEdits('t', [{ range: s.views[1].editor.getModel().getFullModelRange(), text: 'x = 5\\ny = [1, 2]\\nz = x * 2' }]), 1)`);
+        assert.equal((await cellsText())[1], 'x = 5\ny = [1, 2]\nz = x * 2');
+    });
+
+    test('a tag is added in the cell and written to its metadata, and taken away again', async () => {
+        await nbState(`(s.views[2].el.querySelector('.nb-tag-btn').click(), 1)`);
+        await page.waitFor(`window.pymagic.notebook.stateOf('nb_demo.ipynb').views[2].el.querySelector('.nb-tag-input')`, 5000, 'the tag field');
+        await page.evaluate(`(() => { const i = window.pymagic.notebook.stateOf('nb_demo.ipynb').views[2].el.querySelector('.nb-tag-input'); i.value = 'slow, keep'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+        assert.deepEqual(await nbState(`s.nb.cells[2].metadata.tags`), ['slow', 'keep']);
+        assert.deepEqual(await nbState(`[...s.views[2].el.querySelectorAll('.nb-tag-name')].map((e) => e.textContent)`), ['slow', 'keep']);
+        await nbState(`(s.views[2].el.querySelector('.nb-tag-x').click(), 1)`);
+        assert.deepEqual(await nbState(`s.nb.cells[2].metadata.tags`), ['keep']);
+        await nbState(`(s.views[2].el.querySelector('.nb-tag-x').click(), 1)`);
+        assert.equal(await nbState(`'tags' in s.nb.cells[2].metadata`), false, 'no tags: no key');
+    });
+
+    test('Run Section runs the heading cell\'s section and the Variables window lists what the kernel holds', async () => {
+        await nbState(`(s.views[0].el.querySelector('.nb-run-section').click(), 1)`);
+        await page.waitFor(`window.pymagic.notebook.stateOf('nb_demo.ipynb').nb.cells[4].execution_count`, 60000, 'the last cell of the section');
+        assert.equal(await nbState(`s.nb.cells[2].outputs[0].text.join('')`), '10\n');
+        const text = await page.waitFor(`(() => { const t = window.pymagic.notebook.stateOf('nb_demo.ipynb').varsEl.textContent; return t.includes('Variables (') && t.includes('w') && t; })()`, 15000, 'the variables');
+        assert.match(text, /Variables \(4\)/);
+        assert.deepEqual(await nbState(`[...s.varsEl.querySelectorAll('tr')].slice(1).map((r) => [...r.children].map((c) => c.textContent).join('|'))`),
+            ['w|int||1', 'x|int||5', 'y|list|2|[1, 2]', 'z|int||10']);
+    });
+
+    test('the headings of the text cells are the Structure window, and a click goes to the cell', async () => {
+        await page.evaluate(`window.dispatchEvent(new CustomEvent('pymagic:sidebar', { detail: 'structure' }))`);
+        const names = await page.waitFor(`(() => { const r = [...document.querySelectorAll('#structure li .fname')].map((e) => e.textContent); return r.length === 2 && r; })()`, 10000, 'the headings');
+        assert.deepEqual(names, ['Intro', 'Part']);
+        await page.evaluate(`[...document.querySelectorAll('#structure li')].find((li) => li.textContent.includes('Part')).click()`);
+        assert.equal(await nbState(`s.selected`), 3);
     });
 });

@@ -1030,7 +1030,7 @@ async function main() {
         await openFile(target, new monaco.Range(m.getLineCount(), 1, m.getLineCount(), 1));
     };
     const structure = setupStructure({
-        editor, lsp, uriOf: (model) => serverUri.get(model), visible: () => chrome.shown() && chrome.view() === 'structure',
+        editor, lsp, uriOf: (model) => serverUri.get(model), visible: () => chrome.shown() && chrome.view() === 'structure', notebook: () => notebook,
         actions: {
             createAdmin: (model, name, fields) => besideModel(model, 'admin.py', (t) => addModelAdmin(t, name, fields)),
             createSerializer: (model, name, fields) => besideModel(model, 'serializers.py', (t) => addModelSerializer(t, name, fields)),

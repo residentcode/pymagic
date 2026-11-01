@@ -33,7 +33,7 @@ export function pathAt(symbols, line) {
     return path;
 }
 
-export function setupStructure({ editor, lsp, uriOf, visible, actions }) {
+export function setupStructure({ editor, lsp, uriOf, visible, actions, notebook = () => null }) {
     const root = $('structure');
     let symbols = [];
     let django = false;   // the logical structure of the file, as Django sees it
@@ -47,6 +47,9 @@ export function setupStructure({ editor, lsp, uriOf, visible, actions }) {
 
     async function refresh() {
         const model = editor.getModel();
+        // a notebook's structure is the headings of its text cells (the cell is what a click goes to)
+        const nbSymbols = model && notebook()?.symbolsOf(model);
+        if (nbSymbols) { symbols = nbSymbols; ticket++; draw(); return; }
         // a Markdown file's structure is its headings
         if (model && model.getLanguageId() === 'markdown') { symbols = markdownSymbols(model.getValue()); ticket++; draw(); return; }
         const uri = model && uriOf(model);
@@ -128,6 +131,7 @@ export function setupStructure({ editor, lsp, uriOf, visible, actions }) {
                     }
                 }
                 li.onclick = () => {
+                    if (s.cell !== undefined) { notebook()?.revealCell(editor.getModel(), s.cell); return; }
                     const p = s.selectionRange.start;
                     editor.setPosition({ lineNumber: p.line + 1, column: p.character + 1 });
                     editor.revealLineInCenter(p.line + 1);
@@ -145,7 +149,9 @@ export function setupStructure({ editor, lsp, uriOf, visible, actions }) {
     function mark() {
         for (const li of root.querySelectorAll('li.here')) li.classList.remove('here');
         if (!follow) return;
-        const pos = editor.getPosition();
+        const model = editor.getModel();
+        const cell = model ? notebook()?.selectedOf(model) ?? -1 : -1;
+        const pos = cell >= 0 ? { lineNumber: cell + 1 } : editor.getPosition();   // in a notebook the unit is the selected cell
         if (!pos) return;
         const path = pathAt(symbols, pos.lineNumber - 1);
         const li = path.length ? [...root.querySelectorAll('li')].find((x) => x.dataset.key === keyOf(path)) : null;
@@ -157,6 +163,7 @@ export function setupStructure({ editor, lsp, uriOf, visible, actions }) {
     editor.onDidChangeModel(() => later(100));
     editor.onDidChangeModelContent(() => later(800));
     editor.onDidChangeCursorPosition(() => { if (visible()) mark(); });
+    window.addEventListener('pymagic:nbselect', () => { if (visible()) mark(); });
 
     $('st-follow').onclick = () => { follow = !follow; $('st-follow').classList.toggle('on', follow); mark(); };
     $('st-sort').onclick = () => { sorted = !sorted; $('st-sort').classList.toggle('on', sorted); draw(); };

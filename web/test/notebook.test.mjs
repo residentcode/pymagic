@@ -232,3 +232,96 @@ test('line endings in a cell do not change the line count', () => {
     assert.equal(doc.cells[1].start, 3);
     assert.equal(doc.text, 'a\nb\nc\nd');
 });
+
+// ------------------------------------------------------------ merge, split, tags, sections, headings
+
+test('merging joins a cell with the one below, keeps the first one\'s tags and drops the outputs of code', () => {
+    const nb = nbOf(['code', 'a = 1'], ['code', 'b = 2'], ['markdown', 'end']);
+    nb.cells[0].metadata.tags = ['keep'];
+    nb.cells[0].outputs = [{ output_type: 'stream', name: 'stdout', text: ['x'] }];
+    nb.cells[0].execution_count = 3;
+    const merged = m.mergeCells(nb, 0);
+    assert.equal(nb.cells.length, 2);
+    assert.equal(m.sourceOf(merged), 'a = 1\n\nb = 2');
+    assert.deepEqual(merged.outputs, []);
+    assert.equal(merged.execution_count, null);
+    assert.deepEqual(merged.metadata.tags, ['keep']);
+    assert.equal(m.mergeCells(nb, 1), null, 'nothing below the last cell');
+});
+
+test('merging with an empty cell does not add a blank line', () => {
+    const nb = nbOf(['markdown', 'text'], ['markdown', '']);
+    assert.equal(m.sourceOf(m.mergeCells(nb, 0)), 'text');
+});
+
+test('splitting cuts the text at an offset into two cells of the same kind', () => {
+    const nb = nbOf(['code', 'a = 1\nb = 2\nc = 3']);
+    nb.cells[0].metadata.tags = ['t'];
+    nb.cells[0].outputs = [{ output_type: 'stream', name: 'stdout', text: ['x'] }];
+    const made = m.splitCell(nb, 0, 'a = 1\n'.length);
+    assert.equal(nb.cells.length, 2);
+    assert.equal(m.sourceOf(nb.cells[0]), 'a = 1');
+    assert.equal(m.sourceOf(made), 'b = 2\nc = 3');
+    assert.equal(made, nb.cells[1]);
+    assert.equal(made.cell_type, 'code');
+    assert.deepEqual(nb.cells[0].outputs, []);
+    assert.deepEqual(made.metadata, {});
+    assert.deepEqual(nb.cells[0].metadata.tags, ['t']);
+});
+
+test('splitting in the middle of a line, at the end and at the start', () => {
+    let nb = nbOf(['markdown', 'hello world']);
+    m.splitCell(nb, 0, 5);
+    assert.deepEqual(nb.cells.map(m.sourceOf), ['hello', ' world']);
+    nb = nbOf(['code', 'x']);
+    m.splitCell(nb, 0, 1);
+    assert.deepEqual(nb.cells.map(m.sourceOf), ['x', '']);
+    nb = nbOf(['code', 'x']);
+    m.splitCell(nb, 0, 0);
+    assert.deepEqual(nb.cells.map(m.sourceOf), ['', 'x']);
+    assert.equal(m.splitCell(nb, 9, 0), null);
+});
+
+test('the offset of an editor position in the text', () => {
+    assert.equal(m.offsetOfPosition('ab\ncd\nef', 1, 1), 0);
+    assert.equal(m.offsetOfPosition('ab\ncd\nef', 2, 2), 4);
+    assert.equal(m.offsetOfPosition('ab\ncd\nef', 3, 3), 8);
+});
+
+test('tags are read from the metadata, parsed from text and removed when empty', () => {
+    const cell = { cell_type: 'code', metadata: { tags: ['keep', 3], other: 1 } };
+    assert.deepEqual(m.tagsOf(cell), ['keep']);
+    assert.deepEqual(m.parseTags(' a, b  a,,c '), ['a', 'b', 'c']);
+    m.setTags(cell, ['x', 'y']);
+    assert.deepEqual(cell.metadata, { tags: ['x', 'y'], other: 1 });
+    m.setTags(cell, []);
+    assert.deepEqual(cell.metadata, { other: 1 });
+    assert.deepEqual(m.tagsOf({ cell_type: 'code' }), []);
+});
+
+test('headings of a text ignore code fences and take the closing hashes off', () => {
+    const hs = m.headingsOfText('# One ##\ntext\n```\n# not\n```\n## Two\n#nospace\n');
+    assert.deepEqual(hs, [{ level: 1, name: 'One', line: 0 }, { level: 2, name: 'Two', line: 5 }]);
+});
+
+test('a section runs to the next heading of the same or a higher level', () => {
+    const nb = nbOf(['markdown', '# A'], ['code', '1'], ['markdown', '## A1'], ['code', '2'], ['markdown', '# B'], ['code', '3']);
+    assert.deepEqual(m.sectionOf(nb, 0), { start: 0, end: 4 });
+    assert.deepEqual(m.sectionOf(nb, 2), { start: 2, end: 4 });
+    assert.deepEqual(m.sectionOf(nb, 4), { start: 4, end: 6 });
+    assert.equal(m.sectionOf(nb, 1), null, 'a code cell opens no section');
+    assert.equal(m.sectionOf(nbOf(['markdown', 'plain text']), 0), null);
+    assert.equal(m.cellHeadingLevel({ cell_type: 'markdown', source: ['text\n', '# late'] }), 0);
+});
+
+test('the headings of a notebook are nested symbols that point at cells', () => {
+    const nb = nbOf(['markdown', '# A'], ['code', '1'], ['markdown', '## A1\ntext\n## A2'], ['markdown', '# B'], ['code', '2']);
+    const s = m.notebookSymbols(nb);
+    assert.deepEqual(s.map((x) => x.name), ['A', 'B']);
+    assert.deepEqual(s[0].children.map((x) => x.name), ['A1', 'A2']);
+    assert.equal(s[0].children[1].cell, 2);
+    assert.equal(s[0].children[1].selectionRange.start.character, 2, 'the heading\'s line inside the cell');
+    assert.equal(s[0].range.end.line, 2);
+    assert.equal(s[1].range.end.line, 4);
+    assert.equal(s[0].kind, 'md-heading');
+});

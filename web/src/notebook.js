@@ -3,7 +3,8 @@
 // when a cell changes. Code cells run in a Python kernel on the host (the /nb WebSocket, one kernel per notebook).
 import {
     ansiSegments, applyKernelMessage, changeType, clearOutputs, collapseCarriageReturns, deleteCell, describeOutput, insertCell,
-    cellOfLine, lastExecutionCount, moveCell, parseNotebook, serializeNotebook, setSource, sourceOf, virtualDocument, virtualLine,
+    cellOfLine, lastExecutionCount, mergeCells, moveCell, notebookSymbols, offsetOfPosition, parseNotebook, parseTags, sectionOf, serializeNotebook,
+    setSource, setTags, sourceOf, splitCell, tagsOf, virtualDocument, virtualLine,
 } from './notebook-model';
 import { blocksOf, inlineOf } from './markdown-lite';
 import { toast } from './toast';
@@ -155,9 +156,13 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         state.observer = new IntersectionObserver((entries) => {
             for (const e of entries) if (e.isIntersecting) e.target.__create?.();
         }, { root, rootMargin: '300px' });
-        state.dom.append(state.barEl, state.errorEl, state.listEl);
+        state.varsEl = el('div', 'nb-vars');
+        state.vars = [];
+        state.varsOpen = true;
+        state.dom.append(state.barEl, state.varsEl, state.errorEl, state.listEl);
         root.append(state.dom);
         buildBar(state);
+        paintVars(state);
         model.onDidChangeContent(() => { if (!state.pushing) load(state); });
         load(state);
         return state;
@@ -211,6 +216,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
             btn('＋ Text', 'Add a markdown cell below', () => addCell(state, 'markdown')),
             btn('Format', 'Lay out the code of every code cell (the formatter of the toolbar); one cell: Shift+Alt+F', () => void formatAll(state)),
             btn('Clear outputs', 'Remove the outputs of every cell', () => { clearOutputs(state.nb); state.views.forEach(paintOutputs); pushSoon(state); }),
+            btn('Variables', 'Show or hide the Variables window (the names the kernel holds after each run)', () => { state.varsOpen = !state.varsOpen; paintVars(state); }),
             btn('Save', 'Save the notebook (Ctrl+S)', () => { flush(state); void save(); }),
             state.statusEl,
         );
@@ -220,6 +226,23 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         state.status = status;
         state.statusEl.textContent = `kernel: ${text ?? status}`;
         state.statusEl.className = `nb-status ${status}`;
+    }
+
+    // ---- the Variables window: the names the kernel holds, sent after each run
+
+    function paintVars(state) {
+        const box = state.varsEl;
+        box.style.display = state.varsOpen ? 'block' : 'none';
+        if (!state.varsOpen) return;
+        const head = el('div', 'nb-vars-head', `Variables (${state.vars.length})`);
+        if (!state.vars.length) { box.replaceChildren(head, el('div', 'nb-empty', 'Nothing yet: run a cell and the names it leaves are listed here')); return; }
+        const table = el('table', 'nb-vars-table');
+        const row = (cells, tag = 'td') => { const tr = el('tr'); for (const c of cells) tr.append(el(tag, '', c)); return tr; };
+        table.append(row(['Name', 'Type', 'Size', 'Value'], 'th'));
+        for (const v of state.vars) table.append(row([v.name, v.type, v.size ?? '', v.value]));
+        const scroll = el('div', 'nb-vars-scroll');
+        scroll.append(table);
+        box.replaceChildren(head, scroll);
     }
 
     // ---- cells
@@ -242,6 +265,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         state.selected = Math.max(0, index);
         state.views.forEach((v, i) => v.el?.classList.toggle('selected', i === state.selected));
         if (scroll) state.views[state.selected]?.el?.scrollIntoView({ block: 'nearest' });
+        window.dispatchEvent(new CustomEvent('pymagic:nbselect', { detail: { rel: state.rel, cell: state.selected } }));
     }
 
     const indexOf = (state, view) => state.views.indexOf(view);
@@ -256,12 +280,17 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         const main = el('div', 'nb-main');
         view.inputEl = el('div', 'nb-input');
         view.outEl = el('div', 'nb-outputs');
-        main.append(view.inputEl, view.outEl);
+        view.tagsEl = el('div', 'nb-tags');
+        main.append(view.inputEl, view.tagsEl, view.outEl);
 
         const tools = el('div', 'nb-tools');
-        const tool = (label, title, on) => { const b = el('button', '', label); b.title = title; b.onclick = (e) => { e.stopPropagation(); on(); }; return b; };
+        const tool = (label, title, on, cls) => { const b = el('button', cls ?? '', label); b.title = title; b.onclick = (e) => { e.stopPropagation(); on(); }; return b; };
         tools.append(
             tool('▶', 'Run this cell', () => { select(state, indexOf(state, view)); runSelected(state, false); }),
+            ...(cell.cell_type === 'markdown' ? [tool('▶ Section', 'Run Section: this heading cell and the cells up to the next heading of the same or a higher level', () => runSection(state, view), 'nb-run-section')] : []),
+            tool('Split', 'Split the cell at the cursor (Ctrl+Shift+-)', () => split(state, view), 'nb-split'),
+            tool('Merge ↓', 'Merge the cell with the one below it', () => merge(state, view), 'nb-merge'),
+            tool('Tags', 'Edit the tags of the cell (its metadata)', () => { view.tagEdit = !view.tagEdit; paintTags(state, view); }, 'nb-tag-btn'),
             tool('▲', 'Move up', () => move(state, view, -1)),
             tool('▼', 'Move down', () => move(state, view, 1)),
             tool(cell.cell_type === 'code' ? 'To text' : 'To code', 'Change the kind of cell', () => {
@@ -275,6 +304,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
 
         paintCount(view);
         paintOutputs(view);
+        paintTags(state, view);
         if (cell.cell_type === 'markdown') paintMarkdown(state, view);
         else placeholder(state, view);
         // the editor of a cell is made when the cell comes into view: a notebook of hundreds of cells opens at once
@@ -316,6 +346,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         editor.addCommand(M.CtrlCmd | K.Enter, () => runSelected(state, false));
         editor.addCommand(M.Alt | K.Enter, () => { runSelected(state, false); addCell(state, 'code'); });
         editor.addCommand(M.CtrlCmd | K.KeyS, () => { flush(state); void save(); });
+        editor.addCommand(M.CtrlCmd | M.Shift | K.Minus, () => split(state, view));
         // Shift+Alt+F with a selection lays out only the lines it touches, as in the code editor
         if (cell.cell_type === 'code')
             editor.addCommand(M.Shift | M.Alt | K.KeyF, () => {
@@ -347,6 +378,70 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         if (view.cell.cell_type !== 'code') { view.outEl.replaceChildren(); return; }
         view.outEl.replaceChildren(...(view.cell.outputs ?? []).map(renderOutput));
         view.el?.classList.toggle('has-error', (view.cell.outputs ?? []).some((o) => o.output_type === 'error'));
+    }
+
+    /** The tags of a cell as chips (a click on x removes one) and, while editing, a field that takes more (Enter; commas or spaces separate). */
+    function paintTags(state, view) {
+        const tags = tagsOf(view.cell);
+        view.tagsEl.style.display = tags.length || view.tagEdit ? 'flex' : 'none';
+        view.tagsEl.replaceChildren();
+        for (const tag of tags) {
+            const chip = el('span', 'nb-tag');
+            chip.append(el('span', 'nb-tag-name', tag));
+            const x = el('button', 'nb-tag-x', '×');
+            x.title = `Remove the tag ${tag}`;
+            x.onclick = (e) => { e.stopPropagation(); setTags(view.cell, tags.filter((t) => t !== tag)); paintTags(state, view); flush(state); };
+            chip.append(x);
+            view.tagsEl.append(chip);
+        }
+        if (view.tagEdit) {
+            const input = el('input', 'nb-tag-input');
+            input.placeholder = 'tag, another tag';
+            input.onkeydown = (e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') {
+                    const more = parseTags(input.value);
+                    view.tagEdit = false;
+                    if (more.length) setTags(view.cell, [...new Set([...tags, ...more])]);
+                    paintTags(state, view);
+                    flush(state);
+                } else if (e.key === 'Escape') { view.tagEdit = false; paintTags(state, view); }
+            };
+            view.tagsEl.append(input);
+            input.focus();
+        }
+    }
+
+    /** Merges a cell with the one below it. */
+    function merge(state, view) {
+        const i = indexOf(state, view);
+        if (i + 1 >= state.views.length) { toast('There is no cell below to merge with'); return; }
+        if (state.views[i].running || state.views[i + 1].running) { toast('A cell that is running cannot be merged'); return; }
+        mergeCells(state.nb, i);
+        state.selected = i;
+        flush(state); render(state);
+    }
+
+    /** Splits a cell where the cursor is in its editor. */
+    function split(state, view) {
+        const i = indexOf(state, view);
+        const pos = view.editor?.getPosition();
+        if (!pos) { toast('Click in the cell where it should be cut (a text cell: double-click it first)'); return; }
+        const offset = offsetOfPosition(sourceOf(view.cell), pos.lineNumber, pos.column);
+        if (view.running) { toast('A cell that is running cannot be split'); return; }
+        splitCell(state.nb, i, offset);
+        state.selected = i + 1;
+        flush(state); render(state);
+        select(state, i + 1);
+        const next = state.views[i + 1];
+        if (next) { next.rendered = false; createEditor(state, next, true); next.editor?.setPosition({ lineNumber: 1, column: 1 }); }
+    }
+
+    /** Run Section: a heading cell and every cell after it up to the next heading of the same or a higher level. */
+    function runSection(state, view) {
+        const range = sectionOf(state.nb, indexOf(state, view));
+        if (!range) { toast('This text cell does not start with a heading'); return; }
+        enqueue(state, state.views.slice(range.start, range.end));
     }
 
     function addCell(state, type) {
@@ -403,6 +498,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
             case 'kernelExited': setStatus(state, 'dead', 'stopped'); failQueue(state); return;
             case 'kernelLog': return;
         }
+        if (m.type === 'variables') { state.vars = m.vars ?? []; paintVars(state); return; }
         const view = state.ids.get(m.id);
         if (!view) return;
         if (m.type === 'done') {
@@ -478,6 +574,8 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
 
     function restart(state) {
         failQueue(state);
+        state.vars = [];
+        paintVars(state);
         if (state.ws?.readyState === WebSocket.OPEN) { setStatus(state, 'starting', 'restarting…'); send(state, { type: 'restart' }); }
         else connect(state);
     }
@@ -625,6 +723,20 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
             states.delete(rel);
             if (shown === s) this.hide();
         },
+        /** The headings of the notebook that has this model, as the symbols of the Structure window (null when the model is not a notebook's). */
+        symbolsOf(model) {
+            const s = [...states.values()].find((x) => x.model === model);
+            return s?.nb ? notebookSymbols(s.nb) : null;
+        },
+        /** The cell selected in the notebook that has this model (-1 when there is none). */
+        selectedOf(model) { const s = [...states.values()].find((x) => x.model === model); return s?.nb ? s.selected : -1; },
+        /** Selects a cell of the notebook that has this model and scrolls to it (the Structure window does this). */
+        revealCell(model, cell) {
+            const s = [...states.values()].find((x) => x.model === model);
+            if (s?.nb) select(s, cell);
+        },
+        /** For tests and the page: runs the section a heading cell opens. */
+        runSection(rel, cell) { const s = states.get(rel); if (s?.views[cell]) runSection(s, s.views[cell]); },
         isShown: () => shown !== null,
         targetOf,
         locate,

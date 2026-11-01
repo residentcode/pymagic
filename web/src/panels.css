@@ -192,6 +192,17 @@
 .nb-cell:hover .nb-tools, .nb-cell.selected .nb-tools { display: flex; }
 .nb-tools button { background: transparent; color: var(--fg); border: 0; padding: 0 6px; font: inherit; cursor: pointer; }
 .nb-tools button:hover { background: var(--hover); }
+.nb-tags { display: none; flex-wrap: wrap; gap: 4px; align-items: center; margin: 2px 0; }
+.nb-tag { display: inline-flex; align-items: center; gap: 2px; background: var(--hover2); border: 1px solid var(--line); border-radius: 10px; padding: 0 4px 0 8px; font-size: 12px; }
+.nb-tag-x { background: transparent; color: var(--dim); border: 0; cursor: pointer; padding: 0 3px; font: inherit; }
+.nb-tag-x:hover { color: var(--fg); }
+.nb-tag-input { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px; font: inherit; font-size: 12px; width: 180px; }
+.nb-vars { display: none; border-bottom: 1px solid var(--line); background: var(--panel); padding: 2px 12px 4px; }
+.nb-vars-head { color: var(--dim); font-size: 12px; padding: 2px 0; }
+.nb-vars-scroll { max-height: 160px; overflow: auto; }
+.nb-vars-table { border-collapse: collapse; width: 100%; font: 12px/1.4 var(--mono, Consolas, monospace); }
+.nb-vars-table th, .nb-vars-table td { text-align: left; padding: 1px 10px 1px 0; white-space: nowrap; max-width: 520px; overflow: hidden; text-overflow: ellipsis; }
+.nb-vars-table th { color: var(--dim); font-weight: normal; position: sticky; top: 0; background: var(--panel); }
 .ansi-bold { font-weight: 700; } .ansi-red { color: var(--bad); } .ansi-green { color: var(--good); } .ansi-yellow { color: var(--warn); }
 .ansi-blue { color: var(--info); } .ansi-magenta { color: var(--violet); } .ansi-cyan { color: var(--teal); } .ansi-black { color: #888; } .ansi-white { color: #eee; }
 #db-tree-col { width: 26%; } #db-main { flex: 1; }
