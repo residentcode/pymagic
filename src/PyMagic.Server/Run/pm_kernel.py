@@ -10,6 +10,7 @@ To the host:    {"type": "ready", "python": "3.13.1"}
                 {"type": "result", "id", "data": {mime: text}, "execution_count"}      the value of a last expression
                 {"type": "display", "id", "data": {mime: text}}                        display(x), figures
                 {"type": "error", "id", "ename", "evalue", "traceback": [lines]}
+                {"type": "variables", "id", "vars": [{"name", "type", "value", "size"}]}   the user's names, after each cell
                 {"type": "done", "id", "status": "ok" | "error", "execution_count"}
 
 Cells may end with an expression (its value is shown), use `display(x)`, `!shell command` and `%pip install x`; a few other
@@ -201,6 +202,40 @@ def report(error, filename):
     send({"type": "error", "id": _current_id, "ename": type(error).__name__, "evalue": str(error), "traceback": text})
 
 
+_HIDDEN = {"display", "__pm_shell__", "__builtins__", "__name__"}
+
+
+def short_repr(value, limit=120):
+    try:
+        text = repr(value)
+    except Exception:
+        text = "<%s object>" % type(value).__name__
+    text = " ".join(text.splitlines())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def size_of(value):
+    shape = getattr(value, "shape", None)
+    if isinstance(shape, tuple):
+        return "x".join(str(n) for n in shape)
+    if isinstance(value, (str, bytes, list, tuple, dict, set, frozenset, range)):
+        return str(len(value))
+    return ""
+
+
+def variables():
+    """The names a cell left in the namespace (not the private ones and not the kernel's own), for the Variables window."""
+    out = []
+    for name, value in list(namespace.items()):
+        if name in _HIDDEN or name.startswith("_"):
+            continue
+        out.append({"name": name, "type": type(value).__name__, "value": short_repr(value), "size": size_of(value)})
+        if len(out) >= 300:
+            break
+    out.sort(key=lambda v: v["name"])
+    return out
+
+
 def no_input(*_args, **_kwargs):
     raise RuntimeError("input() is not available in notebook cells")
 
@@ -278,6 +313,10 @@ def main():
             status = "error"
         finally:
             _running = False
+        try:
+            send({"type": "variables", "id": _current_id, "vars": variables()})
+        except Exception:
+            pass
         send({"type": "done", "id": _current_id, "status": status, "execution_count": execution_count})
         _current_id = None
 

@@ -232,3 +232,128 @@ export function virtualLine(doc, cellIndex, line) {
     const c = doc.cells.find((x) => x.index === cellIndex);
     return c ? c.start + line : null;
 }
+
+// ------------------------------------------------------------ merging and splitting cells
+
+/**
+ * Joins the cell at `index` with the one below it (what Jupyter's "Merge cell below" does): the sources are joined with a blank line,
+ * the result keeps the kind, the id and the tags of the first, and a code cell loses its outputs (they no longer belong to its code).
+ * Returns the merged cell, or null when there is no cell below.
+ */
+export function mergeCells(nb, index) {
+    if (index < 0 || index + 1 >= nb.cells.length) return null;
+    const [a, b] = [nb.cells[index], nb.cells[index + 1]];
+    const first = sourceOf(a), second = sourceOf(b);
+    setSource(a, first === '' ? second : second === '' ? first : `${first.replace(/\n+$/, '')}\n\n${second}`);
+    if (a.cell_type === 'code') { a.outputs = []; a.execution_count = null; }
+    nb.cells.splice(index + 1, 1);
+    return a;
+}
+
+/**
+ * Cuts the cell at `index` in two at a character offset of its text: the first part stays, the rest becomes a new cell of the same kind below it
+ * (the newline at the cut goes). The new cell has no tags and no outputs; the first keeps its tags and loses its outputs.
+ * Returns the new cell, or null for a bad index.
+ */
+export function splitCell(nb, index, offset) {
+    const cell = nb.cells[index];
+    if (!cell) return null;
+    const text = sourceOf(cell);
+    const at = Math.max(0, Math.min(offset, text.length));
+    const head = text.slice(0, at).replace(/\n$/, ''), tail = text.slice(at).replace(/^\n/, '');
+    setSource(cell, head);
+    if (cell.cell_type === 'code') { cell.outputs = []; cell.execution_count = null; }
+    return insertCell(nb, index + 1, cell.cell_type, tail);
+}
+
+/** The character offset in a text of a Monaco-style position (1-based line and column). */
+export function offsetOfPosition(text, lineNumber, column) {
+    const lines = text.split('\n');
+    let offset = 0;
+    for (let i = 0; i < lineNumber - 1 && i < lines.length; i++) offset += lines[i].length + 1;
+    return Math.min(text.length, offset + column - 1);
+}
+
+// ------------------------------------------------------------ cell tags (metadata.tags)
+
+export function tagsOf(cell) {
+    const t = cell.metadata?.tags;
+    return Array.isArray(t) ? t.filter((x) => typeof x === 'string') : [];
+}
+
+/** A comma- or space-separated list as tags: trimmed, no empty ones, no repeats. */
+export function parseTags(text) {
+    return [...new Set(text.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean))];
+}
+
+/** Sets the tags of a cell; an empty list removes the key (as Jupyter does), other metadata stays. */
+export function setTags(cell, tags) {
+    cell.metadata ??= {};
+    if (tags.length) cell.metadata.tags = [...tags]; else delete cell.metadata.tags;
+}
+
+// ------------------------------------------------------------ headings: sections and the structure
+
+/** The headings of a markdown text: [{ level, name, line }] (line is 0-based in the text); `#` lines inside a code fence are not headings. */
+export function headingsOfText(text) {
+    const out = [];
+    let fence = null;
+    text.split('\n').forEach((raw, line) => {
+        const f = /^\s*(```+|~~~+)/.exec(raw);
+        if (f) { if (!fence) fence = f[1][0]; else if (fence === f[1][0]) fence = null; return; }
+        if (fence) return;
+        const m = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(raw);
+        if (m && m[2]) out.push({ level: m[1].length, name: m[2], line });
+    });
+    return out;
+}
+
+/** The level of the heading a markdown cell starts with (its first heading, when only blank lines come before it); 0 when it has none. */
+export function cellHeadingLevel(cell) {
+    if (cell.cell_type !== 'markdown') return 0;
+    const text = sourceOf(cell);
+    const h = headingsOfText(text)[0];
+    if (!h) return 0;
+    return text.split('\n').slice(0, h.line).every((l) => l.trim() === '') ? h.level : 0;
+}
+
+/**
+ * The cells of the section a markdown heading cell opens: from it to the cell before the next heading cell of the same or a higher level.
+ * Returns { start, end } (end exclusive), or null when the cell at `index` does not start with a heading.
+ */
+export function sectionOf(nb, index) {
+    const level = cellHeadingLevel(nb.cells[index] ?? {});
+    if (!level) return null;
+    let end = index + 1;
+    while (end < nb.cells.length) {
+        const l = cellHeadingLevel(nb.cells[end]);
+        if (l && l <= level) break;
+        end++;
+    }
+    return { start: index, end };
+}
+
+/**
+ * The headings of all markdown cells as the nested symbols of the Structure window. A position's `line` is the index of the cell (the unit a
+ * notebook moves in) and its `character` the heading's line inside the cell; a range runs to the last cell before the next heading of the
+ * same or a higher level, so "follow the cursor" finds the section of the selected cell. A heading is a child of the nearest earlier larger one.
+ */
+export function notebookSymbols(nb) {
+    const flat = [];
+    nb.cells.forEach((cell, index) => {
+        if (cell.cell_type !== 'markdown') return;
+        for (const h of headingsOfText(sourceOf(cell))) flat.push({ ...h, cell: index });
+    });
+    const roots = [];
+    const stack = [];
+    flat.forEach((h, i) => {
+        const next = flat.slice(i + 1).find((x) => x.level <= h.level);
+        const last = next ? (next.cell === h.cell ? h.cell : next.cell - 1) : nb.cells.length - 1;
+        const at = { line: h.cell, character: h.line };
+        const symbol = { name: h.name, detail: '', kind: 'md-heading', level: h.level, cell: h.cell, range: { start: at, end: { line: last, character: 0 } }, selectionRange: { start: at, end: at }, children: [] };
+        while (stack.length && stack[stack.length - 1].level >= h.level) stack.pop();
+        (stack.length ? stack[stack.length - 1].children : roots).push(symbol);
+        stack.push(symbol);
+    });
+    return roots;
+}

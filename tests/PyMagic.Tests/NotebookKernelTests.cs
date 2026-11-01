@@ -82,6 +82,25 @@ public class NotebookKernelTests
     }
 
     [Fact]
+    public void TheNamesACellLeavesAreSentAfterEachRun()
+    {
+        if (!HavePython) return;
+        using var k = new Kernel();
+        var got = k.Run("count = 3\nitems = [1, 2, 3]\n_hidden = 1\nlabel = 'a' * 200");
+        var vars = Of(got, "variables")!["vars"]!.AsArray();
+        var names = vars.Select(v => v!["name"]!.GetValue<string>()).ToList();
+        Assert.Equal("count,items,label", string.Join(",", names));
+        var items = vars.First(v => v!["name"]!.GetValue<string>() == "items")!;
+        Assert.Equal("list", items["type"]!.GetValue<string>());
+        Assert.Equal("[1, 2, 3]", items["value"]!.GetValue<string>());
+        Assert.Equal("3", items["size"]!.GetValue<string>());
+        Assert.True(vars.First(v => v!["name"]!.GetValue<string>() == "label")!["value"]!.GetValue<string>().Length <= 120);
+        // the message comes before "done", also after an error
+        var failed = k.Run("boom = 1\n1/0");
+        Assert.True(failed.FindIndex(e => e["type"]!.GetValue<string>() == "variables") < failed.FindIndex(e => e["type"]!.GetValue<string>() == "done"));
+    }
+
+    [Fact]
     public void TheValueOfALastExpressionIsShown()
     {
         if (!HavePython) return;
