@@ -46,9 +46,9 @@ public static class PackageManager
     }
 
     /// <summary>Packages with a newer release (asks the package index, so it needs the network and can take a while).</summary>
-    public static IReadOnlyList<OutdatedPackage> Outdated(string python, int timeoutMs = 120000, ExecutionTarget? target = null)
+    public static IReadOnlyList<OutdatedPackage> Outdated(string python, int timeoutMs = 120000, ExecutionTarget? target = null, PackageSettings? settings = null)
     {
-        var (code, output, _) = Exec(python, new[] { "-m", "pip", "list", "--outdated", "--format=json", "--disable-pip-version-check" }, timeoutMs, target);
+        var (code, output, _) = Exec(python, PipCommands.WithIndex(new[] { "-m", "pip", "list", "--outdated", "--format=json", "--disable-pip-version-check" }, settings), timeoutMs, target);
         if (code != 0) return Array.Empty<OutdatedPackage>();
         try
         {

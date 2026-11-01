@@ -558,11 +558,28 @@
             <label id="pk-user-label" style="display:none" title="Install for the current user only (system interpreters)"><input type="checkbox" id="pk-user"> --user</label>
             <button id="pk-outdated" title="Ask the package index for newer versions">Check updates</button>
             <button id="pk-refresh" title="Reload the list"><svg class="i"><use href="#i-refresh"/></svg></button>
+            <button id="pk-tree" title="What the installed packages require of each other (read from the environment, nothing is downloaded)">Tree</button>
+            <button id="pk-source-open" title="Install from a folder, a wheel or archive file, a git address or a link; it is checked and confirmed first">From path / git…</button>
+            <button id="pk-config-open" title="Another package index, extra indexes, trusted hosts and a proxy for this project">Index…</button>
             <input id="pk-filter" placeholder="Filter" autocomplete="off" spellcheck="false">
           </div>
           <div id="pk-hint"></div>
           <div id="pk-banner"></div>
+          <div id="pk-config" hidden>
+            <label>Index URL <input id="pk-index-url" placeholder="https://pypi.org/simple (the default)" autocomplete="off" spellcheck="false"></label>
+            <label>Extra index URLs (one per line) <textarea id="pk-extra-urls" rows="2" spellcheck="false"></textarea></label>
+            <label>Trusted hosts (one per line; no https check) <textarea id="pk-trusted" rows="2" spellcheck="false"></textarea></label>
+            <label>Proxy <input id="pk-proxy" placeholder="http://proxy.example:8080" autocomplete="off" spellcheck="false"></label>
+            <div class="row"><button id="pk-config-save">Save</button><button id="pk-config-close">Close</button><span id="pk-config-msg"></span></div>
+            <div class="dim">Kept in .pymagic/packages.json. Used by installing, checking for updates and listing versions.</div>
+          </div>
+          <div id="pk-source" hidden>
+            <div class="row"><input id="pk-source-text" placeholder="C:\path\to\project   ./lib   dist/pkg-1.0-py3-none-any.whl   git+https://host/user/repo.git@v1.0" autocomplete="off" spellcheck="false">
+              <label><input type="checkbox" id="pk-source-editable"> editable (-e)</label><button id="pk-source-check">Check</button><button id="pk-source-close">Close</button></div>
+            <div id="pk-confirm" hidden></div>
+          </div>
           <div id="pk-reqs"></div>
+          <div id="pk-locks"></div>
           <div class="body" id="pk-table"></div>
         </div>
         <div class="col" id="pk-side">

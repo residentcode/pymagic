@@ -296,6 +296,28 @@ public sealed partial class RunSession : IDisposable
     public void StartModule(string root, string module, IReadOnlyList<string> args) =>
         Launch(root, false, new[] { "-m", module }, args, null);
 
+    /// <summary>Runs a program of this computer (uv, poetry...) in the project folder and streams its output like a script run.</summary>
+    public void StartProgram(string root, string program, IReadOnlyList<string> args, IReadOnlyDictionary<string, string> env)
+    {
+        _root = root;
+        var psi = ExecutionTarget.Local.Start(program, root, args, env);
+        psi.RedirectStandardInput = true; psi.RedirectStandardOutput = true; psi.RedirectStandardError = true;
+        psi.UseShellExecute = false; psi.CreateNoWindow = true;
+        psi.StandardOutputEncoding = Encoding.UTF8; psi.StandardErrorEncoding = Encoding.UTF8;
+        try { _process = Process.Start(psi); }
+        catch (System.ComponentModel.Win32Exception e) { Error($"cannot start '{psi.FileName}': {e.Message}"); return; }
+        if (_process == null) { Error($"cannot start '{psi.FileName}'"); return; }
+        _process.StandardInput.Close();
+        _emit(new JsonObject { ["type"] = "started", ["pid"] = _process.Id, ["debug"] = false });
+        var readers = new[] { Pump(_process.StandardOutput, "stdout"), Pump(_process.StandardError, "stderr") };
+        Task.Run(() =>
+        {
+            _process.WaitForExit();
+            Task.WaitAll(readers, TimeSpan.FromSeconds(2));
+            _emit(new JsonObject { ["type"] = "exited", ["code"] = _process.ExitCode });
+        });
+    }
+
     /// <param name="channel">Start the helper script and accept its socket (debugger and test runner); otherwise run the script directly.</param>
     void Launch(string root, bool channel, IReadOnlyList<string> leading, IReadOnlyList<string> args,
         IReadOnlyDictionary<string, JsonArray>? breakpoints, string helper = "pm_debug.py")
