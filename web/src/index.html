@@ -357,12 +357,13 @@
               <button id="db-delete-rows" title="Delete the rows chosen by their number (click again to keep them)">− Rows</button>
               <button id="db-submit" class="primary" title="Write the changes to the database, all or none">Submit</button>
               <button id="db-revert" title="Forget the changes not submitted">Revert</button>
+              <button id="db-import" title="Add the rows of a CSV file of the project to this table">Import CSV…</button>
             </span>
             <span class="spacer"></span>
-            <button id="db-copy-csv" title="Copy what the grid shows as CSV">Copy CSV</button>
+            <button id="db-export" title="What the grid shows, as CSV, JSON or SQL inserts: copied, or saved as a file">Export ▾</button>
           </div>
           <div id="db-console" hidden>
-            <div id="db-console-bar"><label>Source <select id="db-source"></select></label><button id="db-run" class="primary" title="Run the statement at the cursor, or the selection (Ctrl+Enter)">▶ Run</button></div>
+            <div id="db-console-bar"><label>Source <select id="db-source"></select></label><button id="db-run" class="primary" title="Run the statement at the cursor, or the selection (Ctrl+Enter); Ctrl+Shift+Enter runs them all">▶ Run</button><span class="db-hint">.sql files run against this source too: Ctrl+Enter, Ctrl+Shift+Enter for the whole file</span></div>
             <div id="db-sql"></div>
           </div>
           <div class="body" id="db-grid"></div>

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/db-model.js', import.meta.url), 'utf8');
-const { cellText, typedValue, statementAt, aliasesOf, sqlCompletions, changesOf, toCsv } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { cellText, typedValue, statementAt, statementsOf, aliasesOf, sqlCompletions, changesOf, toCsv, toJson, toInserts } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 test('cellText and typedValue: NULL, blobs, numbers and text', () => {
     assert.equal(cellText(null), 'NULL');
@@ -59,6 +59,23 @@ test('changesOf: edits by row key, inserts, deletes; a deleted row\'s edits are 
         { kind: 'delete', key: { rowid: 2 } },
         { kind: 'delete', key: { rowid: 3 } },
     ]);
+});
+
+test('statementsOf: every statement of a file in order, empty ones left out', () => {
+    const text = "CREATE TABLE t (a);\n\nINSERT INTO t VALUES (';');\n;\nSELECT * FROM t";
+    assert.deepEqual(statementsOf(text).map((s) => s.text), ['CREATE TABLE t (a)', "INSERT INTO t VALUES (';')", 'SELECT * FROM t']);
+    assert.deepEqual(statementsOf('SELECT 1;').map((s) => s.text), ['SELECT 1']);
+    assert.deepEqual(statementsOf('  \n').map((s) => s.text), []);
+});
+
+test('toJson and toInserts: rows written again as JSON objects and as INSERT statements', () => {
+    const rows = [[1, "it's", { real: '2.0' }, null], [2, 'x', 3.5, { blob: '00ff', size: 2 }], [3, 'y', 1, { blob: 'aa', size: 400 }]];
+    assert.deepEqual(JSON.parse(toJson(['id', 'name', 'price', 'raw'], rows.slice(0, 1))), [{ id: 1, name: "it's", price: 2, raw: null }]);
+    assert.equal(toInserts('item', ['id', 'name', 'price', 'raw'], rows),
+        "INSERT INTO item (id, name, price, raw) VALUES (1, 'it''s', 2.0, NULL);\n" +
+        "INSERT INTO item (id, name, price, raw) VALUES (2, 'x', 3.5, X'00ff');\n" +
+        "INSERT INTO item (id, name, price, raw) VALUES (3, 'y', 1, NULL /* a blob of 400 bytes, not exported */);\n");
+    assert.match(toInserts('order items', ['a'], [[1]]), /^INSERT INTO "order items" \(a\)/);
 });
 
 test('toCsv: quoting as spreadsheets read it, NULL empty', () => {

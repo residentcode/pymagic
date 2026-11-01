@@ -69,6 +69,28 @@ public class DatabaseTests
     }
 
     [Fact]
+    public void TheSqliteDatabaseOfDjangosSettingsIsOfferedBeforeItExists()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "pm_dj_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "site", "mysite", "settings"));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "site", "manage.py"), "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mysite.settings.base')\nfrom django.core.management import execute_from_command_line\n");
+            File.WriteAllText(Path.Combine(root, "site", "mysite", "__init__.py"), "");
+            File.WriteAllText(Path.Combine(root, "site", "mysite", "settings", "__init__.py"), "");
+            File.WriteAllText(Path.Combine(root, "site", "mysite", "settings", "base.py"),
+                "DATABASES = {\n    'default': {\n        'ENGINE': 'django.db.backends.sqlite3',\n        'NAME': BASE_DIR / 'data' / 'db.sqlite3',\n    },\n" +
+                "    'logs': {'NAME': os.path.join(BASE_DIR, 'logs.sqlite3'), 'ENGINE': 'django.db.backends.sqlite3'},\n" +
+                "    'pg': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'shop'},\n" +
+                "    'mem': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'},\n}\n");
+            var found = Databases.Find(root);
+            Assert.Equal("site/data/db.sqlite3,site/logs.sqlite3", string.Join(",", found.Select(s => s.Path)));
+            Assert.True(found.All(s => !s.Exists && s.Django == "mysite.settings.base" && s.Manage == "site/manage.py"), "not made yet, named by the settings");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void TheSchemaListsTablesViewsColumnsKeysAndIndexes()
     {
         if (!HavePython) return;
@@ -122,6 +144,24 @@ public class DatabaseTests
             new JsonObject { ["kind"] = "insert", ["values"] = new JsonObject { ["name"] = null } });
         Assert.Contains("nothing was changed", p.Ask("apply", new JsonObject { ["table"] = "item", ["changes"] = bad })["error"]!.GetValue<string>());
         Assert.Equal(3, p.Ask("rows", new JsonObject { ["table"] = "item" })["total"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ACsvFileIsImportedIntoATableAllOrNone()
+    {
+        if (!HavePython) return;
+        using var p = new Project();
+        string csv = Path.Combine(p.Root, "more.csv");
+        File.WriteAllText(csv, "﻿Name;PRICE\nlamp;30\n\"desk; oak\";\nchair;7.5\n");   // a BOM, semicolons, a quoted field, an empty one
+        Assert.Equal(3, p.Ask("import", new JsonObject { ["table"] = "item", ["csv"] = csv })["imported"]!.GetValue<int>());
+        var rows = p.Ask("run", new JsonObject { ["sql"] = "SELECT name, price FROM item WHERE id > 3 ORDER BY id" });
+        Assert.Equal("[[\"lamp\",{\"real\":\"30.0\"}],[\"desk; oak\",null],[\"chair\",7.5]]", rows["rows"]!.ToJsonString());
+
+        File.WriteAllText(csv, "name,colour\nx,red\n");
+        Assert.Contains("no column colour", p.Ask("import", new JsonObject { ["table"] = "item", ["csv"] = csv })["error"]!.GetValue<string>());
+        File.WriteAllText(csv, "name,price\nok,1\nbad\n");
+        Assert.Contains("nothing was imported", p.Ask("import", new JsonObject { ["table"] = "item", ["csv"] = csv })["error"]!.GetValue<string>());
+        Assert.Equal(6, p.Ask("rows", new JsonObject { ["table"] = "item" })["total"]!.GetValue<int>());   // the first good line was not kept either
     }
 
     [Fact]

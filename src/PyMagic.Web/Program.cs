@@ -853,10 +853,17 @@ app.MapDelete("/api/db/sources", (string path) => { Databases.RemoveSource(root,
 // one request on a data source: {op: schema | rows | apply | run, path (from the project root), ...}; the answer has "error" when SQLite refused
 app.MapPost("/api/db", async (HttpRequest req) =>
 {
-    if (await JsonNode.ParseAsync(req.Body) is not JsonObject body || body["op"]?.GetValue<string>() is not ("schema" or "rows" or "apply" or "run"))
+    if (await JsonNode.ParseAsync(req.Body) is not JsonObject body || body["op"]?.GetValue<string>() is not ("schema" or "rows" or "apply" or "run" or "import"))
         return Results.BadRequest("unknown request");
     try
     {
+        // a CSV file to import: a file of the project too
+        if (body["csv"]?.GetValue<string>() is { } csv)
+        {
+            string csvFull = ResolveInRoot(csv);
+            if (!File.Exists(csvFull)) return Results.Json(new { error = $"There is no file {csv} in the project." });
+            body["csv"] = csvFull;
+        }
         string full = ResolveInRoot(body["path"]?.GetValue<string>() ?? "");
         if (!File.Exists(full) || !Databases.IsSqlite(full)) return Results.BadRequest("Not an SQLite database of the project.");
         body["path"] = full;

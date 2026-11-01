@@ -3,7 +3,8 @@
 import * as monaco from 'monaco-editor';
 import { showTab } from './panel';
 import { toast } from './toast';
-import { cellText, typedValue, statementAt, sqlCompletions, changesOf, toCsv } from './db-model';
+import { cellText, typedValue, statementAt, statementsOf, sqlCompletions, changesOf, toCsv, toJson, toInserts } from './db-model';
+import { openMenu } from './menu';
 
 const $ = (id) => document.getElementById(id);
 const PAGE = 200;
@@ -28,13 +29,13 @@ export function setupDatabase(deps) {
     async function loadSources() {
         sources = await fetch('/api/db/sources').then((r) => (r.ok ? r.json() : [])).catch(() => []);
         const chosen = sourceBox.value;
-        sourceBox.replaceChildren(...sources.map((s) => new Option(s.path, s.path)));
+        sourceBox.replaceChildren(...sources.filter((s) => s.exists).map((s) => new Option(s.path, s.path)));
         if (sources.some((s) => s.path === chosen))
             sourceBox.value = chosen;
         if (sources.length === 1)
             open.add(sources[0].path);
         for (const s of sources)
-            if (open.has(s.path))
+            if (open.has(s.path) && s.exists)
                 await loadSchema(s.path);
         paintTree();
     }
@@ -76,9 +77,19 @@ export function setupDatabase(deps) {
             return;
         }
         for (const s of sources) {
+            if (!s.exists) {
+                // named by the Django settings, not made yet: manage.py migrate makes it, with Django's tables
+                const row = node(s.path, 'db-source db-missing', `not made yet · ${s.django}`, 0, null);
+                row.title = `The database of ${s.django}. Click to make it: ${s.manage} migrate, in the Run panel`;
+                row.onclick = () => {
+                    if (s.manage && confirm(`Make ${s.path} by running ${s.manage} migrate?`))
+                        void deps.runScript(s.manage, ['migrate']);
+                };
+                continue;
+            }
             const isOpen = open.has(s.path);
             const row = node(s.path, 'db-source', `${Math.round(s.size / 1024)} KB`, 0, isOpen);
-            row.title = s.added ? 'Added by hand; right-click to take it out of the list' : 'Found in the project';
+            row.title = (s.added ? 'Added by hand; right-click to take it out of the list' : 'Found in the project') + (s.django ? ` · the database of ${s.django}` : '');
             row.onclick = async () => { toggleNode(s.path); if (open.has(s.path)) await loadSchema(s.path); paintTree(); };
             row.oncontextmenu = (e) => {
                 e.preventDefault();
@@ -172,6 +183,22 @@ export function setupDatabase(deps) {
         for (const i of chosen)
             if (deleted.has(i)) deleted.delete(i); else deleted.add(i);
         paintGrid();
+    };
+    $('db-import').onclick = async () => {
+        if (view?.kind !== 'table' || !view.editable) {
+            toast('Open a table first (double-click it in the tree).');
+            return;
+        }
+        const csv = await deps.askText(`Import a CSV file into ${view.table}`, 'data.csv', 'A file of the project; its first line names the columns, an empty field is NULL');
+        if (!csv?.trim())
+            return;
+        const r = await ask({ op: 'import', path: view.path, table: view.table, csv: csv.trim() });
+        if (r.error) {
+            toast(r.error);
+            return;
+        }
+        toast(`${r.imported} row${r.imported === 1 ? '' : 's'} imported into ${view.table}`);
+        reloadTable();
     };
     $('db-revert').onclick = () => { edits = new Map(); added = []; deleted = new Set(); paintGrid(); };
     $('db-submit').onclick = async () => {
@@ -315,56 +342,117 @@ export function setupDatabase(deps) {
         });
         try { editor.setValue(localStorage.getItem('pymagic.db.console') ?? ''); } catch { /* storage unavailable */ }
         editor.onDidChangeModelContent(() => { try { localStorage.setItem('pymagic.db.console', editor.getValue()); } catch { /* storage unavailable */ } });
-        editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => void runStatement());
         return editor;
     }
-    async function runStatement() {
-        const ed = consoleEditor(), model = ed.getModel(), sel = ed.getSelection();
+    /**
+     * Runs SQL of an editor against the console's data source: the selection or the statement at the cursor, or with
+     * `whole` every statement of the text in turn (Run file), stopping at the first one SQLite refuses, which is selected.
+     * The last result set is shown in the grid.
+     */
+    async function runSql(ed, whole = false) {
+        const model = ed.getModel(), sel = ed.getSelection();
         const path = sourceBox.value;
         if (!path) {
-            toast('No data source: add an SQLite file with +.');
+            toast('No data source: add an SQLite file in the Database tab (+).');
             return;
         }
-        const sql = sel && !sel.isEmpty() ? model.getValueInRange(sel).trim().replace(/;\s*$/, '') : statementAt(model.getValue(), model.getOffsetAt(ed.getPosition())).text;
-        if (!sql) {
+        if (dirty() && !confirm('Leave the changes that were not submitted?'))
+            return;
+        const statements = whole ? statementsOf(model.getValue())
+            : sel && !sel.isEmpty() ? [{ text: model.getValueInRange(sel).trim().replace(/;\s*$/, '') }]
+                : [statementAt(model.getValue(), model.getOffsetAt(ed.getPosition()))];
+        if (!statements.length || !statements[0].text) {
             toast('No statement at the cursor.');
             return;
         }
+        showTab('database');
+        setMode(ed === editor ? 'console' : view?.kind === 'table' ? 'table' : 'console');
         status.className = '';
         status.textContent = 'Running…';
-        const r = await ask({ op: 'run', path, sql, limit: 1000 });
-        if (r.error) {
-            status.className = 'err';
-            status.textContent = r.error;
-            return;
+        let changed = 0, last = null, total = 0;
+        for (const [i, s] of statements.entries()) {
+            const r = await ask({ op: 'run', path, sql: s.text, limit: 1000 });
+            total += r.time ?? 0;
+            if (r.error) {
+                status.className = 'err';
+                status.textContent = (statements.length > 1 ? `Statement ${i + 1} of ${statements.length}: ` : '') + r.error;
+                if (s.start !== undefined && whole) {
+                    const from = model.getPositionAt(s.start + (model.getValue().slice(s.start).length - model.getValue().slice(s.start).trimStart().length));
+                    const to = model.getPositionAt(s.end);
+                    ed.setSelection(new monaco.Selection(from.lineNumber, from.column, to.lineNumber, to.column));
+                    ed.revealLineInCenter(from.lineNumber);
+                }
+                break;
+            }
+            if (r.columns)
+                last = r;
+            else if (r.changed > 0)
+                changed += r.changed;
+            if (i === statements.length - 1)
+                status.textContent = '';
         }
-        const ms = `${Math.round((r.time ?? 0) * 1000)} ms`;
-        if (r.columns) {
-            view = { kind: 'result', columns: r.columns, rows: r.rows, offset: 0 };
+        if (status.className === 'err')
+            return refreshSchema(path);
+        const ms = `${Math.round(total * 1000)} ms`;
+        const count = statements.length > 1 ? `${statements.length} statements, ` : '';
+        if (last) {
+            view = { kind: 'result', columns: last.columns, rows: last.rows, offset: 0 };
             edits = new Map(); added = []; deleted = new Set();
             paintGrid();
-            status.textContent = `${r.rows.length}${r.more ? '+' : ''} row${r.rows.length === 1 ? '' : 's'} in ${ms}${r.more ? ' (the first 1000)' : ''}`;
+            status.textContent = `${count}${last.rows.length}${last.more ? '+' : ''} row${last.rows.length === 1 ? '' : 's'}${changed ? `, ${changed} changed` : ''} in ${ms}${last.more ? ' (the first 1000)' : ''}`;
         }
-        else {
-            status.textContent = `${r.changed < 0 ? 'Done' : `${r.changed} row${r.changed === 1 ? '' : 's'} changed`} in ${ms}`;
-            // a statement may have changed the tables
-            schemas.delete(path);
-            await loadSchema(path);
-            paintTree();
-        }
+        else
+            status.textContent = `${count}${changed} row${changed === 1 ? '' : 's'} changed in ${ms}`;
+        await refreshSchema(path);
     }
+    // a statement may have changed the tables
+    async function refreshSchema(path) {
+        schemas.delete(path);
+        await loadSchema(path);
+        paintTree();
+    }
+    const runStatement = () => runSql(consoleEditor());
     $('db-run').onclick = () => void runStatement();
-    $('db-copy-csv').onclick = () => {
-        if (!view)
+    // .sql files of the project: Ctrl+Enter runs the statement at the cursor, Ctrl+Shift+Enter the whole file, against the console's source
+    function addSqlActions(ed) {
+        const when = 'editorLangId == sql';
+        ed.addAction({ id: 'pymagic.sql.runStatement', label: 'Run SQL statement (Database)', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
+            precondition: when, contextMenuGroupId: 'navigation', contextMenuOrder: 0, run: () => runSql(ed) });
+        ed.addAction({ id: 'pymagic.sql.runFile', label: 'Run SQL file (Database)', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter],
+            precondition: when, contextMenuGroupId: 'navigation', contextMenuOrder: 1, run: () => runSql(ed, true) });
+    }
+    // the editors made before this panel (the main one), and every one made after it
+    monaco.editor.getEditors().forEach(addSqlActions);
+    monaco.editor.onDidCreateEditor(addSqlActions);
+    /** What the grid shows, as CSV, JSON or INSERT statements (into the open table, or `result`), copied or saved as a file of the project. */
+    $('db-export').onclick = (e) => {
+        if (!view) {
+            toast('Nothing to export: open a table or run a statement.');
             return;
+        }
         const rows = view.kind === 'table' ? view.rows.map((r) => r.values) : view.rows;
-        void navigator.clipboard.writeText(toCsv(view.columns, rows)).then(() => toast('Copied as CSV'), () => toast('Could not copy'));
+        const table = view.kind === 'table' ? view.table : 'result';
+        const formats = [['CSV', 'csv', () => toCsv(view.columns, rows)], ['JSON', 'json', () => toJson(view.columns, rows)], ['SQL inserts', 'sql', () => toInserts(table, view.columns, rows)]];
+        const copy = (label, text) => void navigator.clipboard.writeText(text()).then(() => toast(`Copied as ${label}`), () => toast('Could not copy'));
+        const save = async (label, ext, text) => {
+            const path = await deps.askText(`Save as ${label}`, `${table}.${ext}`, 'A file of the project');
+            if (!path?.trim())
+                return;
+            const res = await fetch('/api/file?path=' + encodeURIComponent(path.trim()), { method: 'PUT', body: text() });
+            toast(res.ok ? `Saved ${path.trim()} (${rows.length} rows)` : `Could not save: ${await res.text()}`);
+        };
+        const box = e.currentTarget.getBoundingClientRect();
+        openMenu({ x: box.left, y: box.bottom }, [
+            ...formats.map(([label, , text]) => ({ label: `Copy as ${label}`, run: () => copy(label, text) })),
+            '-',
+            ...formats.map(([label, ext, text]) => ({ label: `Save as ${label}…`, run: () => void save(label, ext, text) })),
+        ]);
     };
     // completion of tables, columns and keywords, from the console's data source
     monaco.languages.registerCompletionItemProvider('sql', {
         triggerCharacters: ['.', ' '],
         async provideCompletionItems(model, position) {
-            if (!editor || model !== editor.getModel() || !sourceBox.value)
+            if (!sourceBox.value)
                 return { suggestions: [] };
             const objects = await loadSchema(sourceBox.value);
             const text = model.getValue(), offset = model.getOffsetAt(position);

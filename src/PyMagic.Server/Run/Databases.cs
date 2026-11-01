@@ -5,8 +5,11 @@ using System.Text.Json.Nodes;
 
 namespace PyMagic.Server;
 
-/// <summary>An SQLite database of the project: found in its folders, or added by hand.</summary>
-public sealed record DataSource(string Path, string Name, long Size, bool Added);
+/// <summary>An SQLite database of the project: found in its folders, added by hand, or named by the Django settings.</summary>
+/// <param name="Exists">False for the database a Django project's settings name before <c>manage.py migrate</c> has made it.</param>
+/// <param name="Django">The settings module whose <c>DATABASES</c> names it.</param>
+/// <param name="Manage">The manage.py of that Django project, by its path from the root (`manage.py migrate` makes the database).</param>
+public sealed record DataSource(string Path, string Name, long Size, bool Added, bool Exists = true, string? Django = null, string? Manage = null);
 
 /// <summary>
 /// The Database panel's engine side: the SQLite files of a project, and the requests on them (schema, a page of rows,
@@ -61,6 +64,13 @@ public static class Databases
             string full = System.IO.Path.GetFullPath(System.IO.Path.Combine(root, rel));
             if (File.Exists(full) && IsSqlite(full)) Add(full, true);
         }
+        // the SQLite database of a Django project's settings, also before migrate has made it
+        foreach (var (full, settings, manage) in DjangoDatabases(root))
+        {
+            string rel = System.IO.Path.GetRelativePath(root, full).Replace('\\', '/');
+            if (found.TryGetValue(rel, out var known)) found[rel] = known with { Django = settings, Manage = manage };
+            else if (!File.Exists(full)) found[rel] = new DataSource(rel, System.IO.Path.GetFileName(full), 0, false, Exists: false, Django: settings, Manage: manage);
+        }
         return found.Values.OrderBy(s => s.Path, StringComparer.OrdinalIgnoreCase).ToList();
 
         void Add(string full, bool added)
@@ -68,6 +78,50 @@ public static class Databases
             string rel = System.IO.Path.GetRelativePath(root, full).Replace('\\', '/');
             found[rel] = new DataSource(rel, System.IO.Path.GetFileName(full), new FileInfo(full).Length, added || found.GetValueOrDefault(rel)?.Added == true);
         }
+    }
+
+    // "ENGINE": "django.db.backends.sqlite3" ... "NAME": <expression>, in one entry of DATABASES (either order)
+    static readonly System.Text.RegularExpressions.Regex SqliteEntry = new(
+        @"\{[^{}]*?['""]ENGINE['""]\s*:\s*['""]django\.db\.backends\.sqlite3['""][^{}]*\}", System.Text.RegularExpressions.RegexOptions.Compiled);
+    static readonly System.Text.RegularExpressions.Regex NameValue = new(
+        @"['""]NAME['""]\s*:\s*(?<expr>[^,}\n(]*(?:\([^)]*\))?[^,}\n]*)",System.Text.RegularExpressions.RegexOptions.Compiled);
+    static readonly System.Text.RegularExpressions.Regex StringLiteral = new(@"['""](?<s>[^'""]+)['""]", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// The SQLite files the settings modules of the project's Django name: <c>BASE_DIR / "db.sqlite3"</c>,
+    /// <c>os.path.join(BASE_DIR, "db.sqlite3")</c> or a plain name (BASE_DIR is the folder of manage.py, where Django runs);
+    /// inside the project only. With the settings module that names each.
+    /// </summary>
+    public static List<(string Path, string Settings, string Manage)> DjangoDatabases(string root)
+    {
+        var result = new List<(string, string, string)>();
+        var django = DjangoProject.Scan(root);
+        if (!django.Found || django.Manage == null) return result;
+        string baseDir = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(System.IO.Path.Combine(root, django.Manage)))!;
+        foreach (var module in django.SettingsChoices ?? Array.Empty<string>())
+        {
+            string stem = System.IO.Path.Combine(baseDir, module.Replace('.', System.IO.Path.DirectorySeparatorChar));
+            string file = File.Exists(stem + ".py") ? stem + ".py" : System.IO.Path.Combine(stem, "__init__.py");
+            string text;
+            try { text = File.ReadAllText(file); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            foreach (System.Text.RegularExpressions.Match entry in SqliteEntry.Matches(text))
+            {
+                if (NameValue.Match(entry.Value) is not { Success: true } name) continue;
+                var literals = StringLiteral.Matches(name.Groups["expr"].Value);
+                if (literals.Count == 0) continue;
+                // BASE_DIR / "data" / "db.sqlite3", os.path.join(BASE_DIR, "data", "db.sqlite3"): the parts after BASE_DIR, in order
+                string expr = name.Groups["expr"].Value;
+                string last = expr.Contains("BASE_DIR") || expr.Contains("join(")
+                    ? string.Join("/", literals.Select(l => l.Groups["s"].Value)) : literals[^1].Groups["s"].Value;
+                if (last == ":memory:" || last.StartsWith("file:", StringComparison.Ordinal)) continue;
+                string full;
+                try { full = System.IO.Path.GetFullPath(System.IO.Path.IsPathRooted(last) ? last : System.IO.Path.Combine(baseDir, last)); }
+                catch (Exception e) when (e is ArgumentException or NotSupportedException) { continue; }
+                if (!full.StartsWith(System.IO.Path.GetFullPath(root).TrimEnd('\\', '/') + System.IO.Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!result.Any(r => string.Equals(r.Item1, full, StringComparison.OrdinalIgnoreCase))) result.Add((full, module, django.Manage.Replace('\\', '/')));
+            }
+        }
+        return result;
     }
 
     static List<string> AddedPaths(string root)

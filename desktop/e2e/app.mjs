@@ -100,6 +100,9 @@ export async function launch(root) {
     const ws = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise((ok, fail) => { ws.addEventListener('open', ok); ws.addEventListener('error', fail); });
     const page = new Page(ws);
+    // the page behaves as focused even when other windows are in front, so typing and clicks reach the editor every time
+    await page.send('Page.bringToFront');
+    await page.send('Emulation.setFocusEmulationEnabled', { enabled: true });
     await page.waitFor('!!(window.pymagic && window.pymagic.openFile && window.pymagic.editor.getModel())', 60000, 'the editor');
     return {
         page, root,

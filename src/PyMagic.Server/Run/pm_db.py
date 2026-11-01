@@ -8,6 +8,7 @@
                                                              {"kind": "delete", "key"}; a key is {"rowid": n} or the primary key's columns
   {"op": "run", "path", "sql", "limit"}                      one statement of the console: a result set, or the rows it changed
   {"op": "create", "path"}                                   a new, empty database file
+  {"op": "import", "path", "table", "csv"}                   the rows of a CSV file added to a table, all or none
 
 A value is sent as JSON: numbers, text and null as they are, a blob as {"blob": first bytes in hex, "size"}, a REAL with
 nothing after its point as {"real": "2.0"}.
@@ -125,6 +126,50 @@ def apply(path, table, changes):
         db.close()
 
 
+def import_csv(path, table, csv_path):
+    """The rows of a CSV file (its first line names the columns, matched to the table's without regard to case; an
+    empty field is NULL) added to a table, all or none."""
+    import csv
+    db = connect(path, write=True)
+    try:
+        names = [c[1] for c in db.execute("PRAGMA table_info(%s)" % quote(table))]
+        if not names:
+            return {"error": "No table named %s." % table}
+        with open(csv_path, newline="", encoding="utf-8-sig") as f:
+            sample = f.read(4096)
+            f.seek(0)
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+            except csv.Error:
+                dialect = csv.excel
+            reader = csv.reader(f, dialect)
+            header = next(reader, None)
+            if not header:
+                return {"error": "The file is empty."}
+            by_lower = {n.lower(): n for n in names}
+            unknown = [h for h in header if h.strip().lower() not in by_lower]
+            if unknown:
+                return {"error": "The table %s has no column %s (its columns: %s)." % (table, ", ".join(unknown), ", ".join(names))}
+            columns = [by_lower[h.strip().lower()] for h in header]
+            sql = "INSERT INTO %s (%s) VALUES (%s)" % (quote(table), ", ".join(quote(c) for c in columns), ", ".join("?" * len(columns)))
+            count = 0
+            with db:
+                for line, row in enumerate(reader, 2):
+                    if not any(field.strip() for field in row):
+                        continue
+                    if len(row) != len(columns):
+                        raise ValueError("line %d has %d fields, the header %d (nothing was imported)" % (line, len(row), len(columns)))
+                    db.execute(sql, [None if field == "" else field for field in row])
+                    count += 1
+        return {"imported": count}
+    except (sqlite3.Error, ValueError) as e:
+        return {"error": "%s: %s" % (type(e).__name__, e) if isinstance(e, sqlite3.Error) else str(e)}
+    except (OSError, UnicodeDecodeError) as e:
+        return {"error": "The file could not be read: %s" % e}
+    finally:
+        db.close()
+
+
 def run(path, sql, limit=500):
     db = connect(path, write=True)
     try:
@@ -157,6 +202,8 @@ def main():
                           min(int(request.get("limit") or 200), MAX_ROWS), int(request.get("offset") or 0))
         elif op == "apply":
             answer = apply(path, request.get("table", ""), request.get("changes") or [])
+        elif op == "import":
+            answer = import_csv(path, request.get("table", ""), request.get("csv", ""))
         elif op == "create":
             # a new database: SQLite writes its header with the first table, so one is made and dropped
             db = sqlite3.connect(path)

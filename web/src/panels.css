@@ -201,7 +201,7 @@
 .db-source .db-name { font-weight: 600; } .db-table .db-name, .db-view .db-name { color: var(--sym); } .db-pk .db-name { text-decoration: underline; }
 .db-column, .db-index { cursor: default; } .db-empty { padding: 8px 10px; color: var(--dim); font-family: inherit; white-space: normal; }
 #db-bar .db-mode.active { background: var(--accent); color: #fff; } #db-data-bar { display: flex; gap: 4px; align-items: center; } #db-data-bar[hidden] { display: none; }
-#db-where { width: 260px; }
+#db-where { width: 260px; } .db-missing .db-name { color: var(--dim); font-style: italic; } .db-hint { color: var(--dim); font-size: 11px; }
 #db-console { display: flex; flex-direction: column; border-bottom: 1px solid var(--line); } #db-console[hidden] { display: none; }
 #db-console-bar { display: flex; gap: 8px; align-items: center; padding: 3px 8px; } #db-sql { height: 110px; }
 #db-grid table { border-collapse: collapse; font-size: 12px; } #db-grid th, #db-grid td { border: 1px solid var(--line); padding: 1px 6px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }

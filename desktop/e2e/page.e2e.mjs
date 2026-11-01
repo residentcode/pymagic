@@ -6,6 +6,7 @@
 import { after, afterEach, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { launch, project, sleep } from './app.mjs';
 
@@ -14,6 +15,8 @@ const FILES = {
     'loop.py': 'import time\n\n\ndef spin():\n    count = 0\n    while count < 2000:\n        count += 1\n        time.sleep(0.05)\n\n\nprint("started", flush=True)\nspin()\n',
     'fmt.py': 'x=1\nif x :\n  y=[1,2 ,3]\n',
     'quotes.py': 'url = "/shop/about/"\nname = "pen"\nsaid = "it\'s"\n',
+    'queries.sql': "CREATE TABLE note (id INTEGER PRIMARY KEY, body TEXT);\nINSERT INTO note (body) VALUES ('one; two'), ('three');\nSELECT body FROM note ORDER BY id;\n",
+    'more_items.csv': 'name,price\nlamp,30\nmug,\n',
     'tests/__init__.py': '',
     'tests/test_calc.py': 'import unittest\n\n\nclass Calc(unittest.TestCase):\n    def test_ok(self):\n        self.assertEqual(1 + 1, 2)\n\n    def test_bad(self):\n        self.assertEqual(1 + 1, 3)\n',
 };
@@ -177,5 +180,42 @@ describe('database', () => {
         const labels = await page.waitFor(`[...document.querySelectorAll('#db-sql .suggest-widget .monaco-list-row')].map((r) => r.getAttribute('aria-label')).filter(Boolean).join(' | ') || null`, 10000, 'the suggestions');
         assert.match(labels, /price/);
         await page.evaluate(`(${consoleEditor}).trigger('e2e', 'hideSuggestWidget', {})`);
+    });
+
+    /** Answers the page's text prompt (the one askText opens) with `text`. */
+    const answer = (text) => page.waitFor(`(() => { const box = document.querySelector('.ask-box input'); if (!box) return false; box.value = ${JSON.stringify(text)};
+        box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return true; })()`, 10000, 'the prompt');
+
+    test('a .sql file of the project runs against the data source, statement by statement or whole', async () => {
+        await open('queries.sql');
+        assert.equal(await page.evaluate('window.pymagic.editor.getModel().getLanguageId()'), 'sql');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 1, column: 3 }); ed.focus(); return ed.getAction('pymagic.sql.runFile').run(); })()`);
+        await page.waitFor(`/^3 statements, 2 rows, 2 changed in/.test(document.getElementById('db-status').textContent)`, 15000, 'the file run');
+        assert.deepEqual(await grid(), ['|body', '1|one; two', '2|three']);
+        // the table it made is in the tree now; a statement alone, at the cursor
+        await page.waitFor(`[...document.querySelectorAll('#db-tree .db-table .db-name')].some((n) => n.textContent === 'note')`, 10000, 'the new table');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 3, column: 5 }); return ed.getAction('pymagic.sql.runStatement').run(); })()`);
+        await page.waitFor(`/^2 rows in/.test(document.getElementById('db-status').textContent)`, 15000, 'the statement');
+    });
+
+    test('a CSV file is imported into the open table, and the grid is exported as a file', async () => {
+        await page.evaluate(`document.getElementById('db-mode-data').click()`);
+        await page.evaluate(`[...document.querySelectorAll('#db-tree .db-table')].find((n) => n.querySelector('.db-name').textContent === 'item').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+        await page.waitFor(`document.getElementById('db-status').textContent.startsWith('item: rows 1–3 of 3')`, 15000, 'the rows');
+        await page.evaluate(`document.getElementById('db-import').click()`);
+        await answer('more_items.csv');
+        await page.waitFor(`document.getElementById('db-status').textContent.startsWith('item: rows 1–5 of 5')`, 15000, 'the imported rows');
+        assert.deepEqual((await grid()).slice(4), ['4|4|lamp|30.0', '5|5|mug|NULL']);
+        // Export ▾ → Save as JSON…
+        await page.evaluate(`document.getElementById('db-export').click()`);
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim().startsWith('Save as JSON')).click()`);
+        await answer('export/items.json');
+        const file = join(app.root, 'export', 'items.json');
+        for (let i = 0; i < 50 && !existsSync(file); i++)
+            await sleep(100);
+        const saved = JSON.parse(readFileSync(file, 'utf8'));
+        assert.equal(saved.length, 5);
+        assert.deepEqual(saved[4], { id: 5, name: 'mug', price: null });
+        assert.deepEqual(saved[0], { id: 1, name: 'pen', price: 9 });
     });
 });

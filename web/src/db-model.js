@@ -22,6 +22,24 @@ export function typedValue(text) {
  * inside quotes and comments not counting. The statement before the cursor when it stands right after a semicolon.
  */
 export function statementAt(text, offset) {
+    const ends = semicolons(text);
+    let start = 0;
+    for (const end of ends) {
+        if (offset <= end || (offset === end + 1 && text.slice(start, end).trim() && !text.slice(end + 1).split('\n')[0].trim())) {
+            return { start, end, text: text.slice(start, end).trim() };
+        }
+        start = end + 1;
+    }
+    // past the last semicolon: the text after it, or the last statement when nothing follows it
+    if (!text.slice(start).trim() && ends.length) {
+        const prev = ends.length > 1 ? ends[ends.length - 2] + 1 : 0;
+        return { start: prev, end: ends[ends.length - 1], text: text.slice(prev, ends[ends.length - 1]).trim() };
+    }
+    return { start, end: text.length, text: text.slice(start).trim() };
+}
+
+/** The offsets of the semicolons that end statements: not those in quotes, brackets or comments. */
+function semicolons(text) {
     const ends = [];
     for (let i = 0; i < text.length; i++) {
         const c = text[i];
@@ -42,19 +60,7 @@ export function statementAt(text, offset) {
         else if (c === ';')
             ends.push(i);
     }
-    let start = 0;
-    for (const end of ends) {
-        if (offset <= end || (offset === end + 1 && text.slice(start, end).trim() && !text.slice(end + 1).split('\n')[0].trim())) {
-            return { start, end, text: text.slice(start, end).trim() };
-        }
-        start = end + 1;
-    }
-    // past the last semicolon: the text after it, or the last statement when nothing follows it
-    if (!text.slice(start).trim() && ends.length) {
-        const prev = ends.length > 1 ? ends[ends.length - 2] + 1 : 0;
-        return { start: prev, end: ends[ends.length - 1], text: text.slice(prev, ends[ends.length - 1]).trim() };
-    }
-    return { start, end: text.length, text: text.slice(start).trim() };
+    return ends;
 }
 
 const KEYWORDS = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'ON', 'GROUP BY', 'ORDER BY', 'HAVING', 'LIMIT', 'OFFSET',
@@ -125,6 +131,46 @@ export function changesOf(columns, rows, edits, added, deleted) {
         if (rows[index]?.key)
             changes.push({ kind: 'delete', key: rows[index].key });
     return changes;
+}
+
+/** Every statement of an SQL text, in order, as statementAt finds them (empty ones left out): what Run file runs. */
+export function statementsOf(text) {
+    const found = [];
+    let start = 0;
+    for (const end of [...semicolons(text), text.length]) {
+        const piece = text.slice(start, end).trim();
+        if (piece)
+            found.push({ start, end, text: piece });
+        start = end + 1;
+    }
+    return found;
+}
+
+/** A value as JSON writes it: a REAL as its number, a blob as {blob, size} (its first bytes only, as the engine sent it). */
+const plain = (v) => (v !== null && typeof v === 'object' && 'real' in v ? Number(v.real) : v);
+
+/** The results as JSON: an array of objects, one per row, keyed by the column names. */
+export function toJson(columns, rows) {
+    return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, i) => [c, plain(r[i]) ?? null]))), null, 2) + '\n';
+}
+
+const sqlName = (name) => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : '"' + String(name).replace(/"/g, '""') + '"');
+function sqlValue(v) {
+    if (v === null || v === undefined)
+        return 'NULL';
+    if (typeof v === 'object' && 'real' in v)
+        return v.real;
+    if (typeof v === 'object' && 'blob' in v)
+        return v.size * 2 === v.blob.length ? `X'${v.blob}'` : `NULL /* a blob of ${v.size} bytes, not exported */`;
+    if (typeof v === 'number' || typeof v === 'boolean')
+        return String(Number(v));
+    return "'" + String(v).replace(/'/g, "''") + "'";
+}
+
+/** The results as SQL: one INSERT per row into `table`, which a console or a .sql file can run again. */
+export function toInserts(table, columns, rows) {
+    const head = `INSERT INTO ${sqlName(table)} (${columns.map(sqlName).join(', ')}) VALUES `;
+    return rows.map((r) => `${head}(${r.map(sqlValue).join(', ')});`).join('\n') + '\n';
 }
 
 /** The results as CSV, the way spreadsheets read it: fields with commas, quotes or line breaks quoted, NULL empty. */

@@ -1123,7 +1123,7 @@ async function main() {
     const coverage = setupCoverage(common);
     setupRequirementsCheck(common);
     setupProfiler(common);
-    setupDatabase({ ...common, askText: (...a) => explorer.askText(...a) });
+    setupDatabase({ ...common, askText: (...a) => explorer.askText(...a), runScript: (rel, args) => runHooks.runScript(rel, args) });
     // code actions that need the page (not just a text edit) arrive as commands
     monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name) => {
         window.dispatchEvent(new CustomEvent('pymagic:install', { detail: name }));
