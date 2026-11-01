@@ -50,6 +50,7 @@ import { setupBookmarks } from './bookmarks';
 import { setupRecent } from './recent';
 import { setupRunConfigurations } from './runconfig';
 import { setupHistory } from './history';
+import { setupScratches } from './scratches';
 import { setupFileActions, fileTypes } from './fileactions';
 import { setupAutoSave } from './autosave';
 import { THEMES, defineTheme, defineLightTheme } from './theme';
@@ -1029,6 +1030,7 @@ async function main() {
     window.addEventListener('pymagic:sidebar', (e) => { if (e.detail === 'structure') structure.show(); });
     const bookmarks = setupBookmarks({ monaco, editor, openFile, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')), revealInTree: (rel) => explorer?.select(rel) });
     const history = setupHistory({ monaco, editor, currentFile: () => currentRel, openFile, askText: (...a) => explorer.askText(...a) });
+    setupScratches({ openFile, askText: (...a) => explorer.askText(...a), forget: forgetPath, currentFile: () => currentRel });
     recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
     const editorNav = setupEditorNav({
         editor, lsp, openFile, modelFor: ensureModel, currentFile: () => currentRel, saveAll: common.saveAll,

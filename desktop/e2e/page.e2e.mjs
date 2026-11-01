@@ -6,7 +6,8 @@
 import { after, afterEach, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { launch, project, sleep } from './app.mjs';
@@ -39,6 +40,7 @@ const FILES = {
     'broken.yml': 'a: 1\nb: 2\na: 3\n',
     'notes.md': '# Notes\n\nSee [the guide](docs/nope.md) and [here](#notes).\n\n[g](docs/guide.md#nowhere) [h](docs/guide.md#setup)\n',
     'docs/guide.md': '# Guide\n\n## Setup\n',
+    'shop_lib.py': 'def total(prices):\n    return sum(prices)\n',
     'hist.py': 'def f():\n    return 0\n',
     'intent.py': "name = 'x'\nprint('Hello ' + name + '!')\nvalue = 255\n",
     'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\nN = re.compile(f"{PATTERN.pattern}[cc]")\n',
@@ -73,6 +75,8 @@ async function clickMargin(line) {
 
 let echo;
 before(async () => {
+    // the scratch files of this run, not the user's own
+    process.env.PYMAGIC_SCRATCHES = mkdtempSync(join(tmpdir(), 'pymagic-e2e-scratches-'));
     const root = project(FILES);
     // an SQLite file for the Database panel, made with the standard sqlite3 module
     const made = spawnSync('python', ['-c', "import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.executescript(\"CREATE TABLE item (id INTEGER PRIMARY KEY, name TEXT, price REAL); INSERT INTO item (name, price) VALUES ('pen', 2), ('book', 12.5), ('cup', 4);\"); db.commit()", join(root, 'shop.sqlite3')]);
@@ -149,6 +153,32 @@ describe('the editor and the language server', () => {
         await page.evaluate(`window.pymagic.editor.getAction('editor.action.formatDocument').run()`);
         const text = await page.waitFor(`(() => { const t = window.pymagic.editor.getValue(); return t.includes("name = 'pen'") ? t : null; })()`, 15000, 'the formatted text');
         assert.equal(text, "url = '/shop/about/'\nname = 'pen'\nsaid = \"it's\"\n");
+    });
+});
+
+describe('scratch files', () => {
+    test("a scratch is made outside the project, listed, run with the project's interpreter and its imports", async () => {
+        await page.evaluate(`${$('scratch-new')}.click()`);
+        await page.waitFor(`document.querySelector('.ask-box input')`, 5000, 'the question');
+        await page.evaluate(`(() => { const i = document.querySelector('.ask-box input'); i.value = 'try.py'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+        await page.waitFor(`window.pymagic.editor.getModel()?.getLanguageId() === 'python' && window.pymagic.editor.getValue() === '# scratch\\n'`, 15000, 'the new scratch in the editor');
+        assert.ok((await page.evaluate(`[...document.querySelectorAll('#scratch-list .scratch-name')].map((n) => n.textContent)`)).includes('try.py'));
+        await page.evaluate(`window.pymagic.editor.setValue('import shop_lib\\nprint("total", shop_lib.total([1, 2, 3]))\\n')`);
+        await page.evaluate(`${$('b-run')}.click()`);
+        await page.waitFor(`${$('output')}.textContent.includes('total 6')`, 30000, 'the scratch run, importing a module of the project');
+        // the project has no trace of it, the scratch folder has the file
+        const tree = await page.evaluate(`fetch('/api/tree').then((r) => r.json()).then((t) => t.files.map((f) => f.path))`);
+        assert.ok(!tree.some((p) => p.includes('try.py') || p.includes('scratch')), tree.join(', '));
+        assert.ok(existsSync(join(process.env.PYMAGIC_SCRATCHES, 'try.py')));
+        assert.match(readFileSync(join(process.env.PYMAGIC_SCRATCHES, 'try.py'), 'utf8'), /shop_lib\.total/);
+    });
+
+    test('Ctrl+Alt+Shift+Insert asks for another one, and a name that is taken gets a number', async () => {
+        await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', windowsVirtualKeyCode: 45, key: 'Insert', code: 'Insert', modifiers: 2 | 1 | 8 });
+        await page.send('Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: 45, key: 'Insert', code: 'Insert', modifiers: 2 | 1 | 8 });
+        await page.waitFor(`document.querySelector('.ask-box input')`, 5000, 'the question');
+        await page.evaluate(`(() => { const i = document.querySelector('.ask-box input'); i.value = 'try.py'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+        await page.waitFor(`[...document.querySelectorAll('#scratch-list .scratch-name')].some((n) => n.textContent === 'try_1.py')`, 10000, 'try_1.py');
     });
 });
 

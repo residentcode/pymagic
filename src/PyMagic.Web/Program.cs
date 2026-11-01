@@ -116,6 +116,8 @@ ProjectFolders.Load(root);
 
 string ResolveInRoot(string rel)
 {
+    // a scratch file is kept outside the project and reached as .scratches/name
+    if (Scratches.IsScratchPath(rel)) return Scratches.PathOf(rel);
     string full = Path.GetFullPath(Path.Combine(root, rel));
     if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
         throw new UnauthorizedAccessException("outside the workspace");
@@ -124,6 +126,27 @@ string ResolveInRoot(string rel)
 
 // Attach to Process: the Python programs running on this computer
 app.MapGet("/api/processes", () => Results.Json(RunSession.PythonProcesses()));
+
+// scratch files: kept outside the project, opened as .scratches/name (see Scratches)
+app.MapGet("/api/scratches", () => Results.Json(Scratches.List().Select(f => new { name = f.Name, size = f.Size, modified = f.Modified.ToString("o") }).ToList()));
+app.MapPost("/api/scratches", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    try { return Results.Json(new { name = Scratches.Create(body?["name"]?.GetValue<string>() ?? "", body?["text"]?.GetValue<string>()) }); }
+    catch (UnauthorizedAccessException) { return Results.BadRequest("That is not the name of a scratch file."); }
+    catch (IOException e) { return Results.BadRequest(e.Message); }
+});
+app.MapDelete("/api/scratches", (string name) =>
+{
+    try { return Scratches.Delete(name) ? Results.NoContent() : Results.NotFound(); }
+    catch (UnauthorizedAccessException) { return Results.BadRequest("That is not the name of a scratch file."); }
+});
+app.MapPost("/api/scratches/rename", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    try { return Scratches.Rename(body?["from"]?.GetValue<string>() ?? "", body?["to"]?.GetValue<string>() ?? "") ? Results.NoContent() : Results.BadRequest("There is no such scratch, or that name is taken."); }
+    catch (UnauthorizedAccessException) { return Results.BadRequest("That is not the name of a scratch file."); }
+});
 
 app.MapGet("/api/info", () => new
 {
@@ -1313,6 +1336,7 @@ app.Map("/run", async (HttpContext ctx) =>
                 var debugTests = msg["tests"] as JsonObject;   // Debug of tests: the test runner under the debugger
                 var profileTests = msg["profileTests"] as JsonObject;   // Profile of tests: pytest or unittest under the profiler
                 if (module == null && debugTests == null && profileTests == null) ResolveInRoot(file0);   // refuses paths outside the workspace
+                if (Scratches.IsScratchPath(file0)) file0 = Scratches.PathOf(file0);                         // a scratch runs where it is kept, in the project's folder
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
                 // what a run configuration adds: variables, and a folder inside the project to start in
                 // .env files of the project first, the configuration's own variables over them

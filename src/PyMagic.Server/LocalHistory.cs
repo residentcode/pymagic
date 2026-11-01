@@ -59,7 +59,7 @@ public sealed class LocalHistory
     static bool Keeps(string rel, string text)
     {
         string r = rel.Replace('\\', '/').TrimStart('/');
-        if (r.StartsWith(".pymagic/", StringComparison.OrdinalIgnoreCase) || r.StartsWith(".git/", StringComparison.OrdinalIgnoreCase)) return false;
+        if (r.StartsWith(".pymagic/", StringComparison.OrdinalIgnoreCase) || r.StartsWith(".git/", StringComparison.OrdinalIgnoreCase) || r.StartsWith(".scratches/", StringComparison.OrdinalIgnoreCase)) return false;
         return text.Length <= MaxFileBytes && !text.Contains('\0');
     }
 
