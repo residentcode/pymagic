@@ -80,6 +80,10 @@ public sealed partial class LanguageService
         }
 
 
+        // intentions: rewrites at the cursor that need no diagnostic
+        try { IntentionActions(snap.Workspace, snap.ByUri.Values, m, ev, rs, re, (title, edits) => actions.Add(new CodeAction(title, RewriteKind, One(edits.OrderBy(e => e.Start).ToArray()), false))); }
+        catch (Exception e) when (e is InvalidOperationException or ArgumentException or KeyNotFoundException or IndexOutOfRangeException) { /* the other actions still work */ }
+
         // refactorings: the page asks for a name where one is needed and then calls pymagic/refactor
         try
         {

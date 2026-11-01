@@ -39,6 +39,7 @@ const FILES = {
     'broken.yml': 'a: 1\nb: 2\na: 3\n',
     'notes.md': '# Notes\n\nSee [the guide](docs/nope.md) and [here](#notes).\n\n[g](docs/guide.md#nowhere) [h](docs/guide.md#setup)\n',
     'docs/guide.md': '# Guide\n\n## Setup\n',
+    'intent.py': "name = 'x'\nprint('Hello ' + name + '!')\nvalue = 255\n",
     'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\nN = re.compile(f"{PATTERN.pattern}[cc]")\n',
     'api.http':'### the items\nGET {{host}}/items\n    ?page=2\nAccept: application/json\n\n###\nPOST {{host}}/items\nContent-Type: application/json\nAuthorization: Bearer {{token}}\n\n{"name": "pen"}\n',
     'tests/__init__.py': '',
@@ -309,6 +310,36 @@ describe('HTTP client', () => {
         const text = await page.evaluate('window.pymagic.editor.getValue()');
         assert.match(text, /###\nPOST http:\/\/127\.0\.0\.1\/missing\nAccept: text\/plain\nContent-Type: application\/x-www-form-urlencoded\n\na=1\n$/);
         await page.evaluate(`(() => { const ed = window.pymagic.editor; while (ed.getValue().includes('/missing')) ed.trigger('e2e', 'undo', {}); })()`);
+    });
+});
+
+describe('intention actions', () => {
+    /** The quick-fix menu at a place, as titles; one of them can be chosen with a real click. */
+    async function menuAt(line, column, choose) {
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: ${line}, column: ${column} }); ed.focus(); ed.getAction('editor.action.quickFix').run(); })()`);
+        const titles = await page.waitFor(`(() => { const rows = [...document.querySelectorAll('.action-widget .monaco-list-row')]; return rows.length ? rows.map((r) => r.textContent.trim()) : null; })()`, 15000, 'the quick-fix menu');
+        if (choose) {
+            const at = await page.evaluate(`(() => { const r = [...document.querySelectorAll('.action-widget .monaco-list-row')].find((x) => x.textContent.includes(${JSON.stringify(choose)})); const b = r.getBoundingClientRect(); return { x: b.left + 20, y: b.top + b.height / 2 }; })()`);
+            await page.click(at.x, at.y);
+            await sleep(500);
+        } else {
+            await page.key(27, 'Escape');
+        }
+        return titles;
+    }
+
+    test('Alt+Enter at a concatenation offers an f-string and applies it', async () => {
+        await open('intent.py');
+        const titles = await menuAt(2, 16, 'Convert to an f-string');
+        assert.ok(titles.some((t) => t.includes('Convert to an f-string')), titles.join(' | '));
+        assert.equal(await page.evaluate(`window.pymagic.editor.getModel().getLineContent(2)`), "print(f'Hello {name}!')");
+        await page.evaluate(`window.pymagic.editor.trigger('e2e', 'undo', {})`);
+    });
+
+    test('a number is offered in other bases', async () => {
+        await open('intent.py');
+        const titles = await menuAt(3, 10);
+        assert.ok(titles.some((t) => t.includes('Convert to hexadecimal (0xFF)')), titles.join(' | '));
     });
 });
 
