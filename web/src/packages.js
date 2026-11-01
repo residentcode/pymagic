@@ -292,4 +292,6 @@ export function setupPackages() {
     });
     window.addEventListener('pymagic:interpreter', () => { outdated = new Map(); $('pk-outdated').textContent = 'Check updates'; if (loaded)
         void load(); });
+    // another panel asks for packages (the Database panel's driver): installed here, the log in the Packages tab
+    window.addEventListener('pymagic:installPackages', (e) => void run('install', e.detail));
 }

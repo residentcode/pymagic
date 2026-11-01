@@ -526,3 +526,8 @@
 #sigdialog .pchoose { margin: 0 6px 0 -4px; vertical-align: middle; height: 12px; }
 #sigdialog pre.skipped { opacity: 0.45; }
 #sigdialog .add .word { background: var(--good)66; border-radius: 2px; } #sigdialog .del .word { background: var(--bad)66; border-radius: 2px; }
+
+.db-server-form { width: 440px; } .db-form-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; } .db-form-row > span { width: 78px; flex: none; color: var(--dim); }
+.db-form-row > input, .db-form-row > select { flex: 1; min-width: 0; } .db-form-error { color: var(--bad-strong, #e5534b); font-size: 12px; min-height: 16px; white-space: pre-wrap; margin-top: 6px; }
+.db-server .db-name::before { content: '⛁ '; }
+.ask-buttons button[hidden] { display: none; }

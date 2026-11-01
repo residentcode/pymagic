@@ -29,7 +29,7 @@ export function setupDatabase(deps) {
     async function loadSources() {
         sources = await fetch('/api/db/sources').then((r) => (r.ok ? r.json() : [])).catch(() => []);
         const chosen = sourceBox.value;
-        sourceBox.replaceChildren(...sources.filter((s) => s.exists).map((s) => new Option(s.path, s.path)));
+        sourceBox.replaceChildren(...sources.filter((s) => s.exists).map((s) => new Option(s.server ? `${s.name} (${s.server === 'postgres' ? 'PostgreSQL' : 'MySQL'})` : s.path, s.path)));
         if (sources.some((s) => s.path === chosen))
             sourceBox.value = chosen;
         if (sources.length === 1)
@@ -72,7 +72,7 @@ export function setupDatabase(deps) {
         if (!sources.length) {
             const empty = document.createElement('div');
             empty.className = 'db-empty';
-            empty.textContent = 'No SQLite database in the project. + adds a file (a new one is made).';
+            empty.textContent = 'No SQLite database in the project. + adds a file (a new one is made); Server… connects to PostgreSQL or MySQL.';
             tree.appendChild(empty);
             return;
         }
@@ -88,12 +88,18 @@ export function setupDatabase(deps) {
                 continue;
             }
             const isOpen = open.has(s.path);
-            const row = node(s.path, 'db-source', `${Math.round(s.size / 1024)} KB`, 0, isOpen);
-            row.title = (s.added ? 'Added by hand; right-click to take it out of the list' : 'Found in the project') + (s.django ? ` · the database of ${s.django}` : '');
+            const row = s.server
+                ? node(s.name, 'db-source db-server', `${s.server === 'postgres' ? 'PostgreSQL' : 'MySQL'} · ${s.detail}`, 0, isOpen)
+                : node(s.path, 'db-source', `${Math.round(s.size / 1024)} KB`, 0, isOpen);
+            row.title = s.server ? 'A database server; right-click to disconnect it (its data stays where it is)'
+                : (s.added ? 'Added by hand; right-click to take it out of the list' : 'Found in the project') + (s.django ? ` · the database of ${s.django}` : '');
             row.onclick = async () => { toggleNode(s.path); if (open.has(s.path)) await loadSchema(s.path); paintTree(); };
             row.oncontextmenu = (e) => {
                 e.preventDefault();
-                if (s.added && confirm(`Take ${s.path} out of the list? The file stays.`))
+                if (s.server) {
+                    if (confirm(`Disconnect ${s.name}? Its saved password is forgotten; the server is not touched.`))
+                        void fetch('/api/db/servers?id=' + encodeURIComponent(s.path.slice('server:'.length)), { method: 'DELETE' }).then(loadSources);
+                } else if (s.added && confirm(`Take ${s.path} out of the list? The file stays.`))
                     void fetch('/api/db/sources?path=' + encodeURIComponent(s.path), { method: 'DELETE' }).then(loadSources);
             };
             if (!isOpen)
@@ -131,6 +137,104 @@ export function setupDatabase(deps) {
         open.add(path.trim().replace(/\\/g, '/'));
         await loadSources();
     };
+
+    // ------------------------------------------------------------ a PostgreSQL or MySQL server
+    const DEFAULT_PORTS = { postgres: '5432', mysql: '3306' };
+    const DRIVERS = { postgres: 'psycopg[binary]', mysql: 'PyMySQL' };
+    $('db-add-server').onclick = () => void serverForm();
+    function serverForm() {
+        const shade = document.createElement('div');
+        shade.className = 'ask-shade';
+        const box = document.createElement('div');
+        box.className = 'ask-box db-server-form';
+        const title = document.createElement('div');
+        title.className = 'ask-title';
+        title.textContent = 'Connect to a database server';
+        const fields = {};
+        const addField = (key, label, element, hint) => {
+            const row = document.createElement('label');
+            row.className = 'db-form-row';
+            const name = document.createElement('span');
+            name.textContent = label;
+            element.id = 'db-form-' + key;
+            if (hint)
+                element.title = hint;
+            row.append(name, element);
+            fields[key] = element;
+            box.append(row);
+        };
+        const kind = document.createElement('select');
+        kind.append(new Option('PostgreSQL', 'postgres'), new Option('MySQL', 'mysql'));
+        const input = (type = 'text', value = '') => { const i = document.createElement('input'); i.type = type; i.value = value; i.spellcheck = false; i.autocomplete = 'off'; return i; };
+        box.append(title);
+        addField('kind', 'Server', kind);
+        addField('host', 'Host', input('text', 'localhost'));
+        addField('port', 'Port', input('text', DEFAULT_PORTS.postgres));
+        addField('user', 'User', input('text', 'postgres'));
+        addField('password', 'Password', input('password'), 'Kept in .pymagic/db-servers.private.json of the project: keep that file out of version control');
+        addField('database', 'Database', input('text', 'postgres'));
+        addField('name', 'Name', input('text'), 'Optional: how the server is listed');
+        kind.onchange = () => {
+            fields.port.value = DEFAULT_PORTS[kind.value];
+            fields.user.value = kind.value === 'postgres' ? 'postgres' : 'root';
+            fields.database.value = kind.value === 'postgres' ? 'postgres' : '';
+        };
+        const note = document.createElement('div');
+        note.className = 'ask-hint db-form-note';
+        note.textContent = "The password is kept in .pymagic/db-servers.private.json of the project: keep that file out of version control. PyMagic connects with the project's Python and its psycopg / PyMySQL package.";
+        const error = document.createElement('div');
+        error.className = 'db-form-error';
+        const row = document.createElement('div');
+        row.className = 'ask-buttons';
+        const install = document.createElement('button');
+        install.textContent = 'Install the driver';
+        install.hidden = true;
+        const ok = document.createElement('button');
+        ok.textContent = 'Connect';
+        ok.className = 'primary';
+        const cancel = document.createElement('button');
+        cancel.textContent = 'Cancel';
+        row.append(install, ok, cancel);
+        box.append(note, error, row);
+        shade.append(box);
+        const done = () => shade.remove();
+        cancel.onclick = done;
+        shade.onmousedown = (e) => { if (e.target === shade) done(); };
+        install.onclick = () => {
+            window.dispatchEvent(new CustomEvent('pymagic:installPackages', { detail: [DRIVERS[kind.value]] }));
+            done();
+        };
+        ok.onclick = async () => {
+            ok.disabled = true;
+            error.textContent = 'Connecting…';
+            install.hidden = true;
+            const body = {};
+            for (const [key, element] of Object.entries(fields))
+                body[key] = element.value;
+            let answer;
+            try { answer = await fetch('/api/db/servers', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.json()); }
+            catch (e) { answer = { error: String(e) }; }
+            ok.disabled = false;
+            if (answer.error) {
+                error.textContent = answer.error;
+                install.hidden = !answer.missingDriver;
+                return;
+            }
+            done();
+            toast(`Connected: ${answer.version ?? 'ok'}`);
+            open.add(answer.path);
+            await loadSources();
+            sourceBox.value = answer.path;
+        };
+        box.onkeydown = (e) => {
+            if (e.key === 'Escape') done();
+            else if (e.key === 'Enter' && e.target !== cancel && e.target !== install) { e.preventDefault(); ok.click(); }
+            e.stopPropagation();
+        };
+        document.body.append(shade);
+        fields.host.focus();
+        fields.host.select();
+    }
 
     // ------------------------------------------------------------ the grid: a table's rows, or the console's results
     let view = null;   // { kind: 'table', path, table, columns, rows, total, editable, offset, order, desc, where } or { kind: 'result', columns, rows }

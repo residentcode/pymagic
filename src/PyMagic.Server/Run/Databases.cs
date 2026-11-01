@@ -9,7 +9,9 @@ namespace PyMagic.Server;
 /// <param name="Exists">False for the database a Django project's settings name before <c>manage.py migrate</c> has made it.</param>
 /// <param name="Django">The settings module whose <c>DATABASES</c> names it.</param>
 /// <param name="Manage">The manage.py of that Django project, by its path from the root (`manage.py migrate` makes the database).</param>
-public sealed record DataSource(string Path, string Name, long Size, bool Added, bool Exists = true, string? Django = null, string? Manage = null);
+/// <param name="Server">"postgres" or "mysql" for a database server (its Path is <c>server:id</c>); null for an SQLite file.</param>
+/// <param name="Detail">What the panel shows beside a server: <c>host:port/database</c>.</param>
+public sealed record DataSource(string Path, string Name, long Size, bool Added, bool Exists = true, string? Django = null, string? Manage = null, string? Server = null, string? Detail = null);
 
 /// <summary>
 /// The Database panel's engine side: the SQLite files of a project, and the requests on them (schema, a page of rows,
@@ -71,7 +73,9 @@ public static class Databases
             if (found.TryGetValue(rel, out var known)) found[rel] = known with { Django = settings, Manage = manage };
             else if (!File.Exists(full)) found[rel] = new DataSource(rel, System.IO.Path.GetFileName(full), 0, false, Exists: false, Django: settings, Manage: manage);
         }
-        return found.Values.OrderBy(s => s.Path, StringComparer.OrdinalIgnoreCase).ToList();
+        var all = found.Values.OrderBy(s => s.Path, StringComparer.OrdinalIgnoreCase).ToList();
+        all.AddRange(DbServers.Load(root).Select(v => new DataSource(DbServers.PathOf(v.Id), v.Name, 0, true, Server: v.Kind, Detail: $"{v.Host}:{v.Port}/{v.Database}")));
+        return all;
 
         void Add(string full, bool added)
         {
@@ -156,9 +160,9 @@ public static class Databases
 
     /// <summary>A request for pm_db.py; its answer, which has "error" when SQLite refused.</summary>
     /// <exception cref="ServiceException">Python could not be started or did not answer.</exception>
-    public static JsonNode Ask(string python, JsonObject request, int timeoutMs = 60000)
+    public static JsonNode Ask(string python, JsonObject request, int timeoutMs = 60000, string helperName = "pm_db.py")
     {
-        string helper = RunSession.ExtractHelper("pm_db.py");
+        string helper = RunSession.ExtractHelper(helperName);
         var psi = new ProcessStartInfo(python) { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
         psi.ArgumentList.Add("-I");   // the helper's own folder only: no file of the project is imported in its place
         psi.ArgumentList.Add(helper);

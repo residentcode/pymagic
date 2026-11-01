@@ -867,6 +867,24 @@ app.MapPost("/api/db/sources", async (HttpRequest req) =>
     catch (UnauthorizedAccessException) { return Results.BadRequest("The database has to be inside the project."); }
 });
 
+// a PostgreSQL or MySQL server: {kind, host, port, user, password, database, name}; it is connected to before it is kept
+app.MapPost("/api/db/servers", async (HttpRequest req) =>
+{
+    if (await JsonNode.ParseAsync(req.Body) is not JsonObject body) return Results.BadRequest("unknown request");
+    try
+    {
+        var server = DbServers.Parse(body);
+        string password = body["password"]?.GetValue<string>() ?? "";
+        var answer = Databases.Ask(DatabasePython(), new JsonObject { ["op"] = "test", ["server"] = DbServers.Describe(server, password) }, 30000, "pm_dbserver.py");
+        if (answer["error"] is { } error)
+            return Results.Json(new { error = error.GetValue<string>(), missingDriver = answer["missingDriver"]?.GetValue<bool>() ?? false });
+        DbServers.Save(root, server, password);
+        return Results.Json(new { path = DbServers.PathOf(server.Id), version = answer["version"]?.GetValue<string>() });
+    }
+    catch (ServiceException e) { return Results.Json(new { error = e.Message }); }
+});
+app.MapDelete("/api/db/servers", (string id) => { DbServers.Remove(root, id); return Results.Json(Databases.Find(root)); });
+
 app.MapDelete("/api/db/sources", (string path) => { Databases.RemoveSource(root, path); return Results.Json(Databases.Find(root)); });
 
 // one request on a data source: {op: schema | rows | apply | run, path (from the project root), ...}; the answer has "error" when SQLite refused
@@ -882,6 +900,14 @@ app.MapPost("/api/db", async (HttpRequest req) =>
             string csvFull = ResolveInRoot(csv);
             if (!File.Exists(csvFull)) return Results.Json(new { error = $"There is no file {csv} in the project." });
             body["csv"] = csvFull;
+        }
+        // a database server of the project: its settings and password are added here, never sent by the page
+        if (body["path"]?.GetValue<string>() is { } serverPath && DbServers.IsServerPath(serverPath))
+        {
+            if (DbServers.Connection(root, serverPath) is not { } connection) return Results.BadRequest("No such database server in the project.");
+            body.Remove("path");
+            body["server"] = connection;
+            return Results.Json(Databases.Ask(DatabasePython(), body, 60000, "pm_dbserver.py"));
         }
         string full = ResolveInRoot(body["path"]?.GetValue<string>() ?? "");
         if (!File.Exists(full) || !Databases.IsSqlite(full)) return Results.BadRequest("Not an SQLite database of the project.");
