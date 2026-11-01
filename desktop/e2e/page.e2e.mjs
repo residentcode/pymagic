@@ -1890,9 +1890,12 @@ describe('git: the Log graph, its filters and actions, and the toolbar on a chan
         await page.waitFor(`${rowCount} >= 4`, 10000, 'the log again');
         await clickRow('start');
         await page.waitFor(`document.querySelector('#git-detail .meta')?.textContent.startsWith(${JSON.stringify(git('log', '--format=%H', '--grep=^start$', '-1').trim())})`, 10000, 'the actions');
+        // a branch that points at the commit is switched to; with none, HEAD is detached (an earlier test may have left main there)
+        const startHash = git('log', '--format=%H', '--grep=^start$', '-1').trim();
+        const pointing = git('branch', '--points-at', startHash, '--format=%(refname:short)').trim().split(String.fromCharCode(10))[0];
         await act('Checkout');
-        for (let i = 0; i < 30 && git('branch', '--show-current').trim() !== ''; i++) await sleep(300);
-        assert.equal(git('branch', '--show-current').trim(), '');
+        for (let i = 0; i < 30 && git('branch', '--show-current').trim() !== pointing; i++) await sleep(300);
+        assert.equal(git('branch', '--show-current').trim(), pointing);
         git('switch', '-q', 'main');
         await page.evaluate(`${$('git-refresh')}.click()`);
     });
