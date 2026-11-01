@@ -70,7 +70,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 **Run, debug and tests**
 - Debugger: ~~pausing a running program, attaching to a running process, breakpoints added while a frame is already running (they only count in new calls) (10); the stacks of other threads (76)~~ (done, item 219; attaching was item 160); ~~setting attributes and items of objects, watches that expand, exception filters by type, function and data breakpoints (21)~~ (done, item 220; exception filters by type were item 158's exception breakpoints per class). A data breakpoint on a local of a generator ends at its first `yield`, as its frame returns there.
-- Test runner: debugging a test, stopping a test run, `unittest` subtests as their own nodes, tests in classes whose bases live in other files (11).
+- ~~Test runner: debugging a test, stopping a test run, `unittest` subtests as their own nodes, tests in classes whose bases live in other files (11)~~ (done, item 221). Under pytest the subtests of a test are not split (pytest reports the test once); a test inherited from another file is placed on its class's line.
 - ~~Coverage: branch coverage, combining runs, exporting a report, running one test with coverage (52)~~ (done, item 191).
 - Automated tests of the page itself in a real browser; the checks in PyMagic.exe are scripted by hand for now, beside the page's Node tests of its pure modules (9).
 
@@ -102,7 +102,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
 - New project: ~~a *New Project* dialog with a location and project types (pure Python, FastAPI, Flask, Django, Jupyter, each with its starting files), *Create Git repository*, *Create a welcome script*, and the interpreter made with it: a project venv, uv (with the path to uv), base conda or a custom environment, and a Python version~~ (done, item 169). Unlike PyCharm, the packages a kind needs are listed in requirements.txt, not installed while the project is made.
 - Run configurations: ~~kinds of configuration (Django server with host and port, pytest, a module with `-m`, FastAPI/uvicorn and Flask servers), `.env` files, running with `uv run`, the PYTHONPATH switches (content and source roots), *Store as project file*, *Open the Run panel when started*, and *Edit Configurations...* from the run selector~~ (done, item 170). Not tried yet: the three servers and uv with those packages installed.
-- Project tree menu: ~~*Debug* the tests of a folder (debugging a test is not done at all) and *Local History* of a folder; a sources root unmarked, or a folder marked, takes effect by starting the page again (it does so by itself)~~ (done, item 171). Debugged tests show their results as the runner's output, not in the test tree.
+- Project tree menu: ~~*Debug* the tests of a folder (debugging a test is not done at all) and *Local History* of a folder; a sources root unmarked, or a folder marked, takes effect by starting the page again (it does so by itself)~~ (done, item 171). Debugged tests show their results in the test tree since item 221.
 - Tab menu: ~~*Override File Type* colours the file but the language server still reads it by its name; a second window (*Open in a new window*) does not share unsaved text with the first, so the file is saved before it opens~~ (done, item 171).
 - Editor menu: ~~*Generate…* has no getters for public attributes and no `__eq__` / `__repr__` from the fields, and its test calls the class without arguments; *Refactor…* and *Generate…* are on the first editor only~~ (done, item 171). Left as they are: *Paste as Plain Text* (every paste into the editor is plain already) and submenus in the editor's right-click menu (Monaco's menu has none; Refactor… and Generate… open PyMagic's own menus, which have them).
 - Python console: ~~an interactive interpreter beside the editor, with *Execute Line in Python Console* (Alt+Shift+E), *Run File in Python Console* and a view of its variables~~ (done, item 172).
@@ -158,4 +158,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 220 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 221 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

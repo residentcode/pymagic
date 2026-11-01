@@ -262,6 +262,7 @@ def run_unittest(channel, root, ids, flavor="unittest", settings_module=None, fa
             super().__init__()
             self.buffer = True
             self.began = {}
+            self.sub_began = {}
             self.pending = {}
 
         def startTest(self, test):
@@ -307,8 +308,22 @@ def run_unittest(channel, root, ids, flavor="unittest", settings_module=None, fa
 
         def addSubTest(self, test, subtest, err):
             super().addSubTest(test, subtest, err)
-            if err is not None:
-                self.finish(test, "failed", "%s: %s" % (err[0].__name__, first_line(err[1])), self._exc_info_to_string(err, test), err)
+            # each subtest is a node of its own under its test: test_id[i=1], or test_id[message i=1]
+            params = getattr(subtest, "params", None) or {}
+            label = " ".join(([str(subtest._message)] if getattr(subtest, "_message", None) not in (None, unittest.case._subtest_msg_sentinel) else [])
+                             + ["%s=%r" % kv for kv in params.items()]) or "subtest"
+            now = time.perf_counter()
+            began = self.sub_began.get(test, self.began.get(test, now))
+            self.sub_began[test] = now
+            if err is None:
+                outcome, message, tb, file, line = "passed", "", "", None, None
+            else:
+                outcome = "failed" if issubclass(err[0], test.failureException) else "error"
+                message, tb = "%s: %s" % (err[0].__name__, first_line(err[1])), self._exc_info_to_string(err, test)
+                file, line = self.location(err)
+                self.finish(test, "failed", message, tb, err)
+            channel.send({"type": "testResult", "id": "%s[%s]" % (test_id(test), label.replace("[", "(").replace("]", ")")), "outcome": outcome,
+                          "duration": now - began, "message": message, "traceback": tb, "output": "", "file": file, "line": line})
 
         def stopTest(self, test):
             outcome, message, tb, exc_info = self.pending.pop(test, ("passed", "", "", None))
@@ -650,7 +665,8 @@ def main():
     parser.add_argument("ids", nargs="*")
     options = parser.parse_args()
 
-    channel = Channel(options.port, options.token, options.host)
+    # Debug of tests: this runner runs inside the debugger (pm_debug.py --tests), whose connection carries its messages too
+    channel = sys.modules.get("pymagic_test_channel") or Channel(options.port, options.token, options.host)
     channel.go.wait()
     root = os.path.abspath(options.root)
     os.chdir(root)

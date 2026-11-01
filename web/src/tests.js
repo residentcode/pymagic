@@ -433,9 +433,10 @@ export function setupTests(deps) {
         consoleOut.append(b, document.createTextNode('\n'));
     }
     function finish() {
-        const wasRunning = client !== null;
+        const wasRunning = client !== null || debugRun;
         client?.close();
         client = null;
+        debugRun = false;
         if (wasRunning) {
             recordRun();
             offerInstall();
@@ -453,10 +454,20 @@ export function setupTests(deps) {
             showDetail(selected);
     }
     function setButtons() {
+        const busy = client !== null || debugRun;
         for (const id of ['tests-all', 'tests-cov', 'tests-sel', 'tests-here', 'tests-debug'])
-            $(id).disabled = client !== null;
-        $('tests-rerun').disabled = client !== null;
+            $(id).disabled = busy;
+        $('tests-rerun').disabled = busy;
+        $('tests-stop').disabled = !busy;
     }
+    // Stop: the test process is ended; the tests that did not run go back to idle
+    $('tests-stop').onclick = () => {
+        if (client)
+            client.send({ type: 'stop' });
+        else if (debugRun)
+            window.dispatchEvent(new CustomEvent('pymagic:stopDebugTests'));
+        appendConsole('\nStopped.\n', 'info');
+    };
     // ------------------------------------------------------------ running
     let coverageRun = false;
     async function run(ids, coverage = false, extra = {}) {
@@ -531,10 +542,32 @@ export function setupTests(deps) {
         $('tests-fw').value = framework;
         void run(ids, false, { settings, failfast });
     });
-    /** Debugging tests: the test runner itself started under the debugger (Run panel), so the tests' breakpoints stop. */
-    function debugTests(ids) {
+    /** Debugging tests: the test runner itself started under the debugger (Run panel), so the tests' breakpoints stop;
+     * its results come back here (pymagic:testMessage) and fill the tree as a run's do. */
+    let debugRun = false;
+    async function debugTests(ids) {
+        if (client || debugRun)
+            return;
+        await load();
+        consoleOut.textContent = '';
+        for (const id of ids.length ? ids : roots.map((r) => r.id)) {
+            const n = byId.get(id);
+            for (const leaf of n ? leaves(n) : []) {
+                leaf.result = undefined;
+                setStatus(leaf, 'queued');
+            }
+        }
+        started = performance.now();
+        lastIds = ids;
+        debugRun = true;
+        setButtons();
+        summarize();
         window.dispatchEvent(new CustomEvent('pymagic:debugTests', { detail: { ids, framework: $('tests-fw').value } }));
     }
+    window.addEventListener('pymagic:testMessage', (e) => {
+        if (debugRun)
+            handle(e.detail);
+    });
     $('tests-debug').onclick = () => {
         const id = selected?.id ?? idAtCursor();
         debugTests(id ? [id] : []);

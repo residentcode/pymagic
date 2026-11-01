@@ -343,4 +343,105 @@ public class TestRunnerTests
         Assert.True(trial.Any(e => e["type"]!.GetValue<string>() == "testResult") || trial.Any(e => e.ToJsonString().Contains("twisted")),
             "trial without Twisted says why: " + string.Join(" ", trial.Select(e => e.ToJsonString())));
     }
+
+    // ------------------------------------------------------------ item 221: bases in other files, subtests, Stop, Debug of tests
+
+    [Fact]
+    public void BaseClassesImportedFromOtherFilesBringTheirTests()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "pm_disc_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "tests", "shared"));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "tests", "base.py"),
+                "import unittest\nclass ApiCase(unittest.TestCase):\n    def test_status(self): ...\n    def helper(self): ...\n");
+            File.WriteAllText(Path.Combine(root, "tests", "shared", "__init__.py"), "from .checks import Checks\n");
+            File.WriteAllText(Path.Combine(root, "tests", "shared", "checks.py"), "class Checks:\n    def test_shape(self): ...\n");
+            File.WriteAllText(Path.Combine(root, "tests", "test_api.py"),
+                "from .base import ApiCase\nfrom tests.shared import Checks\nimport tests.base as b\n" +
+                "class UserApi(ApiCase):\n    def test_user(self): ...\n" +              // a TestCase through the other file
+                "class TestShapes(Checks):\n    def test_round(self): ...\n" +             // pytest's naming, the base re-exported by a package
+                "class OrderApi(b.ApiCase):\n    pass\n");                                  // module.Class
+            var file = TestDiscovery.Discover(root).Single(f => f.Id == "tests/test_api.py");
+            string Ids(string cls) => string.Join(",", file.Children.Single(c => c.Name == cls).Children.Select(m => m.Name));
+            Assert.Equal("test_user,test_status", Ids("UserApi"));
+            Assert.Equal("test_round,test_shape", Ids("TestShapes"));
+            Assert.Equal("test_status", Ids("OrderApi"));
+            var inherited = file.Children.Single(c => c.Name == "UserApi").Children[1];
+            Assert.Equal("tests/test_api.py::UserApi::test_status", inherited.Id);
+            Assert.Equal(4, inherited.Line);   // placed on its class's line: it is written in another file
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void UnittestSubtestsAreReportedOneByOne()
+    {
+        if (!HavePython) return;
+        using var p = new Project();
+        p.File("test_sub.py",
+            "import unittest\nclass Numbers(unittest.TestCase):\n    def test_even(self):\n" +
+            "        for i in range(3):\n            with self.subTest(i=i):\n                self.assertEqual(i % 2, 0)\n" +
+            "    def test_named(self):\n        with self.subTest('first', n=1):\n            pass\n");
+        var r = Results(p.Run("unittest"));
+        const string id = "test_sub.py::Numbers::test_even";
+        Assert.Equal("passed", Outcome(r, id + "[i=0]"));
+        Assert.Equal("failed", Outcome(r, id + "[i=1]"));
+        Assert.Equal("passed", Outcome(r, id + "[i=2]"));
+        Assert.Equal("failed", Outcome(r, id));   // the test fails with its subtest
+        Assert.Equal(6, r[id + "[i=1]"]["line"]!.GetValue<int>());
+        Assert.Contains("1 != 0", r[id + "[i=1]"]["message"]!.GetValue<string>());
+        Assert.Equal("passed", Outcome(r, "test_sub.py::Numbers::test_named[first n=1]"));
+    }
+
+    [Fact]
+    public void StopEndsATestRun()
+    {
+        if (!HavePython) return;
+        using var p = new Project();
+        p.File("test_slow.py", "import time, unittest\nclass Slow(unittest.TestCase):\n    def test_wait(self):\n        time.sleep(60)\n");
+        var events = new BlockingCollection<JsonNode>();
+        using var session = new RunSession(events.Add);
+        session.StartTests(p.Root, Array.Empty<string>(), "unittest");
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline && events.TryTake(out var e, TimeSpan.FromSeconds(30)))
+            if (e["type"]!.GetValue<string>() == "testStarted") break;
+        var asked = DateTime.UtcNow;
+        session.Handle(new JsonObject { ["type"] = "stop" });
+        while (events.TryTake(out var e, TimeSpan.FromSeconds(20)))
+            if (e["type"]!.GetValue<string>() == "exited") { Assert.True(DateTime.UtcNow - asked < TimeSpan.FromSeconds(15), "stopped at once"); return; }
+        throw new AssertionException("the run did not end");
+    }
+
+    [Fact]
+    public void DebuggedTestsStopAtTheirBreakpointsAndReportTheirResults()
+    {
+        if (!HavePython) return;
+        using var p = new Project();
+        p.File("tests/test_cart.py", UnitTests);
+        var events = new BlockingCollection<JsonNode>();
+        using var session = new RunSession(events.Add);
+        session.StartDebugTests(p.Root, new[] { "tests/test_cart.py::Cart::test_bad", "tests/test_cart.py::Cart::test_ok" }, "unittest",
+            new Dictionary<string, JsonArray> { ["tests/test_cart.py"] = new JsonArray(6) });
+        var seen = new List<JsonNode>();
+        JsonNode Next(string type)
+        {
+            while (events.TryTake(out var e, TimeSpan.FromSeconds(60)))
+            {
+                seen.Add(e);
+                if (e["type"]!.GetValue<string>() == type) return e;
+            }
+            throw new AssertionException("timed out waiting for " + type + "; saw: " + string.Join(" ", seen.Select(x => x.ToJsonString())));
+        }
+        var collected = Next("collected");
+        Assert.Equal(2, collected["tests"]!.AsArray().Count);
+        var stopped = Next("stopped");
+        Assert.Equal(6, stopped["frames"]![0]!["line"]!.GetValue<int>());
+        Assert.Equal("test_bad", stopped["frames"]![0]!["name"]!.GetValue<string>());
+        session.Handle(new JsonObject { ["type"] = "continue" });
+        Next("exited");
+        var r = ResultsCore(seen);
+        Assert.Equal("failed", Outcome(r, "tests/test_cart.py::Cart::test_bad"));
+        Assert.Equal("passed", Outcome(r, "tests/test_cart.py::Cart::test_ok"));
+    }
 }

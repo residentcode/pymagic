@@ -829,7 +829,11 @@ export function setupRun(deps) {
             holder.appendChild(row);
         });
     }
+    let testsRun = false;   // this run is Debug of tests: its results belong to the Tests panel too
+    const TEST_MESSAGES = ['collected', 'testStarted', 'testResult', 'collectError'];
     function handle(m) {
+        if (testsRun && (TEST_MESSAGES.includes(m.type) || m.type === 'exited' || m.type === 'error'))
+            window.dispatchEvent(new CustomEvent('pymagic:testMessage', { detail: m }));
         switch (m.type) {
             case 'started':
                 append(m.attached ? `Attached to process ${m.pid}; the debugger starts with the program's next line of Python (its output is not shown here)\n`
@@ -900,6 +904,7 @@ export function setupRun(deps) {
     function finish() {
         run?.close();
         run = null;
+        testsRun = false;
         dataBreaks = [];
         paused = false;
         frames = [];
@@ -1044,7 +1049,8 @@ export function setupRun(deps) {
             showTab('output');
         openBrowser = !!extra.openBrowser;
         followLogs((extra.logFiles ?? '').split(',').map((s) => s.trim()).filter(Boolean));
-        run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
+        testsRun = !!extra.tests;
+        run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, tests: extra.tests, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
             exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value, functionBreaks: functionNames(),
             envFiles: extra.envFiles, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots });
         run.onMessage = handle;
@@ -1448,17 +1454,13 @@ export function setupRun(deps) {
         if (run) {
             append('A program is running; stop it first.\n', 'err');
             showTab('output');
+            window.dispatchEvent(new CustomEvent('pymagic:testMessage', { detail: { type: 'error', message: 'A program is running in the Run panel; stop it first.' } }));
             return;
         }
-        if (framework === 'unittest' || framework === 'nose' || framework === 'trial') {
-            const names = ids.map((id) => id.replace(/\.py(?=::|$)/, '').replace(/\/|::/g, '.'));
-            void launch(null, true, false, names.length ? names : ['discover'], { module: 'unittest' });
-        }
-        else if (framework === 'doctest')
-            void launch(null, true, false, ['--doctest-modules', ...ids.map((id) => id.split('::')[0])], { module: 'pytest' });
-        else
-            void launch(null, true, false, ['-q', ...ids], { module: 'pytest' });
+        // PyMagic's own test runner, under the debugger: the results land in the Tests tree as a run's do
+        void launch(null, true, false, [], { tests: { ids, framework }, openPanel: false });   // the Tests tab stays in front
     });
+    window.addEventListener('pymagic:stopDebugTests', () => { if (run && testsRun) run.send({ type: 'stop' }); });
     return {
         onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null,
         attach,

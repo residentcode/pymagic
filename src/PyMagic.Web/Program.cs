@@ -1118,7 +1118,8 @@ app.Map("/run", async (HttpContext ctx) =>
                 var args = (msg["args"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
                 string? module = msg["module"]?.GetValue<string>();
                 string file0 = msg["file"]?.GetValue<string>() ?? "";
-                if (module == null) ResolveInRoot(file0);   // refuses paths outside the workspace
+                var debugTests = msg["tests"] as JsonObject;   // Debug of tests: the test runner under the debugger
+                if (module == null && debugTests == null) ResolveInRoot(file0);   // refuses paths outside the workspace
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
                 // what a run configuration adds: variables, and a folder inside the project to start in
                 // .env files of the project first, the configuration's own variables over them
@@ -1140,7 +1141,10 @@ app.Map("/run", async (HttpContext ctx) =>
                     : (content ? new[] { root } : Array.Empty<string>()).Concat(sources ? ProjectFolders.Load(root).Sources.Select(s => Path.Combine(root, s)) : Array.Empty<string>()).ToList();
                 session.AllCode = msg["allCode"]?.GetValue<bool>() == true;
                 session.UvProgram = msg["uv"]?.GetValue<bool>() == true ? (msg["uvPath"]?.GetValue<string>() is { Length: > 0 } uvPath ? uvPath : "uv") : null;
-                if (msg["profile"]?.GetValue<bool>() == true && module == null) session.StartProfile(root, file0, args);
+                if (debugTests != null)
+                    session.StartDebugTests(root, (debugTests["ids"] as JsonArray)?.Select(i => i!.GetValue<string>()).ToList() ?? new List<string>(),
+                        debugTests["framework"]?.GetValue<string>() ?? "auto", bps);   // pm_tests checks the name
+                else if (msg["profile"]?.GetValue<bool>() == true && module == null) session.StartProfile(root, file0, args);
                 else if (module != null) session.StartModule(root, module, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
                 else session.StartWithBreakpoints(root, file0, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
                 if (msg["exceptionBreak"]?.GetValue<string>() == "raised")

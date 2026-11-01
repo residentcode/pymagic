@@ -1291,6 +1291,7 @@ def main():
     parser.add_argument("--script", help="the file to run")
     parser.add_argument("--module", help="or the module to run, as python -m does")
     parser.add_argument("--all-code", action="store_true", help="also step into library code")
+    parser.add_argument("--tests", help="or PyMagic's test runner (pm_tests.py), whose results go through this connection")
     parser.add_argument("args", nargs="*")
     options = parser.parse_args()
 
@@ -1303,7 +1304,18 @@ def main():
     dbg.go.wait()
 
     os.chdir(options.root)
-    if options.module:
+    if options.tests:
+        # the test runner's messages (collected, testStarted, testResult) share this helper's connection
+        class TestChannel(types.ModuleType):
+            go = threading.Event()
+
+            def send(self, message):
+                dbg.send(message)
+        channel = TestChannel("pymagic_test_channel")
+        channel.go.set()
+        sys.modules["pymagic_test_channel"] = channel
+        code = dbg.run_script(os.path.abspath(options.tests), ["--port", "0", "--token", "-", "--root", options.root] + options.args)
+    elif options.module:
         # python -m: the module's file (a package's __main__), run as __main__ of its package, with the folder the run starts in first on sys.path
         import importlib.util
         sys.path.insert(0, os.getcwd())

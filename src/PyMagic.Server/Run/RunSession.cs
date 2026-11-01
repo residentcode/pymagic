@@ -131,6 +131,20 @@ public sealed class RunSession : IDisposable
         Launch(root, true, helperArgs, ids, null, helper: "pm_tests.py");
     }
 
+    /// <summary>
+    /// Debug of tests: the test runner (pm_tests.py) runs inside the debugger, so the tests' breakpoints stop, and its
+    /// results come as the same <c>collected</c> / <c>testStarted</c> / <c>testResult</c> messages as a test run's.
+    /// </summary>
+    public void StartDebugTests(string root, IReadOnlyList<string> ids, string framework, IReadOnlyDictionary<string, JsonArray>? breakpoints)
+    {
+        IsDebug = true;
+        string tests = ExtractHelper("pm_tests.py");
+        var leading = new List<string>();
+        if (AllCode) leading.Add("--all-code");
+        leading.AddRange(new[] { "--tests", tests, "--" });
+        Launch(root, true, leading, new[] { "--framework", framework, "--" }.Concat(ids).ToList(), breakpoints);
+    }
+
     /// <summary>Where a profiler run leaves what it measured.</summary>
     public static string ProfilePath(string root) => Path.Combine(root, ".pymagic", "profile.json");
 
