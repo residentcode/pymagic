@@ -1574,7 +1574,8 @@ app.Map("/nb", async (HttpContext ctx) =>
             var msg = JsonNode.Parse(ms.ToArray());
             switch (msg?["type"]?.GetValue<string>())
             {
-                case "execute": kernel?.Execute(msg["id"]?.GetValue<string>() ?? "", msg["code"]?.GetValue<string>() ?? ""); break;
+                case "execute": kernel?.Execute(msg["id"]?.GetValue<string>() ?? "", msg["code"]?.GetValue<string>() ?? "", msg["debug"]); break;
+                case "inspect": kernel?.Inspect(msg["id"]?.GetValue<string>() ?? "", msg["path"]); break;
                 case "interrupt": kernel?.Interrupt(); break;
                 case "restart": StartKernel(); break;
             }
