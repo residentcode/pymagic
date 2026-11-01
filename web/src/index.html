@@ -186,6 +186,7 @@
         <span class="gsep"></span>
         <button id="t-search" title="Search"><svg class="i"><use href="#i-search"/></svg><span class="lbl">Search</span></button>
         <button id="t-git" title="Git"><svg class="i"><use href="#i-branch"/></svg><span class="lbl">Git</span></button>
+        <button id="t-deployment" title="Deployment: the servers the project goes to (a folder, FTP, SFTP), upload, download, compare and sync"><svg class="i"><use href="#i-web"/></svg><span class="lbl">Deployment</span></button>
         <button id="t-services" title="Services: what is running, and each one stopped, restarted or shown"><svg class="i"><use href="#i-output"/></svg><span class="lbl">Services</span><span id="services-count" class="badge" hidden></span></button>
         <button id="t-history" title="Local history"><svg class="i"><use href="#i-clock"/></svg><span class="lbl">History</span></button>
         <button id="t-packages" title="Packages"><svg class="i"><use href="#i-cube"/></svg><span class="lbl">Packages</span></button>
@@ -499,6 +500,23 @@
         <div class="col" id="pyc-side">
           <div class="listbar"><span>Variables</span></div>
           <div class="body" id="pyc-vars"></div>
+        </div>
+      </div>
+      <div id="deployment-tab" class="tab">
+        <div class="col" id="deployment-main">
+          <div class="listbar">
+            <select id="dep-server" title="The server this tab is about"></select>
+            <button id="dep-add" title="Add a server: a folder, FTP or SFTP">+</button>
+            <button id="dep-edit" title="Change the server: its mappings, what is not sent, upload on save">Edit</button>
+            <button id="dep-remove" title="Forget the server (nothing on it is touched)">Remove</button>
+            <span class="spacer" style="flex:1"></span>
+            <button id="dep-upload" title="Upload the open file to the server">Upload</button>
+            <button id="dep-download" title="Download the open file from the server">Download</button>
+            <button id="dep-compare" title="Compare the open file with the server's">Compare</button>
+            <button id="dep-sync" title="Sync a folder: see what differs, choose what goes which way">Sync…</button>
+          </div>
+          <div class="listbar"><button id="dep-up" title="The folder above">↑</button><span id="dep-path" class="dep-path"></span><span id="dep-info" class="dep-info"></span><button id="dep-refresh" title="Read the folder again"><svg class="i"><use href="#i-refresh"/></svg></button></div>
+          <div class="body" id="dep-list"></div>
         </div>
       </div>
       <div id="services-tab" class="tab">

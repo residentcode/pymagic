@@ -213,6 +213,108 @@ app.MapPut("/api/macros", async (HttpRequest req) =>
     return Results.NoContent();
 });
 
+// Deployment: servers the project is uploaded to (a folder, FTP or SFTP), and upload, download, compare and sync
+object ServerJson(DeployServer sv) => new { id = sv.Id, name = sv.Name, type = sv.Type, host = sv.Host, port = sv.Port, user = sv.User, root = sv.Root, keyFile = sv.KeyFile, uploadOnSave = sv.UploadOnSave, mappings = sv.Mappings, excluded = sv.Excluded, hostKey = sv.HostKey, hasPassword = DeployStore.PasswordOf(root, sv.Id).Length > 0 };
+IResult DeployFail(Exception e) => Results.Json(new { error = e is ServiceException ? e.Message : e is System.Net.WebException we && we.Response is System.Net.FtpWebResponse fr ? fr.StatusDescription.Trim() : e.Message });
+string BrowsePath(DeployServer sv, string path) => sv.Type == "folder" ? path.Trim('/') : string.Join("/", new[] { sv.Root.Trim('/'), path.Trim('/') }.Where(x => x.Length > 0));
+var deployLog = new List<object>();
+void DeployNote(string server, string path, bool ok, string? error) { lock (deployLog) { deployLog.Add(new { time = DateTime.UtcNow.ToString("o"), server, path, ok, error }); if (deployLog.Count > 100) deployLog.RemoveAt(0); } }
+
+app.MapGet("/api/deploy/servers", () => Results.Json(DeployStore.Load(root).Select(ServerJson).ToList()));
+// {…server fields, password?, test?: false}: the connection is tried first; a server that does not answer is not kept
+app.MapPost("/api/deploy/servers", async (HttpRequest req) =>
+{
+    if (await JsonNode.ParseAsync(req.Body) is not JsonObject body) return Results.BadRequest("unknown request");
+    try
+    {
+        var existing = body["id"]?.GetValue<string>() is { Length: > 0 } id ? DeployStore.Find(root, id) : null;
+        var sv = DeployStore.Parse(body, existing?.Id);
+        if (existing != null && existing.Host == sv.Host && existing.Port == sv.Port && existing.User == sv.User) sv = sv with { HostKey = body["forgetKey"]?.GetValue<bool>() == true ? "" : existing.HostKey };
+        string? password = body["password"]?.GetValue<string>();
+        DeployStore.Save(root, sv, password);                       // kept first, so a host key learned while testing lands in the saved record
+        if (body["test"]?.GetValue<bool>() != false)
+        {
+            try { using var remote = Deployment.Open(root, DeployStore.Find(root, sv.Id)!); remote.List(BrowsePath(sv, "")); }
+            catch (Exception e) when (e is ServiceException or System.Net.WebException or Renci.SshNet.Common.SshException or IOException)
+            {
+                if (existing == null) DeployStore.Remove(root, sv.Id);
+                return DeployFail(e);
+            }
+        }
+        return Results.Json(ServerJson(DeployStore.Find(root, sv.Id)!));
+    }
+    catch (ServiceException e) { return Results.Json(new { error = e.Message }); }
+});
+app.MapDelete("/api/deploy/servers", (string id) => { DeployStore.Remove(root, id); return Results.NoContent(); });
+// the folder of a server: what is in it, each with the file of the project it is (when a mapping says)
+app.MapGet("/api/deploy/list", (string server, string? path) =>
+{
+    if (DeployStore.Find(root, server) is not { } sv) return Results.NotFound();
+    try
+    {
+        string dir = BrowsePath(sv, path ?? "");
+        using var remote = Deployment.Open(root, sv);
+        var entries = remote.List(dir).Select(e => new { name = e.Name, isDir = e.IsDir, size = e.Size, modified = e.Modified.ToString("o"), local = Deployment.LocalOf(sv, dir.Length == 0 ? e.Name : dir + "/" + e.Name) }).ToList();
+        return Results.Json(new { path = (path ?? "").Trim('/'), entries });
+    }
+    catch (Exception e) when (e is ServiceException or System.Net.WebException or Renci.SshNet.Common.SshException or IOException) { return DeployFail(e); }
+});
+// paths are those of the project (files or folders); what goes up or comes down is reported file by file
+app.MapPost("/api/deploy/upload", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    if (DeployStore.Find(root, body?["server"]?.GetValue<string>() ?? "") is not { } sv) return Results.NotFound();
+    var paths = (body?["paths"] as JsonArray)?.Select(x => x?.GetValue<string>() ?? "").ToList() ?? new();
+    try
+    {
+        var results = Deployment.Upload(root, sv, paths);
+        foreach (var r in results) DeployNote(sv.Name, r.Path, r.Ok, r.Error);
+        return Results.Json(new { results });
+    }
+    catch (Exception e) when (e is ServiceException or System.Net.WebException or Renci.SshNet.Common.SshException or IOException) { return DeployFail(e); }
+});
+app.MapPost("/api/deploy/download", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    if (DeployStore.Find(root, body?["server"]?.GetValue<string>() ?? "") is not { } sv) return Results.NotFound();
+    var paths = (body?["paths"] as JsonArray)?.Select(x => x?.GetValue<string>() ?? "").ToList() ?? new();
+    try { return Results.Json(new { results = Deployment.Download(root, sv, paths) }); }
+    catch (Exception e) when (e is ServiceException or System.Net.WebException or Renci.SshNet.Common.SshException or IOException) { return DeployFail(e); }
+});
+app.MapGet("/api/deploy/compare", (string server, string path) =>
+{
+    if (DeployStore.Find(root, server) is not { } sv) return Results.NotFound();
+    try
+    {
+        var c = Deployment.Compare(root, sv, path);
+        return Results.Json(new { localExists = c.LocalExists, remoteExists = c.RemoteExists, local = c.Local, remote = c.Remote, same = c.Same });
+    }
+    catch (Exception e) when (e is ServiceException or System.Net.WebException or Renci.SshNet.Common.SshException or IOException) { return DeployFail(e); }
+});
+app.MapGet("/api/deploy/sync", (string server, string? path) =>
+{
+    if (DeployStore.Find(root, server) is not { } sv) return Results.NotFound();
+    try { return Results.Json(new { items = Deployment.SyncPlan(root, sv, path ?? "") }); }
+    catch (Exception e) when (e is ServiceException or System.Net.WebException or Renci.SshNet.Common.SshException or IOException) { return DeployFail(e); }
+});
+// {server, actions: [{path, action: upload | download}]}: what a sync window chose
+app.MapPost("/api/deploy/sync", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    if (DeployStore.Find(root, body?["server"]?.GetValue<string>() ?? "") is not { } sv) return Results.NotFound();
+    var actions = (body?["actions"] as JsonArray)?.Select(a => (Path: a?["path"]?.GetValue<string>() ?? "", Action: a?["action"]?.GetValue<string>() ?? "")).ToList() ?? new();
+    try
+    {
+        var results = new List<TransferResult>();
+        results.AddRange(Deployment.Upload(root, sv, actions.Where(a => a.Action == "upload").Select(a => a.Path)));
+        results.AddRange(Deployment.Download(root, sv, actions.Where(a => a.Action == "download").Select(a => a.Path)));
+        foreach (var r in results) DeployNote(sv.Name, r.Path, r.Ok, r.Error);
+        return Results.Json(new { results });
+    }
+    catch (Exception e) when (e is ServiceException or System.Net.WebException or Renci.SshNet.Common.SshException or IOException) { return DeployFail(e); }
+});
+app.MapGet("/api/deploy/log", () => { lock (deployLog) return Results.Json(deployLog.AsEnumerable().Reverse().ToList()); });
+
 app.MapGet("/api/info", () => new
 {
     root,
@@ -308,6 +410,9 @@ app.MapPut("/api/file", async (string path, HttpRequest req) =>
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         await File.WriteAllTextAsync(full, text, new UTF8Encoding(false));
         history.Record(rel, text);
+        // a server that takes what is saved gets this file, in the background (what happened is in the deployment log)
+        foreach (var sv in DeployStore.Load(root).Where(x => x.UploadOnSave && Deployment.RemoteOf(x, rel) != null && !Deployment.IsExcluded(x, rel)).ToList())
+            _ = Task.Run(() => { try { foreach (var r in Deployment.Upload(root, sv, new[] { rel })) DeployNote(sv.Name, r.Path, r.Ok, r.Error); } catch (Exception e) { DeployNote(sv.Name, rel, false, e.Message); } });
         return Results.NoContent();
     }
     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.BadRequest(e.Message); }

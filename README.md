@@ -163,7 +163,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
   - Markdown and reStructuredText (has: Markdown highlighted): ~~a live preview beside the editor that scrolls with it, the headings in the Structure view, links to files and headings completed and checked, tables formatted, Mermaid diagrams in the preview, export to HTML; reStructuredText highlighted and previewed through docutils when the project's Python has it~~ (done, item 241). Not done: Mermaid kinds other than flowcharts and sequence diagrams (the Mermaid library is a download, which needs a yes).
   - Macros: ~~the typing and commands of the editor recorded, played back, kept by name and given a key~~ (done, item 242). Not carried by a macro: mouse clicks, the clipboard keys, menus and function keys.
   - Run Anything and the Services window: ~~a box (Ctrl twice) that runs a script, `python -m`, `pip install`, a `manage.py` command, a run configuration or opens a recent project, with completion; a Services window with every running program and server (run configurations, the Django server, the consoles) in one place, each stopped, restarted or shown there~~ (done, item 243). Not built: several programs run at once (Run starts one at a time, so the window shows one), and the notebook kernels are not listed in it.
-  - Deployment (lowest, with Docker and remote interpreters): servers reached over SFTP, FTP or a folder, the mappings of local and remote paths, upload, download, compare and sync, upload on save, a remote host's files browsed.
+  - Deployment (lowest, with Docker and remote interpreters): ~~servers reached over SFTP, FTP or a folder, the mappings of local and remote paths, upload, download, compare and sync, upload on save, a remote host's files browsed~~ (done, item 244). Not built: FTP over TLS (FTPS), deleting on the server, and login with a key file (built, not tried against a server).
   - Remote interpreters over SSH and Docker in depth (lowest; has: WSL, a Docker image and an SSH host as the interpreter; see *Git, packages and interpreters* above): Docker Compose services as the interpreter, an interpreter chosen per run configuration, a debug server the program connects back to.
 
 **Checked** (the old notes of a To check list, looked at again on 31 October 2026; what is still open is in the lists above)
@@ -173,4 +173,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 243 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 244 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

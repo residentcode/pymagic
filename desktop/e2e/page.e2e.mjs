@@ -161,6 +161,62 @@ describe('the editor and the language server', () => {
     });
 });
 
+describe('Deployment', () => {
+    const share = mkdtempSync(join(tmpdir(), 'pymagic-e2e-share-'));
+    const fill = (id, value) => page.evaluate(`(() => { const e = document.getElementById(${JSON.stringify(id)}); e.value = ${JSON.stringify(value)}; e.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+
+    test('a folder server is added, a file uploaded, compared with the server\'s, and the list shows the mapping', async () => {
+        await page.evaluate(`${$('t-deployment')}.click()`);
+        await page.evaluate(`${$('dep-add')}.click()`);
+        await page.waitFor(`document.getElementById('dep-form-type')`, 5000, 'the form');
+        await fill('dep-form-type', 'folder');
+        await fill('dep-form-root', share.replace(/\\/g, '/'));
+        await fill('dep-form-name', 'the share');
+        await page.evaluate(`[...document.querySelectorAll('.dep-form button')].find((b) => b.textContent === 'Test and save').click()`);
+        await page.waitFor(`[...document.querySelectorAll('#dep-server option')].some((o) => o.textContent === 'the share')`, 10000, 'the server in the list');
+        await open('shop_lib.py');
+        await page.evaluate(`${$('dep-upload')}.click()`);
+        await page.waitFor(`document.getElementById('toast')?.textContent.includes('Uploaded 1 file')`, 10000, 'the upload to finish');
+        assert.equal(readFileSync(join(share, 'shop_lib.py'), 'utf8'), 'def total(prices):\n    return sum(prices)\n');
+        await page.waitFor(`[...document.querySelectorAll('#dep-list .dep-name')].some((n) => n.textContent === 'shop_lib.py')`, 10000, 'the file in the server list');
+        assert.equal(await page.evaluate(`[...document.querySelectorAll('#dep-list .dep-row')].find((r) => r.querySelector('.dep-name').textContent === 'shop_lib.py').querySelector('.dep-local').textContent`), '↔ shop_lib.py');
+        // changed on the server: the comparison shows both
+        writeFileSync(join(share, 'shop_lib.py'), 'def total(prices):\n    return 0\n');
+        await page.evaluate(`${$('dep-compare')}.click()`);
+        await page.waitFor(`document.querySelector('.hist-diff-title')?.textContent.includes('the server')`, 10000, 'the comparison');
+        await page.evaluate(`[...document.querySelectorAll('.hist-diff-head button')].find((b) => b.textContent === 'Close').click()`);
+    });
+
+    test('Sync lists what differs and writes it the way chosen', async () => {
+        writeFileSync(join(share, 'from_server.txt'), 'only there');
+        await page.evaluate(`${$('dep-sync')}.click()`);
+        await page.waitFor(`document.querySelector('.ask-box input')`, 5000, 'the question');
+        await page.evaluate(`document.querySelector('.ask-box input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
+        await page.waitFor(`document.querySelector('.dep-sync-row')`, 15000, 'the plan');
+        const states = await page.evaluate(`Object.fromEntries([...document.querySelectorAll('.dep-sync-row')].map((r) => [r.querySelector('.dep-name').textContent, r.querySelector('.dep-state').textContent]))`);
+        assert.equal(states['from_server.txt'], 'only on the server');
+        assert.equal(states['calc.py'], 'only here');
+        assert.ok(!('.pymagic/macros.json' in states) && !Object.keys(states).some((k) => k.startsWith('.git/') || k.startsWith('.pymagic/')), 'what never goes is not offered');
+        await page.evaluate(`[...document.querySelectorAll('.dep-sync .hist-diff-head button')].find((b) => b.textContent === 'Apply').click()`);
+        await page.waitFor(`!document.querySelector('.dep-sync')`, 30000, 'the sync to finish');
+        assert.ok(existsSync(join(share, 'calc.py')), 'a local file went up');
+        assert.equal(await page.evaluate(`fetch('/api/file?path=from_server.txt').then((r) => r.text())`), 'only there');
+    });
+
+    test('a server that takes what is saved gets the file on save', async () => {
+        await page.evaluate(`${$('dep-edit')}.click()`);
+        await page.waitFor(`document.getElementById('dep-form-uploadOnSave')`, 5000, 'the form');
+        await page.evaluate(`(() => { const c = document.getElementById('dep-form-uploadOnSave'); c.checked = true; })()`);
+        await page.evaluate(`[...document.querySelectorAll('.dep-form button')].find((b) => b.textContent === 'Test and save').click()`);
+        await page.waitFor(`document.getElementById('dep-info')?.textContent.includes('uploads on save')`, 10000, 'the setting');
+        assert.equal(await page.evaluate(`fetch('/api/file?path=shop_lib.py', { method: 'PUT', body: 'def total(prices):\\n    return sum(prices) + 1\\n' }).then((r) => r.status)`), 204);
+        for (let i = 0; i < 30 && !readFileSync(join(share, 'shop_lib.py'), 'utf8').includes('+ 1'); i++) await sleep(300);
+        assert.equal(readFileSync(join(share, 'shop_lib.py'), 'utf8'), 'def total(prices):\n    return sum(prices) + 1\n');
+        await page.evaluate(`fetch('/api/file?path=shop_lib.py', { method: 'PUT', body: 'def total(prices):\\n    return sum(prices)\\n' })`);
+        await sleep(800);
+    });
+});
+
 describe('Services and Run Anything', () => {
     const rows = () => page.evaluate(`[...document.querySelectorAll('#services-list .svc-row')].map((r) => r.querySelector('.svc-name').textContent + '|' + r.querySelector('.svc-state').textContent.split(' ')[0])`);
     const button = (label) => page.evaluate(`[...document.querySelectorAll('#services-list .svc-row button')].find((b) => b.textContent === ${JSON.stringify(label)}).click()`);

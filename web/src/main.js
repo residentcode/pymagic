@@ -57,6 +57,7 @@ import { setupMarkdownPreview } from './mdpreview';
 import { setupMarkdownTools } from './mdtools';
 import { setupMacros } from './macros';
 import { setupServices } from './services';
+import { setupDeployment } from './deployment';
 import { setupRunAnything } from './runanything';
 import { setupFileActions, fileTypes } from './fileactions';
 import { setupAutoSave } from './autosave';
@@ -1142,6 +1143,7 @@ async function main() {
     setupInjections({ database });
     setupMarkdownPreview({ editor, currentFile: () => currentRel, openFile, askText: (...a) => explorer.askText(...a) });
     setupMarkdownTools({ editor, currentFile: () => currentRel, relOfModel: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+    setupDeployment({ editor, currentFile: () => currentRel, askText: (...a) => explorer.askText(...a), reloadFromDisk, saveAll: common.saveAll });
     setupServices({ providers: [() => runHooks.services(), () => pyConsole.services(), () => terminal.services()] });
     setupRunAnything({ runConfigs, runHooks, editor });
     setupMacros({ editor, askText: (...a) => explorer.askText(...a) });
