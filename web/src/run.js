@@ -9,6 +9,7 @@ import { colouredSpans } from './terminal';
 import { inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem, declarationLine, historyStep, framesOfStop, threadHeadings } from './debug-model.js';
 import { openMenu } from './menu';
 import { toast } from './toast';
+import { linkPieces } from './tracelink-model.js';
 const $ = (id) => document.getElementById(id);
 const STORAGE_KEY = 'pymagic.breakpoints';
 const norm = (p) => p.replace(/\\/g, '/').toLowerCase();
@@ -197,10 +198,36 @@ export function setupRun(deps) {
     $('t-debug').onclick = () => showTab('debug');
     $('t-close').onclick = () => panel.classList.remove('open');
     let colours = ansiReader();
+    // where an interpreter of another machine or a container has the project (/workspace); its tracebacks name files by that
+    let remoteRoot = null;
+    /** The places of a traceback in a piece of output become links that open the file of the project at that line. */
+    function linked(span) {
+        const text = span.textContent;
+        if (!text.includes('.py')) return [span];
+        const pieces = linkPieces(text, deps.root, remoteRoot);
+        if (!pieces.some((p) => p.rel)) return [span];
+        return pieces.map((p) => {
+            const part = span.cloneNode(false);
+            part.textContent = p.text;
+            if (p.rel) {
+                part.classList.add('tb-link');
+                part.dataset.rel = p.rel;
+                part.dataset.line = String(p.line);
+                part.title = `Open ${p.rel}, line ${p.line}`;
+            }
+            return part;
+        });
+    }
+    output.addEventListener('click', (e) => {
+        const link = e.target instanceof Element ? e.target.closest('.tb-link') : null;
+        if (!link || getSelection()?.toString()) return;
+        const line = Number(link.dataset.line);
+        void deps.openFile(link.dataset.rel, new monaco.Range(line, 1, line, 1));
+    });
     function append(text, cls = '') {
         const stick = output.scrollTop + output.clientHeight >= output.scrollHeight - 20;
         // a program that prints colours (rich, colorama, pytest --color=yes) shows them
-        output.append(...colouredSpans(colours, text.split('\r\n').join('\n'), cls));
+        output.append(...colouredSpans(colours, text.split('\r\n').join('\n'), cls).flatMap(linked));
         if (stick)
             output.scrollTop = output.scrollHeight;
     }
@@ -860,6 +887,7 @@ export function setupRun(deps) {
                 setButtons();
                 break;
             case 'started':
+                remoteRoot = m.remoteRoot ?? null;
                 if (m.listening)
                     break;
                 append(m.attached ? `Attached to process ${m.pid}; the debugger starts with the program's next line of Python (its output is not shown here)\n`

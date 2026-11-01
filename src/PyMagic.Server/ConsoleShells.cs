@@ -108,6 +108,35 @@ public static class ConsoleShells
 
     static string Quote(string path) => path.Contains(' ') ? $"\"{path}\"" : path;
 
+    /// <summary>The id the page uses for the shell inside the project's interpreter (Docker, WSL, ...).</summary>
+    public const string InterpreterId = "interpreter";
+
+    /// <summary>A shell inside the target of the project's interpreter, started in <paramref name="workDir"/>; null for this computer.</summary>
+    public static ConsoleShell? InTarget(ExecutionTarget target, string workDir)
+    {
+        if (target.ShellCommand(workDir) is not { } c) return null;
+        return new ConsoleShell(InterpreterId, target.Name, CommandLineOf(c.Program, c.Args));
+    }
+
+    /// <summary>A Windows command line that starts the program with exactly these arguments (the rules of CommandLineToArgvW).</summary>
+    public static string CommandLineOf(string program, IEnumerable<string> args) => string.Join(" ", new[] { program }.Concat(args.Select(QuoteArgument)));
+
+    static string QuoteArgument(string arg)
+    {
+        if (arg.Length > 0 && arg.IndexOfAny(new[] { ' ', '\t', '"' }) < 0) return arg;
+        var sb = new System.Text.StringBuilder("\"");
+        int backslashes = 0;
+        foreach (char ch in arg)
+        {
+            if (ch == '\\') { backslashes++; continue; }
+            if (ch == '"') sb.Append('\\', backslashes * 2 + 1).Append('"');
+            else sb.Append('\\', backslashes).Append(ch);
+            backslashes = 0;
+        }
+        sb.Append('\\', backslashes * 2).Append('"');
+        return sb.ToString();
+    }
+
     /// <summary>
     /// The name a terminal's prompt shows for a virtual environment: the `prompt` of its pyvenv.cfg, else its folder's name; only letters,
     /// digits, spaces, dots, dashes and underscores, since it goes into a command line.

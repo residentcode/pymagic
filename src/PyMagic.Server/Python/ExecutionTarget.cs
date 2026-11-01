@@ -34,6 +34,7 @@ public abstract class ExecutionTarget
         string head = spec[..bar], python = spec[(bar + 1)..];
         if (python.Length == 0) return null;
         if (head.StartsWith("wsl:", StringComparison.Ordinal) && head.Length > 4) return (new WslTarget(head[4..]), python);
+        if (head.StartsWith("docker:container=", StringComparison.Ordinal)) return ContainerTarget.FromHead(head[17..]) is { } container ? (container, python) : null;
         if (head.StartsWith("docker:", StringComparison.Ordinal) && head.Length > 7) return (new DockerTarget(head[7..]), python);
         if (head.StartsWith("compose:", StringComparison.Ordinal) && head.Length > 8 && ComposeTarget.FromHead(head[8..]) is { } compose) return (compose, python);
         if (head.StartsWith("ssh:", StringComparison.Ordinal) && head.Length > 4 && SshTarget.FromHead(head[4..]) is { } ssh) return (ssh, python);
@@ -48,6 +49,12 @@ public abstract class ExecutionTarget
     /// further folders of this machine the program needs to read (helper scripts).
     /// </summary>
     public abstract ProcessStartInfo Start(string python, string workDir, IEnumerable<string> args, IReadOnlyDictionary<string, string>? env = null, IReadOnlyList<string>? mounts = null);
+
+    /// <summary>
+    /// The program and arguments that give an interactive shell inside the target, starting in <paramref name="workDir"/> (a folder of this
+    /// machine); null for this computer, whose Terminal starts its own shell.
+    /// </summary>
+    public virtual (string Program, IReadOnlyList<string> Args)? ShellCommand(string workDir) => null;
 
     /// <summary>How the target sees a path of this machine (paths it cannot see are returned unchanged).</summary>
     public abstract string ToTarget(string hostPath);
@@ -136,6 +143,9 @@ public sealed class WslTarget : ExecutionTarget
         foreach (var a in args) psi.ArgumentList.Add(HostPath.IsMatch(a) ? ToTarget(a) : a);
         return psi;
     }
+
+    public override (string Program, IReadOnlyList<string> Args)? ShellCommand(string workDir) =>
+        ("wsl.exe", new[] { "-d", Distro, "--cd", ToTarget(workDir) });
 
     /// <summary>C:\a\b is /mnt/c/a/b; \\wsl.localhost\&lt;this distro&gt;\home\x is /home/x.</summary>
     public override string ToTarget(string hostPath)
@@ -262,6 +272,12 @@ public sealed class DockerTarget : ExecutionTarget
         psi.ArgumentList.Add(python);
         foreach (var a in args) psi.ArgumentList.Add(HostPath.IsMatch(a) ? ToTarget(a) : a);
         return psi;
+    }
+
+    public override (string Program, IReadOnlyList<string> Args)? ShellCommand(string workDir)
+    {
+        var (share, cwd) = PrepareShare(workDir, null);
+        return ("docker", new[] { "run", "--rm", "-it", "--add-host", "host.docker.internal:host-gateway", "-v", $"{share}:{Workspace}", "-w", cwd, Image, "sh" });
     }
 
     public override string ToTarget(string hostPath)

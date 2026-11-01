@@ -98,6 +98,21 @@ public sealed class ComposeTarget : ExecutionTarget
         return psi;
     }
 
+    public override (string Program, IReadOnlyList<string> Args)? ShellCommand(string workDir)
+    {
+        var (share, cwd) = _paths.PrepareShare(workDir, null);
+        var args = new List<string> { "compose" };
+        if (File != null) { args.Add("-f"); args.Add(File); }
+        if (Exec)
+        {
+            string w = Translate(workDir);
+            args.AddRange(new[] { "exec", "-w", w.StartsWith('/') ? w : WorkDirInService, Service, "sh" });
+        }
+        else
+            args.AddRange(new[] { "run", "--rm", "-v", $"{share}:{DockerTarget.Workspace}", "-w", cwd, Service, "sh" });
+        return ("docker", args);
+    }
+
     // a running service has the project where it mounted it (WorkDirInService); a new container gets it as /workspace
     string Translate(string hostPath) => ToTarget(hostPath);
 

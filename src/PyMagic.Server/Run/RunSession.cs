@@ -321,7 +321,8 @@ public sealed partial class RunSession : IDisposable
             args2.Add("--token"); args2.Add(token);
             args2.Add("--root"); args2.Add(root);
         }
-        foreach (var a in leading) { args2.Add(a); if (a.EndsWith(".py", StringComparison.OrdinalIgnoreCase) && Path.GetDirectoryName(a) is { Length: > 0 } d && d.StartsWith(Path.Combine(Path.GetTempPath(), "pymagic"), StringComparison.OrdinalIgnoreCase)) helperDirs.Add(d); }
+        foreach (var a in leading) { args2.Add(a); if (a.EndsWith(".py", StringComparison.OrdinalIgnoreCase) && Path.GetDirectoryName(a) is { Length: > 0 } d && d.StartsWith(Path.Combine(Path.GetTempPath(), "pymagic"), StringComparison.OrdinalIgnoreCase)
+                && !IsInside(d, root)) helperDirs.Add(d); }   // a project that lives in a folder named pymagic* of the temp folder is the project, not a helper
         args2.AddRange(args);
 
         var env = new Dictionary<string, string> { ["PYTHONIOENCODING"] = "utf-8", ["PYTHONUNBUFFERED"] = "1" };
@@ -356,7 +357,8 @@ public sealed partial class RunSession : IDisposable
         catch (System.ComponentModel.Win32Exception e) { Error($"cannot start '{psi.FileName}': {e.Message}"); return; }
         if (_process == null) { Error($"cannot start '{psi.FileName}'"); return; }
 
-        _emit(new JsonObject { ["type"] = "started", ["pid"] = _process.Id, ["debug"] = IsDebug });
+        // where the project is as the interpreter sees it: its tracebacks name those paths, and the page links them back to the project
+        _emit(new JsonObject { ["type"] = "started", ["pid"] = _process.Id, ["debug"] = IsDebug, ["remoteRoot"] = Target.IsLocal ? null : Target.ToTarget(root) });
 
         var readers = new[]
         {
@@ -394,6 +396,12 @@ public sealed partial class RunSession : IDisposable
     public void Reject(string message) => Error(message);
 
     void Error(string message) => _emit(new JsonObject { ["type"] = "error", ["message"] = message });
+
+    static bool IsInside(string folder, string root)
+    {
+        string f = Path.GetFullPath(folder).TrimEnd('\\', '/'), r = Path.GetFullPath(root).TrimEnd('\\', '/');
+        return string.Equals(f, r, StringComparison.OrdinalIgnoreCase) || f.StartsWith(r + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
 
     internal static string ExtractHelper(string name)
     {

@@ -59,13 +59,18 @@ const FILES = {
     'intent.py': "name = 'x'\nprint('Hello ' + name + '!')\nvalue = 255\n",
     'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\nN = re.compile(f"{PATTERN.pattern}[cc]")\n',
     'api.http':'### the items\nGET {{host}}/items\n    ?page=2\nAccept: application/json\n\n###\nPOST {{host}}/items\nContent-Type: application/json\nAuthorization: Bearer {{token}}\n\n{"name": "pen"}\n',
-    'remote_job.py': 'def work(n):\n    total = n * 2\n    return total\n\n\nprint("job", work(21), flush=True)\n',
+    'tb_boom.py': 'def explode():\n    raise ValueError("boom")\n\n\nexplode()\n',
+    'remote_job.py':'def work(n):\n    total = n * 2\n    return total\n\n\nprint("job", work(21), flush=True)\n',
     'tests/__init__.py': '',
     'tests/test_calc.py': 'import unittest\n\n\nclass Calc(unittest.TestCase):\n    def test_ok(self):\n        self.assertEqual(1 + 1, 2)\n\n    def test_bad(self):\n        self.assertEqual(1 + 1, 3)\n',
 };
 
+// a container that is already running, for the last checks (made there when Docker and the python:3.12-slim image are on this PC)
+const CONTAINER = 'pymagic-e2e-ctr-' + process.pid;
+const hasDocker = spawnSync('docker', ['image', 'inspect', 'python:3.12-slim'], { encoding: 'utf8' }).status === 0;
+
 let app, page;
-const $ = (id) => `document.getElementById(${JSON.stringify(id)})`;
+const $ =(id) => `document.getElementById(${JSON.stringify(id)})`;
 // the file stays in the editor: on a fresh start PyMagic opens a file of its own, which can land after this one
 const open = async (rel) => {
     const shown = `window.pymagic.editor.getModel()?.uri.path.endsWith(${JSON.stringify('/' + rel)})`;
@@ -122,6 +127,9 @@ before(async () => {
         { name: 'loop b', kind: 'script', script: 'loop.py' },
         { name: 'loop pair', kind: 'compound', members: 'loop a\nloop b' },
         { name: 'dbg server', kind: 'debugserver', host: '127.0.0.1', port: '0' },
+        { name: 'plain which', kind: 'script', script: 'which.py' },
+        { name: 'docker boom', kind: 'script', script: 'tb_boom.py', interpreter: 'docker:python:3.12-slim|python' },
+        { name: 'container boom', kind: 'script', script: 'tb_boom.py', interpreter: `docker:container=${CONTAINER}|python` },
     ] }));
     projectRoot = root;
     app = await launch(root);
@@ -982,5 +990,74 @@ describe('a debug server a program started elsewhere connects back to', () => {
             program.kill();
         }
         assert.equal(await clickMargin(2), false, 'a second click takes the breakpoint away');
+    });
+});
+
+// last: the project's interpreter becomes a running container
+describe('Linux paths of a remote interpreter, a running container, and a terminal inside it', () => {
+    const skip = hasDocker ? false : 'Docker or the python:3.12-slim image is not on this PC';
+    const runAnything = async (text) => {
+        await page.evaluate(`window.pymagic.editor.getAction('pymagic.runAnything').run()`);
+        await page.waitFor(`document.querySelector('.ra-box input')`, 10000, 'the box');
+        await page.evaluate(`(() => { const i = document.querySelector('.ra-box input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input')); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+    };
+    before(() => {
+        if (hasDocker) {
+            const made = spawnSync('docker', ['run', '-d', '--name', CONTAINER, '-v', `${projectRoot}:/workspace`, 'python:3.12-slim', 'sleep', '900'], { encoding: 'utf8' });
+            assert.equal(made.status, 0, String(made.stderr));
+        }
+    });
+    after(() => { if (hasDocker) spawnSync('docker', ['rm', '-f', CONTAINER]); });
+
+    // the traceback names /workspace/tb_boom.py; the link opens the project's file at that line
+    const linkOpens = async (config) => {
+        await open('calc.py');
+        await page.evaluate(`${$('output')}.textContent = ''`);
+        await runAnything(config);
+        await page.waitFor(`${$('output')}.textContent.includes('ValueError: boom')`, 90000, 'the traceback');
+        await page.waitFor(`${$('b-stop')}.disabled`, 30000, 'the run to end');
+        assert.match(await output(), /File "\/workspace\/tb_boom\.py", line 2, in explode/);
+        const links = await page.evaluate(`[...document.querySelectorAll('#output .tb-link')].map((l) => l.dataset.rel + ':' + l.dataset.line)`);
+        assert.deepEqual(links, ['tb_boom.py:5', 'tb_boom.py:2']);
+        await page.evaluate(`[...document.querySelectorAll('#output .tb-link')].pop().click()`);
+        await page.waitFor(`window.pymagic.editor.getModel()?.uri.path.endsWith('/tb_boom.py') && window.pymagic.editor.getPosition().lineNumber === 2`, 15000, 'the file at line 2');
+    };
+
+    test('the traceback of a Docker image run links /workspace paths back to the project', { skip }, async () => {
+        await linkOpens('docker boom');
+    });
+
+    test('a container that is already running is the interpreter of a configuration (docker exec), with the same links', { skip }, async () => {
+        await linkOpens('container boom');
+    });
+
+    test('the project can use the running container: a program runs in it and the Terminal offers a shell inside it', { skip }, async () => {
+        const added = await page.evaluate(`fetch('/api/interpreter/remote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'container', name: ${JSON.stringify(CONTAINER)}, python: 'python' }) }).then((r) => r.json())`);
+        assert.match(added.label, new RegExp(`Docker container: ${CONTAINER}`), JSON.stringify(added));
+        assert.equal(added.target, 'container');
+        const shells = await page.evaluate(`fetch('/api/shells').then((r) => r.json())`);
+        assert.equal(shells.interpreter, `Docker container: ${CONTAINER}`);
+        // the shell: a real terminal in the container, starting in the project's place there
+        const got = await page.evaluate(`new Promise((ok) => {
+            const ws = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/console?cols=100&rows=30&shell=interpreter');
+            let got = '';
+            const done = () => { ws.close(); ok(got); };
+            ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.type === 'output') { got += m.data; if (got.includes('mark-42') && got.includes('tb_boom.py')) done(); } else if (m.type === 'error') done(); };
+            ws.onopen = () => setTimeout(() => ws.send(JSON.stringify({ type: 'input', data: 'echo mark-$((6*7)); pwd; ls\\r' })), 2500);
+            setTimeout(done, 30000);
+        })`);
+        assert.ok(got.includes('mark-42'), got);
+        assert.ok(got.includes('/workspace'), got);
+        assert.ok(got.includes('tb_boom.py'), 'ls shows the project\'s files from inside the container: ' + got);
+        // the menu of the Terminal's arrow offers it
+        await page.evaluate(`document.getElementById('term-pick').click()`);
+        await page.waitFor(`[...document.querySelectorAll('body *')].some((e) => e.children.length === 0 && e.textContent.startsWith('In the interpreter: Docker container'))`, 10000, 'the menu entry');
+        await page.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+        // a run with the project's own interpreter goes through docker exec too
+        await open('which.py');
+        await page.evaluate(`${$('output')}.textContent = ''`);
+        await runAnything('plain which');
+        await page.waitFor(`${$('output')}.textContent.includes('exe ')`, 60000, 'the program\'s output');
+        assert.match(await output(), /exe \/usr\/local/);
     });
 });

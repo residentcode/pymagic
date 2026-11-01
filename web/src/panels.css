@@ -1,6 +1,7 @@
 #output-tab { flex-direction: column; }
 #output { flex: 1; margin: 0; padding: 6px 10px; overflow: auto; font: 12.5px/1.45 Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; word-break: break-all; }
 #output .err { color: var(--red); } #output .info { color: var(--dim); }
+#output .tb-link { text-decoration: underline; text-decoration-style: dotted; cursor: pointer; } #output .tb-link:hover { text-decoration-style: solid; color: var(--info); }
 #stdin { border: 0; border-top: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 5px 10px; font: 12.5px Consolas, monospace; outline: none; }
 .col { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
 .col:last-child { border-right: 0; }

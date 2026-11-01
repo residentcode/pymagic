@@ -953,6 +953,7 @@ app.MapGet("/api/interpreter/targets", async (string? composeFile) => await Task
     ssh = new { installed = SshTarget.Installed(), hosts = SshConfigHosts() },
     docker = new { available = DockerTarget.Available() },
     dockerImages = DockerTarget.Available() ? DockerTarget.Images() : Array.Empty<string>(),
+    dockerContainers = DockerTarget.Available() ? ContainerTarget.Running() : Array.Empty<string>(),
     // the services of the project's compose file (or the one named): listing them needs no running engine
     compose = new
     {
@@ -986,11 +987,12 @@ app.MapPost("/api/interpreter/remote", async (HttpRequest req) =>
     {
         "wsl" => new WslTarget(name),
         "docker" => new DockerTarget(name),
+        "container" => ContainerTarget.FromHead(name + (body?["composeDir"]?.GetValue<string>()?.Trim() is { Length: > 0 } cdir ? "?w=" + cdir : "")),
         "compose" => ComposeTarget.FromHead(name + ComposeOptions(body)),
         "ssh" => SshTarget.FromHead(name + (identity.Length > 0 || knownHosts.Length > 0 ? "?" + string.Join("&", new[] { identity.Length > 0 ? "i=" + identity : "", knownHosts.Length > 0 ? "kh=" + knownHosts : "" }.Where(x => x.Length > 0)) : ""))!,
         _ => null!,
     };
-    if (target == null) return Results.BadRequest(new { error = kind == "ssh" ? "that is not an address: write user@host or user@host:port" : kind == "compose" ? "give the name of a service of the compose file" : "the kind is wsl, docker, compose or ssh" });
+    if (target == null) return Results.BadRequest(new { error = kind == "ssh" ? "that is not an address: write user@host or user@host:port" : kind == "compose" ? "give the name of a service of the compose file" : "the kind is wsl, docker, container, compose or ssh" });
     try { return Results.Json(Describe(await Task.Run(() => interpreters.AddRemote(target, py)))); }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
 });
@@ -1312,7 +1314,9 @@ app.MapGet("/api/shells", () =>
 {
     var found = ConsoleShells.Found();
     var auto = ConsoleShells.Choose(ConsoleShells.Auto, found);
-    return Results.Json(new { auto = auto.Name, shells = found.Select(s => new { id = s.Id, name = s.Name }) });
+    // a shell inside the project's interpreter, when that is not this computer (Docker, WSL, SSH, Compose)
+    string? inside = interpreters.Current is { Target.IsLocal: false } cur ? cur.Target.Name : null;
+    return Results.Json(new { auto = auto.Name, interpreter = inside, shells = found.Select(s => new { id = s.Id, name = s.Name }) });
 });
 
 // a real console for each terminal tab: the page sends {type:"input", data} and {type:"resize", cols, rows}, and gets {type:"output", data},
@@ -1347,17 +1351,19 @@ app.Map("/console", async (HttpContext ctx) =>
     foreach (var k in env.Keys.Where(k => k.StartsWith("DOTNET_", StringComparison.OrdinalIgnoreCase) || k.StartsWith("ASPNETCORE_", StringComparison.OrdinalIgnoreCase)).ToList()) env.Remove(k);
     TerminalSession.WithInterpreter(env, interpreters.Current is { Target.IsLocal: true } c ? c.Path : null);
     // the page names a shell by its id (?shell=); the command line is the one found here
-    var shell = ConsoleShells.Choose(ctx.Request.Query["shell"], ConsoleShells.Found());
+    // Open In > Terminal starts it in a folder of the project (?cwd=)
+    string cwd = root;
+    if (ctx.Request.Query["cwd"].ToString() is { Length: > 0 } wanted)
+        try { if (Directory.Exists(ResolveInRoot(wanted))) cwd = ResolveInRoot(wanted); } catch (UnauthorizedAccessException) { }
+    // ?shell=interpreter is a shell inside the project's interpreter (a WSL distribution, a Docker image or container, a Compose service, an SSH host)
+    ConsoleShell? inTarget = ctx.Request.Query["shell"] == ConsoleShells.InterpreterId && interpreters.Current is { } cur ? ConsoleShells.InTarget(cur.Target, cwd) : null;
+    var shell = inTarget ?? ConsoleShells.Choose(ctx.Request.Query["shell"], ConsoleShells.Found());
     // an active virtual environment shows in the prompt, as its activation script would make it: `(.venv) PS C:\proj>`
-    var (commandLine, shellEnv) = shell.WithVenv(ConsoleShells.VenvPrompt(env.TryGetValue("VIRTUAL_ENV", out var venv) ? venv : null));
+    var (commandLine, shellEnv) = inTarget != null ? (inTarget.CommandLine, new Dictionary<string, string>()) : shell.WithVenv(ConsoleShells.VenvPrompt(env.TryGetValue("VIRTUAL_ENV", out var venv) ? venv : null));
     foreach (var (k, v) in shellEnv) env[k] = v;
     Send(new JsonObject { ["type"] = "shell", ["id"] = shell.Id, ["name"] = shell.Name });
     try
     {
-        // Open In > Terminal starts it in a folder of the project (?cwd=)
-        string cwd = root;
-        if (ctx.Request.Query["cwd"].ToString() is { Length: > 0 } wanted)
-            try { if (Directory.Exists(ResolveInRoot(wanted))) cwd = ResolveInRoot(wanted); } catch (UnauthorizedAccessException) { }
         console.Start(commandLine, cwd, env, Query("cols", 100), Query("rows", 30),
             data => Send(new JsonObject { ["type"] = "output", ["data"] = data }),
             code => { Send(new JsonObject { ["type"] = "exit", ["code"] = code }); outbox.CompleteAdding(); });

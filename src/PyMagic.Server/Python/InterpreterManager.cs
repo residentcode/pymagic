@@ -76,6 +76,7 @@ public sealed class InterpreterManager
     {
         if (interpreter?.Target is DockerTarget docker) docker.Project = _root;   // what a container sees as /workspace
         if (interpreter?.Target is ComposeTarget compose) compose.Project = _root;
+        if (interpreter?.Target is ContainerTarget container) container.Project = _root;
         if (interpreter?.Target is SshTarget ssh) ssh.Project = _root;            // what is copied to the remote machine
         lock (_gate) _current = interpreter;
         if (save && interpreter != null) Save(interpreter.Path);

@@ -323,9 +323,14 @@ export function setupTerminal() {
     function keepSoon() { if (!keeping) keeping = window.setTimeout(keep, 5000); }
     window.addEventListener('beforeunload', keep);
 
-    function pickShell(anchor, run) {
+    async function pickShell(anchor, run) {
+        // the interpreter may have been changed since the page loaded: ask again, so "in the interpreter" is there when it is one of another machine
+        try { shells = await (await fetch('/api/shells')).json(); } catch { /* the last answer stands */ }
         const list = shells?.shells ?? [];
-        openMenu(anchor, list.length ? list.map((s) => ({ label: s.name, run: () => run(s.id) })) : [{ label: 'No other shell was found', disabled: true }]);
+        const items = list.map((s) => ({ label: s.name, run: () => run(s.id) }));
+        // a shell inside the project's WSL distribution, Docker image or container, Compose service or SSH host
+        if (shells?.interpreter) items.unshift({ label: `In the interpreter: ${shells.interpreter}`, run: () => run('interpreter') });
+        openMenu(anchor, items.length ? items : [{ label: 'No other shell was found', disabled: true }]);
     }
 
     $('term-stop').onclick = () => { const p = focusedPane(); if (p?.alive) send(p, { type: 'input', data: '\u0003' }); p?.xterm.focus(); };

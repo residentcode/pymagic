@@ -176,6 +176,20 @@ public sealed class SshTarget : ExecutionTarget
         return psi;
     }
 
+    /// <summary>A login shell on the machine in the project's folder there (a password may be typed: this one has a terminal).</summary>
+    public override (string Program, IReadOnlyList<string> Args)? ShellCommand(string workDir)
+    {
+        string cwd = ToTarget(workDir);
+        if (!cwd.StartsWith(ProjectDir, StringComparison.Ordinal)) cwd = ProjectDir;
+        var args = new List<string> { "-t", "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30" };
+        if (KnownHosts != null) { args.Add("-o"); args.Add("UserKnownHostsFile=" + KnownHosts); }
+        if (Port != 22) { args.Add("-p"); args.Add(Port.ToString()); }
+        if (Identity != null) { args.Add("-i"); args.Add(Identity); }
+        args.Add(Destination);
+        args.Add($"mkdir -p {Quote(cwd)} && cd {Quote(cwd)} && exec ${{SHELL:-sh}} -l");
+        return ("ssh", args);
+    }
+
     public override void Stop(string runId)
     {
         if (!Regex.IsMatch(runId, "^[0-9a-f]{12}$")) return;

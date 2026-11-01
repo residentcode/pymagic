@@ -93,7 +93,7 @@ export function setupInterpreters() {
         const shade = el('div', 'ask-shade');
         const box = el('div', 'ask-box');
         const kind = el('select');
-        for (const [value, label] of [['wsl', 'WSL distribution'], ['docker', 'Docker image'], ['compose', 'Docker Compose service'], ['ssh', 'SSH host']]) { const o = el('option', '', label); o.value = value; kind.append(o); }
+        for (const [value, label] of [['wsl', 'WSL distribution'], ['docker', 'Docker image'], ['container', 'Docker container that is running'], ['compose', 'Docker Compose service'], ['ssh', 'SSH host']]) { const o = el('option', '', label); o.value = value; kind.append(o); }
         const nameLabel = el('div', 'ask-hint');
         const nameSelect = el('select');
         const nameInput = el('input');
@@ -138,15 +138,19 @@ export function setupInterpreters() {
             const ssh = kind.value === 'ssh';
             const compose = kind.value === 'compose';
             composeFileLabel.style.display = composeFile.style.display = execLabel.style.display = compose ? '' : 'none';
-            composeDir.style.display = compose && execBox.checked ? '' : 'none';
+            const container = kind.value === 'container';
+            composeDir.style.display = (compose && execBox.checked) || container ? '' : 'none';
+            composeDir.placeholder = container ? 'Where the container has the project (default /workspace)' : 'Where the service mounts the project (default /workspace)';
             if (compose && !composeFile.value && targets.compose.file) composeFile.placeholder = targets.compose.file;
-            nameLabel.textContent = compose ? 'Service' : wsl ? 'Distribution' : ssh ? 'Address (user@host or user@host:port, or a name from ~/.ssh/config)' : 'Image (for example python:3.12-slim)';
+            nameLabel.textContent = container ? 'Container (its name, as docker ps shows it)' : compose ? 'Service' : wsl ? 'Distribution' : ssh ? 'Address (user@host or user@host:port, or a name from ~/.ssh/config)' : 'Image (for example python:3.12-slim)';
             nameSelect.style.display = wsl ? '' : 'none';
             nameInput.style.display = wsl ? 'none' : '';
             identityLabel.style.display = identity.style.display = ssh ? '' : 'none';
             python.placeholder = wsl || ssh ? 'python3' : 'python';
             hint.textContent = wsl
                 ? (targets.wsl.length ? 'The project folder is shared with the distribution; libraries are read from it. Debugging needs the Windows firewall to let it connect back.' : 'No WSL distribution was found on this computer.')
+                : container
+                    ? (targets.dockerContainers?.length ? 'Each run is docker exec in that container, which keeps running. The container must have the project folder mounted itself (a bind mount) at the place named below. The debugger, test runner and notebooks need an image or a Compose service instead.' : 'No running container was found: start one with the project folder mounted, or write its name.')
                 : compose
                     ? (targets.compose.services.length ? 'Each run is docker compose run --rm of the service (and what it depends on), with the project folder as /workspace. Libraries of the image are not read by the editor. Nothing here has been run against a Docker engine yet.' : 'No compose file with services was found in the project: write the service name, and the file if it is not compose.yaml.')
                 : ssh
@@ -170,6 +174,14 @@ export function setupInterpreters() {
             }
             if (kind.value === 'ssh')
                 nameInput.setAttribute('list', 'ssh-hosts');
+            else if (kind.value === 'container') {
+                document.getElementById('docker-containers')?.remove();
+                const list = el('datalist');
+                list.id = 'docker-containers';
+                list.append(...(targets.dockerContainers ?? []).map((c) => { const o = el('option'); o.value = c; return o; }));
+                box.append(list);
+                nameInput.setAttribute('list', 'docker-containers');
+            }
             else if (kind.value === 'docker' && targets.dockerImages.length && !document.getElementById('docker-images')) {
                 const list = el('datalist');
                 list.id = 'docker-images';
@@ -198,7 +210,7 @@ export function setupInterpreters() {
         add.onclick = async () => {
             message.textContent = '';
             const name = kind.value === 'wsl' ? nameSelect.value : nameInput.value.trim();
-            if (!name) { message.textContent = kind.value === 'wsl' ? 'Choose a distribution.' : kind.value === 'compose' ? 'Type the name of a service.' : kind.value === 'ssh' ? 'Type user@host.' : 'Type the name of an image.'; return; }
+            if (!name) { message.textContent = kind.value === 'wsl' ? 'Choose a distribution.' : kind.value === 'compose' ? 'Type the name of a service.' : kind.value === 'container' ? 'Type the name of a container.' : kind.value === 'ssh' ? 'Type user@host.' : 'Type the name of an image.'; return; }
             add.disabled = true;
             say('Asking the interpreter…');
             try {
