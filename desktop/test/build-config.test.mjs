@@ -16,15 +16,27 @@ test('the installer is a wizard that installs for the current user unless told o
   assert.equal(nsis.perMachine, false);
 });
 
-test('the installer has no folder page, so it can never take over a folder that holds other files', () => {
+test('the installer has a folder page, and a script that only lets it take a folder PyMagic can own', () => {
   // electron-builder keeps a chosen folder as it is when its path contains "PyMagic", and uninstalling deletes it whole
-  assert.equal(installerConfig().nsis.allowToChangeInstallationDirectory, false);
+  const { nsis } = installerConfig();
+  assert.equal(nsis.allowToChangeInstallationDirectory, true);
+  assert.equal(nsis.include, 'installer/installer.nsh');
+  const script = readFileSync(resolve(desktop, nsis.include), 'utf8');
+  for (const part of ['Function PMCheckFolder', 'Function .onVerifyInstDir', 'SetErrorLevel 2', 'StrCpy $INSTDIR "$1"', 'IfFileExists "$1\\${APP_FILENAME}.exe"'])
+    assert.ok(script.includes(part), `installer.nsh no longer has ${part}`);
 });
 
-test('the installer makes a Start menu entry and a desktop shortcut named after the app', () => {
+test('the desktop shortcut is a check box of the wizard, made and removed by the script and not by the template', () => {
+  const { nsis } = installerConfig();
+  assert.equal(nsis.createDesktopShortcut, false);   // the template would make it without asking
+  const script = readFileSync(resolve(desktop, nsis.include), 'utf8');
+  for (const part of ['${NSD_CreateCheckbox}', 'Page custom PMShortcutPage PMShortcutPageLeave', '!macro customInstall', 'CreateShortCut "$DESKTOP\\${SHORTCUT_NAME}.lnk"',
+    '!macro customUnInstall', 'Delete "$DESKTOP\\${SHORTCUT_NAME}.lnk"'])assert.ok(script.includes(part), `installer.nsh no longer has ${part}`);
+});
+
+test('the installer makes a Start menu entry named after the app', () => {
   const { nsis } = installerConfig();
   assert.equal(nsis.createStartMenuShortcut, true);
-  assert.equal(nsis.createDesktopShortcut, true);
   assert.equal(nsis.shortcutName, PRODUCT);
   assert.equal(nsis.uninstallDisplayName, PRODUCT);
 });
@@ -63,7 +75,7 @@ test('package.mjs builds the installer from the packaged folder, and the tools a
 test('the app folder takes the shell and its icon, and leaves out the build tools, tests and icon source', () => {
   for (const p of ['/main.js', '/host-env.js', '/preload.js', '/recent-projects.js', '/package.json', '/icon', '/icon/pymagic.ico']) assert.ok(kept(p), `${p} is left out`);
   for (const p of ['/out', '/out/PyMagic-win32-x64/PyMagic.exe', '/stage/host', '/test/build-config.test.mjs',
-    '/package.mjs', '/build-config.mjs', '/icon/pymagic.svg', '/icon/pymagic.ico.sha256', '/icon/make-icon.js']) assert.ok(!kept(p), `${p} is packaged`);
+    '/package.mjs', '/build-config.mjs', '/installer/installer.nsh', '/icon/pymagic.svg', '/icon/pymagic.ico.sha256', '/icon/make-icon.js']) assert.ok(!kept(p), `${p} is packaged`);
   assert.deepEqual(opts.extraResource.map(p => p.split(/[\\/]/).pop()), ['www', 'host', 'demo', 'typeshed']);
   assert.equal(opts.name, PRODUCT);
 });

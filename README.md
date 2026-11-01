@@ -81,7 +81,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Remote interpreters: ~~a terminal inside the interpreter's target, Linux paths in tracebacks, a Docker container that is already running~~ (done, item 254; the WSL and SSH terminals only checked as command lines). Still open: the container's mount point found from `docker inspect`, and the debugger, test runner and notebooks in the exec forms (a container, a Compose `exec`).
 
 **Installer**
-- A checkbox for the desktop shortcut and a safe folder page (they need NSIS script), PyMagic's own pictures in the wizard (66).
+- ~~A checkbox for the desktop shortcut and a safe folder page~~ (done, item 260). Still open: PyMagic's own pictures in the wizard (66); the wizard's two new pages were not looked at on screen (only the silent installs were run).
 
 **Type engine** (ibnbolbna's area until 31 October 2026, ours from then on; what ibnbolbna did and left is in [docs/ibnbolbna-work.md](docs/ibnbolbna-work.md))
 - ~~`NoReturn` calls, `with` blocks that swallow exceptions, `break`/`return` through `finally` (4, 5); call-site parameter inference (5)~~ (done, item 186).
@@ -173,4 +173,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 259 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 260 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

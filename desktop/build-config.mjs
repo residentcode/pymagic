@@ -19,7 +19,7 @@ export function packagerOptions(desktop, stage) {
     overwrite: true,
     prune: true,
     // the build tools, the tests and the icon's source stay out of the app; the .ico itself goes in for the window
-    ignore: [/^\/out/, /^\/stage/, /^\/test/, /^\/package\.mjs$/, /^\/build-config\.mjs$/, /^\/icon\/(?!pymagic\.ico$)/],
+    ignore: [/^\/out/, /^\/stage/, /^\/test/, /^\/installer/, /^\/package\.mjs$/, /^\/build-config\.mjs$/, /^\/icon\/(?!pymagic\.ico$)/],
     extraResource: ['www', 'host', 'demo', 'typeshed'].map(d => resolve(stage, d)),
   };
 }
@@ -36,10 +36,11 @@ export function installerConfig() {
       oneClick: false,
       perMachine: false,                // a page offers "only for me" (the default, no admin) or "for all users"
       allowElevation: true,             // only needed for "for all users"
-      // no folder page: electron-builder uses a chosen folder as it is when its path already says "PyMagic" (any case),
-      // and uninstalling or updating then deletes everything in it, a git checkout of PyMagic included
-      allowToChangeInstallationDirectory: false,
-      createDesktopShortcut: true,
+      // a folder page that only takes a folder PyMagic can own (not there yet, empty, or an earlier PyMagic): electron-builder keeps a chosen folder
+      // as it is when its path already says "PyMagic", and uninstalling or updating deletes it whole; the rule is in installer/installer.nsh
+      allowToChangeInstallationDirectory: true,
+      createDesktopShortcut: false,     // made by installer/installer.nsh instead, on a page with a check box
+      include: 'installer/installer.nsh',
       createStartMenuShortcut: true,
       shortcutName: PRODUCT,
       installerIcon: ICON,
