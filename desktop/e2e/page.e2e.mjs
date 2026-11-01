@@ -1417,3 +1417,122 @@ describe('branches: comparing, rebasing onto another, and pushing tags', () => {
         assert.equal(git('log', '--format=%s').trim().split('\n').join(' | '), 'only on main | only on other | start');
     });
 });
+
+describe('changelists, the shelf, and choosing lines from the editor gutter', () => {
+    const git = (...args) => {
+        const r = spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8' });
+        assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+        return r.stdout;
+    };
+    const NL = String.fromCharCode(10);
+    const numbered = (n, ...changes) => {
+        const lines = Array.from({ length: n }, (_, i) => `line ${i + 1}`);
+        for (const [at, text] of changes) lines[at - 1] = text;
+        return lines.join(NL) + NL;
+    };
+    // the changelist each row of the changes list sits under, read from the page
+    const listsOnPage = () => page.evaluate(`(() => { const out = {}; let list = '';
+        for (const el of document.getElementById('git-changes').children) {
+            if (el.classList.contains('gc-list')) list = el.dataset.list;
+            else if (el.classList.contains('gc')) out[el.querySelector('.path').textContent.replace(/[0-9]+.[0-9]+ lines$/, '')] = list;
+        } return out; })()`);
+    const refresh = async () => { await page.evaluate(`${$('git-refresh')}.click()`); await sleep(400); };
+    const waitRows = (expr, label) => page.waitFor(`(() => { const rows = [...document.querySelectorAll('#git-changes .gc')].map((r) => r.querySelector('.path').textContent); return ${expr}; })()`, 15000, label);
+    const clickRowButton = (file, cls) => page.evaluate(`(() => { const row = [...document.querySelectorAll('#git-changes .gc')].find((r) => r.querySelector('.path').textContent.startsWith(${JSON.stringify(file)}));
+        row.querySelector(${JSON.stringify('button.' + cls)}).click(); return true; })()`);
+    const status = () => git('status', '--porcelain').split(NL).filter(Boolean).map((l) => l.slice(3)).sort();
+
+    test('a changelist commits only its own files, the shelf puts files away and back, and the gutter picks lines', async () => {
+        git('init', '-q', '-b', 'main');
+        git('config', 'user.name', 'Tester');
+        git('config', 'user.email', 'tester@example.com');
+        git('config', 'core.autocrlf', 'false');
+        // PyMagic's own state (recent files, the index, the changelists and the shelf) is not part of this repository
+        writeFileSync(join(projectRoot, '.git', 'info', 'exclude'), '.pymagic/' + NL + 'nb_demo.ipynb' + NL);
+        writeFileSync(join(projectRoot, 'cl_a.py'), numbered(14));
+        writeFileSync(join(projectRoot, 'cl_b.py'), numbered(14));
+        writeFileSync(join(projectRoot, 'cl_g.py'), numbered(14));
+        git('add', '-A');
+        git('commit', '-q', '--allow-empty', '-m', 'changelist base');
+        writeFileSync(join(projectRoot, 'cl_a.py'), numbered(14, [3, 'line 3 A']));
+        writeFileSync(join(projectRoot, 'cl_b.py'), numbered(14, [3, 'line 3 B']));
+        // two changes far apart: two hunks
+        writeFileSync(join(projectRoot, 'cl_g.py'), numbered(14, [2, 'line 2 G'], [13, 'line 13 G']));
+
+        await page.evaluate(`window.confirm = () => true; window.prompt = () => window.__answer ?? ''`);
+        await page.evaluate(`${$('t-git')}.click()`);
+        await refresh();
+        await waitRows(`['cl_a.py', 'cl_b.py', 'cl_g.py'].every((f) => rows.some((r) => r.startsWith(f)))`, 'the three changed files');
+        assert.deepEqual(await listsOnPage(), { 'cl_a.py': 'Changes', 'cl_b.py': 'Changes', 'cl_g.py': 'Changes' });
+
+        // a new changelist becomes the active one: a file that changes now goes into it
+        await page.evaluate(`window.__answer = 'Feature'`);
+        await page.evaluate(`${$('git-cl-new')}.click()`);
+        await page.waitFor(`document.querySelector('.gc-list[data-list="Feature"]')`, 15000, 'the new changelist');
+        writeFileSync(join(projectRoot, 'cl_c.py'), 'new = 1' + NL);
+        await refresh();
+        await waitRows(`rows.some((r) => r.startsWith('cl_c.py'))`, 'the new file');
+        assert.equal((await listsOnPage())['cl_c.py'], 'Feature');
+
+        // move a file between lists, with the button of its row
+        await clickRowButton('cl_b.py', 'move');
+        await page.waitFor(`document.querySelector('.git-popup')`, 5000, 'the move menu');
+        await page.evaluate(`[...document.querySelectorAll('.git-popup button')].find((b) => b.textContent === 'Feature').click()`);
+        await page.waitFor(`[...document.querySelectorAll('#git-changes .gc-list, #git-changes .gc')].findIndex((e) => e.classList.contains('gc') && e.textContent.includes('cl_b.py')) > [...document.querySelectorAll('#git-changes .gc-list, #git-changes .gc')].findIndex((e) => e.dataset.list === 'Feature')`, 15000, 'cl_b.py under Feature');
+        assert.deepEqual(await listsOnPage(), { 'cl_a.py': 'Changes', 'cl_g.py': 'Changes', 'cl_b.py': 'Feature', 'cl_c.py': 'Feature' });
+        // kept in a project file
+        const saved = JSON.parse(readFileSync(join(projectRoot, '.pymagic', 'changelists.json'), 'utf8'));
+        assert.equal(saved.active, 'Feature');
+        assert.deepEqual(saved.lists.find((l) => l.name === 'Feature').files.sort(), ['cl_b.py', 'cl_c.py']);
+
+        // the commit takes the files of the chosen list and no others
+        await page.evaluate(`(() => { const s = ${$('git-cl-commit')}; s.value = 'Feature'; s.dispatchEvent(new Event('change')); ${$('git-message')}.value = 'the feature'; ${$('git-commit')}.click(); })()`);
+        for (let i = 0; i < 40 && git('log', '-1', '--format=%s').trim() !== 'the feature'; i++) await sleep(300);
+        assert.deepEqual(git('show', '--name-only', '--format=', 'HEAD').split(NL).filter(Boolean).sort(), ['cl_b.py', 'cl_c.py']);
+        assert.deepEqual(status(), ['cl_a.py', 'cl_g.py']);
+
+        // from the gutter: the change bar of the first change of cl_g.py offers to commit just those lines
+        await open('cl_g.py');
+        await page.evaluate(`${$('t-git')}.click()`);
+        await refresh();
+        await page.waitFor(`window.pymagic.editor.getModel().getAllDecorations().some((d) => d.options.linesDecorationsClassName?.startsWith('git-bar-'))`, 15000, 'change bars');
+        const at = await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.revealLine(2); const box = ed.getContainerDomNode().getBoundingClientRect();
+            return { x: box.left + ed.getLayoutInfo().decorationsLeft + 2, y: box.top + ed.getTopForLineNumber(2) - ed.getScrollTop() + 8 }; })()`);
+        await page.click(at.x, at.y);
+        await page.waitFor(`[...document.querySelectorAll('.git-popup button')].some((b) => b.textContent.startsWith('Commit lines'))`, 8000, 'the gutter popup');
+        await page.evaluate(`[...document.querySelectorAll('.git-popup button')].find((b) => b.textContent.startsWith('Commit lines')).click()`);
+        await page.waitFor(`${$('git-lines')}.classList.contains('open')`, 10000, 'the lines window');
+        assert.match(await page.evaluate(`${$('git-lines-count')}.textContent`), /^2 of 4 changed lines/);
+        await page.evaluate(`${$('git-lines-done')}.click()`);
+        // cl_a.py stays out: untick it
+        await page.evaluate(`[...document.querySelectorAll('#git-changes .gc')].find((r) => r.querySelector('.path').textContent.startsWith('cl_a.py')).querySelector('input').click()`);
+        await page.evaluate(`(() => { const s = ${$('git-cl-commit')}; s.value = 'Changes'; s.dispatchEvent(new Event('change')); ${$('git-message')}.value = 'one change of g'; ${$('git-commit')}.click(); })()`);
+        for (let i = 0; i < 40 && git('log', '-1', '--format=%s').trim() !== 'one change of g'; i++) await sleep(300);
+        assert.equal(git('show', 'HEAD:cl_g.py'), numbered(14, [2, 'line 2 G']));
+        assert.equal(readFileSync(join(projectRoot, 'cl_g.py'), 'utf8'), numbered(14, [2, 'line 2 G'], [13, 'line 13 G']));
+        assert.deepEqual(status(), ['cl_a.py', 'cl_g.py']);
+
+        // shelve the default list: the files are clean again and a patch is kept
+        await refresh();
+        await page.evaluate(`window.__answer = 'put away'`);
+        await page.evaluate(`[...document.querySelectorAll('#git-changes .gc-list[data-list="Changes"] button')].find((b) => b.textContent === 'Shelve').click()`);
+        await page.waitFor(`document.querySelector('#git-shelf .gs-row[data-shelf]')`, 15000, 'the shelved set');
+        assert.deepEqual(status(), []);
+        assert.equal(readFileSync(join(projectRoot, 'cl_a.py'), 'utf8'), numbered(14));
+        assert.equal(readFileSync(join(projectRoot, 'cl_g.py'), 'utf8'), numbered(14, [2, 'line 2 G']));
+        assert.match(await page.evaluate(`${$('git-shelf')}.textContent`), /put away.*2 files/);
+
+        // its diff
+        await page.evaluate(`[...document.querySelectorAll('#git-shelf .gs-row button')].find((b) => b.textContent === 'Diff').click()`);
+        await page.waitFor(`document.querySelector('.shelf-patch')?.textContent.includes('line 13 G')`, 10000, 'the shelved diff');
+        assert.match(await page.evaluate(`document.querySelector('.shelf-patch').textContent`), /\+line 3 A/);
+        await page.evaluate(`document.querySelectorAll('.ask-shade').forEach((s) => s.remove())`);
+
+        // and back
+        await page.evaluate(`[...document.querySelectorAll('#git-shelf .gs-row button')].find((b) => b.textContent === 'Unshelve').click()`);
+        await page.waitFor(`!document.querySelector('#git-shelf .gs-row[data-shelf]')`, 15000, 'the shelf empty again');
+        assert.deepEqual(status(), ['cl_a.py', 'cl_g.py']);
+        assert.equal(readFileSync(join(projectRoot, 'cl_a.py'), 'utf8'), numbered(14, [3, 'line 3 A']));
+        assert.equal(readFileSync(join(projectRoot, 'cl_g.py'), 'utf8'), numbered(14, [2, 'line 2 G'], [13, 'line 13 G']));
+    });
+});

@@ -293,17 +293,20 @@
           <div id="git-none" style="display:none"><span id="git-none-text"></span> <button id="git-init" style="display:none">Create a repository here</button></div>
           <div id="git-split">
             <div id="git-left">
-              <div class="git-head"><span>Changes <span id="git-count"></span></span><label><input type="checkbox" id="git-all" checked> all</label></div>
+              <div class="git-head"><span>Changes <span id="git-count"></span></span><span><button id="git-cl-new" title="Make a new changelist: a named group of changed files; new changes go into it">New changelist…</button> <label><input type="checkbox" id="git-all" checked> all</label></span></div>
               <div id="git-changes"></div>
               <textarea id="git-message" placeholder="Commit message" spellcheck="true"></textarea>
               <div id="git-grammar" hidden title="Grammar problems of the message (LanguageTool); a click on a suggestion writes it"></div>
               <div id="git-commit-bar">
+                <label title="Only the files of this changelist go into the commit">From <select id="git-cl-commit"></select></label>
                 <label title="Replace the last commit"><input type="checkbox" id="git-amend"> Amend</label>
                 <button id="git-commit">Commit</button>
                 <span id="git-result"></span>
               </div>
               <div class="git-head"><span>Stashes <span id="git-stash-count"></span></span><button id="git-stash-new" title="Put the changes away and get a clean working tree">Stash changes…</button></div>
               <div id="git-stashes"></div>
+              <div class="git-head"><span>Shelf <span id="git-shelf-count"></span></span><button id="git-shelf-new" title="Put the ticked files of the changelist away as a patch and take them out of the working tree">Shelve checked…</button></div>
+              <div id="git-shelf"></div>
             </div>
             <div id="git-right">
               <div class="git-head"><span>History</span><label><input type="checkbox" id="git-file-log"> current file</label></div>

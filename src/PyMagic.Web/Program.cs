@@ -1895,10 +1895,58 @@ app.MapPost("/api/git/commit", async (HttpRequest req) =>
                     if (int.TryParse(index, out int h) && lines is JsonArray arr) sel.Hunks[h] = arr.Select(x => x?.GetValue<int>() ?? -1).ToHashSet();
             partial[file] = sel;
         }
+    // with a changelist named, only the files of that list may go into the commit
+    string? list = body?["changelist"]?.GetValue<string>();
     if (partial.Count == 0)
-        return await GitCall(r => new { hash = r.Commit(StringsOf(body?["paths"]), message, amend) });
-    return await GitCall(r => new { hash = r.CommitSelection(StringsOf(body?["paths"]), partial, message, amend) });
+        return await GitCall(r =>
+        {
+            if (list != null) r.RequireInChangelist(list, StringsOf(body?["paths"]));
+            return new { hash = r.Commit(StringsOf(body?["paths"]), message, amend) };
+        });
+    return await GitCall(r =>
+    {
+        if (list != null) r.RequireInChangelist(list, StringsOf(body?["paths"]).Concat(partial.Keys));
+        return new { hash = r.CommitSelection(StringsOf(body?["paths"]), partial, message, amend) };
+    });
 });
+
+// ---- changelists and the shelf (.pymagic/changelists.json, .pymagic/shelf/) --------------------------------------------
+
+app.MapGet("/api/git/changelists", () => GitCall(r => r.Changelists()));
+app.MapPost("/api/git/changelist", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    string op = body?["op"]?.GetValue<string>() ?? "";
+    string Str(string key) => body?[key]?.GetValue<string>() ?? "";
+    return await GitCall(r => (object?)(op switch
+    {
+        "create" => r.CreateChangelist(Str("name"), body?["active"]?.GetValue<bool>() ?? false),
+        "rename" => r.RenameChangelist(Str("name"), Str("newName")),
+        "delete" => r.DeleteChangelist(Str("name")),
+        "active" => r.SetActiveChangelist(Str("name")),
+        "move" => r.MoveToChangelist(StringsOf(body?["paths"]), Str("name")),
+        _ => throw new GitException($"'{op}' is not something to do"),
+    }));
+});
+
+app.MapGet("/api/git/shelf", () => GitCall(r => r.ShelvedSets()));
+app.MapGet("/api/git/shelf/patch", (string id) => GitCall(r => new { patch = r.ShelfPatch(id) }));
+app.MapPost("/api/git/shelf", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    string op = body?["op"]?.GetValue<string>() ?? "";
+    string Str(string key) => body?[key]?.GetValue<string>() ?? "";
+    if (op == "shelve") AutoLabel("Before Git shelve");
+    if (op == "unshelve") AutoLabel("Before Git unshelve");
+    return await GitCall(r => (object?)(op switch
+    {
+        "shelve" => r.Shelve(StringsOf(body?["paths"]), body?["title"]?.GetValue<string>(), body?["changelist"]?.GetValue<string>()),
+        "unshelve" => r.Unshelve(Str("id"), body?["changelist"]?.GetValue<string>(), body?["delete"]?.GetValue<bool>() ?? false),
+        "delete" => DeleteShelf(r, Str("id")),
+        _ => throw new GitException($"'{op}' is not something to do"),
+    }));
+});
+object DeleteShelf(GitRepository r, string id) { r.DeleteShelf(id); return new { ok = true }; }
 
 app.MapPost("/api/git/discard", async (HttpRequest req) =>
 {
