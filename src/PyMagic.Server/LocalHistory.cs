@@ -47,6 +47,7 @@ public sealed class LocalHistory
     {
         _root = root;
         _perFile = perFile;
+        PymagicFolder.IgnoreInGit(Path.Combine(root, ".pymagic"), "history/");   // written now, so a later label does not change a committed .gitignore under a Git operation
     }
 
     string FolderOf(string rel)

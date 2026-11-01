@@ -1359,6 +1359,8 @@ describe('branches: comparing, rebasing onto another, and pushing tags', () => {
         git('config', 'user.name', 'Tester');
         git('config', 'user.email', 'tester@example.com');
         git('config', 'core.autocrlf', 'false');
+        // PyMagic's own state (recent files, the index) changes while the app runs: it is not part of this repository
+        writeFileSync(join(projectRoot, '.git', 'info', 'exclude'), '.pymagic/' + String.fromCharCode(10) + 'nb_demo.ipynb' + String.fromCharCode(10));
         git('add', '-A');
         git('commit', '-q', '-m', 'start');
         git('switch', '-q', '-c', 'other');
