@@ -39,9 +39,36 @@ public class SchemaTests
     [Fact]
     public void EverySchemaHasAnHttpsAddressAndOnlyTheKnownOnesAreKept()
     {
-        Assert.Equal(10, Schemas.Urls.Count);
-        foreach (var name in new[] { "package", "pyproject", "workflow", "compose", "gitlab", "precommit", "mkdocs", "dependabot", "codecov", "tox" })
+        Assert.Equal(13, Schemas.Urls.Count);
+        foreach (var name in new[] { "package", "pyproject", "workflow", "compose", "gitlab", "precommit", "mkdocs", "dependabot", "codecov", "tox", "renovate", "openapi", "swagger" })
             Assert.True(Schemas.Urls.TryGetValue(name, out var url) && url.StartsWith("https://"), name);
+    }
+
+    [Fact]
+    public void AKubernetesKindHasItsOwnSchemaAddressAndNothingElseIsMadeUp()
+    {
+        Assert.Equal("https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/master-standalone/deployment-apps-v1.json", Schemas.UrlOf("k8s-deployment-apps-v1"));
+        Assert.True(Schemas.UrlOf("k8s-service-v1")!.EndsWith("/service-v1.json"));
+        Assert.Equal("https://docs.renovatebot.com/renovate-schema.json", Schemas.UrlOf("renovate"));
+        foreach (var bad in new[] { "k8s-", "k8s-../x", "k8s-a-b-c-d", "K8S-pod-v1", "../evil", "k8s-pod/v1" })
+            Assert.True(Schemas.UrlOf(bad) == null && !Schemas.IsKnown(bad), bad);
+    }
+
+    [Fact]
+    public void KeptKubernetesSchemasAreListedAndRead()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "pm_schema_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Schemas.FolderOf(root));
+        try
+        {
+            File.WriteAllText(Schemas.PathOf(root, "k8s-pod-v1"), "{}");
+            File.WriteAllText(Path.Combine(Schemas.FolderOf(root), "k8s-not a name.json"), "{}");
+            File.WriteAllText(Schemas.PathOf(root, "renovate"), "{}");
+            Assert.Equal("k8s-pod-v1,renovate", string.Join(",", Schemas.List(root).Keys.OrderBy(k => k)));
+            Assert.Equal("{}", Schemas.Kept(root, "k8s-pod-v1"));
+            Assert.True(Schemas.Kept(root, "k8s-service-v1") == null);
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     [Fact]
