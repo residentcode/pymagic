@@ -1871,7 +1871,8 @@ app.MapGet("/api/git/file", async (string path, string? rev) =>
     catch (GitException e) { return Results.BadRequest(new { error = e.Message }); }
 });
 
-app.MapGet("/api/git/log", (string? path, int? limit, int? skip) => GitCall(r => r.Log(string.IsNullOrEmpty(path) ? null : path, limit ?? 100, skip ?? 0)));
+app.MapGet("/api/git/log", (string? path, int? limit, int? skip, bool? all, string? branch, string? author, string? text, string? since, string? until) =>
+    GitCall(r => r.Log(string.IsNullOrEmpty(path) ? null : path, limit ?? 100, skip ?? 0, new GitLogFilter(all == true, branch, author, text, since, until))));
 app.MapGet("/api/git/commit", (string hash) => GitCall(r => r.Show(hash)));
 app.MapGet("/api/git/blame", (string path) => GitCall(r => r.Blame(path)));
 app.MapGet("/api/git/branches", () => GitCall(r => r.Branches()));
@@ -1943,7 +1944,7 @@ app.MapPost("/api/git/action", async (HttpRequest req) =>
     string? labelled = op switch
     {
         "pull" => "Git pull", "merge" => $"Git merge of {Str("branch")}", "applyStash" => "Git: stash applied", "revert" => "Git revert", "rebaseInteractive" => "Git rebase", "rebaseOnto" => $"Git rebase onto {Str("branch")}",
-        "cherryPick" => "Git cherry-pick", "reset" => "Git reset", "checkoutRemote" => $"Git checkout of {Str("branch")}", _ => null,
+        "cherryPick" => "Git cherry-pick", "checkoutCommit" => "Git checkout of a commit", "reset" => "Git reset", "checkoutRemote" => $"Git checkout of {Str("branch")}", _ => null,
     };
     if (labelled != null) AutoLabel("Before " + labelled);
     return await GitCall(r =>
@@ -1972,6 +1973,8 @@ app.MapPost("/api/git/action", async (HttpRequest req) =>
                 return r.RebaseInteractive(Str("base"), (body?["steps"] as JsonArray ?? new JsonArray())
                     .Select(x => new GitRebaseStep(x?["hash"]?.GetValue<string>() ?? "", x?["action"]?.GetValue<string>() ?? "", x?["message"]?.GetValue<string>())).ToList());
             case "cherryPick": return r.CherryPick(Str("hash"));
+            case "createBranchAt": r.CreateBranchAt(Str("name"), Str("hash"), Flag("checkout")); return Ok();
+            case "checkoutCommit": r.CheckoutCommit(Str("hash")); return Ok();
             case "reset": r.Reset(Str("hash"), Str("mode")); return Ok();
             case "rebaseOnto": return r.RebaseOnto(Str("branch"), Flag("keepMerges"));
             case "pushTag": return new { ok = true, output = r.PushTag(Str("name"), Str("remote")) };

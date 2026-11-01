@@ -1417,3 +1417,95 @@ describe('branches: comparing, rebasing onto another, and pushing tags', () => {
         assert.equal(git('log', '--format=%s').trim().split('\n').join(' | '), 'only on main | only on other | start');
     });
 });
+
+describe('git: the Log graph, its filters and actions, and the toolbar on a change marker', () => {
+    const git = (...args) => {
+        const r = spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8' });
+        assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+        return r.stdout;
+    };
+    const setField = (id, value) => page.evaluate(`(() => { const e = ${$(id)}; e.value = ${JSON.stringify(value)}; e.dispatchEvent(new Event(e.tagName === 'SELECT' || e.type === 'date' ? 'change' : 'input')); return true; })()`);
+    const rowCount = `document.querySelectorAll('#git-log .gl[data-hash]').length`;
+    test('the log draws a graph with merge lines and labels, filters, and acts on a commit', async () => {
+        git('config', 'user.name', 'Tester');
+        git('config', 'user.email', 'tester@example.com');
+        git('switch', '-q', 'main');
+        git('switch', '-q', '-c', 'topic');
+        writeFileSync(join(projectRoot, 'topic.txt'), 'topic\n');
+        git('add', '-A');
+        git('commit', '-q', '-m', 'topic work', '--author=Zed Other <zed@example.com>');
+        git('switch', '-q', 'main');
+        writeFileSync(join(projectRoot, 'main2.txt'), 'main\n');
+        git('add', '-A');
+        git('commit', '-q', '-m', 'main work');
+        git('merge', '-q', '--no-ff', 'topic', '-m', 'merge topic');
+        git('tag', 'v2');
+        await page.evaluate(`window.confirm = () => false; window.prompt = () => 'from-log'`);
+        await page.evaluate(`${$('t-git')}.click()`);
+        await page.evaluate(`${$('git-refresh')}.click()`);
+        await page.waitFor(`document.querySelectorAll('#git-log .gl .graph circle').length >= 4`, 20000, 'the graph').catch(async (e) => { throw new Error(e.message + ' ' + (await page.evaluate(`(async () => document.getElementById('git-log').outerHTML.slice(0, 1500) + document.body.innerText.slice(-300) + await (await fetch('/api/git/log?limit=5&skip=0')).text() + await (await fetch('/api/git/status')).text())()`))); });
+        // every row has its dot, and the merge made a second lane: some line is not straight
+        assert.equal(await page.evaluate(`${rowCount} === document.querySelectorAll('#git-log .gl .graph circle').length`), true);
+        assert.equal(await page.evaluate(`[...document.querySelectorAll('#git-log .gl .graph path')].some((p) => /C/.test(p.getAttribute('d')))`), true);
+        assert.equal(await page.evaluate(`[...document.querySelectorAll('#git-log .gl .ref.tag')].some((r) => r.textContent === 'v2')`), true);
+        assert.equal(await page.evaluate(`document.querySelector('#git-log .gl .ref.current')?.textContent`), 'main');
+
+        // filters: the author, then the words, then a branch; a filtered list has no graph
+        await setField('git-log-author', 'zed');
+        await page.waitFor(`${rowCount} === 1`, 10000, 'the author filter');
+        assert.equal(await page.evaluate(`document.querySelectorAll('#git-log .gl .graph').length`), 0);
+        assert.match(await page.evaluate(`document.querySelector('#git-log .gl .subject').textContent`), /topic work/);
+        await page.evaluate(`${$('git-log-clear')}.click()`);
+        await page.waitFor(`${rowCount} >= 4`, 10000, 'the cleared filter');
+        await setField('git-log-text', 'merge');
+        await page.waitFor(`${rowCount} === 1`, 10000, 'the text filter');
+        await page.evaluate(`${$('git-log-clear')}.click()`);
+        await page.waitFor(`${rowCount} >= 4`, 10000, 'the cleared filter');
+        await setField('git-log-branch', 'topic');
+        await page.waitFor(`!document.querySelector('#git-log .gl .subject[title="main work"]') && document.querySelector('#git-log .gl .subject[title="topic work"]')`, 10000, 'the branch filter');
+        await page.evaluate(`${$('git-log-clear')}.click()`);
+        await page.waitFor(`${rowCount} >= 4`, 10000, 'the cleared filter');
+
+        // a commit: its files, a branch from it, and a checkout of it
+        const clickRow = (subject) => page.evaluate(`[...document.querySelectorAll('#git-log .gl')].find((r) => r.querySelector('.subject')?.textContent === ${JSON.stringify(subject)}).click()`);
+        const act = (label) => page.evaluate(`[...document.querySelectorAll('#git-detail .git-acts button')].find((b) => b.textContent === ${JSON.stringify(label)}).click()`);
+        await clickRow('main work');
+        await page.waitFor(`document.querySelector('#git-detail .gc .path')?.textContent === 'main2.txt'`, 10000, 'the files of the commit');
+        await act('New branch here…');
+        for (let i = 0; i < 30 && !git('branch').includes('from-log'); i++) await sleep(300);
+        assert.equal(git('rev-parse', 'from-log').trim(), git('log', '--format=%H', '--grep=main work', '-1').trim());
+        assert.equal(git('branch', '--show-current').trim(), 'main');
+        await page.waitFor(`${rowCount} >= 4`, 10000, 'the log again');
+        await clickRow('start');
+        await page.waitFor(`document.querySelector('#git-detail .meta')?.textContent.startsWith(${JSON.stringify(git('log', '--format=%H', '--grep=^start$', '-1').trim())})`, 10000, 'the actions');
+        await act('Checkout');
+        for (let i = 0; i < 30 && git('branch', '--show-current').trim() !== ''; i++) await sleep(300);
+        assert.equal(git('branch', '--show-current').trim(), '');
+        git('switch', '-q', 'main');
+        await page.evaluate(`${$('git-refresh')}.click()`);
+    });
+
+    test('a click on a change marker shows Revert, Show diff and the next and previous change', async () => {
+        await open('hist.py');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; const m = ed.getModel(); const n = m.getLineCount(); const R = window.pymagic.monaco.Range;
+            ed.executeEdits('t', [{ range: new R(2, 1, 2, 1), text: '    x = 1' + String.fromCharCode(10) }, { range: new R(n, 1, n, 1), text: '# tail' + String.fromCharCode(10) }]); return true; })()`);
+        await page.waitFor(`document.querySelectorAll('.git-bar-added, .git-bar-modified').length >= 2 && window.pymagic.editor.getModel().getLineDecorations(4).some((d) => d.options.linesDecorationsClassName?.startsWith('git-bar'))`, 15000, 'two change markers');
+        const clickBar = async (nth) => {
+            const at = await page.evaluate(`(() => { const r = [...document.querySelectorAll('.git-bar-added, .git-bar-modified')].map((b) => b.getBoundingClientRect()).sort((a, b) => a.top - b.top)[${nth}]; return { x: r.left + 1, y: r.top + r.height / 2 }; })()`);
+            await page.click(at.x, at.y);
+            await page.waitFor(`document.querySelector('.git-popup')`, 5000, 'the popup');
+        };
+        await clickBar(0);
+        assert.equal(await page.evaluate(`[...document.querySelectorAll('.git-popup button')].map((b) => b.textContent).join(',')`), 'Revert,Show diff,↑,↓');
+        // next: the cursor goes to the second change and the popup follows it
+        await page.evaluate(`document.querySelector('.git-popup .git-next-change').click()`);
+        await page.waitFor(`window.pymagic.editor.getPosition().lineNumber >= 4 && document.querySelector('.git-popup')`, 5000, 'the second change').catch(async (e) => { throw new Error(e.message + ' ' + (await page.evaluate(`JSON.stringify([window.pymagic.editor.getPosition(), document.querySelector('.git-popup')?.textContent, [...document.querySelectorAll('.git-bar-added, .git-bar-modified, .git-bar-deleted')].map((b) => b.className + Math.round(b.getBoundingClientRect().top)),window.pymagic.editor.getModel().getValue()])`))); });
+        // revert that one: the tail goes, the first stays
+        await page.evaluate(`document.querySelector('.git-popup .git-revert-change').click()`);
+        await page.waitFor(`!window.pymagic.editor.getModel().getValue().includes('# tail') && window.pymagic.editor.getModel().getValue().includes('x = 1')`, 5000, 'the revert');
+        await clickBar(0);
+        await page.evaluate(`document.querySelector('.git-popup .git-show-diff').click()`);
+        await page.waitFor(`${$('git-diff')}.classList.contains('open')`, 10000, 'the diff');
+        await page.evaluate(`${$('git-diff-close')}.click()`);
+    });
+});
