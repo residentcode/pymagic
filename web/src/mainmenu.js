@@ -47,7 +47,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
         const theme = (value, label) => ({ label, checked: s.theme === value, run: () => change({ theme: value }) });
         const sidebarShown = !$('app').classList.contains('no-side');
         const windows = [['output', 'Output'], ['debug', 'Debugger'], ['terminal', 'Terminal'], ['tests', 'Tests'], ['coverage', 'Coverage'], ['profiler', 'Profiler'], '-',
-            ['problems', 'Problems'], ['todo', 'TODO'], ['insp', 'Inspections'], ['hier', 'Hierarchy'], '-', ['search', 'Search'], ['git', 'Git'], ['history', 'History'], ['packages', 'Packages'], ['database', 'Database'], ['routes', 'Endpoints'], ['django', 'Django']]
+            ['problems', 'Problems'], ['todo', 'TODO'], ['insp', 'Inspections'], ['hier', 'Hierarchy'], '-', ['search', 'Search'], ['git', 'Git'], ['history', 'History'], ['packages', 'Packages'], ['database', 'Database'], ['httpclient', 'HTTP client'], ['routes', 'Endpoints'], ['django', 'Django']]
             .map((w) => (w === '-' ? w : { label: w[1], checked: $('panel').classList.contains('open') && $(`t-${w[0]}`).classList.contains('active'), run: dock(w[0]) }));
         const files = recent(currentFile());
         return [
@@ -244,6 +244,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 { label: 'Endpoints', run: dock('routes') },
                 { label: 'Profiler', run: dock('profiler') },
                 { label: 'Database', run: dock('database') },
+                { label: 'HTTP client', run: dock('httpclient') },
             ] },
             { label: 'Git', submenu: [
                 { label: 'Update (pull)', run: press('b-update') },

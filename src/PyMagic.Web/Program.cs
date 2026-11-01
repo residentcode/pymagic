@@ -375,7 +375,8 @@ app.MapPost("/api/fs", async (HttpRequest req) =>
 
 // Find in files: the page sends the texts of its unsaved editors so that results match what is on screen.
 // the RegExp checker: a pattern tried on a text by Python's own re (the rules of JavaScript's are not the same)
-// the Endpoints tab's requests: sent by the engine (the page could not read another port's answers), to this computer only
+// the Endpoints tab's requests: sent by the engine (the page could not read another port's answers), to this computer only;
+// the HTTP client's (a request of the user's own .http file, run by its ▶ Run), to any address
 var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 app.MapPost("/api/http", async (HttpRequest req) =>
 {
@@ -383,7 +384,8 @@ app.MapPost("/api/http", async (HttpRequest req) =>
     string method = (b?["method"]?.GetValue<string>() ?? "GET").ToUpperInvariant();
     if (!Uri.TryCreate(b?["url"]?.GetValue<string>() ?? "", UriKind.Absolute, out var url) || url.Scheme is not ("http" or "https"))
         return Results.BadRequest(new { error = "an http:// or https:// address" });
-    if (!url.IsLoopback) return Results.BadRequest(new { error = "only servers on this computer (localhost, 127.0.0.1)" });
+    bool fromFile = b?["fromFile"]?.GetValue<bool>() == true;
+    if (!url.IsLoopback && !fromFile) return Results.BadRequest(new { error = "only servers on this computer (localhost, 127.0.0.1)" });
     if (!System.Text.RegularExpressions.Regex.IsMatch(method, "^[A-Z]{3,7}$")) return Results.BadRequest(new { error = "not a method" });
     var message = new HttpRequestMessage(new HttpMethod(method), url);
     string? body = b?["body"]?.GetValue<string>();
@@ -406,9 +408,11 @@ app.MapPost("/api/http", async (HttpRequest req) =>
         {
             status = (int)res.StatusCode, reason = res.ReasonPhrase, headers, ms = watch.ElapsedMilliseconds,
             body = System.Text.Encoding.UTF8.GetString(bytes, 0, Math.Min(bytes.Length, max)), truncated = bytes.Length > max,
+            size = bytes.Length, url = res.RequestMessage?.RequestUri?.ToString(),   // where it ended, after redirects
         });
     }
-    catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return Results.BadRequest(new { error = e is TaskCanceledException ? "no answer in 30 seconds" : e.Message + " (is the server running?)" }); }
+    catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return Results.BadRequest(new { error = e is TaskCanceledException ? "no answer in 30 seconds" : e.Message + (url.IsLoopback ? " (is the server running?)" : "") }); }
+    catch (InvalidOperationException e) { return Results.BadRequest(new { error = e.Message }); }
 });
 
 // the live preview of templates: the server running on this computer, relayed under /preview/ so the page can show it in a frame

@@ -186,6 +186,7 @@
         <button id="t-packages" title="Packages"><svg class="i"><use href="#i-cube"/></svg><span class="lbl">Packages</span></button>
         <button id="t-tpreview" title="The live preview of the open template: its page on the running server"><svg class="i"><use href="#i-web"/></svg><span class="lbl">Preview</span></button>
         <button id="t-database" title="Database: the project's SQLite files, their tables and an SQL console"><svg class="i"><use href="#i-data"/></svg><span class="lbl">Database</span></button>
+        <button id="t-httpclient" title="HTTP client: the responses of the requests of .http files, and their history"><svg class="i"><use href="#i-web"/></svg><span class="lbl">HTTP</span></button>
         <button id="t-routes" title="Endpoints"><svg class="i"><use href="#i-route"/></svg><span class="lbl">Endpoints</span></button>
         <button id="t-django" title="Django"><svg class="i"><use href="#i-layers"/></svg><span class="lbl">Django</span></button>
         <span class="spacer"></span>
@@ -341,6 +342,19 @@
             <button id="cov-clear" title="Forget the result and remove the marks">Clear</button>
           </div>
           <div class="body" id="cov-list"></div>
+        </div>
+      </div>
+      <div id="httpclient-tab" class="tab">
+        <div class="col" id="http-history-col"><h2>History <span class="db-tools"><button id="http-new" class="mini" title="A new .http file of requests">+</button><button id="http-clear" class="mini" title="Forget the history">✕</button></span></h2><div class="body" id="http-history"></div></div>
+        <div class="col" id="http-main">
+          <div class="listbar" id="http-bar">
+            <label title="The variables {{name}} take their values from this environment of http-client.env.json (and http-client.private.env.json)">Environment <select id="http-env"><option value="">No environment</option></select></label>
+            <span id="http-parts"><button data-part="body" class="db-mode">Body</button><button data-part="headers" class="db-mode">Headers</button><button data-part="request" class="db-mode">Request</button></span>
+            <span class="spacer"></span>
+            <button id="http-copy" title="Copy the body of the response">Copy body</button>
+          </div>
+          <div id="http-status"></div>
+          <pre class="body" id="http-body"></pre>
         </div>
       </div>
       <div id="database-tab" class="tab">

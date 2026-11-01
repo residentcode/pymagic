@@ -27,6 +27,7 @@ import { setupRequirementsCheck } from './requirements-check';
 import { setupSemantic } from './semantic';
 import { setupProfiler } from './profiler';
 import { setupDatabase } from './database';
+import { setupHttpClient } from './http';
 import { setupNotebook } from './notebook';
 import { buildInfo, buildLabel } from './build-info.js';
 import { setupGitSync } from './git-sync';
@@ -1123,6 +1124,7 @@ async function main() {
     const coverage = setupCoverage(common);
     setupRequirementsCheck(common);
     setupProfiler(common);
+    setupHttpClient({ ...common, root: info.root, askText: (...a) => explorer.askText(...a) });
     setupDatabase({ ...common, askText: (...a) => explorer.askText(...a), runScript: (rel, args) => runHooks.runScript(rel, args) });
     // code actions that need the page (not just a text edit) arrive as commands
     monaco.editor.registerCommand('pymagic.installPackage', (_accessor, name) => {

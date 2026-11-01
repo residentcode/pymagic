@@ -6,7 +6,8 @@
 import { after, afterEach, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { launch, project, sleep } from './app.mjs';
 
@@ -17,6 +18,7 @@ const FILES = {
     'quotes.py': 'url = "/shop/about/"\nname = "pen"\nsaid = "it\'s"\n',
     'queries.sql': "CREATE TABLE note (id INTEGER PRIMARY KEY, body TEXT);\nINSERT INTO note (body) VALUES ('one; two'), ('three');\nSELECT body FROM note ORDER BY id;\n",
     'more_items.csv': 'name,price\nlamp,30\nmug,\n',
+    'api.http': '### the items\nGET {{host}}/items\n    ?page=2\nAccept: application/json\n\n###\nPOST {{host}}/items\nContent-Type: application/json\nAuthorization: Bearer {{token}}\n\n{"name": "pen"}\n',
     'tests/__init__.py': '',
     'tests/test_calc.py': 'import unittest\n\n\nclass Calc(unittest.TestCase):\n    def test_ok(self):\n        self.assertEqual(1 + 1, 2)\n\n    def test_bad(self):\n        self.assertEqual(1 + 1, 3)\n',
 };
@@ -37,15 +39,28 @@ async function clickMargin(line) {
     return page.evaluate(`window.pymagic.editor.getModel().getLineDecorations(${line}).some((d) => d.options.glyphMarginClassName?.startsWith('bp-glyph'))`);
 }
 
+let echo;
 before(async () => {
     const root = project(FILES);
     // an SQLite file for the Database panel, made with the standard sqlite3 module
     const made = spawnSync('python', ['-c', "import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.executescript(\"CREATE TABLE item (id INTEGER PRIMARY KEY, name TEXT, price REAL); INSERT INTO item (name, price) VALUES ('pen', 2), ('book', 12.5), ('cup', 4);\"); db.commit()", join(root, 'shop.sqlite3')]);
     assert.equal(made.status, 0, String(made.stderr));
+    // a server for the HTTP client: it answers with what it was sent
+    echo = createServer((req, res) => {
+        let body = '';
+        req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+            res.writeHead(req.url.startsWith('/missing') ? 404 : 200, { 'Content-Type': 'application/json', 'X-Echo': 'yes' });
+            res.end(JSON.stringify({ method: req.method, path: req.url, auth: req.headers.authorization ?? null, body }));
+        });
+    });
+    await new Promise((ok) => echo.listen(0, '127.0.0.1', ok));
+    writeFileSync(join(root, 'http-client.env.json'), JSON.stringify({ dev: { host: `http://127.0.0.1:${echo.address().port}` }, prod: { host: 'https://example.invalid' } }));
+    writeFileSync(join(root, 'http-client.private.env.json'), JSON.stringify({ dev: { token: 'secret' } }));
     app = await launch(root);
     page = app.page;
 });
-after(async () => { await app?.close(); });
+after(async () => { await app?.close(); echo?.close(); });
 // a test that failed half way leaves no program running for the next one
 afterEach(async () => {
     if (page && !(await page.evaluate(`${$('b-stop')}.disabled`))) {
@@ -64,8 +79,13 @@ describe('the editor and the language server', () => {
 
     test('hover over a call shows the function and its docstring', async () => {
         await open('calc.py');
-        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 9, column: 30 }); ed.focus(); ed.trigger('e2e', 'editor.action.showHover', {}); })()`);
-        const text = await page.waitFor(`[...document.querySelectorAll('.monaco-hover-content')].map((h) => h.textContent).join(' ').trim() || null`, 15000, 'the hover');
+        // asked again every few seconds: the first hover of a session can come before the language server has the file
+        let text = null;
+        for (let i = 0; i < 6 && !text; i++) {
+            await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 9, column: 30 }); ed.focus(); ed.trigger('e2e', 'editor.action.showHover', {}); })()`);
+            text = await page.waitFor(`[...document.querySelectorAll('.monaco-hover-content')].map((h) => h.textContent).join(' ').trim() || null`, 4000, 'the hover').catch(() => null);
+        }
+        assert.ok(text, 'no hover in 24 seconds');
         assert.match(text, /total/);
         assert.match(text, /The sum of the prices/);
         await page.evaluate(`window.pymagic.editor.trigger('e2e', 'hideHover', {})`);
@@ -217,5 +237,47 @@ describe('database', () => {
         assert.equal(saved.length, 5);
         assert.deepEqual(saved[4], { id: 5, name: 'mug', price: null });
         assert.deepEqual(saved[0], { id: 1, name: 'pen', price: 9 });
+    });
+});
+
+describe('HTTP client', () => {
+    const status = () => page.evaluate(`document.getElementById('http-status').textContent`);
+    const body = () => page.evaluate(`document.getElementById('http-body').textContent`);
+
+    test('▶ Run above a request sends it with the environment\'s variables, and shows the response', async () => {
+        await open('api.http');
+        assert.equal(await page.evaluate('window.pymagic.editor.getModel().getLanguageId()'), 'http');
+        await page.waitFor(`[...document.querySelectorAll('.codelens-decoration a')].filter((a) => a.textContent.includes('▶ Run')).length === 2`, 15000, 'the run marks');
+        // a real click: Monaco runs a lens's command from its own mouse handling
+        const at = await page.evaluate(`(() => { const r = [...document.querySelectorAll('.codelens-decoration a')].find((a) => a.textContent.includes('▶ Run')).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+        await page.click(at.x, at.y);
+        await page.waitFor(`/^200 OK · \\d+ ms/.test(document.getElementById('http-status').textContent)`, 15000, 'the response').catch(async (e) => { throw new Error(e.message + ': ' + await status() + ' / ' + await page.evaluate(`document.querySelector('.toast, #toast')?.textContent ?? ''`)); });
+        assert.equal(await page.evaluate(`document.getElementById('http-env').value`), 'dev');
+        const answer = JSON.parse(await body());
+        assert.deepEqual(answer, { method: 'GET', path: '/items?page=2', auth: null, body: '' });
+        assert.match(await body(), /^\{\n {2}"method"/);   // indented
+        await page.evaluate(`document.querySelector('#http-parts button[data-part=headers]').click()`);
+        assert.match(await body(), /X-Echo: yes/);
+        await page.evaluate(`document.querySelector('#http-parts button[data-part=body]').click()`);
+    });
+
+    test('Ctrl+Enter runs the request at the cursor; the private environment\'s secrets fill it; the history keeps it', async () => {
+        await open('api.http');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 11, column: 2 }); ed.focus(); return ed.getAction('pymagic.http.runAtCursor').run(); })()`);
+        await page.waitFor(`document.getElementById('http-status').textContent.includes('POST')`, 15000, 'the response');
+        assert.deepEqual(JSON.parse(await body()), { method: 'POST', path: '/items', auth: 'Bearer secret', body: '{"name": "pen"}' });
+        assert.equal(await page.evaluate(`document.querySelectorAll('#http-history .http-item').length`), 2);
+        const saved = JSON.parse(readFileSync(join(app.root, '.pymagic', 'http-history.json'), 'utf8'));
+        assert.deepEqual(saved.map((h) => `${h.method} ${h.status}`), ['POST 200', 'GET 200']);
+    });
+
+    test('a pasted cURL command becomes a request', async () => {
+        await open('api.http');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; const m = ed.getModel(); const end = m.getLineCount();
+            ed.setPosition({ lineNumber: end, column: m.getLineMaxColumn(end) }); ed.trigger('keyboard', 'type', { text: '\\n###\\n' });
+            ed.trigger('keyboard', 'paste', { text: "curl 'http://127.0.0.1/missing' -H 'Accept: text/plain' --data-raw 'a=1'" }); })()`);
+        const text = await page.evaluate('window.pymagic.editor.getValue()');
+        assert.match(text, /###\nPOST http:\/\/127\.0\.0\.1\/missing\nAccept: text\/plain\nContent-Type: application\/x-www-form-urlencoded\n\na=1\n$/);
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; while (ed.getValue().includes('/missing')) ed.trigger('e2e', 'undo', {}); })()`);
     });
 });

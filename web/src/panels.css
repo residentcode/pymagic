@@ -201,6 +201,13 @@
 .db-source .db-name { font-weight: 600; } .db-table .db-name, .db-view .db-name { color: var(--sym); } .db-pk .db-name { text-decoration: underline; }
 .db-column, .db-index { cursor: default; } .db-empty { padding: 8px 10px; color: var(--dim); font-family: inherit; white-space: normal; }
 #db-bar .db-mode.active { background: var(--accent); color: #fff; } #db-data-bar { display: flex; gap: 4px; align-items: center; } #db-data-bar[hidden] { display: none; }
+#http-history-col { width: 28%; } #http-main { flex: 1; } #http-parts { display: flex; gap: 2px; } #http-parts button.active { background: var(--accent); color: #fff; }
+.http-item { display: flex; gap: 8px; padding: 1px 8px; cursor: pointer; white-space: nowrap; } .http-item:hover { background: var(--hover); } .http-item.sel { background: var(--accent); color: #fff; }
+.http-code { width: 28px; font-weight: 600; } .http-code.ok { color: var(--green, #3fb950); } .http-code.bad, .http-code.err { color: var(--red); }
+.http-what { flex: 1; overflow: hidden; text-overflow: ellipsis; } .http-when { color: var(--dim); font-size: 11px; } .http-item.sel .http-code, .http-item.sel .http-when { color: #fff; }
+.http-empty { padding: 8px 10px; color: var(--dim); white-space: normal; font-family: inherit; }
+#http-status { padding: 4px 10px; font-size: 12px; border-bottom: 1px solid var(--line); min-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#http-status.ok { color: var(--green, #3fb950); } #http-status.bad, #http-status.err { color: var(--red); } #http-body { margin: 0; padding: 6px 10px; white-space: pre-wrap; word-break: break-word; }
 #db-where { width: 260px; } .db-missing .db-name { color: var(--dim); font-style: italic; } .db-hint { color: var(--dim); font-size: 11px; }
 #db-console { display: flex; flex-direction: column; border-bottom: 1px solid var(--line); } #db-console[hidden] { display: none; }
 #db-console-bar { display: flex; gap: 8px; align-items: center; padding: 3px 8px; } #db-sql { height: 110px; }
