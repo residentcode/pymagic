@@ -185,6 +185,26 @@ app.MapGet("/api/raw", (string path) =>
     }
     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.NotFound(); }
 });
+// Open in browser (notebooks): the page builds the HTML of a notebook, the host keeps it a while and serves it at an address the web browser can open
+app.MapPost("/api/notebook/export", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    string id = NotebookExports.Put(body?["name"]?.GetValue<string>() ?? "notebook", body?["html"]?.GetValue<string>() ?? "") ?? "";
+    return id.Length == 0 ? Results.StatusCode(413) : Results.Json(new { url = "/api/notebook/view?id=" + id });
+});
+app.MapGet("/api/notebook/view", (string id, HttpContext ctx) =>
+{
+    if (NotebookExports.Get(id) is not { } html) return Results.NotFound();
+    ctx.Response.Headers["Content-Security-Policy"] = NotebookExports.Policy;
+    ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    return Results.Text(html, "text/html; charset=utf-8");
+});
+// does a Jupyter server answer at this address with this token (the notebook's kernel selector)
+app.MapPost("/api/jupyter/probe", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    return Results.Json(await JupyterKernel.Probe(body?["url"]?.GetValue<string>() ?? "", body?["token"]?.GetValue<string>() ?? ""));
+});
 // reStructuredText as HTML by docutils, when the project's Python has it: {text}
 app.MapPost("/api/rst", async (HttpRequest req) =>
 {
@@ -1536,15 +1556,26 @@ app.Map("/nb", async (HttpContext ctx) =>
     using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
     var outbox = new BlockingCollection<string>();
     void Send(JsonNode msg) { if (!outbox.IsAddingCompleted) try { outbox.Add(msg.ToJsonString()); } catch (InvalidOperationException) { } }
-    NotebookKernel? kernel = null;
+    INotebookKernel? kernel = null;
     int generation = 0;
+    // a notebook on a Jupyter server (?remote=1) is told which one by its first message (useServer); the built-in kernel starts at once
+    bool remote = ctx.Request.Query["remote"] == "1";
     void StartKernel()
     {
         kernel?.Dispose();
         int mine = ++generation;
         // messages of a kernel that was replaced (restart) must not reach the page
-        kernel = new NotebookKernel(msg => { if (mine == generation) Send(msg); }) { Python = interpreters.Current?.Python ?? python, Target = interpreters.Current?.Target ?? ExecutionTarget.Local };
-        kernel.Start(root);
+        var local = new NotebookKernel(msg => { if (mine == generation) Send(msg); }) { Python = interpreters.Current?.Python ?? python, Target = interpreters.Current?.Target ?? ExecutionTarget.Local };
+        kernel = local;
+        local.Start(root);
+    }
+    void UseServer(string url, string token, string? name)
+    {
+        kernel?.Dispose();
+        int mine = ++generation;
+        var jupyter = new JupyterKernel(msg => { if (mine == generation) Send(msg); });
+        kernel = jupyter;
+        jupyter.Start(url, token, name);
     }
 
     var sender = Task.Run(async () =>
@@ -1557,7 +1588,7 @@ app.Map("/nb", async (HttpContext ctx) =>
         }
     });
 
-    StartKernel();
+    if (!remote) StartKernel();
     var buffer = new byte[64 * 1024];
     try
     {
@@ -1574,9 +1605,11 @@ app.Map("/nb", async (HttpContext ctx) =>
             var msg = JsonNode.Parse(ms.ToArray());
             switch (msg?["type"]?.GetValue<string>())
             {
-                case "execute": kernel?.Execute(msg["id"]?.GetValue<string>() ?? "", msg["code"]?.GetValue<string>() ?? ""); break;
+                case "useServer" when remote && kernel == null: UseServer(msg["url"]?.GetValue<string>() ?? "", msg["token"]?.GetValue<string>() ?? "", msg["kernel"]?.GetValue<string>()); break;
+                case "execute": kernel?.Execute(msg["id"]?.GetValue<string>() ?? "", msg["code"]?.GetValue<string>() ?? "", msg["debug"]); break;
+                case "inspect": kernel?.Inspect(msg["id"]?.GetValue<string>() ?? "", msg["path"]); break;
                 case "interrupt": kernel?.Interrupt(); break;
-                case "restart": StartKernel(); break;
+                case "restart": if (kernel is JupyterKernel jk) jk.Restart(); else if (!remote) StartKernel(); break;
             }
         }
     }

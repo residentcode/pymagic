@@ -5,6 +5,8 @@ import {
     ansiSegments, applyKernelMessage, changeType, clearOutputs, collapseCarriageReturns, deleteCell, describeOutput, insertCell,
     cellOfLine, lastExecutionCount, mergeCells, moveCell, notebookSymbols, offsetOfPosition, parseNotebook, parseTags, sectionOf, serializeNotebook,
     setSource, setTags, sourceOf, splitCell, tagsOf, virtualDocument, virtualLine,
+    BUILT_IN_SERVER, addServer, cellDebugFile, needsMoreInput, normalizeServer, notebookSlug, notebookToHtml, parseCellDebugFile, parseServers,
+    pathKey, pathsToRefresh, pushHistory, stepHistory, variableRows,
 } from './notebook-model';
 import { blocksOf, inlineOf } from './markdown-lite';
 import { toast } from './toast';
@@ -114,6 +116,21 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
     const states = new Map();      // rel -> state of one open notebook
     const cellModels = new WeakMap();   // the Monaco model of a cell's editor -> { state, view }
     let shown = null;              // the state on screen
+    let debugApi = null;           // the debugger of the Run panel (connectDebugger): breakpoints in cells, a debug session for one cell
+    const bpStore = new WeakMap(); // cell object -> its breakpoints while its editor is gone (a rebuilt notebook makes new editors)
+
+    // ---- Jupyter servers: the ones the user saved, and the one a notebook runs on (null: the built-in kernel)
+
+    const SERVERS_KEY = 'pm.jupyterServers';
+    const store = {
+        get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+        set(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
+    };
+    const savedServers = () => parseServers(store.get(SERVERS_KEY) ?? '[]');
+    const chosenServer = (rel) => {
+        const id = store.get(`pm.nbServer.${rel}`);
+        return id ? savedServers().find((s) => s.id === id) ?? null : null;
+    };
 
     // ---- the notebook as one Python file for the language server
 
@@ -159,7 +176,15 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         state.varsEl = el('div', 'nb-vars');
         state.vars = [];
         state.varsOpen = true;
-        state.dom.append(state.barEl, state.varsEl, state.errorEl, state.listEl);
+        state.openVars = new Set();         // paths of the variables (and members) shown open
+        state.members = new Map();          // path key -> { list } | { loading } | { error }: what the kernel said about an open value
+        state.inspecting = new Map();       // request id -> path key
+        state.consoleIds = new Map();       // request id -> entry of the console
+        state.history = [];
+        state.consoleOpen = false;
+        state.consoleEl = el('div', 'nb-console');
+        state.server = chosenServer(rel);   // the Jupyter server this notebook runs on (null: the built-in kernel)
+        state.dom.append(state.barEl, state.varsEl, state.errorEl, state.listEl, state.consoleEl);
         root.append(state.dom);
         buildBar(state);
         paintVars(state);
@@ -195,7 +220,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
     }
 
     function dispose(state) {
-        for (const v of state.views) v.editor?.dispose();
+        for (const v of state.views) { endDebug(v); v.editor?.dispose(); }
         state.observer?.disconnect();
         state.ws?.close();
         state.dom.remove();
@@ -217,9 +242,14 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
             btn('Format', 'Lay out the code of every code cell (the formatter of the toolbar); one cell: Shift+Alt+F', () => void formatAll(state)),
             btn('Clear outputs', 'Remove the outputs of every cell', () => { clearOutputs(state.nb); state.views.forEach(paintOutputs); pushSoon(state); }),
             btn('Variables', 'Show or hide the Variables window (the names the kernel holds after each run)', () => { state.varsOpen = !state.varsOpen; paintVars(state); }),
+            (state.consoleBtn = btn('Console', 'Show or hide the Jupyter console: a line to type into, sharing the kernel and the variables of the cells', () => toggleConsole(state))),
+            btn('Open in browser', 'Show the notebook as a page in your web browser (a copy: the cells as they are now, with their outputs)', () => void openInBrowser(state)),
             btn('Save', 'Save the notebook (Ctrl+S)', () => { flush(state); void save(); }),
+            el('span', 'sep'),
+            (state.serverBtn = btn('', 'The kernel this notebook runs on: the built-in one or a Jupyter server. Click to choose or add a server', () => void serversWindow(state))),
             state.statusEl,
         );
+        paintServerButton(state);
     }
 
     function setStatus(state, status, text) {
@@ -235,20 +265,77 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         box.style.display = state.varsOpen ? 'block' : 'none';
         if (!state.varsOpen) return;
         const head = el('div', 'nb-vars-head', `Variables (${state.vars.length})`);
-        if (!state.vars.length) { box.replaceChildren(head, el('div', 'nb-empty', 'Nothing yet: run a cell and the names it leaves are listed here')); return; }
+        if (!state.vars.length) {
+            const why = state.server ? 'The Variables window needs the built-in kernel: a Jupyter server does not send its names here' : 'Nothing yet: run a cell and the names it leaves are listed here';
+            box.replaceChildren(head, el('div', 'nb-empty', why));
+            return;
+        }
         const table = el('table', 'nb-vars-table');
         const row = (cells, tag = 'td') => { const tr = el('tr'); for (const c of cells) tr.append(el(tag, '', c)); return tr; };
         table.append(row(['Name', 'Type', 'Size', 'Value'], 'th'));
-        for (const v of state.vars) table.append(row([v.name, v.type, v.size ?? '', v.value]));
+        for (const r of variableRows(state.vars, state.openVars, state.members)) {
+            const tr = el('tr', r.depth ? 'nb-var-child' : '');
+            tr.dataset.path = r.key;
+            const name = el('td', 'nb-var-name');
+            name.style.paddingLeft = `${r.depth * 14}px`;
+            if (r.expandable) {
+                const caret = el('button', r.isOpen ? 'nb-var-caret open' : 'nb-var-caret');
+                caret.title = r.isOpen ? 'Close' : 'Open: show the members of this value';
+                caret.onclick = () => toggleVar(state, r);
+                name.append(caret);
+            } else name.append(el('span', 'nb-var-caret'));
+            name.append(el('span', 'nb-var-label', r.name));
+            const value = el('td', r.error ? 'nb-var-error' : '', r.error || (r.loading ? 'loading…' : r.value));
+            value.title = r.error || r.value;
+            tr.append(name, el('td', '', r.type), el('td', '', r.size), value);
+            table.append(tr);
+        }
         const scroll = el('div', 'nb-vars-scroll');
         scroll.append(table);
         box.replaceChildren(head, scroll);
     }
 
+    /** Opens or closes a variable (or a member of one); the members are asked for from the kernel when a row is opened. */
+    function toggleVar(state, row) {
+        if (state.openVars.has(row.key)) { state.openVars.delete(row.key); paintVars(state); return; }
+        state.openVars.add(row.key);
+        askMembers(state, row.path, false);
+        paintVars(state);
+    }
+
+    /** Asks the kernel for the members of the value at a path; `quiet`: keep what is shown until the answer comes (a refresh after a run). */
+    function askMembers(state, path, quiet) {
+        const key = pathKey(path);
+        if (!quiet || !state.members.has(key)) state.members.set(key, { loading: true });
+        if (state.ws?.readyState !== WebSocket.OPEN) { state.members.set(key, { error: 'The kernel is not running' }); return; }
+        const id = `v${state.nextId++}`;
+        state.inspecting.set(id, key);
+        send(state, { type: 'inspect', id, path });
+    }
+
+    /** After a run the names may have changed: the open values are asked for again (those whose variable is gone are closed). */
+    function refreshOpen(state) {
+        const names = new Set(state.vars.map((v) => v.name));
+        for (const path of pathsToRefresh(state.openVars)) {
+            if (!names.has(path[0][1])) { state.openVars.delete(pathKey(path)); state.members.delete(pathKey(path)); continue; }
+            askMembers(state, path, true);
+        }
+    }
+
     // ---- cells
 
+    /** Keeps the breakpoints of a cell's editor (they are decorations of its model) before the editor is disposed. */
+    function releaseEditor(view) {
+        if (!view.editor) return;
+        if (debugApi && view.cell.cell_type === 'code') {
+            const list = debugApi.breakpointsOf(view.editor.getModel());
+            if (list.length) bpStore.set(view.cell, list); else bpStore.delete(view.cell);
+        }
+        view.editor.dispose();
+    }
+
     function render(state) {
-        for (const v of state.views) v.editor?.dispose();
+        for (const v of state.views) releaseEditor(v);
         state.observer.disconnect();
         // the cells being run or waiting to run keep their place across a rebuild (the kernel is still writing into those cells)
         const before = new Map(state.views.map((v) => [v.cell, v]));
@@ -288,6 +375,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         tools.append(
             tool('▶', 'Run this cell', () => { select(state, indexOf(state, view)); runSelected(state, false); }),
             ...(cell.cell_type === 'markdown' ? [tool('▶ Section', 'Run Section: this heading cell and the cells up to the next heading of the same or a higher level', () => runSection(state, view), 'nb-run-section')] : []),
+            ...(cell.cell_type === 'code' ? [tool('Debug', 'Run this cell under the debugger: it stops at the breakpoints set in the margin of its lines', () => void debugCell(state, view), 'nb-debug-btn')] : []),
             tool('Split', 'Split the cell at the cursor (Ctrl+Shift+-)', () => split(state, view), 'nb-split'),
             tool('Merge ↓', 'Merge the cell with the one below it', () => merge(state, view), 'nb-merge'),
             tool('Tags', 'Edit the tags of the cell (its metadata)', () => { view.tagEdit = !view.tagEdit; paintTags(state, view); }, 'nb-tag-btn'),
@@ -328,7 +416,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         const host = el('div', 'nb-monaco');
         view.inputEl.append(host);
         const editor = monaco.editor.create(host, {
-            value: sourceOf(cell), language, theme: 'vs-dark', minimap: { enabled: false }, lineNumbers: 'off', folding: false, glyphMargin: false,
+            value: sourceOf(cell), language, theme: 'vs-dark', minimap: { enabled: false }, lineNumbers: 'off', folding: false, glyphMargin: cell.cell_type === 'code',
             scrollBeyondLastLine: false, scrollbar: { vertical: 'hidden', horizontal: 'auto', alwaysConsumeMouseWheel: false, handleMouseWheel: false },
             overviewRulerLanes: 0, renderLineHighlight: 'none', lineDecorationsWidth: 6, padding: { top: 4, bottom: 4 }, fontSize: 14,
             automaticLayout: true, wordWrap: 'off', contextmenu: true, quickSuggestions: { other: true, comments: false, strings: false },
@@ -339,6 +427,11 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         fit();
         editor.onDidChangeModelContent(() => { setSource(cell, editor.getValue()); pushSoon(state); virtualSoon(state); });
         cellModels.set(editor.getModel(), { state, view });
+        if (cell.cell_type === 'code' && debugApi) {
+            debugApi.attachEditor(editor);
+            const saved = bpStore.get(cell);
+            if (saved?.length) debugApi.restoreBreakpoints(editor.getModel(), saved);
+        }
         applyMarkers(state, view);
         editor.onDidFocusEditorText(() => select(state, indexOf(state, view), false));
         const K = monaco.KeyCode, M = monaco.KeyMod;
@@ -353,6 +446,8 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
                 const sel = editor.getSelection();
                 void editor.getAction(sel && !sel.isEmpty() ? 'editor.action.formatSelection' : 'editor.action.formatDocument')?.run();
             });
+        if (cell.cell_type === 'code')
+            editor.addAction({ id: 'pymagic.debugCell', label: 'Debug Cell', contextMenuGroupId: 'navigation', contextMenuOrder: 0.5, run: () => void debugCell(state, view) });
         if (cell.cell_type === 'markdown') editor.addCommand(K.Escape, () => { view.rendered = true; paintMarkdown(state, view); });
         if (focus) editor.focus();
     }
@@ -476,9 +571,12 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
     function connect(state) {
         if (state.ws && state.ws.readyState <= 1) return;
         const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-        const ws = new WebSocket(`${scheme}://${location.host}/nb`);
+        const server = state.server;
+        const ws = new WebSocket(`${scheme}://${location.host}/nb${server ? '?remote=1' : ''}`);
         state.ws = ws;
-        setStatus(state, 'starting', 'starting…');
+        // the host waits to be told which Jupyter server to use (the token travels in this message, not in the address)
+        if (server) ws.onopen = () => ws.send(JSON.stringify({ type: 'useServer', url: server.url, token: server.token, kernel: server.kernel }));
+        setStatus(state, 'starting', server ? `connecting to ${server.name}…` : 'starting…');
         ws.onmessage = (ev) => onKernel(state, JSON.parse(ev.data));
         ws.onclose = () => { if (state.ws === ws) { setStatus(state, 'dead', 'disconnected'); failQueue(state); } };
     }
@@ -498,13 +596,21 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
             case 'kernelExited': setStatus(state, 'dead', 'stopped'); failQueue(state); return;
             case 'kernelLog': return;
         }
-        if (m.type === 'variables') { state.vars = m.vars ?? []; paintVars(state); return; }
+        if (m.type === 'variables') { state.vars = m.vars ?? []; refreshOpen(state); paintVars(state); return; }
+        if (m.type === 'children') {
+            const key = state.inspecting.get(m.id);
+            state.inspecting.delete(m.id);
+            if (key !== undefined) { state.members.set(key, m.error ? { error: m.error } : { list: m.children ?? [] }); paintVars(state); }
+            return;
+        }
+        if (state.consoleIds.has(m.id)) { onConsoleMessage(state, state.consoleIds.get(m.id), m); return; }
         const view = state.ids.get(m.id);
         if (!view) return;
         if (m.type === 'done') {
             view.cell.execution_count = m.execution_count ?? view.cell.execution_count;
             view.running = false;
             state.busy = false;
+            endDebug(view);
             paintCount(view);
             setStatus(state, 'idle', `Python ${state.python ?? ''} idle`);
             state.ids.delete(m.id);
@@ -517,8 +623,17 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         pushSoon(state);
     }
 
+    function endDebug(view) {
+        view.debugSession?.end();
+        view.debugSession = null;
+        view.debugInfo = null;
+    }
+
     function failQueue(state) {
-        for (const v of state.views) { v.running = false; v.queued = false; paintCount(v); }
+        for (const v of state.views) { v.running = false; v.queued = false; endDebug(v); paintCount(v); }
+        for (const entry of state.consoleIds.values()) finishEntry(entry, 'the kernel stopped');
+        state.consoleIds.clear();
+        state.inspecting.clear();
         state.queue = [];
         state.busy = false;
         state.ids.clear();
@@ -548,7 +663,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         state.busy = true;
         setStatus(state, 'busy', 'busy');
         flush(state);
-        send(state, { type: 'execute', id, code: sourceOf(view.cell) });
+        send(state, { type: 'execute', id, code: sourceOf(view.cell), ...(view.debugInfo ? { debug: view.debugInfo } : {}) });
     }
 
     function runSelected(state, advance) {
@@ -575,9 +690,264 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
     function restart(state) {
         failQueue(state);
         state.vars = [];
+        state.openVars.clear();
+        state.members.clear();
         paintVars(state);
         if (state.ws?.readyState === WebSocket.OPEN) { setStatus(state, 'starting', 'restarting…'); send(state, { type: 'restart' }); }
         else connect(state);
+    }
+
+    // ---- debugging a cell
+
+    /**
+     * Runs a code cell under the debugger of the Run panel. The panel listens like a debug server; the kernel connects to it and runs the cell
+     * under the name of a file that stands for the cell (`cellDebugFile`), so the breakpoints in the cell's margin stop it, and the stop is
+     * shown in the cell with the frames, variables and stepping of the panel.
+     */
+    async function debugCell(state, view) {
+        if (!debugApi) { toast('The debugger is not ready yet', true); return; }
+        if (view.cell.cell_type !== 'code') { toast('Only a code cell can be debugged'); return; }
+        if (state.server) { toast('Debug Cell works with the built-in kernel: a Jupyter server runs the cell somewhere the debugger cannot reach', true); return; }
+        if (state.busy || view.running || view.queued || state.queue.length) { toast('Wait until the cells that are running are done'); return; }
+        flush(state);
+        select(state, indexOf(state, view), false);
+        if (!view.editor) createEditor(state, view);          // the breakpoints of the cell are on its editor
+        const session = await debugApi.cellSession();
+        if (!session) { toast('Another run or debug session is going: stop it first', true); return; }
+        view.debugInfo = { host: session.host, port: session.port, token: session.token, file: cellDebugFile(state.rel, indexOf(state, view)) };
+        view.debugSession = session;
+        enqueue(state, [view]);
+    }
+
+    // ---- the Jupyter console: a line to type into, beside the cells, in the kernel's own namespace
+
+    function toggleConsole(state) {
+        state.consoleOpen = !state.consoleOpen;
+        paintConsole(state);
+    }
+
+    function paintConsole(state) {
+        const box = state.consoleEl;
+        box.style.display = state.consoleOpen ? 'flex' : 'none';
+        state.consoleBtn?.classList.toggle('on', state.consoleOpen);
+        if (!state.consoleOpen) return;
+        if (!state.consoleLog) buildConsole(state);
+        state.consoleInput.focus();
+    }
+
+    function buildConsole(state) {
+        const head = el('div', 'nb-console-head');
+        head.append(el('span', 'nb-console-title', 'Console'), el('span', 'nb-console-hint', 'Enter runs · Shift+Enter adds a line · Up and Down recall · shares the variables of the cells'));
+        const clear = el('button', '', 'Clear');
+        clear.onclick = () => state.consoleLog.replaceChildren();
+        const close = el('button', '', '✕');
+        close.title = 'Hide the console';
+        close.onclick = () => toggleConsole(state);
+        head.append(clear, close);
+        state.consoleLog = el('div', 'nb-console-log');
+        const row = el('div', 'nb-console-row');
+        const prompt = el('span', 'nb-console-prompt', '>>>');
+        const input = el('textarea', 'nb-console-input');
+        input.rows = 1;
+        input.spellcheck = false;
+        input.placeholder = 'Type Python here, e.g. df.head()';
+        state.consoleInput = input;
+        let at = state.history.length, draft = '';
+        const grow = () => { input.rows = Math.min(8, input.value.split('\n').length); };
+        input.oninput = grow;
+        input.onkeydown = (e) => {
+            e.stopPropagation();                       // the keys of the notebook (Shift+Enter runs a cell) are not for this line
+            if (e.key === 'Enter' && !e.shiftKey) {
+                if (!e.ctrlKey && needsMoreInput(input.value)) return;   // the statement goes on: a new line
+                e.preventDefault();
+                const code = input.value;
+                if (code.trim() === '') return;
+                pushHistory(state.history, code);
+                at = state.history.length;
+                draft = '';
+                input.value = '';
+                grow();
+                runConsole(state, code);
+            } else if (e.key === 'ArrowUp' && !input.value.slice(0, input.selectionStart).includes('\n')) {
+                if (at === state.history.length) draft = input.value;
+                const step = stepHistory(state.history, at, -1, draft);
+                at = step.index; input.value = step.text; grow(); e.preventDefault();
+            } else if (e.key === 'ArrowDown' && !input.value.slice(input.selectionEnd).includes('\n') && at < state.history.length) {
+                const step = stepHistory(state.history, at, 1, draft);
+                at = step.index; input.value = step.text; grow(); e.preventDefault();
+            }
+        };
+        row.append(prompt, input);
+        state.consoleEl.replaceChildren(head, state.consoleLog, row);
+    }
+
+    /** Sends a line of the console to the kernel; what comes back is shown under the line, not in a cell. */
+    function runConsole(state, code) {
+        const entry = { code, cell: { outputs: [] }, el: el('div', 'nb-console-entry'), outEl: el('div', 'nb-console-out'), countEl: el('span', 'nb-console-count', '[…]') };
+        const echo = el('div', 'nb-console-echo');
+        echo.append(el('span', 'nb-console-prompt', '>>>'), el('pre', 'nb-console-code', code), entry.countEl);
+        entry.el.append(echo, entry.outEl);
+        state.consoleLog.append(entry.el);
+        state.consoleLog.scrollTop = state.consoleLog.scrollHeight;
+        const id = `k${state.nextId++}`;
+        state.consoleIds.set(id, entry);
+        whenOpen(state, () => send(state, { type: 'execute', id, code }));
+    }
+
+    function onConsoleMessage(state, entry, m) {
+        if (m.type === 'done') {
+            state.consoleIds.delete(m.id);
+            finishEntry(entry, null, m.execution_count);
+            return;
+        }
+        applyKernelMessage(entry.cell, m);
+        entry.outEl.replaceChildren(...entry.cell.outputs.map(renderOutput));
+        state.consoleLog.scrollTop = state.consoleLog.scrollHeight;
+    }
+
+    function finishEntry(entry, note, count) {
+        entry.countEl.textContent = note ? `(${note})` : `[${count ?? ' '}]`;
+        entry.done = true;
+    }
+
+    // ---- Open in browser
+
+    /** Makes a page of the notebook as it is now (the host serves it from memory) and opens it in the web browser. */
+    async function openInBrowser(state) {
+        if (!state.nb) { toast('The notebook has an error: fix it first', true); return; }
+        flush(state);
+        const title = state.rel.split('/').pop();
+        let url;
+        try {
+            const res = await fetch('/api/notebook/export', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: title, html: notebookToHtml(state.nb, { title, blocksOf }) }) });
+            if (!res.ok) throw new Error(`the host said ${res.status}`);
+            url = (await res.json()).url;
+        } catch (e) { toast(`Could not make the page: ${e.message}`, true); return; }
+        state.lastExport = url;
+        window.open(location.origin + url, '_blank');
+        toast('Opened the notebook in your web browser');
+    }
+
+    // ---- the Jupyter servers window and the selector
+
+    function paintServerButton(state) {
+        if (state.serverBtn) state.serverBtn.textContent = `Kernel: ${state.server?.name ?? BUILT_IN_SERVER.name} ▾`;
+    }
+
+    /** Switches the notebook to another kernel: the built-in one (null) or a Jupyter server. The new kernel starts when a cell is run. */
+    function useServer(state, server) {
+        if ((state.server?.id ?? null) === (server?.id ?? null)) return;
+        const old = state.ws;
+        state.ws = null;                          // its close is not news
+        old?.close();
+        failQueue(state);
+        state.server = server;
+        store.set(`pm.nbServer.${state.rel}`, server ? server.id : null);
+        state.vars = [];
+        state.openVars.clear();
+        state.members.clear();
+        setStatus(state, 'dead', 'not started');
+        paintServerButton(state);
+        paintVars(state);
+        toast(server ? `This notebook runs on ${server.name} from the next run` : 'This notebook runs on the built-in kernel from the next run');
+    }
+
+    /** Asks the host whether a Jupyter server answers at an address with a token: { ok, message, kernels }. */
+    async function probeServer(server) {
+        try {
+            const res = await fetch('/api/jupyter/probe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: server.url, token: server.token }) });
+            return await res.json();
+        } catch (e) { return { ok: false, message: e.message }; }
+    }
+
+    /** The window of the servers: the built-in kernel and the Jupyter servers (address and token) to choose between for this notebook. */
+    function serversWindow(state) {
+        const shade = el('div', 'ask-shade nb-servers-shade');
+        const box = el('div', 'ask-box nb-servers');
+        let servers = savedServers();
+        let chosen = state.server?.id ?? BUILT_IN_SERVER.id;
+        const message = el('div', 'nb-server-msg');
+        const list = el('div', 'nb-server-list');
+        const say = (text, bad) => { message.textContent = text; message.className = `nb-server-msg${bad ? ' bad' : ''}`; };
+        const paint = () => {
+            list.replaceChildren();
+            for (const srv of [BUILT_IN_SERVER, ...servers]) {
+                const row = el('label', 'nb-server-row');
+                const radio = el('input');
+                radio.type = 'radio';
+                radio.name = 'nb-server';
+                radio.checked = chosen === srv.id;
+                radio.onchange = () => { chosen = srv.id; };
+                row.append(radio, el('span', 'nb-server-name', srv.name), el('span', 'nb-server-url', srv.url || 'runs here, with the interpreter of the project'));
+                if (srv.id !== BUILT_IN_SERVER.id) {
+                    const test = el('button', '', 'Test');
+                    test.onclick = async (e) => { e.preventDefault(); say(`Asking ${srv.url}…`); const r = await probeServer(srv); say(r.message, !r.ok); };
+                    const remove = el('button', '', 'Remove');
+                    remove.onclick = (e) => {
+                        e.preventDefault();
+                        servers = servers.filter((x) => x.id !== srv.id);
+                        store.set(SERVERS_KEY, JSON.stringify(servers));
+                        if (chosen === srv.id) chosen = BUILT_IN_SERVER.id;
+                        paint();
+                    };
+                    row.append(test, remove);
+                }
+                list.append(row);
+            }
+        };
+        const field = (label, type, placeholder) => {
+            const input = el('input', 'nb-server-field');
+            input.type = type;
+            input.placeholder = placeholder;
+            input.spellcheck = false;
+            const wrap = el('label', 'nb-server-labelled');
+            wrap.append(el('span', '', label), input);
+            return { wrap, input };
+        };
+        const name = field('Name', 'text', 'optional');
+        const url = field('Address', 'text', 'http://localhost:8888');
+        const token = field('Token', 'password', 'the token Jupyter printed when it started');
+        const kernel = field('Kernel', 'text', 'optional, e.g. python3');
+        url.input.id = 'nb-server-url';
+        token.input.id = 'nb-server-token';
+        name.input.id = 'nb-server-name';
+        const typed = () => normalizeServer({ name: name.input.value, url: url.input.value, token: token.input.value, kernel: kernel.input.value });
+        const testNew = el('button', '', 'Test');
+        testNew.onclick = async () => { const s = typed(); if (s.error) { say(s.error, true); return; } say(`Asking ${s.url}…`); const r = await probeServer(s); say(r.message, !r.ok); };
+        const add = el('button', 'primary', 'Add server');
+        add.id = 'nb-server-add';
+        add.onclick = () => {
+            const s = typed();
+            if (s.error) { say(s.error, true); return; }
+            servers = addServer(servers, s);
+            store.set(SERVERS_KEY, JSON.stringify(servers));
+            chosen = s.id;
+            for (const f of [name, url, token, kernel]) f.input.value = '';
+            say(`Added ${s.name}. Choose "Use" to run this notebook on it.`);
+            paint();
+        };
+        const use = el('button', 'primary', 'Use for this notebook');
+        use.id = 'nb-server-use';
+        const done = () => shade.remove();
+        use.onclick = () => { useServer(state, chosen === BUILT_IN_SERVER.id ? null : servers.find((x) => x.id === chosen) ?? null); done(); };
+        const close = el('button', '', 'Close');
+        close.onclick = done;
+        const form = el('div', 'nb-server-form');
+        form.append(name.wrap, url.wrap, token.wrap, kernel.wrap);
+        const addRow = el('div', 'ask-buttons');
+        addRow.append(testNew, add);
+        const buttons = el('div', 'ask-buttons');
+        buttons.append(use, close);
+        box.append(
+            el('div', 'ask-title', 'Kernel and Jupyter servers'),
+            el('div', 'ask-hint', 'A notebook runs on the built-in kernel (PyMagic starts Python itself) or on a Jupyter server you started yourself, here or on another computer: type its address and token. The token is kept in this browser profile.'),
+            list, el('div', 'nb-server-sub', 'Add a Jupyter server'), form, addRow, message, buttons);
+        shade.append(box);
+        shade.onmousedown = (e) => { if (e.target === shade) done(); };
+        shade.onkeydown = (e) => { if (e.key === 'Escape') done(); };
+        paint();
+        document.body.append(shade);
+        use.focus();
     }
 
     // ---- what the language server says about a cell
@@ -694,6 +1064,32 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
     return {
         /** Whether a Monaco model is the editor of a notebook cell. */
         isCell(model) { return cellModels.has(model); },
+        /** The debugger of the Run panel (see run.js, `notebook`): breakpoints in cells, and a debug session for one cell. */
+        connectDebugger(api) { debugApi = api; },
+        /** The file that stands for a cell while it is debugged (its breakpoints are set on it), or null for a model that is not a cell. */
+        cellFileOf(model) {
+            const e = cellModels.get(model);
+            return e && e.view.cell.cell_type === 'code' ? cellDebugFile(e.state.rel, indexOf(e.state, e.view)) : null;
+        },
+        /** The cell a file made by cellFileOf stands for, shown (selected, scrolled to the line): { model, editor } or null. */
+        cellAtFile(file, line) {
+            const at = parseCellDebugFile(file);
+            if (!at) return null;
+            const state = [...states.values()].find((s) => notebookSlug(s.rel) === at.slug);
+            const view = state?.views[at.index];
+            if (!view) return null;
+            select(state, at.index);
+            if (!view.editor) createEditor(state, view);
+            if (!view.editor) return null;
+            view.editor.revealLineInCenterIfOutsideViewport?.(line);
+            return { model: view.editor.getModel(), editor: view.editor };
+        },
+        /** The editor of a cell model (null when the model is not a cell's). */
+        editorOf(model) { const e = cellModels.get(model); return e?.view.editor ?? null; },
+        /** For tests and the page: debugs the cell at an index of the notebook of a file. */
+        debugCell(rel, index) { const s = states.get(rel); return s?.views[index] ? debugCell(s, s.views[index]) : Promise.resolve(); },
+        /** For tests and the page: the last page made by Open in browser. */
+        lastExport: (rel) => states.get(rel)?.lastExport ?? null,
         /** The text of a cell's editor laid out by the formatter (throws when it cannot be). */
         formatted(model, range) {
             const entry = cellModels.get(model);

@@ -12,7 +12,7 @@ namespace PyMagic.Server;
 /// kernel says (<c>ready</c>, <c>stream</c>, <c>result</c>, <c>display</c>, <c>error</c>, <c>done</c>) is passed to
 /// <c>emit</c> as it arrives; the host adds <c>kernelError</c> (it could not start) and <c>kernelExited</c>.
 /// </summary>
-public sealed class NotebookKernel : IDisposable
+public sealed class NotebookKernel : INotebookKernel
 {
     readonly Action<JsonNode> _emit;
     readonly object _gate = new();
@@ -135,8 +135,23 @@ public sealed class NotebookKernel : IDisposable
 
     // ------------------------------------------------------------ commands
 
-    public void Execute(string id, string code) =>
-        Send(new JsonObject { ["type"] = "execute", ["id"] = id, ["code"] = code });
+    /// <param name="debug">Debug Cell: where the debugger of the IDE listens ({host, port, token, file}); the cell runs under it.</param>
+    public void Execute(string id, string code, JsonNode? debug = null)
+    {
+        var msg = new JsonObject { ["type"] = "execute", ["id"] = id, ["code"] = code };
+        if (debug is JsonObject d)
+        {
+            // pm_debug.py is a file of its own beside the other helpers: the kernel imports it from where the host put it
+            var copy = (JsonObject)d.DeepClone();
+            copy["helper"] = Path.GetDirectoryName(RunSession.ExtractHelper("pm_debug.py"));
+            msg["debug"] = copy;
+        }
+        Send(msg);
+    }
+
+    /// <summary>Asks for the members of a value of the Variables window (<c>inspect</c>); the kernel answers with <c>children</c>.</summary>
+    public void Inspect(string id, JsonNode? path) =>
+        Send(new JsonObject { ["type"] = "inspect", ["id"] = id, ["path"] = path?.DeepClone() });
 
     /// <summary>Raises KeyboardInterrupt in the running cell (a cell blocked inside native code stops when it returns to Python).</summary>
     public void Interrupt() => Send(new JsonObject { ["type"] = "interrupt" });

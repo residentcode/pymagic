@@ -997,7 +997,10 @@ async function main() {
         },
     };
     runConfigs = setupRunConfigurations({ currentFile: () => currentRel });
-    runHooks = setupRun({ ...common, root: info.root, runConfig: () => runConfigs.current(), runConfigByName: (name) => runConfigs.byName(name), showDiff: (...a) => git.showDiff(...a), askText: (...a) => explorer.askText(...a) });
+    runHooks = setupRun({ ...common, root: info.root, runConfig: () => runConfigs.current(), runConfigByName: (name) => runConfigs.byName(name), showDiff: (...a) => git.showDiff(...a), askText: (...a) => explorer.askText(...a),
+        // a notebook's cells are debugged as files of their own: their breakpoints and the stops in them
+        cellFileOf: (model) => notebook.cellFileOf(model), cellAtFile: (file, line) => notebook.cellAtFile(file, line), editorOfModel: (model) => notebook.editorOf(model) });
+    notebook.connectDebugger(runHooks.notebook);
     const tests = setupTests({ ...common, lsp, relOfUri });
     setupInterpreters();
     setupPackages();

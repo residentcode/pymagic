@@ -26,11 +26,12 @@ public class NotebookKernelTests
     {
         public readonly BlockingCollection<JsonNode> Events = new();
         public readonly NotebookKernel Inner;
+        public readonly string Root;
         int _next = 1;
 
         public Kernel()
         {
-            string root = Path.Combine(Path.GetTempPath(), "pm_nb_" + Guid.NewGuid().ToString("N"));
+            string root = Root = Path.Combine(Path.GetTempPath(), "pm_nb_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
             Inner = new NotebookKernel(Events.Add) { Python = PythonExe };
             Inner.Start(root);
@@ -60,6 +61,14 @@ public class NotebookKernelTests
                 return e["type"]!.GetValue<string>() == "done" && e["id"]?.GetValue<string>() == id;
             });
             return got;
+        }
+
+        /// <summary>The members of a value of the Variables window; <c>path</c> is JSON, e.g. [["v","d"],["i",0]].</summary>
+        public JsonNode Inspect(string path)
+        {
+            string id = "i" + _next++;
+            Inner.Inspect(id, JsonNode.Parse(path));
+            return Wait(e => e["type"]!.GetValue<string>() == "children" && e["id"]?.GetValue<string>() == id);
         }
 
         public void Dispose() => Inner.Dispose();
@@ -229,5 +238,104 @@ public class NotebookKernelTests
         kernel.Start(Path.GetTempPath());
         Assert.True(events.TryTake(out var e, TimeSpan.FromSeconds(5)));
         Assert.Equal("kernelError", e!["type"]!.GetValue<string>());
+    }
+
+    static List<(string Name, string Type, string Value, bool Expandable)> Members(JsonNode children) =>
+        children["children"]!.AsArray().Select(c => (c!["name"]!.GetValue<string>(), c["type"]!.GetValue<string>(), c["value"]!.GetValue<string>(), c["expandable"]!.GetValue<bool>())).ToList();
+
+    [Fact]
+    public void ObjectsOfTheVariablesWindowAreOpenedOneLevelAtATime()
+    {
+        if (!HavePython) return;
+        using var k = new Kernel();
+        var got = k.Run("class Point:\n    def __init__(self):\n        self.x = 3\n        self.tags = ['a', 'b']\n        self._hidden = None\n\n\n"
+            + "p = Point()\nd = {'one': [1, 2], 'two': {'k': 'v'}, 'n': 7}\nitems = [10, [20, 30]]\nempty = []\nname = 'text'\n");
+        var vars = Of(got, "variables")!["vars"]!.AsArray();
+        bool Expandable(string name) => vars.First(v => v!["name"]!.GetValue<string>() == name)!["expandable"]!.GetValue<bool>();
+        Assert.True(Expandable("p") && Expandable("d") && Expandable("items"));
+        Assert.True(!Expandable("empty") && !Expandable("name"), "an empty list and a string have nothing to open");
+
+        var dict = Members(k.Inspect("[[\"v\",\"d\"]]"));
+        Assert.Equal(3, dict.Count);
+        Assert.Equal("'one'", dict[0].Name);
+        Assert.Equal("list", dict[0].Type);
+        Assert.True(dict[0].Expandable && dict[1].Expandable && !dict[2].Expandable);
+        // a member is reached again by the key it was listed with, one level further down
+        var inner = Members(k.Inspect("[[\"v\",\"d\"],[\"i\",1]]"));
+        Assert.Equal("'k'", inner[0].Name);
+        Assert.Equal("'v'", inner[0].Value);
+
+        var obj = Members(k.Inspect("[[\"v\",\"p\"]]"));
+        Assert.Equal("x,tags,_hidden", string.Join(",", obj.Select(m => m.Name)));
+        Assert.Equal("3", obj[0].Value);
+        var tags = Members(k.Inspect("[[\"v\",\"p\"],[\"a\",\"tags\"]]"));
+        Assert.Equal("'a','b'", string.Join(",", tags.Select(m => m.Value)));
+
+        var items = Members(k.Inspect("[[\"v\",\"items\"]]"));
+        Assert.Equal("[20, 30]", items[1].Value);
+        Assert.Equal("30", Members(k.Inspect("[[\"v\",\"items\"],[\"i\",1]]"))[1].Value);
+        var gone = k.Inspect("[[\"v\",\"nope\"]]");
+        Assert.True(gone["error"] != null, "a name that is gone is an error, not a crash");
+    }
+
+    [Fact]
+    public void ATableIsOpenedByItsColumnsAndShowsItsShapeAsSize()
+    {
+        if (!HavePython) return;
+        using var k = new Kernel();
+        // stand-ins found by what they have (columns, dtypes, shape): pandas is not needed here
+        var got = k.Run("class Col:\n    shape = (3,)\n    dtype = 'int64'\n    def __init__(self, v): self.v = v\n    def __len__(self): return 3\n"
+            + "    def __getitem__(self, i): return self.v[i]\n    def __repr__(self): return 'Col(%r)' % (self.v,)\n\n\n"
+            + "class Frame:\n    shape = (3, 2)\n    dtypes = {}\n    columns = ['a', 'b']\n    def __getitem__(self, c): return Col({'a': [1, 2, 3], 'b': [4, 5, 6]}[c])\n    def __repr__(self): return 'Frame'\n\n\n"
+            + "df = Frame()\n");
+        var row = Of(got, "variables")!["vars"]!.AsArray().First(v => v!["name"]!.GetValue<string>() == "df")!;
+        Assert.Equal("3x2", row["size"]!.GetValue<string>());
+        Assert.True(row["expandable"]!.GetValue<bool>());
+        var columns = Members(k.Inspect("[[\"v\",\"df\"]]"));
+        Assert.Equal("a,b", string.Join(",", columns.Select(c => c.Name)));
+        Assert.Equal("Col([1, 2, 3])", columns[0].Value);
+        var cells = Members(k.Inspect("[[\"v\",\"df\"],[\"c\",1]]"));
+        Assert.Equal("4,5,6", string.Join(",", cells.Select(c => c.Value)));
+    }
+
+    [Fact]
+    public void ACellRunsUnderTheDebuggerAndStopsAtTheBreakpointOfItsLine()
+    {
+        if (!HavePython) return;
+        using var k = new Kernel();
+        var events = new BlockingCollection<JsonNode>();
+        using var session = new RunSession(events.Add);
+        string file = ".pymagic/notebooks/nb.cell1.py";
+        session.Listen(k.Root, "127.0.0.1", 0, "", Array.Empty<(string, string)>(), new Dictionary<string, JsonArray> { [file] = new JsonArray(2) });
+        var seen = new List<string>();
+        JsonNode Next(Func<JsonNode, bool> match)
+        {
+            while (true)
+            {
+                if (!events.TryTake(out var e, TimeSpan.FromSeconds(30))) throw new AssertionException("timed out waiting for the debugger; the debugger said: " + string.Join(" | ", seen) + "; the kernel said: " + string.Join(" | ", k.Events.ToArray().Select(x => x.ToJsonString())));
+                seen.Add(e.ToJsonString());
+                if (match(e)) return e;
+            }
+        }
+        var listening = Next(e => e["type"]!.GetValue<string>() == "listening");
+        k.Run("seed = 100");
+        var debug = new JsonObject { ["host"] = "127.0.0.1", ["port"] = listening["port"]!.GetValue<int>(), ["token"] = listening["token"]!.GetValue<string>(), ["file"] = file };
+        k.Inner.Execute("dbg1", "x = 5\ny = x * 2 + seed\nz = y + 1\nprint('z', z)\n", debug);
+        var stopped = Next(e => e["type"]!.GetValue<string>() == "stopped");
+        var top = stopped["frames"]![0]!;
+        Assert.Equal(2, top["line"]!.GetValue<int>());
+        Assert.True(top["file"]!.GetValue<string>().Replace('\\', '/').EndsWith(file), "the stop is in the file that stands for the cell");
+        session.Handle(new JsonObject { ["type"] = "evaluate", ["id"] = 1, ["frameId"] = 0, ["expression"] = "x + seed" });
+        Assert.Equal("105", Next(e => e["type"]!.GetValue<string>() == "evaluated")["result"]!.GetValue<string>());
+        session.Handle(new JsonObject { ["type"] = "next" });
+        Assert.Equal(3, Next(e => e["type"]!.GetValue<string>() == "stopped")["frames"]![0]!["line"]!.GetValue<int>());
+        session.Handle(new JsonObject { ["type"] = "continue" });
+        var done = new List<JsonNode>();
+        k.Wait(e => { if (e["id"]?.GetValue<string>() == "dbg1") done.Add(e); return e["type"]!.GetValue<string>() == "done" && e["id"]?.GetValue<string>() == "dbg1"; });
+        Assert.Equal("z 111\n", Text(done, "stdout"));
+        Next(e => e["type"]!.GetValue<string>() == "disconnected");
+        // the namespace is the notebook's own, and the next cell runs without the debugger
+        var after = k.Run("y");
+        Assert.Equal("110", Of(after, "result")!["data"]!["text/plain"]!.GetValue<string>());
     }
 }
