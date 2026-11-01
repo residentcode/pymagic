@@ -14,6 +14,10 @@ public static class Schemas
         ["package"] = "https://json.schemastore.org/package.json",
         ["pyproject"] = "https://json.schemastore.org/pyproject.json",
         ["workflow"] = "https://json.schemastore.org/github-workflow.json",
+        // the entries of SchemaStore's catalog whose schema lives with the project that owns it
+        ["compose"] = "https://raw.githubusercontent.com/compose-spec/compose-go/master/schema/compose-spec.json",
+        ["gitlab"] = "https://gitlab.com/gitlab-org/gitlab-foss/-/raw/master/app/assets/javascripts/editor/schema/ci.json",
+        ["precommit"] = "https://www.schemastore.org/pre-commit-config.json",
     };
 
     public static string FolderOf(string root) => Path.Combine(root, ".pymagic", "schemas");

@@ -8,6 +8,9 @@ import { launch, project, sleep } from './app.mjs';
 const FILES = {
     'package.json': '{\n  "name": "ok-name",\n  "scripts": {\n    "t": 1\n  },\n  "private": "yes"\n}\n',
     'pyproject.toml': '[project]\nname = 5\n',
+    'docker-compose.yml': 'services:\n  web:\n    image: 5\n    restart_policy: always\n',
+    '.gitlab-ci.yml': 'stages: build\n',
+    '.pre-commit-config.yaml': 'fail_fast: sometimes\n',
     '.github/workflows/ci.yml': 'on:\n  push:\n    branches: main\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n',
 };
 const markers = `(() => { const m = window.pymagic.editor.getModel(); return window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.code === 'schema').map((x) => x.startLineNumber + ': ' + x.message); })()`;
@@ -25,7 +28,7 @@ async function session(answer) {
         asked: await page.evaluate('window.__asked'),
         text: await page.evaluate('window.__text'),
         first: await page.evaluate(markers),
-        kept: ['package', 'pyproject', 'workflow'].map((n) => existsSync(join(root, '.pymagic', 'schemas', n + '.json'))),
+        kept: ['package', 'pyproject', 'workflow', 'compose', 'gitlab', 'precommit'].map((n) => existsSync(join(root, '.pymagic', 'schemas', n + '.json'))),
     };
     if (answer) {
         await page.evaluate(`window.pymagic.openFile('pyproject.toml')`);
@@ -38,8 +41,16 @@ async function session(answer) {
         }
         result.model = await page.evaluate('window.pymagic.editor.getModel().uri.toString()');
         result.workflow = await page.evaluate(markers);
+        for (const file of ['docker-compose.yml', '.gitlab-ci.yml', '.pre-commit-config.yaml']) {
+            for (let i = 0; i < 4; i++) {
+                await page.evaluate(`window.pymagic.openFile('${file}')`);
+                await sleep(3500);
+                if ((await page.evaluate('window.pymagic.editor.getModel().uri.toString()')).endsWith(file)) break;
+            }
+            (result.more ??= {})[file] = await page.evaluate(markers);
+        }
         result.askedAfter = await page.evaluate('window.__asked');
-        result.kept = ['package', 'pyproject', 'workflow'].map((n) => existsSync(join(root, '.pymagic', 'schemas', n + '.json')));
+        result.kept = ['package', 'pyproject', 'workflow', 'compose', 'gitlab', 'precommit'].map((n) => existsSync(join(root, '.pymagic', 'schemas', n + '.json')));
     }
     await app.close();
     return result;
@@ -48,10 +59,13 @@ async function session(answer) {
 const yes = await session(true);
 console.log(JSON.stringify(yes, null, 1));
 assert.equal(yes.asked, 1, 'asked once');
-assert.match(yes.text, /json\.schemastore\.org/);
+assert.match(yes.text, /schemastore\.org/);
 assert.ok(yes.first.some((m) => m.startsWith('4: ')), 'scripts.t marked');
 assert.ok(yes.first.some((m) => m.startsWith('6: ')), 'private marked');
-assert.deepEqual(yes.kept, [true, true, true]);
+assert.deepEqual(yes.kept, [true, true, true, true, true, true]);
+assert.deepEqual(yes.more['docker-compose.yml'], ['3: Should be string, not integer', '4: The property restart_policy is not allowed here']);
+assert.deepEqual(yes.more['.gitlab-ci.yml'], ['1: Should be array, not string']);
+assert.deepEqual(yes.more['.pre-commit-config.yaml'], ['1: The property repos is required', '1: Should be boolean, not string']);
 assert.deepEqual(yes.workflow, ['3: Should be array, not string']);
 assert.deepEqual(yes.second, ['2: Should be string, not integer']);
 assert.equal(yes.askedAfter, 1, 'not asked again for the second file');
@@ -60,5 +74,5 @@ const no = await session(false);
 console.log(JSON.stringify(no, null, 1));
 assert.equal(no.asked, 1);
 assert.deepEqual(no.first, []);
-assert.deepEqual(no.kept, [false, false, false]);
+assert.deepEqual(no.kept, [false, false, false, false, false, false]);
 console.log('download flow ok');

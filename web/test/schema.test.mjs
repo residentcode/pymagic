@@ -72,3 +72,18 @@ test('of several forms, the one that fits is reported (a normal job, not a reusa
     // a pattern that is a ${{ expression }} gets a plain message
     assert.deepEqual(msgs('x', { type: 'string', pattern: '^\\$\\{\\{.*\\}\\}$' }), ['' + ': Should be a ${{ expression }}']);
 });
+
+test('unevaluatedProperties: what no part of the schema dealt with', () => {
+    const service = {
+        type: 'object',
+        allOf: [{ properties: { image: { type: 'string' } } }, { patternProperties: { '^x-': {} } }],
+        properties: { ports: { type: 'array' } },
+        unevaluatedProperties: false,
+    };
+    assert.deepEqual(msgs({ image: 'a', ports: [], 'x-note': 1 }, service), []);
+    assert.deepEqual(msgs({ image: 'a', restart_policy: 1 }, service), ['restart_policy: The property restart_policy is not allowed here']);
+    // a $ref and a fitting branch count as dealing with their properties
+    const withRef = { $ref: '#/definitions/base', anyOf: [{ properties: { b: {} } }, { properties: { c: {} } }], unevaluatedProperties: false, definitions: { base: { properties: { a: {} } } } };
+    assert.deepEqual(msgs({ a: 1, b: 2 }, withRef), []);
+    assert.deepEqual(msgs({ a: 1, z: 2 }, withRef), ['z: The property z is not allowed here']);
+});

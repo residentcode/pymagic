@@ -23,6 +23,12 @@ const FILES = {
     '.pymagic/schemas/pyproject.json': '{"type":"object","properties":{"project":{"type":"object","properties":{"name":{"type":"string"}}}}}',
     '.pymagic/schemas/workflow.json': '{"type":"object","properties":{"jobs":{"type":"object","additionalProperties":{"type":"object","properties":{"runs-on":{"type":"string"}}}}}}',
     '.github/workflows/ci.yml': 'name: CI\njobs:\n  test:\n    runs-on: 5\n',
+    '.pymagic/schemas/compose.json': '{"type":"object","properties":{"services":{"type":"object","additionalProperties":{"type":"object","properties":{"image":{"type":"string"}},"unevaluatedProperties":false}}}}',
+    'docker-compose.yml': 'services:\n  web:\n    image: 5\n    extra: 1\n',
+    '.pymagic/schemas/gitlab.json': '{"type":"object","properties":{"stages":{"type":"array"}}}',
+    '.gitlab-ci.yml': 'stages: build\n',
+    '.pymagic/schemas/precommit.json': '{"type":"object","properties":{"fail_fast":{"type":"boolean"}}}',
+    '.pre-commit-config.yaml': 'fail_fast: sometimes\n',
     'package.json': '{\n  "name": "Bad Name",\n  "scripts": {\n    "t": 1\n  }\n}\n',
     'pyproject.toml': '[project]\nname = 5\n',
     'broken.toml':'[tool]\nname = "x"\nname = "y"\nflag = True\n',
@@ -315,6 +321,9 @@ describe('file checks', () => {
         assert.deepEqual(await schema('package.json'), ['2:3 Should match ^[a-z][a-z0-9-]*$', '4:5 Should be string, not integer']);
         assert.deepEqual(await schema('pyproject.toml'), ['2:1 Should be string, not integer']);
         assert.deepEqual(await schema('.github/workflows/ci.yml'), ['4:5 Should be string, not integer']);
+        assert.deepEqual(await schema('docker-compose.yml'), ['3:5 Should be string, not integer', '4:5 The property extra is not allowed here']);
+        assert.deepEqual(await schema('.gitlab-ci.yml'), ['1:1 Should be array, not string']);
+        assert.deepEqual(await schema('.pre-commit-config.yaml'), ['1:1 Should be boolean, not string']);
     });
 
     test('a Markdown link to a missing file is marked, an anchor that exists is not', async () => {

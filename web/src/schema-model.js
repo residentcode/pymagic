@@ -18,19 +18,23 @@ function resolve(root, ref) {
 /** Problems of `data` against `schema`: [{path: [keys and indexes], message}]. */
 export function validate(data, schema, limit = 200) {
     const out = [];
+    // walk gives the names of the properties the node (and what it applies) dealt with, which `unevaluatedProperties` needs
     const walk = (value, node, path, depth) => {
-        if (out.length >= limit) return;
-        if (node === true || node == null || typeof node !== 'object' || depth > 40) return;
-        if (node === false) { out.push({ path, message: 'Not allowed here' }); return; }
+        const evaluated = new Set();
+        if (out.length >= limit) return evaluated;
+        if (node === true || node == null || typeof node !== 'object' || depth > 40) return evaluated;
+        if (node === false) { out.push({ path, message: 'Not allowed here' }); return evaluated; }
+        const merge = (set) => { for (const k of set) evaluated.add(k); };
         if (node.$ref) {
             const target = resolve(schema, node.$ref);
-            if (target) walk(value, target, path, depth + 1);
+            if (target) merge(walk(value, target, path, depth + 1));
         }
-        if (node.allOf) for (const sub of node.allOf) walk(value, sub, path, depth + 1);
+        if (node.allOf) for (const sub of node.allOf) merge(walk(value, sub, path, depth + 1));
         if (node.anyOf || node.oneOf) {
             const branches = node.anyOf ?? node.oneOf;
             const results = branches.map((b) => problemsOf(value, b, path, depth + 1));
             const ok = results.filter((r) => r.length === 0).length;
+            for (const r of results) if (r.length === 0) merge(r.evaluated);
             if (ok === 0) {
                 // the branches that fit the value's type say what is wrong; the others only say it is the wrong type
                 const near = results.filter((r) => !r.some((p) => p.path.length === path.length && /^Should be /.test(p.message)));
@@ -48,7 +52,7 @@ export function validate(data, schema, limit = 200) {
             const types = Array.isArray(node.type) ? node.type : [node.type];
             if (!types.some((t) => isType(value, t))) {
                 out.push({ path, message: `Should be ${types.join(' or ')}, not ${typeOf(value)}` });
-                return;
+                return evaluated;
             }
         }
         if (node.const !== undefined && JSON.stringify(value) !== JSON.stringify(node.const)) out.push({ path, message: `Should be ${JSON.stringify(node.const)}` });
@@ -79,17 +83,31 @@ export function validate(data, schema, limit = 200) {
                 let matched = false;
                 if (node.properties && key in node.properties) { matched = true; walk(v, node.properties[key], [...path, key], depth + 1); }
                 for (const [re, s] of patterns) if (re.test(key)) { matched = true; walk(v, s, [...path, key], depth + 1); }
+                if (matched) evaluated.add(key);
                 if (!matched && node.additionalProperties !== undefined) {
+                    evaluated.add(key);
                     if (node.additionalProperties === false) out.push({ path: [...path, key], message: `The property ${key} is not allowed here`, key: true });
                     else walk(v, node.additionalProperties, [...path, key], depth + 1);
                 }
             }
+            // what neither this node nor anything it applied (allOf, $ref, the branch that fitted) dealt with
+            if (node.unevaluatedProperties !== undefined) {
+                for (const [key, v] of Object.entries(value)) {
+                    if (evaluated.has(key)) continue;
+                    if (node.unevaluatedProperties === false) out.push({ path: [...path, key], message: `The property ${key} is not allowed here`, key: true });
+                    else walk(v, node.unevaluatedProperties, [...path, key], depth + 1);
+                    evaluated.add(key);
+                }
+            }
         }
+        return evaluated;
     };
     const problemsOf = (value, node, path, depth) => {
         const keep = out.length;
-        walk(value, node, path, depth);
-        return out.splice(keep);
+        const evaluated = walk(value, node, path, depth);
+        const found = out.splice(keep);
+        found.evaluated = evaluated;
+        return found;
     };
     walk(data, schema, [], 0);
     // "matches no allowed form" adds nothing when a problem inside the value already says what is wrong
