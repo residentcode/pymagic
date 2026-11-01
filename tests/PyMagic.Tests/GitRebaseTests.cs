@@ -159,7 +159,7 @@ public class GitRebaseTests
             Assert.Contains("first commit", Fails(() => git.RebaseInteractive(b, new[] { Step(plan[0], "drop"), Step(plan[1], "fixup"), Step(plan[2]) })));
             Assert.Contains("nothing is changed", Fails(() => git.RebaseInteractive(b, plan.Select(c => Step(c)).ToList())));
             Assert.Contains("message", Fails(() => git.RebaseInteractive(b, new[] { Step(plan[0], "reword", "  "), Step(plan[1]), Step(plan[2]) })));
-            Assert.Contains("not something", Fails(() => git.RebaseInteractive(b, new[] { Step(plan[0], "edit"), Step(plan[1]), Step(plan[2]) })));
+            Assert.Contains("not something", Fails(() => git.RebaseInteractive(b, new[] { Step(plan[0], "bogus"), Step(plan[1]), Step(plan[2]) })));
             Assert.Contains("every commit", Fails(() => git.RebaseInteractive(b, plan.Select(c => Step(c, "drop")).ToList())) + "every commit");
             Assert.Equal(head, r.Head());
         }

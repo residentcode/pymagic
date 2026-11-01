@@ -8,7 +8,7 @@ public sealed record GitRebaseStep(string Hash, string Action, string? Message);
 /// <summary>Interactive rebase: the commits of the branch after a chosen one, reordered, reworded, squashed or dropped by a plan the caller gives.</summary>
 public sealed partial class GitRepository
 {
-    static readonly string[] RebaseActions = { "pick", "reword", "squash", "fixup", "drop" };
+    static readonly string[] RebaseActions = { "pick", "reword", "edit", "squash", "fixup", "drop" };
 
     /// <summary>The commits after <paramref name="baseHash"/> up to the current one, oldest first: what a rebase onto it would replay.</summary>
     public List<GitRebaseCommit> RebasePlan(string baseHash)

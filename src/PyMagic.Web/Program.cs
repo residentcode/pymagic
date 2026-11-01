@@ -1830,6 +1830,8 @@ app.MapPost("/api/git/branch", async (HttpRequest req) =>
 app.MapGet("/api/git/remotes", () => GitCall(r => r.Remotes()));
 // the commits after one, oldest first: what an interactive rebase onto it would replay
 app.MapGet("/api/git/rebase/plan", (string baseHash) => GitCall(r => r.RebasePlan(baseHash)));
+app.MapGet("/api/git/compare", (string a, string b) => GitCall(r => r.CompareBranches(a, b)));
+app.MapGet("/api/git/remote-tags", (string? remote) => GitCall(r => r.RemoteTags(remote)));
 app.MapGet("/api/git/stashes", () => GitCall(r => r.Stashes()));
 app.MapGet("/api/git/tags", () => GitCall(r => r.Tags()));
 app.MapGet("/api/git/stash/files", (int index) => GitCall(r => r.StashFiles(index)));
@@ -1846,7 +1848,7 @@ app.MapPost("/api/git/action", async (HttpRequest req) =>
     int Int(string key) => body?[key]?.GetValue<int>() ?? -1;
     string? labelled = op switch
     {
-        "pull" => "Git pull", "merge" => $"Git merge of {Str("branch")}", "applyStash" => "Git: stash applied", "revert" => "Git revert", "rebaseInteractive" => "Git rebase",
+        "pull" => "Git pull", "merge" => $"Git merge of {Str("branch")}", "applyStash" => "Git: stash applied", "revert" => "Git revert", "rebaseInteractive" => "Git rebase", "rebaseOnto" => $"Git rebase onto {Str("branch")}",
         "cherryPick" => "Git cherry-pick", "reset" => "Git reset", "checkoutRemote" => $"Git checkout of {Str("branch")}", _ => null,
     };
     if (labelled != null) AutoLabel("Before " + labelled);
@@ -1877,6 +1879,10 @@ app.MapPost("/api/git/action", async (HttpRequest req) =>
                     .Select(x => new GitRebaseStep(x?["hash"]?.GetValue<string>() ?? "", x?["action"]?.GetValue<string>() ?? "", x?["message"]?.GetValue<string>())).ToList());
             case "cherryPick": return r.CherryPick(Str("hash"));
             case "reset": r.Reset(Str("hash"), Str("mode")); return Ok();
+            case "rebaseOnto": return r.RebaseOnto(Str("branch"), Flag("keepMerges"));
+            case "pushTag": return new { ok = true, output = r.PushTag(Str("name"), Str("remote")) };
+            case "pushAllTags": return new { ok = true, output = r.PushAllTags(Str("remote")) };
+            case "deleteRemoteTag": return new { ok = true, output = r.DeleteRemoteTag(Str("name"), Str("remote")) };
             case "createTag": r.CreateTag(Str("name"), Str("hash"), Str("message")); return Ok();
             case "deleteTag": r.DeleteTag(Str("name")); return Ok();
             default: throw new GitException($"'{op}' is not something to do");

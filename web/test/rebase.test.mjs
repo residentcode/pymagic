@@ -60,3 +60,10 @@ test('what the plan does, in a line', () => {
     assert.equal(summary(setAction(startingPlan(commits), 1, 'squash'), commits), '1 squashed');
     assert.equal(summary(setAction(startingPlan(commits), 1, 'drop'), commits), '1 dropped');
 });
+
+test('a commit marked edit counts as a change and is sent as it is', () => {
+    const rows = setAction(startingPlan(commits), 1, 'edit');
+    assert.equal(problem(rows, commits), null);
+    assert.equal(summary(rows, commits), '1 to edit');
+    assert.deepEqual(steps(rows)[1], { hash: commits[1].hash, action: 'edit' });
+});
