@@ -76,8 +76,10 @@ export function setupRun(deps) {
         }
         catch { /* storage unavailable */ }
     }
+    /** The file a model's breakpoints belong to: a project file, or the file that stands for a notebook cell while it is debugged. */
+    const fileOf = (model) => deps.relOf(model) ?? deps.cellFileOf?.(model) ?? null;
     function sendBreakpoints(model) {
-        const rel = deps.relOf(model);
+        const rel = fileOf(model);
         if (rel && run)
             run.send({ type: 'setBreakpoints', file: rel, lines: wire(model, breakpointsOf(model)) });
     }
@@ -232,6 +234,7 @@ export function setupRun(deps) {
             output.scrollTop = output.scrollHeight;
     }
     let serving = false, connected = false;   // a debug server is listening / a program is connected to it
+    let cellHook = null, cellMode = false;    // Debug Cell: who waits for the address of the debug server / the session debugs a notebook cell
     function setButtons() {
         const active = run !== null;
         $('b-run').disabled = active;
@@ -292,7 +295,7 @@ export function setupRun(deps) {
         }
         clearInline();
         inlineStyle.textContent = rules.join('\n');
-        const shows = [editor, focused].filter((e, i, all) => all.indexOf(e) === i && e.getModel() === model);
+        const shows = [editor, focused, deps.editorOfModel?.(model)].filter((e, i, all) => e && all.indexOf(e) === i && e.getModel() === model);
         const byLine = new Map(lines.map(({ line, names: onLine }) => [line, onLine.filter((n) => Object.prototype.hasOwnProperty.call(values, n))]));
         inline = { model, byLine, collections: shows.map((e) => e.createDecorationsCollection(decorations)) };
     }
@@ -304,7 +307,17 @@ export function setupRun(deps) {
         document.querySelectorAll('#frames div.frame').forEach((d, i) => d.classList.toggle('sel', i === index));
         clearCurrentLine();
         const rel = relOfAbsolute(f.file);
-        if (rel) {
+        // a stop in the file that stands for a notebook cell is shown in the cell
+        const cell = rel ? deps.cellAtFile?.(rel, f.line) : null;
+        if (cell) {
+            const ids = cell.model.deltaDecorations([], [{
+                    range: new monaco.Range(f.line, 1, f.line, 1),
+                    options: { isWholeLine: true, className: 'debug-line', glyphMarginClassName: 'debug-arrow' },
+                }]);
+            currentLine = { model: cell.model, ids };
+            void showInline(f, cell.model);
+        }
+        else if (rel) {
             await deps.openFile(rel, new monaco.Range(f.line, 1, f.line, 1));
             const model = await deps.modelFor(rel);
             if (model) {
@@ -866,6 +879,15 @@ export function setupRun(deps) {
             window.dispatchEvent(new CustomEvent('pymagic:testMessage', { detail: m }));
         switch (m.type) {
             case 'listening': {
+                if (cellHook) {
+                    // Debug Cell: the notebook is told where to connect; there is no snippet to show
+                    const hook = cellHook, mine = run;
+                    cellHook = null;
+                    cellMode = true;
+                    append('Debugging a notebook cell: the cell runs in the notebook\'s kernel, under the debugger.\n', 'info');
+                    hook({ host: m.host, port: m.port, token: m.token, end: () => { if (run && run === mine) run.send({ type: 'stop' }); } });
+                    break;
+                }
                 const mapped = m.mapped ? `${m.mapped} path mapping${m.mapped === 1 ? '' : 's'} between this computer and the program's machine` : 'no path mappings: the files are taken to be the same on both sides';
                 append(`Debug server listening on ${m.host}:${m.port} (${mapped}).\nPut this in the program, started on the other machine:\n\n${m.snippet}\n\nThe program stops at the breakpoints set here, once it has run that line. Stop ends the listening; a program that is connected goes on running.\n`, 'info');
                 showServerSnippet(m);
@@ -939,7 +961,7 @@ export function setupRun(deps) {
                 void refreshWatches();
                 break;
             case 'exited':
-                append(m.detached ? (serving ? '\nDebug server stopped; a program that was connected goes on running.\n' : '\nDetached; the program goes on running.\n') : `\nProcess finished with exit code ${m.code}\n`, 'info');
+                append(cellMode ? '\nThe cell is done; the debugger is detached.\n' : m.detached ? (serving ? '\nDebug server stopped; a program that was connected goes on running.\n' : '\nDetached; the program goes on running.\n') : `\nProcess finished with exit code ${m.code}\n`, 'info');
                 clearInterval(logTimer);
                 openBrowser = false;
                 if (afterExit) {
@@ -959,6 +981,7 @@ export function setupRun(deps) {
         run?.close();
         run = null;
         serving = connected = false;
+        cellMode = false;
         testsRun = false;
         dataBreaks = [];
         paused = false;
@@ -1086,7 +1109,7 @@ export function setupRun(deps) {
         await deps.saveAll();
         const breakpoints = {};
         for (const m of monaco.editor.getModels()) {
-            const r = deps.relOf(m);
+            const r = fileOf(m);
             const bps = r ? breakpointsOf(m) : [];
             if (r && bps.length)
                 breakpoints[r] = wire(m, bps);
@@ -1720,6 +1743,37 @@ export function setupRun(deps) {
             },
         }]), ...sideServices()],
         attach,
+        /**
+         * What the notebook view needs to debug a cell: `attachEditor` gives a cell's editor the breakpoint margin and F9; `cellSession` starts a debug
+         * server for one cell and resolves with { host, port, token, end } (null when another run is going); `breakpointsOf` / `restoreBreakpoints`
+         * keep the breakpoints of a cell whose editor is rebuilt.
+         */
+        notebook: {
+            attachEditor(ed) {
+                glyphMouse(ed);
+                ed.addCommand(monaco.KeyCode.F9, () => {
+                    const model = ed.getModel(), pos = ed.getPosition();
+                    if (model && pos)
+                        toggleBreakpoint(model, pos.lineNumber);
+                });
+            },
+            async cellSession() {
+                if (run)
+                    return null;
+                const got = new Promise((resolve) => { cellHook = resolve; });
+                if (!(await startDebugServer({ host: '127.0.0.1', port: 0, connectHost: '', mappings: [] }, true))) {
+                    cellHook = null;
+                    return null;
+                }
+                return got;
+            },
+            breakpointsOf: (model) => breakpointsOf(model),
+            restoreBreakpoints(model, list) {
+                for (const bp of list)
+                    if (bp.line <= model.getLineCount())
+                        placeBreakpoint(model, bp.line, bp);
+            },
+        },
         /** The breakpoint commands of the editor (F9, Shift+F9), for the menus. */
         breakpoints: {
             toggle() { const model = editor.getModel(), pos = editor.getPosition(); if (model && pos) toggleBreakpoint(model, pos.lineNumber); },

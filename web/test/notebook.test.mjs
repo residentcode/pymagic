@@ -325,3 +325,118 @@ test('the headings of a notebook are nested symbols that point at cells', () => 
     assert.equal(s[1].range.end.line, 4);
     assert.equal(s[0].kind, 'md-heading');
 });
+
+// ------------------------------------------------------------ objects of the Variables window, debugging a cell, the console, servers, HTML
+
+const mdSource = readFileSync(new URL('../src/markdown-lite.js', import.meta.url), 'utf8');
+const { blocksOf } = await import('data:text/javascript;base64,' + Buffer.from(mdSource).toString('base64'));
+
+test('variable rows: open ones list the members the kernel sent, nested', () => {
+    const vars = [{ name: 'd', type: 'dict', size: '2', value: '{...}', expandable: true }, { name: 'n', type: 'int', size: '', value: '3', expandable: false }];
+    const open = new Set();
+    const members = new Map();
+    assert.deepEqual(m.variableRows(vars, open, members).map((r) => [r.name, r.depth, r.isOpen]), [['d', 0, false], ['n', 0, false]]);
+    // opening a row that is not loaded yet shows it as loading
+    const dKey = m.pathKey([['v', 'd']]);
+    open.add(dKey);
+    members.set(dKey, { loading: true });
+    assert.equal(m.variableRows(vars, open, members)[0].loading, true);
+    members.set(dKey, { list: [{ name: "'a'", key: ['i', 0], type: 'list', size: '2', value: '[1, 2]', expandable: true }, { name: "'b'", key: ['i', 1], type: 'int', value: '7', expandable: false }] });
+    open.add(m.pathKey([['v', 'd'], ['i', 0]]));
+    members.set(m.pathKey([['v', 'd'], ['i', 0]]), { list: [{ name: '0', key: ['i', 0], type: 'int', value: '1', expandable: false }] });
+    const rows = m.variableRows(vars, open, members);
+    assert.deepEqual(rows.map((r) => [r.name, r.depth]), [['d', 0], ["'a'", 1], ['0', 2], ["'b'", 1], ['n', 0]]);
+    assert.deepEqual(rows[2].path, [['v', 'd'], ['i', 0], ['i', 0]]);
+    // a row that cannot be opened is never open, even when its key is in the set
+    open.add(m.pathKey([['v', 'n']]));
+    assert.equal(m.variableRows(vars, open, members).at(-1).isOpen, false);
+    members.set(dKey, { error: 'KeyError: gone' });
+    assert.equal(m.variableRows(vars, open, members)[0].error, 'KeyError: gone');
+    assert.deepEqual(m.pathsToRefresh(new Set([m.pathKey([['v', 'd'], ['i', 0]]), dKey])).map((p) => p.length), [1, 2]);
+});
+
+test('a cell debugged is a file of the project with the notebook and the cell in its name', () => {
+    const file = m.cellDebugFile('docs/analysis.ipynb', 2);
+    assert.equal(file, '.pymagic/notebooks/docs__analysis_ipynb.cell3.py');
+    assert.deepEqual(m.parseCellDebugFile(file), { slug: 'docs__analysis_ipynb', index: 2 });
+    assert.deepEqual(m.parseCellDebugFile('.pymagic\\notebooks\\a_ipynb.cell1.py'), { slug: 'a_ipynb', index: 0 });
+    assert.equal(m.parseCellDebugFile('src/app.py'), null);
+    assert.equal(m.notebookSlug('docs/analysis.ipynb'), 'docs__analysis_ipynb');
+});
+
+test('console history keeps distinct lines and walks up and down', () => {
+    const h = [];
+    m.pushHistory(h, 'x = 1');
+    m.pushHistory(h, 'x = 1');
+    m.pushHistory(h, '   ');
+    m.pushHistory(h, 'x + 1');
+    assert.deepEqual(h, ['x = 1', 'x + 1']);
+    let at = m.stepHistory(h, h.length, -1, 'draft');
+    assert.deepEqual(at, { index: 1, text: 'x + 1' });
+    at = m.stepHistory(h, at.index, -1, 'draft');
+    assert.equal(at.text, 'x = 1');
+    at = m.stepHistory(h, at.index, -1, 'draft');
+    assert.equal(at.index, 0);
+    at = m.stepHistory(h, 1, 1, 'draft');
+    assert.deepEqual(at, { index: 2, text: 'draft' });
+    const long = [];
+    for (let i = 0; i < 5; i++) m.pushHistory(long, 'l' + i, 3);
+    assert.deepEqual(long, ['l2', 'l3', 'l4']);
+});
+
+test('the console runs a line at Enter unless the statement goes on', () => {
+    assert.equal(m.needsMoreInput('x = 1'), false);
+    assert.equal(m.needsMoreInput('x = [1,'), true);
+    assert.equal(m.needsMoreInput('s = """abc'), true);
+    assert.equal(m.needsMoreInput('s = "a(" + "b"'), false);
+    assert.equal(m.needsMoreInput('if x:'), true);
+    assert.equal(m.needsMoreInput('if x:\n    y = 1'), true);
+    assert.equal(m.needsMoreInput('if x:\n    y = 1\n'), false);
+    assert.equal(m.needsMoreInput('a = 1 + \\'), true);
+    assert.equal(m.needsMoreInput('# comment ('), false);
+});
+
+test('a server is typed as Jupyter prints it, and kept without the token in the address', () => {
+    const s = m.normalizeServer({ url: 'localhost:8888/lab?token=abc123' });
+    assert.equal(s.url, 'http://localhost:8888');
+    assert.equal(s.token, 'abc123');
+    assert.equal(s.name, 'localhost:8888');
+    const t = m.normalizeServer({ url: 'https://hub.example.org/user/me/tree', token: 'T', name: 'Hub', kernel: 'python3' });
+    assert.deepEqual([t.url, t.token, t.name, t.kernel], ['https://hub.example.org/user/me', 'T', 'Hub', 'python3']);
+    assert.ok(m.normalizeServer({ url: '' }).error);
+    assert.ok(m.normalizeServer({ url: 'ftp://x' }).error);
+    const list = m.addServer(m.addServer([], s), { ...s, name: 'again' });
+    assert.equal(list.length, 1);
+    assert.equal(list[0].name, 'again');
+    assert.equal(m.parseServers('not json').length, 0);
+    assert.equal(m.parseServers(JSON.stringify([s, { url: '' }, 5])).length, 1);
+    assert.equal(m.BUILT_IN_SERVER.id, 'builtin');
+});
+
+test('a notebook becomes one HTML page with nothing live in it', () => {
+    const nb = m.parseNotebook(JSON.stringify({
+        nbformat: 4, nbformat_minor: 5, metadata: {},
+        cells: [
+            { cell_type: 'markdown', metadata: {}, source: ['# Title\n', 'some *words* and `code` <b>not bold</b>\n', '\n', '- one\n', '- two'] },
+            { cell_type: 'code', metadata: {}, execution_count: 3, source: ['print("<hi>")'], outputs: [
+                { output_type: 'stream', name: 'stdout', text: ['<hi>\n'] },
+                { output_type: 'execute_result', execution_count: 3, metadata: {}, data: { 'text/html': '<script>alert(1)</script><b>x</b>', 'text/plain': 'x' } },
+                { output_type: 'display_data', metadata: {}, data: { 'image/png': 'iVBORw0KGgo=', 'text/plain': '<Figure>' } },
+                { output_type: 'error', ename: 'ValueError', evalue: 'bad', traceback: ['\u001b[31mValueError\u001b[0m: bad'] },
+            ] },
+        ],
+    })).nb;
+    const html = m.notebookToHtml(nb, { title: 'My <nb>', blocksOf });
+    assert.ok(html.startsWith('<!doctype html>'));
+    assert.ok(html.includes('<title>My &lt;nb&gt;</title>'));
+    assert.ok(html.includes('<h1>Title</h1>'));
+    assert.ok(html.includes('<em>words</em>') && html.includes('<code>code</code>'));
+    assert.ok(html.includes('&lt;b&gt;not bold&lt;/b&gt;'), 'markup in a text cell is text');
+    assert.ok(html.includes('<li>one</li>') && html.includes('<li>two</li>'));
+    assert.ok(html.includes('In [3]:') && html.includes('print(&quot;&lt;hi&gt;&quot;)'));
+    assert.ok(html.includes('<img class="out" src="data:image/png;base64,iVBORw0KGgo="'));
+    assert.ok(html.includes('<span class="ansi-red">ValueError</span>'));
+    // the script of an HTML output is only ever inside the attribute of a frame with every right taken away
+    assert.ok(!html.includes('<script'));
+    assert.ok(html.includes('sandbox="" srcdoc="&lt;script&gt;alert(1)&lt;/script&gt;'));
+});

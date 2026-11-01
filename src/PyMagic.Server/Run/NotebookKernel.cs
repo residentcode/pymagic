@@ -12,7 +12,7 @@ namespace PyMagic.Server;
 /// kernel says (<c>ready</c>, <c>stream</c>, <c>result</c>, <c>display</c>, <c>error</c>, <c>done</c>) is passed to
 /// <c>emit</c> as it arrives; the host adds <c>kernelError</c> (it could not start) and <c>kernelExited</c>.
 /// </summary>
-public sealed class NotebookKernel : IDisposable
+public sealed class NotebookKernel : INotebookKernel
 {
     readonly Action<JsonNode> _emit;
     readonly object _gate = new();
