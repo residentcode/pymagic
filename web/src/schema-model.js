@@ -151,3 +151,47 @@ export function locate(text, problem) {
     }
     return found ?? { line: 1, start: 1, end: 2 };
 }
+
+/** Which schema checks a project file, by its path: 'package' | 'pyproject' | 'workflow' | 'compose' | 'gitlab' | 'precommit' | 'mkdocs' | 'dependabot' | 'codecov' | 'tox' | 'renovate' | 'openapi' | null.
+ * 'openapi' is only the file's name: openapiSchemaOf says from the content which schema (3.0 or Swagger 2.0) applies, if any. */
+export function schemaOf(rel) {
+    const lower = rel.toLowerCase();
+    const name = lower.split('/').pop();
+    if (/(^|\/)\.github\/workflows\/[^/]+\.ya?ml$/.test(lower)) return 'workflow';
+    if (/^(docker-)?compose(\.[^/]+)?\.ya?ml$/.test(name)) return 'compose';
+    if (/(^|\.)gitlab-ci\.ya?ml$/.test(name)) return 'gitlab';
+    if (/^\.pre-commit-config\.ya?ml$/.test(name)) return 'precommit';
+    if (/^mkdocs\.ya?ml$/.test(name)) return 'mkdocs';
+    if (/(^|\/)\.github\/dependabot\.ya?ml$/.test(lower)) return 'dependabot';
+    if (/^\.?codecov\.ya?ml$/.test(name)) return 'codecov';
+    if (name === 'tox.toml') return 'tox';
+    if (name === 'renovate.json' || name === '.renovaterc' || name === '.renovaterc.json') return 'renovate';
+    if (/^(openapi|swagger)(\.[^/.]+)?\.(ya?ml|json)$/.test(name)) return 'openapi';
+    return name === 'package.json' ? 'package' : name === 'pyproject.toml' ? 'pyproject' : null;
+}
+
+/** The schema of an OpenAPI / Swagger document, by its version: 'openapi' (3.0.x), 'swagger' (2.0), or null (3.1 uses $dynamicRef, which the validator cannot follow, so it is not checked). */
+export function openapiSchemaOf(data) {
+    if (!data || typeof data !== 'object') return null;
+    if (typeof data.openapi === 'string' && /^3\.0(\.|$)/.test(data.openapi)) return 'openapi';
+    if (String(data.swagger) === '2.0' || String(data.swagger) === '2') return 'swagger';
+    return null;
+}
+
+/** Whether a YAML text may hold Kubernetes manifests: a top-level apiVersion and kind, and no template markers. */
+export function looksKubernetes(text) {
+    return /^apiVersion:/m.test(text) && /^kind:/m.test(text) && !text.includes('{{');
+}
+
+/**
+ * The name of the schema of one Kubernetes manifest (yannh/kubernetes-json-schema keeps one file per kind: deployment-apps-v1,
+ * service-v1, ingress-networking-v1), or null when the document has no apiVersion and kind of that shape.
+ */
+export function kubernetesSchemaOf(doc) {
+    if (!doc || typeof doc !== 'object' || typeof doc.apiVersion !== 'string' || typeof doc.kind !== 'string') return null;
+    const [first, second] = doc.apiVersion.split('/');
+    const group = second === undefined ? '' : first.split('.')[0];
+    const version = second === undefined ? first : second;
+    if (!/^[A-Za-z0-9]+$/.test(doc.kind) || !/^[a-z0-9]*$/.test(group) || !/^v\d+((alpha|beta)\d+)?$/.test(version)) return null;
+    return ['k8s', doc.kind.toLowerCase(), group, version].filter(Boolean).join('-');
+}

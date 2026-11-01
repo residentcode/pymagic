@@ -34,6 +34,13 @@ const FILES = {
     'mkdocs.yml': 'site_name: 5\n',
     '.pymagic/schemas/tox.json': '{"type":"object","properties":{"env_list":{"type":"array"}}}',
     'tox.toml': 'env_list = "py312"\n',
+    '.pymagic/schemas/renovate.json': '{"type":"object","properties":{"labels":{"type":"array"}}}',
+    'renovate.json': '{\n  "labels": 5\n}\n',
+    '.pymagic/schemas/openapi.json': '{"type":"object","required":["info"],"properties":{"info":{"type":"object","required":["version"]}}}',
+    'openapi.yaml': 'openapi: 3.0.3\ninfo:\n  title: t\n',
+    'openapi31.yaml': 'openapi: 3.1.0\ninfo:\n  title: t\n',
+    '.pymagic/schemas/k8s-service-v1.json': '{"type":"object","properties":{"spec":{"type":["object","null"],"properties":{"ports":{"type":"array","items":{"type":"object","properties":{"port":{"type":"integer"}}}}}}}}',
+    'k8s.yaml': 'apiVersion: v1\nkind: Service\nspec:\n  ports:\n    - port: 80\n---\napiVersion: v1\nkind: Service\nspec:\n  ports:\n    - port: http\n',
     'package.json': '{\n  "name": "Bad Name",\n  "scripts": {\n    "t": 1\n  }\n}\n',
     'pyproject.toml': '[project]\nname = 5\n',
     'broken.toml':'[tool]\nname = "x"\nname = "y"\nflag = True\n',
@@ -814,6 +821,17 @@ describe('file checks', () => {
         assert.deepEqual(await schema('.pre-commit-config.yaml'), ['1:1 Should be boolean, not string']);
         assert.deepEqual(await schema('mkdocs.yml'), ['1:1 Should be string, not integer']);
         assert.deepEqual(await schema('tox.toml'), ['1:1 Should be array, not string']);
+    });
+
+    test('Renovate, OpenAPI and a Kubernetes manifest (the second document of a file) are checked against the kept schemas', async () => {
+        const schema = (file) => open(file).then(() => page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); const found = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.code === 'schema'); return found.length ? found.map((x) => x.startLineNumber + ':' + x.startColumn + ' ' + x.message) : null; })()`, 20000, 'the schema problems of ' + file));
+        assert.deepEqual(await schema('renovate.json'), ['2:3 Should be array, not integer']);
+        assert.deepEqual(await schema('openapi.yaml'), ['2:1 The property version is required']);
+        assert.deepEqual(await schema('k8s.yaml'), ['10:3 Should be integer, not string']);
+        // OpenAPI 3.1 is not checked (its schema needs $dynamicRef)
+        await open('openapi31.yaml');
+        await new Promise((r) => setTimeout(r, 2500));
+        assert.deepEqual(await page.evaluate(`window.pymagic.monaco.editor.getModelMarkers({ resource: window.pymagic.editor.getModel().uri }).filter((x) => x.code === 'schema').length`), 0);
     });
 
     test('a Markdown link to a missing file is marked, an anchor that exists is not', async () => {
