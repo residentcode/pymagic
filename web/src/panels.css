@@ -205,6 +205,7 @@
 .nb-vars-table th { color: var(--dim); font-weight: normal; position: sticky; top: 0; background: var(--panel); }
 .nb-var-caret { display: inline-block; width: 14px; background: transparent; color: var(--dim); border: 0; padding: 0; font: inherit; cursor: pointer; text-align: center; }
 button.nb-var-caret:hover { color: var(--fg); }
+button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before { content: '▾'; }   /* drawn, not written: the cell's text stays the name */
 .nb-var-child td { color: var(--dim); } .nb-var-child .nb-var-name { color: var(--fg); }
 .nb-var-error { color: var(--bad); }
 .nb-bar button.on { background: var(--hover2); }

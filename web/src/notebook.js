@@ -279,12 +279,12 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
             const name = el('td', 'nb-var-name');
             name.style.paddingLeft = `${r.depth * 14}px`;
             if (r.expandable) {
-                const caret = el('button', 'nb-var-caret', r.isOpen ? '▾' : '▸');
+                const caret = el('button', r.isOpen ? 'nb-var-caret open' : 'nb-var-caret');
                 caret.title = r.isOpen ? 'Close' : 'Open: show the members of this value';
                 caret.onclick = () => toggleVar(state, r);
                 name.append(caret);
             } else name.append(el('span', 'nb-var-caret'));
-            name.append(document.createTextNode(r.name));
+            name.append(el('span', 'nb-var-label', r.name));
             const value = el('td', r.error ? 'nb-var-error' : '', r.error || (r.loading ? 'loading…' : r.value));
             value.title = r.error || r.value;
             tr.append(name, el('td', '', r.type), el('td', '', r.size), value);

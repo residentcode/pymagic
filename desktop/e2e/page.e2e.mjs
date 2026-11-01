@@ -9,6 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { launch, project, sleep } from './app.mjs';
 
@@ -76,6 +77,16 @@ FILES['nb_demo.ipynb'] = JSON.stringify({
         { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ['print(z)'] },
         { cell_type: 'markdown', metadata: {}, source: ['## Part'] },
         { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ['w = 1'] },
+    ],
+    metadata: {}, nbformat: 4, nbformat_minor: 5,
+}, null, 1) + '\n';
+
+// a second notebook, for the checks of the last block: objects to open, a cell to debug, a text cell
+FILES['nb_more.ipynb'] = JSON.stringify({
+    cells: [
+        { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ['class Point:\n', '    def __init__(self):\n', '        self.x = 3\n', "        self.tags = ['a', 'b']\n", '\n', '\n', 'p = Point()\n', "d = {'one': [1, 2], 'two': 7}"] },
+        { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ['a = 4\n', 'b = a * 2\n', 'c = b + 1\n', "print('c =', c)"] },
+        { cell_type: 'markdown', metadata: {}, source: ['# Report\n', '\n', 'Some *words*.'] },
     ],
     metadata: {}, nbformat: 4, nbformat_minor: 5,
 }, null, 1) + '\n';
@@ -1415,5 +1426,210 @@ describe('branches: comparing, rebasing onto another, and pushing tags', () => {
         await clickIn('other', 'Rebase current onto');
         for (let i = 0; i < 40 && !git('log', '--format=%s').includes('only on other'); i++) await sleep(300);
         assert.equal(git('log', '--format=%s').trim().split('\n').join(' | '), 'only on main | only on other | start');
+    });
+});
+
+// A Jupyter server for the checks below, written here: the REST calls and the WebSocket the notebook uses, nothing more. It has never been
+// compared with a real Jupyter server.
+function fakeJupyter(token) {
+    const calls = [];
+    const server = createServer((req, res) => {
+        const path = req.url.split('?')[0];
+        const ok = req.headers.authorization === 'token ' + token;
+        calls.push(`${req.method} ${path} ${ok ? 'ok' : 'denied'}`);
+        if (!ok) { res.writeHead(403).end(); return; }
+        if (req.method === 'GET' && path === '/api/kernelspecs') { res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ default: 'python3', kernelspecs: { python3: {} } })); return; }
+        if (req.method === 'POST' && path === '/api/kernels') { res.writeHead(201, { 'content-type': 'application/json' }).end(JSON.stringify({ id: 'k1', name: 'python3' })); return; }
+        if (req.method === 'DELETE') { res.writeHead(204).end(); return; }
+        res.writeHead(404).end();
+    });
+    server.on('upgrade', (req, socket) => {
+        if (req.headers.authorization !== 'token ' + token) { socket.end('HTTP/1.1 403 Forbidden\r\n\r\n'); return; }
+        calls.push('WS ' + req.url.split('?')[0]);
+        const accept = createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+        socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+        const send = (obj) => {
+            const data = Buffer.from(JSON.stringify(obj));
+            const head = data.length < 126 ? Buffer.from([0x81, data.length]) : data.length < 65536 ? Buffer.from([0x81, 126, data.length >> 8, data.length & 255]) : null;
+            socket.write(Buffer.concat([head, data]));
+        };
+        const msg = (type, parent, content, channel) => ({ header: { msg_id: Math.random().toString(16).slice(2), msg_type: type, session: 's', username: 'u', version: '5.3' }, parent_header: { msg_id: parent }, metadata: {}, content, channel, buffers: [] });
+        let count = 0;
+        const handle = (m) => {
+            const id = m.header.msg_id;
+            if (m.header.msg_type === 'kernel_info_request') send(msg('kernel_info_reply', id, { status: 'ok', language_info: { name: 'python', version: '3.99.9' } }, 'shell'));
+            if (m.header.msg_type === 'execute_request') {
+                calls.push('execute ' + JSON.stringify(m.content.code));
+                send(msg('status', id, { execution_state: 'busy' }, 'iopub'));
+                send(msg('stream', id, { name: 'stdout', text: 'from the fake Jupyter server\n' }, 'iopub'));
+                send(msg('execute_reply', id, { status: 'ok', execution_count: ++count }, 'shell'));
+                send(msg('status', id, { execution_state: 'idle' }, 'iopub'));
+            }
+        };
+        let buf = Buffer.alloc(0);
+        socket.on('data', (chunk) => {
+            buf = Buffer.concat([buf, chunk]);
+            for (;;) {
+                if (buf.length < 2) return;
+                const opcode = buf[0] & 15;
+                let len = buf[1] & 127, at = 2;
+                if (len === 126) { if (buf.length < 4) return; len = buf.readUInt16BE(2); at = 4; }
+                else if (len === 127) { if (buf.length < 10) return; len = Number(buf.readBigUInt64BE(2)); at = 10; }
+                if (buf.length < at + 4 + len) return;
+                const mask = buf.subarray(at, at + 4);
+                const payload = Buffer.from(buf.subarray(at + 4, at + 4 + len)).map((b, i) => b ^ mask[i % 4]);
+                buf = buf.subarray(at + 4 + len);
+                if (opcode === 8) { socket.end(); return; }
+                if (opcode === 1) handle(JSON.parse(payload.toString('utf8')));
+            }
+        });
+        socket.on('error', () => { });
+    });
+    return { server, calls };
+}
+
+// last: the notebook of the Open work list, which turns the file into a kernel session, debugs it and exports it
+describe('a notebook: objects in the Variables window, Debug Cell, the console, Open in browser and the Jupyter servers', () => {
+    const REL = 'nb_more.ipynb';
+    const nb = (expr) => page.evaluate(`(() => { const s = window.pymagic.notebook.stateOf(${JSON.stringify(REL)}); return ${expr}; })()`);
+    const runCell = async (index) => {
+        await nb(`(s.views[${index}].el.querySelector('.nb-tools button').click(), 1)`);
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).nb.cells[${index}].execution_count`, 60000, `cell ${index} run`);
+    };
+    const rows = () => nb(`[...s.varsEl.querySelectorAll('tr[data-path]')].map((r) => r.querySelector('.nb-var-label').textContent + '|' + r.children[3].textContent)`);
+    const caretOf = (name) => nb(`(([...s.varsEl.querySelectorAll('tr[data-path]')].find((r) => r.querySelector('.nb-var-label').textContent === ${JSON.stringify(name)})?.querySelector('button.nb-var-caret'))?.click(), 1)`);
+
+    test('an object, a dict and a list open one level at a time, from the kernel', async () => {
+        await open(REL);
+        await page.waitFor(`document.querySelector('#notebook.active .nb-cell')`, 15000, 'the notebook');
+        await runCell(0);
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).varsEl.textContent.includes('Variables (3)')`, 15000, 'the variables');
+        const first = await rows();
+        assert.ok(first.includes("d|{'one': [1, 2], 'two': 7}"), first.join(''));
+        assert.ok(first.some((r) => r.startsWith('p|<')), first.join(''));
+        await caretOf('d');
+        const open1 = await page.waitFor(`(() => { const r = window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).varsEl.querySelectorAll('tr[data-path]'); return r.length === 5 && r.length; })()`, 15000, 'the members of d');
+        assert.equal(open1, 5);
+        assert.deepEqual((await rows()).slice(2, 4), ["'one'|[1, 2]", "'two'|7"]);
+        await caretOf("'one'");
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).varsEl.querySelectorAll('tr[data-path]').length === 7`, 15000, 'the members of the list');
+        assert.deepEqual((await rows()).slice(2, 6), ["'one'|[1, 2]", '0|1', '1|2', "'two'|7"]);
+        await caretOf('p');
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).varsEl.textContent.includes('tags')`, 15000, 'the attributes of p');
+        const all = await rows();
+        assert.ok(all.includes('x|3') && all.includes("tags|['a', 'b']"), all.join('\n'));
+        // a run asks again for what is open: the list changed in a cell shows its new length
+        await nb(`(s.views[0].editor ?? (s.views[0].el.__create(), s.views[0].editor), 1)`);
+        await nb(`(s.views[0].editor.executeEdits('t', [{ range: s.views[0].editor.getModel().getFullModelRange(), text: s.views[0].editor.getValue() + "\\nd['one'].append(9)" }]), 1)`);
+        await runCell(0);
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).varsEl.textContent.includes('[1, 2, 9]')`, 20000, 'the refreshed members');
+        assert.ok((await rows()).includes('2|9'), (await rows()).join('\n'));
+    });
+
+    test('Debug Cell stops at a breakpoint in the margin of the cell, shows it in the cell, steps, and runs on', async () => {
+        await nb(`(s.views[1].el.__create(), 1)`);
+        await page.waitFor(`!!window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).views[1].editor`, 10000, 'the editor of the cell');
+        // F9 in the cell: a breakpoint on line 2 (the cell's glyph margin)
+        await nb(`(s.views[1].editor.setPosition({ lineNumber: 2, column: 1 }), s.views[1].editor.focus(), 1)`);
+        await page.key(120, 'F9');
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).views[1].editor.getModel().getLineDecorations(2).some((d) => d.options.glyphMarginClassName?.startsWith('bp-glyph'))`, 5000, 'the breakpoint');
+        await nb(`(s.views[1].el.querySelector('.nb-debug-btn').click(), 1)`);
+        await page.waitFor(`${$('runstate')}.textContent === 'paused'`, 60000, 'the stop in the cell');
+        // the stop is drawn in the cell, on the line of the breakpoint
+        assert.equal(await nb(`s.views[1].editor.getModel().getAllDecorations().filter((d) => d.options.className === 'debug-line').map((d) => d.range.startLineNumber).join()`), '2');
+        assert.match(await page.evaluate(`${$('frames')}.textContent`), /nb_more_ipynb\.cell2\.py/);
+        const vars = await page.waitFor(`(() => { const t = ${$('vars')}.textContent; return t.includes('a') && t.includes('4') && t; })()`, 15000, 'the variables of the stop');
+        assert.match(vars, /a/);
+        // step over to line 3; the cell is still not done
+        await page.evaluate(`${$('b-over')}.click()`);
+        await page.waitFor(`${$('runstate')}.textContent === 'paused' && window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).views[1].editor.getModel().getAllDecorations().some((d) => d.options.className === 'debug-line' && d.range.startLineNumber === 3)`, 20000, 'the step');
+        assert.equal(await nb(`s.nb.cells[1].execution_count`), null);
+        // remove the breakpoint and resume: the cell runs to its end, with its output in the cell
+        await nb(`(s.views[1].editor.setPosition({ lineNumber: 2, column: 1 }), s.views[1].editor.focus(), 1)`);
+        await page.key(120, 'F9');
+        await page.evaluate(`${$('b-debug')}.click()`);
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).nb.cells[1].execution_count`, 60000, 'the end of the cell');
+        assert.equal(await nb(`s.nb.cells[1].outputs[0].text.join('')`), 'c = 9\n');
+        await page.waitFor(`${$('b-stop')}.disabled`, 15000, 'the end of the debug session');
+        // the cell's names are the notebook's: the next cell sees them, and runs without the debugger
+        assert.equal(await nb(`s.views[1].editor.getModel().getAllDecorations().filter((d) => d.options.className === 'debug-line').length`), 0);
+    });
+
+    test('the console runs a line in the namespace of the cells and the Variables window follows', async () => {
+        await nb(`(s.consoleBtn.click(), 1)`);
+        await page.waitFor(`!!window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).consoleInput`, 5000, 'the console');
+        const type = (text) => page.evaluate(`(() => { const i = window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).consoleInput; i.value = ${JSON.stringify(text)};
+            i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return true; })()`);
+        await type('a + 100');
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).consoleEl.querySelector('.nb-console-out')?.textContent.includes('104')`, 30000, 'the value');
+        await type('late = [a, b, c]');
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).varsEl.textContent.includes('late')`, 30000, 'the new name in the Variables window');
+        await type('print(late)');
+        await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).consoleEl.textContent.includes('[4, 8, 9]')`, 30000, 'the printed list');
+        // a line that is not finished (an open bracket) waits for more instead of running
+        assert.equal(await page.evaluate(`(() => { const s = window.pymagic.notebook.stateOf(${JSON.stringify(REL)}); const n = s.consoleEl.querySelectorAll('.nb-console-entry').length;
+            s.consoleInput.value = 'x = ['; s.consoleInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+            return s.consoleEl.querySelectorAll('.nb-console-entry').length - n; })()`), 0);
+        await page.evaluate(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).consoleInput.value = ''`);
+        // Up recalls the line
+        await page.evaluate(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).consoleInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))`);
+        assert.equal(await nb(`s.consoleInput.value`), 'print(late)');
+        await nb(`(s.consoleBtn.click(), s.consoleInput.value = '', 1)`);
+    });
+
+    test('Open in browser makes a page of the notebook that no script can run in', async () => {
+        await page.evaluate(`window.__opened = []; window.open = (u) => { window.__opened.push(u); return null; }`);
+        await nb(`(s.barEl.querySelector('button[title^="Show the notebook as a page"]').click(), 1)`);
+        const url = await page.waitFor(`window.__opened[0]`, 15000, 'the page being opened');
+        assert.match(url, /\/api\/notebook\/view\?id=[0-9a-f]{24}$/);
+        const got = await page.evaluate(`fetch(${JSON.stringify(url)}).then(async (r) => ({ status: r.status, type: r.headers.get('content-type'), csp: r.headers.get('content-security-policy'), text: await r.text() }))`);
+        assert.equal(got.status, 200);
+        assert.match(got.type, /text\/html/);
+        assert.match(got.csp, /sandbox/);
+        assert.match(got.csp, /script-src 'none'/);
+        assert.ok(got.text.includes('<title>nb_more.ipynb</title>') && got.text.includes('<h1>Report</h1>') && got.text.includes('c = 9'), got.text.slice(0, 600));
+        assert.ok(!got.text.includes('<script'), 'there is no script in the page');
+        // the address is not a way to read anything else
+        assert.equal(await page.evaluate(`fetch('/api/notebook/view?id=0000').then((r) => r.status)`), 404);
+    });
+
+    test('the server selector adds a Jupyter server by address and token and runs the notebook on it', async () => {
+        const jupyter = fakeJupyter('tok-123');
+        await new Promise((ok) => jupyter.server.listen(0, '127.0.0.1', ok));
+        const url = `http://127.0.0.1:${jupyter.server.address().port}`;
+        try {
+            await nb(`(s.serverBtn.click(), 1)`);
+            await page.waitFor(`document.querySelector('.nb-servers #nb-server-url')`, 5000, 'the servers window');
+            assert.match(await page.evaluate(`document.querySelector('.nb-servers').textContent`), /Built-in kernel/);
+            // the address as Jupyter prints it, token and all; a wrong token is refused when tested
+            await page.evaluate(`(() => { const set = (id, v) => { const e = document.getElementById(id); e.value = v; }; set('nb-server-url', ${JSON.stringify(url + '/lab?token=wrong')}); set('nb-server-name', 'Fake'); })()`);
+            await page.evaluate(`[...document.querySelectorAll('.nb-servers button')].find((b) => b.textContent === 'Test').click()`);
+            await page.waitFor(`document.querySelector('.nb-server-msg.bad')?.textContent.includes('refused the token')`, 15000, 'the refusal');
+            await page.evaluate(`document.getElementById('nb-server-token').value = 'tok-123'`);
+            await page.evaluate(`[...document.querySelectorAll('.nb-servers button')].find((b) => b.textContent === 'Test').click()`);
+            await page.waitFor(`document.querySelector('.nb-server-msg:not(.bad)')?.textContent.includes('python3')`, 15000, 'the connection');
+            await page.evaluate(`document.getElementById('nb-server-add').click()`);
+            await page.evaluate(`document.getElementById('nb-server-use').click()`);
+            await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).serverBtn.textContent.includes('Fake')`, 5000, 'the selector');
+            // the token is not in the saved address
+            assert.equal(await page.evaluate(`JSON.parse(localStorage.getItem('pm.jupyterServers'))[0].url`), url);
+            // a cell now runs on the server, over its WebSocket, and its output is the server's
+            await nb(`(s.views[1].el.querySelector('.nb-tools button').click(), 1)`);
+            await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).nb.cells[1].outputs[0]?.text.join('').includes('fake Jupyter')`, 30000, 'the output of the server');
+            assert.match(await nb(`s.statusEl.textContent`), /3\.99\.9/);
+            assert.ok(jupyter.calls.includes('POST /api/kernels ok') && jupyter.calls.includes('WS /api/kernels/k1/channels'), jupyter.calls.join('\n'));
+            assert.ok(jupyter.calls.some((c) => c.startsWith('execute "a = 4')), jupyter.calls.join('\n'));
+            assert.ok(!jupyter.calls.some((c) => c.endsWith('denied') && !c.startsWith('GET /api/kernelspecs')), 'the token was sent on every call');
+            // the Variables window says why it is empty; Debug Cell says it needs the built-in kernel
+            assert.match(await nb(`s.varsEl.textContent`), /built-in kernel/);
+            // back to the built-in kernel: the server's kernel is deleted
+            await nb(`(s.serverBtn.click(), 1)`);
+            await page.waitFor(`document.querySelector('.nb-servers #nb-server-use')`, 5000, 'the servers window');
+            await page.evaluate(`document.querySelector('.nb-servers input[type=radio]').click()`);
+            await page.evaluate(`document.getElementById('nb-server-use').click()`);
+            await page.waitFor(`window.pymagic.notebook.stateOf(${JSON.stringify(REL)}).serverBtn.textContent.includes('Built-in')`, 5000, 'the built-in kernel');
+            for (let i = 0; i < 30 && !jupyter.calls.includes('DELETE /api/kernels/k1 ok'); i++) await sleep(200);
+            assert.ok(jupyter.calls.includes('DELETE /api/kernels/k1 ok'), jupyter.calls.join('\n'));
+        } finally { jupyter.server.close(); jupyter.server.closeAllConnections?.(); }
     });
 });
