@@ -25,6 +25,7 @@ import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
 import { setupRequirementsCheck } from './requirements-check';
 import { setupFileChecks } from './filecheck';
+import { setupSchemaCheck } from './schemacheck';
 import { setupSemantic } from './semantic';
 import { setupProfiler } from './profiler';
 import { setupDatabase } from './database';
@@ -1125,6 +1126,7 @@ async function main() {
     const coverage = setupCoverage(common);
     setupRequirementsCheck(common);
     setupFileChecks(common);
+    setupSchemaCheck(common);
     setupProfiler({ ...common, askText: (...a) => explorer.askText(...a) });
     setupHttpClient({ ...common, root: info.root, askText: (...a) => explorer.askText(...a) });
     setupDatabase({ ...common, askText: (...a) => explorer.askText(...a), runScript: (rel, args) => runHooks.runScript(rel, args) });

@@ -19,7 +19,11 @@ const FILES = {
     'queries.sql': "CREATE TABLE note (id INTEGER PRIMARY KEY, body TEXT);\nINSERT INTO note (body) VALUES ('one; two'), ('three');\nSELECT body FROM note ORDER BY id;\n",
     'more_items.csv': 'name,price\nlamp,30\nmug,\n',
     'busy.py': 'def inner(n):\n    return sum(i * i for i in range(n))\n\n\ndef outer():\n    return [inner(3000) for _ in range(40)]\n\n\nouter()\n',
-    'broken.toml': '[tool]\nname = "x"\nname = "y"\nflag = True\n',
+    '.pymagic/schemas/package.json': '{"type":"object","properties":{"name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$"},"scripts":{"type":"object","additionalProperties":{"type":"string"}}}}',
+    '.pymagic/schemas/pyproject.json': '{"type":"object","properties":{"project":{"type":"object","properties":{"name":{"type":"string"}}}}}',
+    'package.json': '{\n  "name": "Bad Name",\n  "scripts": {\n    "t": 1\n  }\n}\n',
+    'pyproject.toml': '[project]\nname = 5\n',
+    'broken.toml':'[tool]\nname = "x"\nname = "y"\nflag = True\n',
     'broken.yml': 'a: 1\nb: 2\na: 3\n',
     'notes.md': '# Notes\n\nSee [the guide](docs/nope.md) and [here](#notes).\n',
     'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\n',
@@ -301,6 +305,12 @@ describe('file checks', () => {
     test('TOML and YAML syntax problems are marked', async () => {
         assert.deepEqual(await problems('broken.toml'), ['toml-duplicate-key@3:1', 'toml-value@4:8']);
         assert.deepEqual(await problems('broken.yml'), ['yaml-duplicate-key@3:1']);
+    });
+
+    test('package.json and pyproject.toml are checked against the kept schemas', async () => {
+        const schema = (file) => open(file).then(() => page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); const found = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.code === 'schema'); return found.length ? found.map((x) => x.startLineNumber + ':' + x.startColumn + ' ' + x.message) : null; })()`, 20000, 'the schema problems of ' + file));
+        assert.deepEqual(await schema('package.json'), ['2:3 Should match ^[a-z][a-z0-9-]*$', '4:5 Should be string, not integer']);
+        assert.deepEqual(await schema('pyproject.toml'), ['2:1 Should be string, not integer']);
     });
 
     test('a Markdown link to a missing file is marked, an anchor that exists is not', async () => {

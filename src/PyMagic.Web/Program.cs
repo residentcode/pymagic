@@ -759,6 +759,21 @@ app.MapGet("/api/pypi", async (string name) =>
     }
     catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return Results.Json(new { error = "the package index is not reachable" }, statusCode: 502); }
 });
+// SchemaStore's schemas (package.json, pyproject.toml, GitHub workflows): kept ones, one kept one, and the download (the page asks the user first)
+app.MapGet("/api/schemas", () => Results.Json(Schemas.List(root)));
+app.MapGet("/api/schemas/get", (string name) => Schemas.Kept(root, name) is { } kept ? Results.Text(kept, "application/json") : Results.NotFound());
+app.MapPost("/api/schemas/download", async (string name) =>
+{
+    try { return Results.Text(await Schemas.Download(root, name, pypi), "application/json"); }
+    catch (ServiceException e) { return Results.Json(new { error = e.Message }, statusCode: 502); }
+});
+// a TOML text as JSON, for checking pyproject.toml against its schema
+app.MapPost("/api/toml", async (HttpRequest req) =>
+{
+    using var reader = new StreamReader(req.Body);
+    string? json = Schemas.TomlToJson(DatabasePython(), await reader.ReadToEndAsync());
+    return json == null ? Results.Json(new { error = "not TOML, or a Python older than 3.11" }) : Results.Text(json, "application/json");
+});
 app.MapGet("/api/tests", () => TestDiscovery.Discover(root));
 DjangoConfig.Load(root);
 ProjectFolders.Load(root);
