@@ -139,4 +139,31 @@ public class ComposeTargetTests
         }
         finally { Directory.Delete(dir, true); }
     }
+
+    /// <summary>With PYMAGIC_TEST_COMPOSE=1 and a running Docker engine (python:3.12-slim present), a script really runs in a service.</summary>
+    [Fact]
+    public void AScriptRunsInAServiceOfARealEngine()
+    {
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_COMPOSE") != "1") return;
+        string root = Path.Combine(Path.GetTempPath(), "pm_compose_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string nl = Environment.NewLine;
+            File.WriteAllText(Path.Combine(root, "compose.yaml"), string.Join(nl, "services:", "  web:", "    image: python:3.12-slim", "    command: sleep 600", ""));
+            File.WriteAllText(Path.Combine(root, "hello.py"), string.Join(nl, "import os", "print('hi from', os.getcwd())", ""));
+            var t = new ComposeTarget("web", null);
+            t.Project = root;
+            var psi = t.Start("python", root, new[] { Path.Combine(root, "hello.py") }, new Dictionary<string, string>(), Array.Empty<string>());
+            psi.WorkingDirectory = root;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.UseShellExecute = false;
+            using var p = System.Diagnostics.Process.Start(psi)!;
+            string output = p.StandardOutput.ReadToEnd(), error = p.StandardError.ReadToEnd();
+            p.WaitForExit();
+            Assert.Contains("hi from /workspace", output + error);
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
 }
