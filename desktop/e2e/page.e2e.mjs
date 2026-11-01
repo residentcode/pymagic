@@ -27,8 +27,9 @@ const FILES = {
     'pyproject.toml': '[project]\nname = 5\n',
     'broken.toml':'[tool]\nname = "x"\nname = "y"\nflag = True\n',
     'broken.yml': 'a: 1\nb: 2\na: 3\n',
-    'notes.md': '# Notes\n\nSee [the guide](docs/nope.md) and [here](#notes).\n',
-    'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\n',
+    'notes.md': '# Notes\n\nSee [the guide](docs/nope.md) and [here](#notes).\n\n[g](docs/guide.md#nowhere) [h](docs/guide.md#setup)\n',
+    'docs/guide.md': '# Guide\n\n## Setup\n',
+    'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\nN = re.compile(f"{PATTERN.pattern}[cc]")\n',
     'api.http':'### the items\nGET {{host}}/items\n    ?page=2\nAccept: application/json\n\n###\nPOST {{host}}/items\nContent-Type: application/json\nAuthorization: Bearer {{token}}\n\n{"name": "pen"}\n',
     'tests/__init__.py': '',
     'tests/test_calc.py': 'import unittest\n\n\nclass Calc(unittest.TestCase):\n    def test_ok(self):\n        self.assertEqual(1 + 1, 2)\n\n    def test_bad(self):\n        self.assertEqual(1 + 1, 3)\n',
@@ -317,11 +318,11 @@ describe('file checks', () => {
     });
 
     test('a Markdown link to a missing file is marked, an anchor that exists is not', async () => {
-        assert.deepEqual(await problems('notes.md'), ['md-link@3:17']);
+        assert.deepEqual(await problems('notes.md'), ['md-link@3:17', 'md-anchor@5:5']);
     });
 
     test('a redundant escape and a repeated class character in re.compile are marked', async () => {
-        assert.deepEqual(await problems('rx.py'), ['re-class-repeat@2:26', 're-escape@2:28']);
+        assert.deepEqual(await problems('rx.py'), ['re-class-repeat@2:26', 're-escape@2:28', 're-class-repeat@3:37']);
     });
 });
 

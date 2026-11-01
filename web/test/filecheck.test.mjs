@@ -93,12 +93,55 @@ test('Markdown links', () => {
     assert.deepEqual(m.markdownProblems('# A\n# A\n[x](#a) [y](#a-1)\n', {}), []);
 });
 
-test('regular expression literals', () => {
-    assert.deepEqual(m.regexLiterals('x = re.compile(r"\\d+-\\w")').map((l) => [l.pattern, l.col]), [['\\d+-\\w', 18]]);
-    assert.deepEqual(m.regexLiterals("re.sub('a|b', '', s)").map((l) => l.pattern), ['a|b']);
-    assert.deepEqual(m.regexLiterals('re.match(f"{x}+", s)'), []);
-    assert.deepEqual(m.regexLiterals('re.match("a\\\\.b", s)'), []);   // escapes in a non-raw string: not the pattern's own text
+test('regular expression literals of every kind', () => {
+    const pats = (text) => m.regexLiterals(text).map((l) => l.pattern);
+    assert.deepEqual(pats('x = re.compile(r"\\d+-\\w")'), ['\\d+-\\w']);
+    assert.deepEqual(pats("re.sub('a|b', '', s)"), ['a|b']);
     assert.deepEqual(m.regexLiterals('re.fullmatch(r"x", s)').map((l) => l.fullmatch), [true]);
+    // an escaped (not raw) string is read as Python reads it
+    assert.deepEqual(pats('re.match("a\\\\.b\\\\d", s)'), ['a\\.b\\d']);
+    assert.deepEqual(pats('re.match("tab\\there", s)'), ['tab\there']);
+    assert.deepEqual(pats('re.match("\\d+", s)'), ['\\d+']);                       // an escape Python keeps
+    // an f-string: {{ is {, an expression is one character nothing is known of
+    assert.deepEqual(pats('re.match(f"a{{2}}{x}+", s)'), ['a{2}\uE000+']);
+    // triple-quoted, on several lines
+    assert.deepEqual(pats('re.compile("""\n  a+  # one\n  b\n""", re.X)'), ['\n  a+  # one\n  b\n']);
+    assert.equal(m.regexLiterals('re.compile("""a""", re.X)')[0].verbose, true);
+    assert.equal(m.regexLiterals('re.compile("""a""")')[0].verbose, false);
+    // a name set once at the top of the file
+    assert.deepEqual(pats('PATTERN = r"a|b"\ndef f():\n    return re.compile(PATTERN)\n'), ['a|b']);
+    assert.deepEqual(pats('P = r"a"\nP = r"b"\nre.compile(P)\n'), []);              // set twice: not known
+    assert.deepEqual(pats('def f(x):\n    P = r"a"\n    return re.compile(P)\n'), []);   // not at the top level
+    // joined to something else: not the pattern
+    assert.deepEqual(pats('re.match("a" + x, s)'), []);
+    assert.deepEqual(pats('re.match("a" "b", s)'), []);
+    assert.deepEqual(pats('re.match("a%s" % x, s)'), []);
+    assert.deepEqual(pats('re.match(x, s)'), []);
+});
+
+test('problems are put where they are in the source, whatever the kind of string', () => {
+    const at = (text) => m.pythonRegexProblems(text).map((p) => `${p.code}@${p.line}:${p.start}-${p.end}`);
+    // escaped: "\\-" is two characters of source for \- (one escape)
+    assert.deepEqual(at('import re\nA = re.compile("a\\\\-b")\n'), ['re-escape@2:18-21']);
+    // f-string: the expression is not looked into, its place keeps the columns after it right
+    assert.deepEqual(at('B = re.compile(rf"{name}\\-x")\n'), ['re-escape@1:25-27']);
+    assert.deepEqual(at('B = re.compile(f"[{a}{a}][bb]")\n'), ['re-class-repeat@1:28-29']);
+    // triple-quoted, several lines: the line of the problem
+    assert.deepEqual(at('C = re.compile(r"""\n    ok\n    [xx]  # a comment with ( and \\-\n""", re.VERBOSE)\n'), ['re-class-repeat@3:7-8']);
+    // a constant used twice is one problem, at its own line
+    assert.deepEqual(at('P = r"\\-"\nre.compile(P)\nre.match(P, s)\n'), ['re-escape@1:7-9']);
+});
+
+test('a Markdown link to a heading of another file', () => {
+    const files = new Set(['docs/guide.md', 'docs/other.txt']);
+    const text = '[a](docs/guide.md#setup) [b](docs/guide.md#missing) [c](docs/other.txt#x) [d](docs/guide.md)\n';
+    assert.deepEqual(m.markdownTargets(text, 'README.md'), ['docs/guide.md']);
+    const anchors = new Map([['docs/guide.md', m.headingAnchors('# Guide\n\n## Setup\n')]]);
+    assert.deepEqual(codes(m.markdownProblems(text, { rel: 'README.md', files, anchors })), ['md-anchor@1']);
+    // without the other file's headings read, nothing is said
+    assert.deepEqual(m.markdownProblems(text, { rel: 'README.md', files }), []);
+    // relative to the file's folder
+    assert.deepEqual(m.markdownTargets('[x](guide.md#a) [y](../README.md#b)\n', 'docs/index.md'), ['docs/guide.md', 'README.md']);
 });
 
 test('regular expression problems', () => {

@@ -376,11 +376,8 @@ export function headingAnchors(text) {
     return anchors;
 }
 
-/** `context`: {rel: the file's project path, files: Set of the project's file paths (null: unknown, so no file is reported)}. */
-export function markdownProblems(text, context = {}) {
-    const found = [];
-    const own = headingAnchors(text);
-    const dir = (context.rel ?? '').split('/').slice(0, -1);
+/** The links of a Markdown text that point somewhere in the project: {line, at (1-based column of the target), target, path, anchor}. */
+function* markdownLinks(text) {
     let fence = '';
     const lines = text.split('\n');
     for (let i = 0; i < lines.length; i++) {
@@ -395,21 +392,52 @@ export function markdownProblems(text, context = {}) {
         while ((m = re.exec(code))) {
             const target = m[1];
             if (/^([a-z][a-z0-9+.-]*:|\/\/|\{\{|\$)/i.test(target)) continue;
-            const at = m.index + m[0].indexOf(target) + 1;
             const hash = target.indexOf('#');
-            const path = decodeURIComponentSafe(hash >= 0 ? target.slice(0, hash) : target).replace(/\?.*$/, '');
-            const anchor = hash >= 0 ? decodeURIComponentSafe(target.slice(hash + 1)).toLowerCase() : '';
-            if (!path) {
-                if (anchor && !own.has(anchor))
-                    found.push(problem(i + 1, at, at + target.length, 'warning', 'md-anchor', `No heading here makes the anchor #${anchor}`));
-                continue;
-            }
-            if (!context.files) continue;
-            const resolved = resolveRel(path.startsWith('/') ? [] : dir, path);
-            if (resolved === null) { found.push(problem(i + 1, at, at + target.length, 'warning', 'md-link', `${path} is outside the project`)); continue; }
-            const isDir = [...context.files].some((p) => p.startsWith(resolved + '/'));
-            if (resolved && !context.files.has(resolved) && !isDir)
-                found.push(problem(i + 1, at, at + target.length, 'warning', 'md-link', `${path} is not in the project`));
+            yield {
+                line: i + 1, at: m.index + m[0].indexOf(target) + 1, target,
+                path: decodeURIComponentSafe(hash >= 0 ? target.slice(0, hash) : target).replace(/\?.*$/, ''),
+                anchor: hash >= 0 ? decodeURIComponentSafe(target.slice(hash + 1)).toLowerCase() : '',
+            };
+        }
+    }
+}
+
+const isMarkdown = (path) => /\.(md|markdown)$/i.test(path);
+
+/** The Markdown files a text links to with a #heading, by their project path: their headings have to be read to check the anchors. */
+export function markdownTargets(text, rel) {
+    const dir = (rel ?? '').split('/').slice(0, -1);
+    const found = new Set();
+    for (const link of markdownLinks(text)) {
+        if (!link.path || !link.anchor || !isMarkdown(link.path)) continue;
+        const resolved = resolveRel(link.path.startsWith('/') ? [] : dir, link.path);
+        if (resolved) found.add(resolved);
+    }
+    return [...found];
+}
+
+/**
+ * `context`: {rel: the file's project path, files: Set of the project's file paths (null: unknown, so no file is reported),
+ * anchors: Map of a Markdown file's project path to the Set of its anchors (markdownTargets says which; one not in it is not checked)}.
+ */
+export function markdownProblems(text, context = {}) {
+    const found = [];
+    const own = headingAnchors(text);
+    const dir = (context.rel ?? '').split('/').slice(0, -1);
+    for (const { line, at, target, path, anchor } of markdownLinks(text)) {
+        if (!path) {
+            if (anchor && !own.has(anchor))
+                found.push(problem(line, at, at + target.length, 'warning', 'md-anchor', `No heading here makes the anchor #${anchor}`));
+            continue;
+        }
+        if (!context.files) continue;
+        const resolved = resolveRel(path.startsWith('/') ? [] : dir, path);
+        if (resolved === null) { found.push(problem(line, at, at + target.length, 'warning', 'md-link', `${path} is outside the project`)); continue; }
+        const isDir = [...context.files].some((p) => p.startsWith(resolved + '/'));
+        if (resolved && !context.files.has(resolved) && !isDir) {
+            found.push(problem(line, at, at + target.length, 'warning', 'md-link', `${path} is not in the project`));
+        } else if (anchor && context.anchors?.get(resolved) && !context.anchors.get(resolved).has(anchor)) {
+            found.push(problem(line, at, at + target.length, 'warning', 'md-anchor', `No heading in ${path} makes the anchor #${anchor}`));
         }
     }
     return found;
@@ -431,39 +459,124 @@ function resolveRel(from, path) {
 
 const RE_FUNCTIONS = 'compile|match|search|fullmatch|sub|subn|findall|finditer|split';
 
+/** The Python string literal at text[i], or null: {raw, fstring, start, end (the body is text[start, end)), after}. */
+function readLiteral(text, i) {
+    const m = /^([A-Za-z]{0,2})("""|'''|"|')/.exec(text.slice(i, i + 6));
+    if (!m) return null;
+    const prefix = m[1].toLowerCase();
+    if (prefix && !/^(r|b|u|f|rb|br|rf|fr)$/.test(prefix)) return null;
+    const quote = m[2];
+    const start = i + m[0].length;
+    let end = start;
+    while (end < text.length) {
+        if (text[end] === '\\') { end += 2; continue; }
+        if (text.startsWith(quote, end)) break;
+        if (quote.length === 1 && text[end] === '\n') return null;
+        end++;
+    }
+    if (end >= text.length) return null;
+    return { raw: prefix.includes('r'), fstring: prefix.includes('f'), start, end, after: end + quote.length };
+}
+
+const ESCAPES = { n: '\n', t: '\t', r: '\r', '\\': '\\', "'": "'", '"': '"', a: '\x07', b: '\b', f: '\f', v: '\v', 0: '\0' };
+
 /**
- * The regular expressions of `re.compile("...")`, `re.sub(r"...", ...)` and the like on one line, with the column the pattern starts at.
- * Only plain strings are looked at: an f-string, a triple-quoted string, or an escaped one (without the r prefix) has text the pattern
- * is not.
+ * The pattern a literal stands for, with where each of its characters is in the source: {pattern, from[], to[]}. A normal string's
+ * escapes are read as Python reads them (`"\\d"` is `\d`, `"\n"` a newline; an escape Python keeps, `"\d"`, stays), an f-string's
+ * `{{` is `{` and each `{expression}` becomes one private character of its own (nothing is known of what it holds).
  */
-export function regexLiterals(line) {
-    const out = [];
-    const re = new RegExp(`\\bre\\.(${RE_FUNCTIONS})\\(\\s*([rR]?)(["'])`, 'g');
+function decodeLiteral(text, lit) {
+    const chars = [], from = [], to = [];
+    const push = (c, a, b) => { chars.push(c); from.push(a); to.push(b); };
+    let holes = 0;
+    for (let i = lit.start; i < lit.end;) {
+        const ch = text[i];
+        if (lit.fstring && ch === '{') {
+            if (text[i + 1] === '{') { push('{', i, i + 2); i += 2; continue; }
+            let depth = 1, j = i + 1;
+            while (j < lit.end && depth) { if (text[j] === '{') depth++; else if (text[j] === '}') depth--; j++; }
+            push(String.fromCharCode(0xE000 + (holes++ % 6000)), i, j);
+            i = j;
+            continue;
+        }
+        if (lit.fstring && ch === '}' && text[i + 1] === '}') { push('}', i, i + 2); i += 2; continue; }
+        if (!lit.raw && ch === '\\') {
+            const n = text[i + 1];
+            if (n === '\n') { i += 2; continue; }
+            if (n in ESCAPES) { push(ESCAPES[n], i, i + 2); i += 2; continue; }
+            const hex = /^(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))/.exec(text.slice(i + 1, i + 6));
+            if (hex) { push(String.fromCharCode(parseInt(hex[1] ?? hex[2], 16)), i, i + 1 + hex[0].length); i += 1 + hex[0].length; continue; }
+            push('\\', i, i + 1);
+            push(n ?? '', i + 1, i + 2);
+            i += 2;
+            continue;
+        }
+        push(ch, i, i + 1);
+        i++;
+    }
+    return { pattern: chars.join(''), from, to };
+}
+
+/** The names a file sets once, at its top level, to a plain string: PATTERN = r"..." (those a pattern can be read from). */
+function stringConstants(text) {
+    const found = new Map(), counts = new Map();
+    const re = /^([A-Za-z_]\w*)[ \t]*(?::[ \t]*[\w.\[\], ]+)?=[ \t]*/gm;
     let m;
-    while ((m = re.exec(line))) {
-        const raw = m[2] !== '', quote = m[3];
-        const start = m.index + m[0].length;
-        if (line.startsWith(quote + quote, start - 1) && line.startsWith(quote.repeat(3), start - 1)) continue;
-        let end = start;
-        while (end < line.length && line[end] !== quote) { if (line[end] === '\\') end += raw ? 2 : 2; else end++; }
-        if (end >= line.length) continue;
-        const pattern = line.slice(start, end);
-        if (!raw && pattern.includes('\\')) continue;
-        out.push({ pattern, col: start + 1, fullmatch: m[1] === 'fullmatch' });
+    while ((m = re.exec(text))) {
+        counts.set(m[1], (counts.get(m[1]) ?? 0) + 1);
+        const lit = readLiteral(text, m.index + m[0].length);
+        if (lit && /^[ \t]*(#.*)?(\n|$)/.test(text.slice(lit.after, lit.after + 200))) found.set(m[1], lit);
+    }
+    for (const [name, n] of counts) if (n > 1) found.delete(name);
+    return found;
+}
+
+/**
+ * The regular expressions of `re.compile(...)`, `re.sub(r"...", ...)` and the like in a source text, each {pattern, from, to,
+ * fullmatch, verbose}: a literal of any kind (raw, escaped, f-string, triple-quoted, on several lines) as the first argument, or a
+ * name the file sets once to such a literal. A pattern joined to something else ("a" + x, "a" "b", .format()) is not looked at.
+ */
+export function regexLiterals(text) {
+    const out = [];
+    const constants = stringConstants(text);
+    const re = new RegExp(`\\bre\\.(${RE_FUNCTIONS})\\(\\s*`, 'g');
+    let m;
+    while ((m = re.exec(text))) {
+        const at = m.index + m[0].length;
+        let lit = readLiteral(text, at);
+        let after = lit?.after ?? at;
+        if (!lit) {
+            const name = /^[A-Za-z_]\w*/.exec(text.slice(at, at + 80))?.[0];
+            if (!name || !constants.has(name)) continue;
+            lit = constants.get(name);
+            after = at + name.length;
+        }
+        if (!/^\s*[,)]/.test(text.slice(after, after + 60))) continue;
+        const flags = text.slice(after, after + 200).split(')')[0];
+        out.push({ ...decodeLiteral(text, lit), at: lit.start, fullmatch: m[1] === 'fullmatch', verbose: /\bre\.(VERBOSE|X)\b/.test(flags) });
     }
     return out;
 }
 
 export function pythonRegexProblems(text) {
-    const found = [];
-    const lines = text.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-        if (!lines[i].includes('re.')) continue;
-        for (const lit of regexLiterals(lines[i]))
-            for (const p of regexProblems(lit.pattern, { anchored: lit.fullmatch }))
-                found.push(problem(i + 1, lit.col + p.index, lit.col + p.index + Math.max(1, p.length), p.severity ?? 'warning', p.code, p.message));
+    const found = [], seen = new Set();
+    if (!text.includes('re.')) return found;
+    const starts = [0];
+    for (let i = 0; i < text.length; i++) if (text[i] === '\n') starts.push(i + 1);
+    const lineOf = (offset) => { let lo = 0, hi = starts.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= offset) lo = mid; else hi = mid - 1; } return lo; };
+    for (const lit of regexLiterals(text)) {
+        for (const p of regexProblems(lit.pattern, { anchored: lit.fullmatch, verbose: lit.verbose })) {
+            const a = lit.from[p.index], b = lit.to[Math.min(lit.pattern.length, p.index + Math.max(p.length, 1)) - 1];
+            if (a === undefined) continue;
+            const key = a + ':' + p.code;
+            if (seen.has(key)) continue;           // one constant used by several calls is one problem
+            seen.add(key);
+            const line = lineOf(a);
+            const lineEnd = (starts[line + 1] ?? text.length + 1) - 1;
+            found.push(problem(line + 1, a - starts[line] + 1, Math.min(b, lineEnd) - starts[line] + 1, p.severity ?? 'warning', p.code, p.message));
+        }
     }
-    return found;
+    return found.sort((x, y) => x.line - y.line || x.start - y.start);
 }
 
 const SPECIAL_OUTSIDE = new Set('\\^$.|?*+()[]{}'.split(''));
@@ -484,6 +597,7 @@ export function regexProblems(pattern, options = {}) {
     const stack = [];
     while (i < pattern.length) {
         const ch = pattern[i];
+        if (verbose && ch === '#') { while (i < pattern.length && pattern[i] !== '\n') i++; continue; }
         if (ch === '\\') {
             const next = pattern[i + 1];
             if (next !== undefined && !/[A-Za-z0-9]/.test(next) && !SPECIAL_OUTSIDE.has(next) && !(verbose && (next === ' ' || next === '#')) && next !== ' ' && next !== '#' && next !== '\\')
