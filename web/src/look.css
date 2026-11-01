@@ -532,3 +532,11 @@ body.row-resizing { cursor: row-resize; user-select: none; }
 .welcome-key kbd { min-width: 104px; font: 12px var(--mono); color: var(--fg); }
 li.mark-templates .fname, li.mark-templates .folder { color: var(--violet, #b48ead); }
 li.mark-resources .fname, li.mark-resources .folder { color: var(--teal, #6cc4c4); }
+
+.hist-row.picked { background: var(--sel-soft); }
+.hist-label { background: color-mix(in srgb, var(--accent) 9%, transparent); border-left: 3px solid var(--accent); }
+.hist-label.auto { border-left-color: var(--faint); }
+.hist-name { font-weight: 600; flex: 1; }
+.hist-snippet { font-family: var(--mono); font-size: 12px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-row button.mini { padding: 1px 8px; }
+#hist-deleted-box { display: flex; align-items: center; gap: 4px; color: var(--dim); font-size: 12px; }

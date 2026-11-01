@@ -501,6 +501,12 @@
           <div class="listbar">
             <span id="history-title">Local history</span>
             <span class="spacer" style="flex:1"></span>
+            <label id="hist-deleted-box" hidden title="Only the files that were deleted"><input type="checkbox" id="hist-deleted"> deleted only</label>
+            <button id="hist-selection-back" hidden title="Back to the versions of the whole file">File</button>
+            <button id="hist-two" hidden disabled title="Ctrl+click two versions of the file, then compare them with each other">Compare two</button>
+            <button id="hist-selection" title="The versions in which the lines selected in the editor were different">Selection</button>
+            <button id="hist-project" title="Recent changes: the versions of every file of the project, deleted ones too, and the labels">Project</button>
+            <button id="hist-label" title="Mark the project as it is now; history can go back to the label">Label…</button>
             <button id="hist-refresh" title="Read the versions again"><svg class="i"><use href="#i-refresh"/></svg></button>
           </div>
           <div class="body" id="history-list"></div>

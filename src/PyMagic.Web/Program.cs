@@ -254,6 +254,88 @@ app.MapGet("/api/history/text", (string path, string id) =>
     catch (UnauthorizedAccessException) { return Results.NotFound(); }
 });
 
+// labels of the whole project (by hand, or put by PyMagic before a refactoring, a test run, a Git update) and what they allow
+IEnumerable<(string Rel, string Text)> TrackedFiles()
+{
+    var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", "node_modules", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".pymagic", ".idea", ".vs", ".tox", ".eggs", "bin", "obj", "dist", "build" };
+    var binary = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp", ".zip", ".gz", ".tar", ".whl", ".pdf", ".dll", ".exe", ".pyc", ".pyd", ".so", ".sqlite3", ".sqlite", ".db", ".woff", ".woff2", ".ttf", ".mp3", ".mp4", ".pstats" };
+    int count = 0;
+    var stack = new Stack<string>();
+    stack.Push(root);
+    while (stack.Count > 0 && count < 4000)
+    {
+        string dir = stack.Pop();
+        IEnumerable<string> files, dirs;
+        try { files = Directory.EnumerateFiles(dir).ToList(); dirs = Directory.EnumerateDirectories(dir).ToList(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+        foreach (var f in files)
+        {
+            if (count >= 4000) break;
+            if (binary.Contains(Path.GetExtension(f))) continue;
+            string text;
+            try { var info = new FileInfo(f); if (info.Length > LocalHistory.MaxFileBytes) continue; text = File.ReadAllText(f); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            count++;
+            yield return (Path.GetRelativePath(root, f).Replace('\\', '/'), text);
+        }
+        foreach (var d in dirs)
+            if (!skip.Contains(Path.GetFileName(d)) && !d.EndsWith(".egg-info", StringComparison.OrdinalIgnoreCase) && !ProjectFolders.IsExcluded(d)) stack.Push(d);
+    }
+}
+void AutoLabel(string name) { try { history.PutLabel(name, true, TrackedFiles()); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* the operation goes on without its label */ } }
+object LabelJson(HistoryLabel l) => new { id = l.Id, time = l.Time.ToString("o"), name = l.Name, auto = l.Auto };
+
+app.MapGet("/api/history/labels", () => Results.Json(history.Labels().Select(LabelJson).ToList()));
+app.MapPost("/api/history/label", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    string name = body?["name"]?.GetValue<string>() ?? "";
+    bool auto = body?["auto"]?.GetValue<bool>() ?? false;
+    return Results.Json(LabelJson(history.PutLabel(name, auto, TrackedFiles())));
+});
+app.MapDelete("/api/history/label", (string id) => history.RemoveLabel(id) ? Results.NoContent() : Results.NotFound());
+// the text of the version before one (what that save changed is the difference); 404 when it was the first
+app.MapGet("/api/history/before", (string path, string id) =>
+{
+    try
+    {
+        string rel = Path.GetRelativePath(root, ResolveInRoot(path)).Replace('\\', '/');
+        return history.Before(rel, id) is { } text ? Results.Text(text, "text/plain; charset=utf-8") : Results.NotFound();
+    }
+    catch (UnauthorizedAccessException) { return Results.NotFound(); }
+});
+// the project as a label had it: {label, dry} lists the files that would change; without dry they are written (a label of its own is put first, so it can be undone)
+app.MapPost("/api/history/revert", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    string id = body?["label"]?.GetValue<string>() ?? "";
+    bool dry = body?["dry"]?.GetValue<bool>() ?? false;
+    var label = history.Labels().FirstOrDefault(l => l.Id == id);
+    if (label == null) return Results.NotFound();
+    var plan = new List<(string Rel, string Text, bool Missing)>();
+    foreach (var (rel, text) in history.StateAt(id))
+    {
+        if (text == null) continue;                                  // made after the label: it stays
+        string full = Path.Combine(root, rel);
+        bool exists = File.Exists(full);
+        string? now = null;
+        if (exists) { try { now = File.ReadAllText(full); } catch (IOException) { continue; } }
+        if (now != text) plan.Add((rel, text, !exists));
+    }
+    if (!dry)
+    {
+        AutoLabel($"Before going back to '{label.Name}'");
+        foreach (var (rel, text, _) in plan)
+        {
+            string full = ResolveInRoot(rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            await File.WriteAllTextAsync(full, text, new UTF8Encoding(false));
+            history.Record(rel, text);
+        }
+    }
+    return Results.Json(new { label = LabelJson(label), files = plan.Select(x => new { path = x.Rel, missing = x.Missing }).ToList(), done = !dry });
+});
+
 // the files that change on disk, as server-sent events: "kind|path" (changed, created, deleted; "all|*" when there were too many to tell)
 var projectWatcher = new ProjectWatcher(root);
 app.Lifetime.ApplicationStopping.Register(projectWatcher.Dispose);
@@ -1448,6 +1530,7 @@ app.MapPost("/api/git/discard", async (HttpRequest req) =>
 app.MapPost("/api/git/checkout", async (HttpRequest req) =>
 {
     var body = await JsonNode.ParseAsync(req.Body);
+    AutoLabel($"Before Git checkout of {body?["branch"]?.GetValue<string>()}");
     return await GitCall(r => { r.Checkout(body?["branch"]?.GetValue<string>() ?? ""); return new { ok = true }; });
 });
 
@@ -1476,6 +1559,12 @@ app.MapPost("/api/git/action", async (HttpRequest req) =>
     string Str(string key) => body?[key]?.GetValue<string>() ?? "";
     bool Flag(string key) => body?[key]?.GetValue<bool>() ?? false;
     int Int(string key) => body?[key]?.GetValue<int>() ?? -1;
+    string? labelled = op switch
+    {
+        "pull" => "Git pull", "merge" => $"Git merge of {Str("branch")}", "applyStash" => "Git: stash applied", "revert" => "Git revert", "rebaseInteractive" => "Git rebase",
+        "cherryPick" => "Git cherry-pick", "reset" => "Git reset", "checkoutRemote" => $"Git checkout of {Str("branch")}", _ => null,
+    };
+    if (labelled != null) AutoLabel("Before " + labelled);
     return await GitCall(r =>
     {
         object? Ok() => new { ok = true };

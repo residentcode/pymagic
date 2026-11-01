@@ -5,6 +5,9 @@ namespace PyMagic.Server;
 
 public sealed record HistoryEntry(string Id, DateTime Time, int Bytes);
 
+/// <summary>A moment of the whole project that was marked, by hand or by PyMagic before something big (a refactoring, a test run, a Git update).</summary>
+public sealed record HistoryLabel(string Id, DateTime Time, string Name, bool Auto);
+
 /// <summary>Lines of the project's <c>.pymagic/.gitignore</c>: the caches PyMagic keeps there stay out of version control, the files that are the project's (inspection profile, run configurations, bookmarks) do not.</summary>
 public static class PymagicFolder
 {
@@ -141,5 +144,93 @@ public sealed class LocalHistory
             try { return File.Exists(file) ? File.ReadAllText(file) : null; }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
         }
+    }
+
+    // ------------------------------------------------------------ labels: moments of the whole project
+
+    /// <summary>The most labels kept; the oldest made by PyMagic go first.</summary>
+    public const int MaxLabels = 120;
+
+    string LabelsFile => Path.Combine(_root, ".pymagic", "history", "labels.json");
+
+    public IReadOnlyList<HistoryLabel> Labels()
+    {
+        lock (_gate)
+        {
+            try
+            {
+                if (!File.Exists(LabelsFile)) return Array.Empty<HistoryLabel>();
+                var list = System.Text.Json.JsonSerializer.Deserialize<List<HistoryLabel>>(File.ReadAllText(LabelsFile)) ?? new();
+                return list.OrderByDescending(l => l.Id, StringComparer.Ordinal).ToList();
+            }
+            catch (Exception e) when (e is IOException or System.Text.Json.JsonException or UnauthorizedAccessException) { return Array.Empty<HistoryLabel>(); }
+        }
+    }
+
+    void SaveLabels(List<HistoryLabel> labels)
+    {
+        while (labels.Count > MaxLabels)
+        {
+            var drop = labels.Where(l => l.Auto).OrderBy(l => l.Id, StringComparer.Ordinal).FirstOrDefault() ?? labels.OrderBy(l => l.Id, StringComparer.Ordinal).First();
+            labels.Remove(drop);
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(LabelsFile)!);
+        File.WriteAllText(LabelsFile, System.Text.Json.JsonSerializer.Serialize(labels.OrderBy(l => l.Id, StringComparer.Ordinal).ToList()));
+    }
+
+    /// <summary>
+    /// Marks the project as it is now: every file given is kept as a version first (when it differs from its newest), so the state at the
+    /// label is known for each of them, then the label is made.
+    /// </summary>
+    public HistoryLabel PutLabel(string name, bool auto, IEnumerable<(string Rel, string Text)> files)
+    {
+        foreach (var (rel, text) in files) Record(rel, text);
+        lock (_gate)
+        {
+            var labels = Labels().ToList();
+            long ticks = DateTime.UtcNow.Ticks;
+            if (labels.Count > 0 && long.TryParse(labels[0].Id, out var last) && ticks <= last) ticks = last + 1;
+            var made = new HistoryLabel(ticks.ToString("D19"), new DateTime(ticks, DateTimeKind.Utc), name.Trim().Length == 0 ? "Label" : name.Trim(), auto);
+            labels.Add(made);
+            PymagicFolder.IgnoreInGit(Path.Combine(_root, ".pymagic"), "history/");
+            SaveLabels(labels);
+            return made;
+        }
+    }
+
+    public bool RemoveLabel(string id)
+    {
+        lock (_gate)
+        {
+            var labels = Labels().ToList();
+            bool removed = labels.RemoveAll(l => l.Id == id) > 0;
+            if (removed) SaveLabels(labels);
+            return removed;
+        }
+    }
+
+    /// <summary>The text of the version just older than this one, or null when it is the first.</summary>
+    public string? Before(string rel, string id)
+    {
+        var older = List(rel).Where(e => string.CompareOrdinal(e.Id, id) < 0).FirstOrDefault();   // List is newest first
+        return older == null ? null : Read(rel, older.Id);
+    }
+
+    /// <summary>What every file with a history held at a label (the newest version not after it): path and text, null when it had no version yet.</summary>
+    public IReadOnlyList<(string Path, string? Text)> StateAt(string labelId)
+    {
+        string store = Path.Combine(_root, ".pymagic", "history");
+        var state = new List<(string, string?)>();
+        if (!Directory.Exists(store)) return state;
+        foreach (var folder in Directory.GetDirectories(store))
+        {
+            string marker = Path.Combine(folder, "path.txt");
+            string rel;
+            try { if (!File.Exists(marker)) continue; rel = File.ReadAllText(marker).Trim().Replace('\\', '/'); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            var at = List(rel).FirstOrDefault(e => string.CompareOrdinal(e.Id, labelId) <= 0);
+            state.Add((rel, at == null ? null : Read(rel, at.Id)));
+        }
+        return state.OrderBy(x => x.Item1, StringComparer.OrdinalIgnoreCase).ToList();
     }
 }

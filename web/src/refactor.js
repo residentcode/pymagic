@@ -1,5 +1,6 @@
 // Refactorings: the server offers them as code actions that carry the command "pymagic.refactor"; the page asks for the
 // name where one is needed, sends the request and applies the returned edits.
+import { putLabel } from './labels';
 import * as monaco from 'monaco-editor';
 import { editSignature, fetchSignature } from './signature';
 import { pickTarget } from './movepicker';
@@ -302,6 +303,8 @@ export function setupRefactor(deps) {
             toast(e.message ?? 'The refactoring could not be done.', true);
             return;
         }
+        // the project as it is on disk is kept first, to go back to from Local History
+        await putLabel('Before ' + (titleOf[kind] ?? 'refactoring').toLowerCase());
         await applyEdits(titleOf[kind] ?? 'Refactor', edit.changes, { alwaysPreview: previewed.has(kind) });
     }
     monaco.editor.registerCommand('pymagic.refactor', (_accessor, kind, uri, range, defaultName, all, members, chosen) => {

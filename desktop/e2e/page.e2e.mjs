@@ -39,6 +39,7 @@ const FILES = {
     'broken.yml': 'a: 1\nb: 2\na: 3\n',
     'notes.md': '# Notes\n\nSee [the guide](docs/nope.md) and [here](#notes).\n\n[g](docs/guide.md#nowhere) [h](docs/guide.md#setup)\n',
     'docs/guide.md': '# Guide\n\n## Setup\n',
+    'hist.py': 'def f():\n    return 0\n',
     'intent.py': "name = 'x'\nprint('Hello ' + name + '!')\nvalue = 255\n",
     'rx.py': 'import re\nPATTERN = re.compile(r"[aa]\\-x")\nN = re.compile(f"{PATTERN.pattern}[cc]")\n',
     'api.http':'### the items\nGET {{host}}/items\n    ?page=2\nAccept: application/json\n\n###\nPOST {{host}}/items\nContent-Type: application/json\nAuthorization: Bearer {{token}}\n\n{"name": "pen"}\n',
@@ -198,6 +199,72 @@ describe('tests', () => {
         const rows = await page.evaluate(`Object.fromEntries([...document.querySelectorAll('#tests-tree .trow')].map((r) => [r.querySelector('.tname').textContent, r.querySelector('.ticon').textContent]))`);
         assert.equal(rows.test_ok, '✔');
         assert.equal(rows.test_bad, '✖');
+    });
+});
+
+describe('local history', () => {
+    const put = (text) => page.evaluate(`fetch('/api/file?path=hist.py', { method: 'PUT', body: ${JSON.stringify(text)} }).then((r) => r.status)`);
+    const disk = () => page.evaluate(`fetch('/api/file?path=hist.py').then((r) => r.text())`);
+    const labels = () => page.evaluate(`fetch('/api/history/labels').then((r) => r.json())`);
+    const rows = () => page.evaluate(`[...document.querySelectorAll('#history-list .hist-row')].map((r) => r.textContent)`);
+
+    test('a test run you ask for puts a label first, and a label put by hand shows among the versions', async () => {
+        await page.evaluate(`${$('tests-all')}.click()`);
+        await page.waitFor(`!${$('tests-all')}.disabled && ${$('tests-console')}.textContent.includes('finished')`, 60000, 'the test run');
+        assert.ok((await labels()).some((l) => l.auto && l.name === 'Before running the tests'), JSON.stringify(await labels()));
+        await open('hist.py');
+        for (const text of ['def f():\n    return 1\n', 'def f():\n    return 2\n']) assert.equal(await put(text), 204);
+        await page.evaluate(`window.confirm = () => true; ${$('t-history')}.click()`);
+        await page.waitFor(`document.querySelectorAll('#history-list .hist-row:not(.hist-label)').length >= 2`, 10000, 'the versions');
+        // the label by hand, through the form
+        await page.evaluate(`${$('hist-label')}.click()`);
+        await page.waitFor(`document.querySelector('.ask-box input')`, 5000, 'the question');
+        await page.evaluate(`(() => { const i = document.querySelector('.ask-box input'); i.value = 'two returns'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+        await page.waitFor(`[...document.querySelectorAll('#history-list .hist-label')].some((r) => r.textContent.includes('two returns'))`, 10000, 'the label in the list');
+    });
+
+    test('the history of the selected lines shows only the versions where they differed', async () => {
+        await put('# a header\ndef f():\n    return 3\n');
+        await open('hist.py');
+        await page.waitFor(`window.pymagic.editor.getModel().getLineCount() >= 3 && window.pymagic.editor.getModel().getValue().includes('return 3')`, 10000, 'the editor to read the file again');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setSelection({ startLineNumber: 3, startColumn: 1, endLineNumber: 3, endColumn: 15 }); ed.focus(); ed.getAction('pymagic.history.selection').run(); })()`);
+        await page.waitFor(`document.getElementById('history-title').textContent.includes('lines 3–3')`, 10000, 'the selection history');
+        const found = await rows();
+        assert.ok(found.length >= 2 && found.length <= 3, found.join('\n'));
+        assert.ok(found.some((r) => r.includes('return 2')) && found.some((r) => r.includes('return 1')), found.join('\n'));
+        // a click opens the lines then and now
+        await page.evaluate(`document.querySelector('#history-list .hist-row').click()`);
+        await page.waitFor(`document.querySelector('.hist-diff')`, 5000, 'the comparison');
+        await page.evaluate(`[...document.querySelectorAll('.hist-diff-head button')].find((b) => b.textContent === 'Close').click()`);
+        await page.evaluate(`${$('hist-selection-back')}.click()`);
+    });
+
+    test('two versions compared with each other, and the project as a label had it written back', async () => {
+        await page.waitFor(`document.querySelectorAll('#history-list .hist-row:not(.hist-label)').length >= 3`, 10000, 'the versions');
+        await page.waitFor(`document.getElementById('history-title').textContent === 'Local history of hist.py' && document.querySelectorAll('#history-list .hist-row .hist-size').length >= 3`, 10000, 'the versions of the file');
+        for (const i of [0, 2])   // the list is drawn again after each click
+            await page.evaluate(`[...document.querySelectorAll('#history-list .hist-row:not(.hist-label)')][${i}].dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))`);
+        await page.waitFor(`!${$('hist-two')}.disabled`, 5000, 'Compare two');
+        await page.evaluate(`${$('hist-two')}.click()`);
+        await page.waitFor(`document.querySelector('.hist-diff-title')?.textContent.includes('and the version of')`, 5000, 'the two versions');
+        await page.evaluate(`[...document.querySelectorAll('.hist-diff-head button')].find((b) => b.textContent === 'Close').click()`);
+        // go back to the label put by hand: hist.py as it was then
+        assert.equal(await put('changed after the label\n'), 204);
+        await page.evaluate(`document.querySelector('#history-list .hist-label:not(.auto) button').click()`);
+        await page.waitFor(`false || true`, 1000);
+        const back = await page.waitFor(`fetch('/api/file?path=hist.py').then((r) => r.text()).then((t) => (t.includes('return 2') ? t : null))`, 15000, 'the file as it was at the label');
+        assert.equal(back, 'def f():\n    return 2\n');
+        assert.ok((await labels()).some((l) => l.auto && l.name.startsWith('Before going back to')), 'a label of the present was put first');
+    });
+
+    test('the project view lists the versions of every file, and the deleted ones can be filtered', async () => {
+        await page.evaluate(`${$('hist-project')}.click()`);
+        await page.waitFor(`document.getElementById('history-title').textContent.includes('Recent changes')`, 5000, 'the project history');
+        await page.waitFor(`[...document.querySelectorAll('#history-list .hist-tag')].some((t) => t.textContent === 'hist.py')`, 10000, 'the file in the list');
+        await page.evaluate(`(() => { const c = ${$('hist-deleted')}; c.checked = true; c.dispatchEvent(new Event('change')); })()`);
+        await sleep(600);
+        assert.equal(await page.evaluate(`[...document.querySelectorAll('#history-list .hist-tag')].filter((t) => t.textContent === 'hist.py').length`), 0);
+        await page.evaluate(`(() => { const c = ${$('hist-deleted')}; c.checked = false; c.dispatchEvent(new Event('change')); })()`);
     });
 });
 

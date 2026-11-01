@@ -1,4 +1,5 @@
 // Test explorer: discovered tests as a tree, run all / selected / failed / at the cursor, results with tracebacks.
+import { putLabel } from './labels';
 import * as monaco from 'monaco-editor';
 import { RunClient } from './runclient';
 import { showTab } from './panel';
@@ -415,12 +416,12 @@ export function setupTests(deps) {
         ]);
     };
     // Auto: the last run again a moment after a file is saved, when nothing is running
-    let autoTimer = 0, ownSave = false;
+    let autoTimer = 0, ownSave = false, autoRun = false;
     window.addEventListener('pymagic:saved', () => {
         if (!$('tests-auto').checked || lastIds === null || ownSave || client)
             return;
         clearTimeout(autoTimer);
-        autoTimer = window.setTimeout(() => { if (!client) void run(lastIds); }, 800);
+        autoTimer = window.setTimeout(() => { if (!client) { autoRun = true; void run(lastIds); } }, 800);
     });
     /** A run that could not start for want of its package: a button in the console installs it. */
     function offerInstall() {
@@ -484,6 +485,11 @@ export function setupTests(deps) {
         finally {
             ownSave = false;
         }
+        // the project is kept as it is before a run you asked for (not before each run of Auto)
+        const byAuto = autoRun;
+        autoRun = false;
+        if (!byAuto)
+            await putLabel(ids.length === 1 ? `Before running ${byId.get(ids[0])?.name ?? 'a test'}` : 'Before running the tests');
         await load();
         consoleOut.textContent = '';
         const wanted = ids.length ? ids : roots.map((r) => r.id);

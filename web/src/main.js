@@ -1028,7 +1028,7 @@ async function main() {
     });
     window.addEventListener('pymagic:sidebar', (e) => { if (e.detail === 'structure') structure.show(); });
     const bookmarks = setupBookmarks({ monaco, editor, openFile, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')), revealInTree: (rel) => explorer?.select(rel) });
-    const history = setupHistory({ monaco, editor, currentFile: () => currentRel, openFile });
+    const history = setupHistory({ monaco, editor, currentFile: () => currentRel, openFile, askText: (...a) => explorer.askText(...a) });
     recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
     const editorNav = setupEditorNav({
         editor, lsp, openFile, modelFor: ensureModel, currentFile: () => currentRel, saveAll: common.saveAll,
