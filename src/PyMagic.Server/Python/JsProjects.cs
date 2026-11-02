@@ -7,11 +7,16 @@ using System.Text.RegularExpressions;
 namespace PyMagic.Server;
 
 /// <summary>
-/// The choices of New Project's other kinds: the version of HTML5 Boilerplate, Bootstrap, Next.js or React Native; Vite's template; Next.js's
-/// switches (TypeScript, ESLint, Tailwind CSS, the App Router, a src folder); Express's view engine.
+/// The choices of New Project's other kinds, as PyCharm's dialog has them: the Node runtime; the generator's command (shown with its default, such
+/// as <c>npx --package express-generator express</c>, and changed as wanted) and its version; then the kind's options: the version of HTML5
+/// Boilerplate, Bootstrap or React Native, Vite's template, Next.js's switches (TypeScript, ESLint, Tailwind CSS, the App Router, a src folder),
+/// Express's view and stylesheet engines.
 /// </summary>
 public sealed record JsProjectOptions(string? Version = null, string? Template = null, bool TypeScript = true, bool Eslint = true, bool Tailwind = true,
-    bool AppRouter = true, bool SrcDir = false, string? View = null);
+    bool AppRouter = true, bool SrcDir = false, string? View = null, string? Node = null, string? Command = null, string? GeneratorVersion = null, string? Css = null);
+
+/// <summary>A kind's generator: the npm package it is, and the command New Project shows for it (npx, as PyCharm runs it).</summary>
+public sealed record JsGenerator(string Package, string Command);
 
 /// <summary>
 /// New Project's kinds that are not Python, as PyCharm's New Project has them under Other: HTML5 Boilerplate, Bootstrap, Vite, React Native, Next.js,
@@ -33,17 +38,52 @@ public static class JsProjects
     };
 
     /// <summary>express-generator's view engines ("none": an API without views).</summary>
-    public static readonly string[] ExpressViews = { "pug", "ejs", "hbs", "hjs", "twig", "vash", "none" };
+    public static readonly string[] ExpressViews = { "dust", "ejs", "hbs", "hjs", "pug", "twig", "vash", "none" };
 
-    /// <summary>The npm package whose versions a kind offers, or null for a kind without a version to choose.</summary>
+    /// <summary>express-generator's stylesheet engines ("css": plain CSS).</summary>
+    public static readonly string[] ExpressCss = { "css", "less", "stylus", "compass", "sass" };
+
+    /// <summary>The generator of a kind, or null for a kind made without one (HTML5 Boilerplate, Bootstrap and Node.js).</summary>
+    public static JsGenerator? Generator(string kind) => kind switch
+    {
+        "express" => new("express-generator", "npx --package express-generator express"),
+        "vite" => new("create-vite", "npx create-vite"),
+        "nextjs" => new("create-next-app", "npx create-next-app"),
+        "reactnative" => new("@react-native-community/cli", "npx @react-native-community/cli"),
+        _ => null,
+    };
+
+    /// <summary>The npm package whose versions a kind's options offer (the framework's own, not its generator's), or null.</summary>
     public static string? VersionPackage(string kind) => kind switch
     {
         "html5boilerplate" => "html5-boilerplate",
         "bootstrap" => "bootstrap",
-        "nextjs" => "create-next-app",
         "reactnative" => "react-native",
         _ => null,
     };
+
+    static readonly Regex Package = new(@"^(@[a-z0-9~-][a-z0-9._~-]*/)?[a-z0-9~-][a-z0-9._~-]*$");
+
+    /// <summary>Whether a name is one npm takes for a package (express-generator, @react-native-community/cli).</summary>
+    public static bool IsPackageName(string name) => Package.IsMatch(name);
+
+    /// <summary>
+    /// The arguments of npx for a generator's command as written in New Project: it must start with npx; the package it names (after --package, or
+    /// the first word that is not an option) gets the version chosen when it has none; --yes is added so that npx does not ask.
+    /// </summary>
+    public static List<string> CommandArgs(string command, string package, string? version)
+    {
+        var words = Regex.Matches(command ?? "", "\"([^\"]*)\"|'([^']*)'|(\\S+)")
+            .Select(m => m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Success ? m.Groups[2].Value : m.Groups[3].Value).ToList();
+        if (words.Count < 2 || !string.Equals(words[0], "npx", StringComparison.OrdinalIgnoreCase))
+            throw new ServiceException("The generator's command starts with npx, as in: npx " + package);
+        words.RemoveAt(0);
+        int at = words.FindIndex(w => w is "--package" or "-p");
+        at = at >= 0 && at + 1 < words.Count ? at + 1 : words.FindIndex(w => !w.StartsWith('-'));
+        if (at >= 0 && version is { } v && Version.IsMatch(v) && words[at].LastIndexOf('@') <= 0) words[at] += "@" + v;
+        if (!words.Contains("--yes") && !words.Contains("-y")) words.Insert(0, "--yes");
+        return words;
+    }
 
     static readonly Regex Version = new(@"^\d+\.\d+\.\d+$");
     static readonly Regex NpmName = new(@"^[a-z0-9][a-z0-9._-]*$");
@@ -66,36 +106,39 @@ public static class JsProjects
     public static List<string> StableVersions(IEnumerable<string> versions) =>
         versions.Where(v => Version.IsMatch(v)).Select(v => (v, key: new System.Version(v))).OrderByDescending(x => x.key).Select(x => x.v).ToList();
 
-    /// <summary>The arguments of npx that make a project of a kind, run in the project's folder (React Native: in the folder above it), or null for a kind npx does not make.</summary>
+    /// <summary>
+    /// The arguments of npx that make a project of a kind: the generator's command (New Project's, or the default) with its version, then what the
+    /// options ask of it; run in the project's folder (React Native: in the folder above it). Null for a kind made without a generator.
+    /// </summary>
     public static List<string>? GeneratorArgs(string kind, string folder, JsProjectOptions o, bool install)
     {
+        if (Generator(kind) is not { } generator) return null;
         string name = Path.GetFileName(folder.TrimEnd('\\', '/'));
-        string at(string fallback = "latest") => o.Version is { } v && Version.IsMatch(v) ? v : fallback;
+        var args = CommandArgs(string.IsNullOrWhiteSpace(o.Command) ? generator.Command : o.Command, generator.Package, o.GeneratorVersion);
         switch (kind)
         {
             case "vite":
                 string template = o.Template is { } t && ViteTemplates.Contains(t) ? t : "vanilla";
-                return new() { "--yes", "create-vite@latest", ".", "--template", template, "--no-interactive" };
+                args.AddRange(new[] { ".", "--template", template, "--no-interactive" });
+                break;
             case "nextjs":
-                var next = new List<string> { "--yes", $"create-next-app@{at()}", ".", o.TypeScript ? "--ts" : "--js", o.Eslint ? "--eslint" : "--no-eslint",
-                    o.Tailwind ? "--tailwind" : "--no-tailwind", o.AppRouter ? "--app" : "--no-app", o.SrcDir ? "--src-dir" : "--no-src-dir",
-                    "--import-alias", "@/*", "--use-npm", "--disable-git", "--yes" };
-                if (!install) next.Add("--skip-install");
-                return next;
+                args.AddRange(new[] { ".", o.TypeScript ? "--ts" : "--js", o.Eslint ? "--eslint" : "--no-eslint", o.Tailwind ? "--tailwind" : "--no-tailwind",
+                    o.AppRouter ? "--app" : "--no-app", o.SrcDir ? "--src-dir" : "--no-src-dir", "--import-alias", "@/*", "--use-npm", "--disable-git", "--yes" });
+                if (!install) args.Add("--skip-install");
+                break;
             case "reactnative":
-                var rn = new List<string> { "--yes", "@react-native-community/cli@latest", "init", AppName(name), "--directory", folder, "--skip-git-init", "--pm", "npm" };
-                if (o.Version is { } rv && Version.IsMatch(rv)) { rn.Add("--version"); rn.Add(rv); }
-                if (!install) rn.Add("--skip-install");
-                return rn;
+                args.AddRange(new[] { "init", AppName(name), "--directory", folder, "--skip-git-init", "--pm", "npm" });
+                if (o.Version is { } rv && Version.IsMatch(rv)) { args.Add("--version"); args.Add(rv); }
+                if (!install) args.Add("--skip-install");
+                break;
             case "express":
                 string view = o.View is { } w && ExpressViews.Contains(w) ? w : "pug";
-                var express = new List<string> { "--yes", "express-generator@latest" };
-                express.Add(view == "none" ? "--no-view" : "--view=" + view);
-                express.Add(".");
-                return express;
-            default:
-                return null;
+                args.Add(view == "none" ? "--no-view" : "--view=" + view);
+                if (o.Css is { } css && ExpressCss.Contains(css) && css != "css") args.Add("--css=" + css);
+                args.Add(".");
+                break;
         }
+        return args;
     }
 
     /// <summary>Whether a kind's generator leaves the packages to `npm install` (Vite and Express do; Next.js and React Native install them themselves).</summary>
@@ -145,14 +188,14 @@ public static class JsProjects
                 break;
             case "html5boilerplate":
             {
-                var npm = Npm.Find();
+                var npm = Npm.Find(o.Node);
                 string version = Unpack(npm, "html5-boilerplate", o.Version, folder, "package/dist/");
                 notes.Add($"HTML5 Boilerplate {version}.");
                 break;
             }
             case "bootstrap":
             {
-                var npm = Npm.Find();
+                var npm = Npm.Find(o.Node);
                 string version = Unpack(npm, "bootstrap", o.Version, folder, "package/dist/");
                 written["index.html"] = BootstrapPage(name, File.Exists(Path.Combine(folder, "js", "bootstrap.bundle.min.js")));
                 notes.Add($"Bootstrap {version}: its css and js folders, and its starter page as index.html.");
@@ -163,7 +206,7 @@ public static class JsProjects
                 goto default;
             default:
             {
-                var npm = Npm.Find();
+                var npm = Npm.Find(o.Node);
                 var args = GeneratorArgs(r.Kind, folder, o, install) ?? throw new ServiceException($"'{r.Kind}' is not a kind of project.");
                 string where = folder;
                 if (r.Kind == "reactnative")
@@ -244,9 +287,12 @@ public static class JsProjects
     }
 
     /// <summary>The versions New Project offers for a kind, newest first (the npm registry is asked), or none when it cannot be reached.</summary>
-    public static List<string> Versions(string kind)
+    public static List<string> Versions(string kind) => VersionPackage(kind) is { } package ? VersionsOf(package) : new();
+
+    /// <summary>The stable versions of an npm package, newest first (a generator's, for the version beside its command); none when npm cannot be reached.</summary>
+    public static List<string> VersionsOf(string package)
     {
-        if (VersionPackage(kind) is not { } package) return new();
+        if (!IsPackageName(package)) return new();
         try
         {
             string json = Npm.Find().Output(Path.GetTempPath(), new[] { "view", package, "versions", "--json" }, TimeSpan.FromSeconds(60));
@@ -260,17 +306,47 @@ public static class JsProjects
 /// <summary>npm and npx, run through node itself (npm-cli.js, npx-cli.js) rather than their .cmd files, so no argument passes through cmd.exe.</summary>
 public sealed record Npm(string Node, string NpmCli, string NpxCli)
 {
-    /// <summary>The node on the PATH and the npm beside the npm command found first (a newer npm installed globally wins over Node's own).</summary>
-    public static Npm Find()
+    /// <summary>
+    /// The node chosen in New Project (or the one on the PATH) and its npm: the npm command found first on the PATH (a newer npm installed globally
+    /// wins over Node's own) when that node is the PATH's, else the npm beside the chosen node.
+    /// </summary>
+    public static Npm Find(string? chosen = null)
     {
-        string node = LockFiles.Find("node") ?? throw new ServiceException("this kind of project needs Node.js (nodejs.org), which was not found");
-        foreach (string dir in new[] { LockFiles.Find("npm") is { } npm ? Path.GetDirectoryName(npm)! : null, Path.GetDirectoryName(node)! }.OfType<string>())
+        string? onPath = LockFiles.Find("node");
+        string node = !string.IsNullOrWhiteSpace(chosen) ? chosen.Trim() : onPath ?? throw new ServiceException("this kind of project needs Node.js (nodejs.org), which was not found");
+        if (!File.Exists(node)) throw new ServiceException($"the Node runtime {node} does not exist");
+        bool pathNode = onPath != null && string.Equals(Path.GetFullPath(onPath), Path.GetFullPath(node), StringComparison.OrdinalIgnoreCase);
+        string? pathNpm = pathNode && LockFiles.Find("npm") is { } npm ? Path.GetDirectoryName(npm) : null;
+        foreach (string dir in new[] { pathNpm, Path.GetDirectoryName(node)! }.OfType<string>())
         {
             string bin = Path.Combine(dir, "node_modules", "npm", "bin");
             if (File.Exists(Path.Combine(bin, "npm-cli.js")) && File.Exists(Path.Combine(bin, "npx-cli.js")))
                 return new Npm(node, Path.Combine(bin, "npm-cli.js"), Path.Combine(bin, "npx-cli.js"));
         }
         throw new ServiceException("npm was not found beside Node.js");
+    }
+
+    /// <summary>The Node runtimes of this computer, for New Project's Node runtime: each node on the PATH and in Node's usual folders, with its version.</summary>
+    public static List<(string Path, string Version)> Runtimes()
+    {
+        var found = new List<(string, string)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string exe = OperatingSystem.IsWindows() ? "node.exe" : "node";
+        var places = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries).Select(d => d.Trim('"'))
+            .Concat(new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) }
+                .Where(p => p.Length > 0).Select(p => Path.Combine(p, "nodejs")));
+        foreach (var dir in places)
+        {
+            string candidate;
+            try { candidate = Path.GetFullPath(Path.Combine(dir, exe)); }
+            catch (ArgumentException) { continue; }
+            if (!File.Exists(candidate) || !seen.Add(candidate)) continue;
+            string version;
+            try { version = RunProgram(candidate, Path.GetTempPath(), new[] { "--version" }, TimeSpan.FromSeconds(15)).Trim().TrimStart('v'); }
+            catch (ServiceException) { continue; }
+            found.Add((candidate, version));
+        }
+        return found;
     }
 
     public void Run(string folder, IEnumerable<string> args, TimeSpan limit) => RunProgram(Node, folder, new[] { NpmCli }.Concat(args), limit);

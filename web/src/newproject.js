@@ -23,9 +23,10 @@ const KINDS = [
 ];
 
 const VITE_TEMPLATES = ['vanilla', 'vanilla-ts', 'vue', 'vue-ts', 'react', 'react-ts', 'react-swc', 'react-swc-ts', 'preact', 'preact-ts', 'lit', 'lit-ts', 'svelte', 'svelte-ts', 'solid', 'solid-ts', 'qwik', 'qwik-ts'];
-const EXPRESS_VIEWS = [['pug', 'Pug'], ['ejs', 'EJS'], ['hbs', 'Handlebars'], ['hjs', 'Hogan.js'], ['twig', 'Twig'], ['vash', 'Vash'], ['none', 'None (an API)']];
-/** The kinds whose version is chosen (the npm registry lists them). */
-const VERSIONED = new Set(['html5boilerplate', 'bootstrap', 'nextjs', 'reactnative']);
+const EXPRESS_VIEWS = [['dust', 'Dust'], ['ejs', 'EJS'], ['hbs', 'Handlebars'], ['hjs', 'Hogan.js'], ['pug', 'Pug (Jade)'], ['twig', 'Twig'], ['vash', 'Vash'], ['none', 'None']];
+const EXPRESS_CSS = [['css', 'Plain CSS'], ['less', 'LESS'], ['stylus', 'Stylus'], ['compass', 'Compass'], ['sass', 'Sass']];
+/** The kinds whose own version is chosen among the options (the npm registry lists them), and what that row says. */
+const VERSIONED = new Map([['html5boilerplate', 'Version'], ['bootstrap', 'Version'], ['reactnative', 'React Native version']]);
 /** Whether a kind is one of the other kinds (no Python environment). */
 export const isOtherKind = (kind) => KINDS.some(([id, , , group]) => id === kind && group === 'other');
 
@@ -63,9 +64,18 @@ export async function openNewProject() {
         <label class="np-check"><input type="checkbox" id="np-dj-admin" checked> The admin (django.contrib.admin and its URL)</label>
       </div>
       <div id="np-js" class="np-django" style="display:none">
-        <label class="np-check" id="np-js-version-row">Version <select id="np-js-version"><option value="">latest</option></select> <span class="set-note" id="np-js-versions-note"></span></label>
+        <div class="np-grid">
+          <label for="np-js-runtime">Node runtime</label>
+          <span class="np-gen"><select id="np-js-runtime"></select></span>
+          <label for="np-js-command" id="np-js-gen-label">generator</label>
+          <span class="np-gen" id="np-js-gen-row"><input id="np-js-command" spellcheck="false" title="The command that makes the project; change it as you like (it must start with npx)"><select id="np-js-gen-version" title="The generator's version"><option value="">latest</option></select></span>
+        </div>
+        <p class="set-note" id="np-js-node"></p>
+        <div class="np-group" id="np-js-options-head">Options</div>
+        <label class="np-check" id="np-js-version-row"><span id="np-js-version-label">Version</span> <select id="np-js-version"><option value="">latest</option></select> <span class="set-note" id="np-js-versions-note"></span></label>
         <label class="np-check" id="np-js-template-row">Template <select id="np-js-template"></select></label>
-        <label class="np-check" id="np-js-view-row">View engine <select id="np-js-view"></select></label>
+        <label class="np-check" id="np-js-view-row">View Engine <select id="np-js-view"></select></label>
+        <label class="np-check" id="np-js-css-row">Stylesheet Engine <select id="np-js-css"></select></label>
         <div id="np-js-next" class="np-next">
           <label class="np-check"><input type="checkbox" id="np-js-ts" checked> TypeScript</label>
           <label class="np-check"><input type="checkbox" id="np-js-eslint" checked> ESLint</label>
@@ -74,7 +84,6 @@ export async function openNewProject() {
           <label class="np-check"><input type="checkbox" id="np-js-src"> A src folder</label>
         </div>
         <label class="np-check" id="np-js-install-row"><input type="checkbox" id="np-js-install" checked> Install its packages (npm install)</label>
-        <p class="set-note" id="np-js-node"></p>
       </div>
       <div id="np-python-env">
       <h4>Interpreter</h4>
@@ -102,26 +111,55 @@ export async function openNewProject() {
     $('np-js-template').value = 'react-ts';
     for (const [v, label] of EXPRESS_VIEWS)
         $('np-js-view').add(new Option(label, v));
-    const versionsAsked = new Map();   // kind -> its versions (asked once)
-    async function showVersions(id) {
-        const select = $('np-js-version');
+    $('np-js-view').value = 'pug';
+    for (const [v, label] of EXPRESS_CSS)
+        $('np-js-css').add(new Option(label, v));
+    // the versions npm lists, asked once per query (a kind's own: ?kind=, a generator's: ?package=)
+    const versionsAsked = new Map();
+    const versionsOf = (query) => {
+        if (!versionsAsked.has(query))
+            versionsAsked.set(query, fetch('/api/newproject/versions?' + query).then((r) => r.json()).catch(() => []));
+        return versionsAsked.get(query);
+    };
+    async function fillVersions(select, query, id, note) {
         select.replaceChildren(new Option('latest', ''));
-        $('np-js-versions-note').textContent = '';
-        if (!VERSIONED.has(id))
-            return;
-        $('np-js-versions-note').textContent = 'asking npm for its versions…';
-        if (!versionsAsked.has(id))
-            versionsAsked.set(id, fetch('/api/newproject/versions?kind=' + id).then((r) => r.json()).catch(() => []));
-        const list = await versionsAsked.get(id);
+        if (note) note.textContent = 'asking npm for its versions…';
+        const list = await versionsOf(query);
         if (kind !== id)
             return;
         for (const v of list)
             select.add(new Option(v, v));
         if (list.length)
             select.value = list[0];
-        $('np-js-versions-note').textContent = list.length ? '' : 'npm could not be reached: the latest is taken';
+        if (note) note.textContent = list.length ? '' : 'npm could not be reached: the latest is taken';
     }
-    let nodeChecked = null;
+    function showVersions(id) {
+        $('np-js-versions-note').textContent = '';
+        if (VERSIONED.has(id))
+            void fillVersions($('np-js-version'), 'kind=' + id, id, $('np-js-versions-note'));
+    }
+    // the Node runtimes of this computer and each kind's generator with its default command (the engine's), asked once
+    const commands = new Map();   // kind -> the command as last written in this dialog
+    let nodeInfo = null;
+    const nodeAsked = () => (nodeInfo ??= fetch('/api/newproject/node').then((r) => r.json()).catch(() => ({ runtimes: [], generators: {} })).then((n) => {
+        for (const r of n.runtimes ?? [])
+            $('np-js-runtime').add(new Option(`node   ${r.path}   ${r.version}`, r.path));
+        return n;
+    }));
+    $('np-js-command').oninput = () => commands.set(kind, $('np-js-command').value);
+    async function showGenerator(id) {
+        const n = await nodeAsked();
+        if (kind !== id)
+            return;
+        $('np-js-node').textContent = (n.runtimes ?? []).length || id === 'nodejs' ? '' : 'Node.js was not found: install it from nodejs.org to make this kind of project.';
+        const generator = n.generators?.[id];
+        $('np-js-gen-label').style.display = $('np-js-gen-row').style.display = generator ? '' : 'none';
+        if (!generator)
+            return;
+        $('np-js-gen-label').textContent = generator.package + ':';
+        $('np-js-command').value = commands.get(id) ?? generator.command;
+        void fillVersions($('np-js-gen-version'), 'package=' + encodeURIComponent(generator.package), id, null);
+    }
     function pick(id, note, b) {
         kind = id;
         for (const x of [...$('np-kinds').children, ...$('np-kinds-other').children]) x.classList.toggle('active', x === b);
@@ -134,14 +172,14 @@ export async function openNewProject() {
         if (!other)
             return;
         $('np-js-version-row').style.display = VERSIONED.has(id) ? '' : 'none';
+        $('np-js-version-label').textContent = VERSIONED.get(id) ?? 'Version';
         $('np-js-template-row').style.display = id === 'vite' ? '' : 'none';
-        $('np-js-view-row').style.display = id === 'express' ? '' : 'none';
+        $('np-js-view-row').style.display = $('np-js-css-row').style.display = id === 'express' ? '' : 'none';
         $('np-js-next').style.display = id === 'nextjs' ? '' : 'none';
         $('np-js-install-row').style.display = ['vite', 'express', 'nextjs', 'reactnative'].includes(id) ? '' : 'none';
-        void showVersions(id);
-        // Node.js is needed for every one but a Node.js project's own files
-        nodeChecked ??= fetch('/api/newproject/node').then((r) => r.json()).catch(() => ({ found: false }));
-        void nodeChecked.then((n) => { if (kind === id) $('np-js-node').textContent = n.found || id === 'nodejs' ? '' : 'Node.js was not found: install it from nodejs.org to make this kind of project.'; });
+        $('np-js-options-head').style.display = id === 'nodejs' ? 'none' : '';
+        showVersions(id);
+        void showGenerator(id);
     }
     for (const [id, label, note, group] of KINDS.filter(([k]) => !offKinds.includes(k))) {
         const b = document.createElement('button');
@@ -187,7 +225,9 @@ export async function openNewProject() {
             uvPath: $('np-uv').value, pythonVersion: $('np-version').value,
             installPackages: other ? $('np-js-install').checked : undefined,
             js: other ? {
-                version: $('np-js-version').value || undefined, template: $('np-js-template').value, view: $('np-js-view').value,
+                version: $('np-js-version').value || undefined, template: $('np-js-template').value, view: $('np-js-view').value, css: $('np-js-css').value,
+                node: $('np-js-runtime').value || undefined, command: $('np-js-gen-row').style.display === 'none' ? undefined : $('np-js-command').value.trim() || undefined,
+                generatorVersion: $('np-js-gen-version').value || undefined,
                 typeScript: $('np-js-ts').checked, eslint: $('np-js-eslint').checked, tailwind: $('np-js-tailwind').checked, appRouter: $('np-js-app').checked, srcDir: $('np-js-src').checked,
             } : undefined,
             django: kind === 'django' ? { templateLanguage: $('np-dj-lang').value, templatesFolder: $('np-dj-folder').value.trim() || 'templates', appName: $('np-dj-app').value.trim() || undefined, admin: $('np-dj-admin').checked } : undefined,

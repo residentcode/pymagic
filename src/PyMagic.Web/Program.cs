@@ -1097,16 +1097,23 @@ app.MapPost("/api/newproject", async (HttpRequest req) =>
         InstallPackages: b?["installPackages"]?.GetValue<bool>() != false,
         Js: b?["js"] is JsonObject js ? new JsProjectOptions(js["version"]?.GetValue<string>(), js["template"]?.GetValue<string>(), js["typeScript"]?.GetValue<bool>() != false,
             js["eslint"]?.GetValue<bool>() != false, js["tailwind"]?.GetValue<bool>() != false, js["appRouter"]?.GetValue<bool>() != false, js["srcDir"]?.GetValue<bool>() == true,
-            js["view"]?.GetValue<string>()) : null);
+            js["view"]?.GetValue<string>(), js["node"]?.GetValue<string>(), js["command"]?.GetValue<string>(), js["generatorVersion"]?.GetValue<string>(),
+            js["css"]?.GetValue<string>()) : null);
     try { return Results.Json(await Task.Run(() => NewProject.Create(request))); }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.BadRequest(new { error = e.Message }); }
 });
 
-// the versions New Project offers for HTML5 Boilerplate, Bootstrap, Next.js and React Native (the npm registry is asked); none when it cannot be reached
-app.MapGet("/api/newproject/versions", async (string kind) => Results.Json(await Task.Run(() => JsProjects.Versions(kind))));
-// whether Node.js is there, for the other kinds
-app.MapGet("/api/newproject/node", () => { try { var n = Npm.Find(); return Results.Json(new { found = true, node = n.Node }); } catch (ServiceException e) { return Results.Json(new { found = false, error = e.Message }); } });
+// the versions New Project offers (the npm registry is asked): a kind's own (HTML5 Boilerplate, Bootstrap, React Native) or a generator's package;
+// none when it cannot be reached
+app.MapGet("/api/newproject/versions", async (string? kind, string? package) =>
+    Results.Json(await Task.Run(() => package != null ? JsProjects.VersionsOf(package) : JsProjects.Versions(kind ?? ""))));
+// the Node runtimes of this computer, and each kind's generator with the command New Project shows for it
+app.MapGet("/api/newproject/node", async () => Results.Json(new
+{
+    runtimes = (await Task.Run(Npm.Runtimes)).Select(r => new { path = r.Path, version = r.Version }),
+    generators = JsProjects.Kinds.Where(k => JsProjects.Generator(k) != null).ToDictionary(k => k, k => new { package = JsProjects.Generator(k)!.Package, command = JsProjects.Generator(k)!.Command }),
+}));
 
 app.MapPost("/api/venv", async (HttpRequest req) =>
 {

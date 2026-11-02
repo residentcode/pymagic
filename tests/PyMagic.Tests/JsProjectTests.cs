@@ -14,16 +14,30 @@ public class JsProjectTests
     public void EachGeneratorIsAskedForTheChoicesMade()
     {
         string f = Folder("my-site");
-        Assert.Equal("--yes create-vite@latest . --template react-ts --no-interactive", string.Join(" ", JsProjects.GeneratorArgs("vite", f, new JsProjectOptions(Template: "react-ts"), true)!));
-        Assert.Equal("--yes create-vite@latest . --template vanilla --no-interactive", string.Join(" ", JsProjects.GeneratorArgs("vite", f, new JsProjectOptions(Template: "evil; rm"), true)!));
+        string Args(string kind, JsProjectOptions o, bool install = true) => string.Join(" ", JsProjects.GeneratorArgs(kind, f, o, install)!);
+        // the default commands, as PyCharm shows them
+        Assert.Equal("npx --package express-generator express", JsProjects.Generator("express")!.Command);
+        Assert.Equal("npx create-vite", JsProjects.Generator("vite")!.Command);
+        Assert.Equal("npx create-next-app", JsProjects.Generator("nextjs")!.Command);
+        Assert.Equal("npx @react-native-community/cli", JsProjects.Generator("reactnative")!.Command);
+        A.Null(JsProjects.Generator("bootstrap"));
+        // the command, its version, then the options
+        Assert.Equal("--yes create-vite . --template react-ts --no-interactive", Args("vite", new(Template: "react-ts")));
+        Assert.Equal("--yes create-vite@6.1.0 . --template vanilla --no-interactive", Args("vite", new(Template: "evil; rm", GeneratorVersion: "6.1.0")));
         Assert.Equal("--yes create-next-app@15.1.0 . --js --no-eslint --tailwind --no-app --src-dir --import-alias @/* --use-npm --disable-git --yes --skip-install",
-            string.Join(" ", JsProjects.GeneratorArgs("nextjs", f, new JsProjectOptions(Version: "15.1.0", TypeScript: false, Eslint: false, AppRouter: false, SrcDir: true), false)!));
-        Assert.Equal("--yes create-next-app@latest . --ts --eslint --tailwind --app --no-src-dir --import-alias @/* --use-npm --disable-git --yes",
-            string.Join(" ", JsProjects.GeneratorArgs("nextjs", f, new JsProjectOptions(Version: "1.0; x"), true)!));
-        Assert.Equal($"--yes @react-native-community/cli@latest init MySite --directory {f} --skip-git-init --pm npm --version 0.76.0",
-            string.Join(" ", JsProjects.GeneratorArgs("reactnative", f, new JsProjectOptions(Version: "0.76.0"), true)!));
-        Assert.Equal("--yes express-generator@latest --view=ejs .", string.Join(" ", JsProjects.GeneratorArgs("express", f, new JsProjectOptions(View: "ejs"), true)!));
-        Assert.Equal("--yes express-generator@latest --no-view .", string.Join(" ", JsProjects.GeneratorArgs("express", f, new JsProjectOptions(View: "none"), true)!));
+            Args("nextjs", new(GeneratorVersion: "15.1.0", TypeScript: false, Eslint: false, AppRouter: false, SrcDir: true), false));
+        Assert.Equal("--yes create-next-app . --ts --eslint --tailwind --app --no-src-dir --import-alias @/* --use-npm --disable-git --yes", Args("nextjs", new(GeneratorVersion: "1.0; x")));
+        Assert.Equal($"--yes @react-native-community/cli init MySite --directory {f} --skip-git-init --pm npm --version 0.76.0", Args("reactnative", new(Version: "0.76.0")));
+        Assert.Equal("--yes --package express-generator@4.16.1 express --view=ejs --css=less .", Args("express", new(View: "ejs", Css: "less", GeneratorVersion: "4.16.1")));
+        Assert.Equal("--yes --package express-generator express --no-view .", Args("express", new(View: "none", Css: "css")));
+        Assert.Equal("--yes --package express-generator express --view=dust .", Args("express", new(View: "dust", Css: "evil")));
+        // a command changed in the dialog: kept as written (a version already in it wins), --yes added once
+        Assert.Equal("-y create-vite@5 . --template vanilla --no-interactive", Args("vite", new(Command: "npx -y create-vite@5", GeneratorVersion: "6.1.0")));
+        Assert.Equal("--yes \"create-vite\" . --template vanilla --no-interactive".Replace("\"", ""), Args("vite", new(Command: "npx \"create-vite\"")));
+        bool refused = false;
+        try { Args("vite", new(Command: "npm create vite")); }
+        catch (ServiceException e) { refused = e.Message.Contains("npx"); }
+        Assert.True(refused, "only npx runs a generator");
         A.Null(JsProjects.GeneratorArgs("nodejs", f, new JsProjectOptions(), true));
         Assert.True(JsProjects.InstallsAfter("vite") && JsProjects.InstallsAfter("express") && !JsProjects.InstallsAfter("nextjs"));
     }
@@ -38,6 +52,9 @@ public class JsProjectTests
         Assert.Equal("9.0.1,5.3.3,5.0.0", string.Join(",", JsProjects.StableVersions(new[] { "5.0.0", "9.0.1", "5.3.3", "6.0.0-beta.1", "x" })));
         Assert.Equal("bootstrap", JsProjects.VersionPackage("bootstrap"));
         A.Null(JsProjects.VersionPackage("vite"));
+        Assert.True(JsProjects.IsPackageName("@react-native-community/cli") && JsProjects.IsPackageName("express-generator"));
+        Assert.True(!JsProjects.IsPackageName("../x") && !JsProjects.IsPackageName("a b") && !JsProjects.IsPackageName("Express"));
+        A.Empty(JsProjects.VersionsOf("not a package"));
     }
 
     [Fact]
@@ -112,12 +129,17 @@ public class JsProjectTests
         if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_JS_LIVE") != "1") return;
         var bootstrapVersions = JsProjects.Versions("bootstrap");
         Assert.True(bootstrapVersions.Count > 5 && bootstrapVersions.Contains("5.3.3"), string.Join(",", bootstrapVersions));
+        // a generator's versions, and the Node runtimes of this computer (the first is the one used)
+        Assert.True(JsProjects.VersionsOf("express-generator").Contains("4.16.1"));
+        var runtimes = Npm.Runtimes();
+        Assert.True(runtimes.Count > 0 && runtimes[0].Version.Length > 0, "no Node runtime");
+        string node = runtimes[0].Path;
         var cases = new (string Kind, JsProjectOptions Options, string[] Files)[]
         {
             ("html5boilerplate", new(Version: JsProjects.Versions("html5boilerplate").FirstOrDefault()), new[] { "index.html", "css/style.css" }),
             ("bootstrap", new(Version: "5.3.3"), new[] { "index.html", "css/bootstrap.min.css", "js/bootstrap.bundle.min.js" }),
-            ("vite", new(Template: "react-ts"), new[] { "package.json", "index.html", "src/main.tsx" }),
-            ("express", new(View: "pug"), new[] { "package.json", "app.js", "bin/www", "views/index.pug" }),
+            ("vite", new(Template: "react-ts", Node: node), new[] { "package.json", "index.html", "src/main.tsx" }),
+            ("express", new(View: "hjs", Css: "less", GeneratorVersion: "4.16.1", Node: node), new[] { "package.json", "app.js", "bin/www", "views/index.hjs", "public/stylesheets/style.less" }),
             ("nextjs", new(), new[] { "package.json", "app/page.tsx", "tsconfig.json" }),
             ("reactnative", new(), new[] { "package.json", "App.tsx", "android/build.gradle" }),
         };

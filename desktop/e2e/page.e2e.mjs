@@ -2993,10 +2993,23 @@ describe('New Project: the other kinds', () => {
         await pick('Vite');
         assert.deepEqual([await shown('np-js'), await shown('np-python-env'), await shown('np-js-template-row'), await shown('np-js-version-row'), await shown('np-js-view-row')], [true, false, true, false, false]);
         assert.equal(await page.evaluate(`document.getElementById('np-js-template').value`), 'react-ts');
-        // Express: its view engines
+        // Express: the Node runtime, its generator's default command as PyCharm shows it, its view and stylesheet engines
         await pick('Express');
-        assert.deepEqual([await shown('np-js-view-row'), await shown('np-js-template-row')], [true, false]);
-        assert.ok((await page.evaluate(`[...document.getElementById('np-js-view').options].map((o) => o.value).join()`)).startsWith('pug,ejs'));
+        await page.waitFor(`document.getElementById('np-js-gen-label').textContent === 'express-generator:'`, 20000, "express-generator's row");
+        assert.equal(await page.evaluate(`document.getElementById('np-js-command').value`), 'npx --package express-generator express');
+        assert.ok(await page.evaluate(`document.getElementById('np-js-runtime').options.length > 0 && /node\\.exe/i.test(document.getElementById('np-js-runtime').options[0].textContent)`), 'a Node runtime listed');
+        assert.deepEqual([await shown('np-js-view-row'), await shown('np-js-css-row'), await shown('np-js-template-row')], [true, true, false]);
+        assert.equal(await page.evaluate(`[...document.getElementById('np-js-view').options].map((o) => o.value).join()`), 'dust,ejs,hbs,hjs,pug,twig,vash,none');
+        assert.equal(await page.evaluate(`document.getElementById('np-js-view').value`), 'pug');
+        assert.equal(await page.evaluate(`[...document.getElementById('np-js-css').options].map((o) => o.textContent).join()`), 'Plain CSS,LESS,Stylus,Compass,Sass');
+        // a command changed is kept for its kind; another kind shows its own
+        await page.evaluate(`(() => { const c = document.getElementById('np-js-command'); c.value = 'npx --package express-generator@4.16.1 express'; c.dispatchEvent(new Event('input')); })()`);
+        await pick('Vite');
+        await page.waitFor(`document.getElementById('np-js-gen-label').textContent === 'create-vite:'`, 20000, "create-vite's row");
+        assert.equal(await page.evaluate(`document.getElementById('np-js-command').value`), 'npx create-vite');
+        await pick('Express');
+        await page.waitFor(`document.getElementById('np-js-gen-label').textContent === 'express-generator:'`, 20000, "express-generator's row again");
+        assert.equal(await page.evaluate(`document.getElementById('np-js-command').value`), 'npx --package express-generator@4.16.1 express');
         // Node.js: nothing to choose, nothing to install
         await pick('Node.js');
         assert.deepEqual([await shown('np-js-install-row'), await shown('np-js-view-row')], [false, false]);
