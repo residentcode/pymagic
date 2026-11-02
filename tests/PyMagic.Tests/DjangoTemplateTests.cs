@@ -53,6 +53,26 @@ public class DjangoTemplateTests
     }
 
     [Fact]
+    public void WithTheDjangoPluginOffADjangoTemplateIsLeftAloneAndAJinjaOneIsNot()
+    {
+        var r = Make("{% for b in books %}\n{{ b }}\n");
+        try
+        {
+            Plugins.Load("{\"plugins\": {\"django\": false}}");
+            Assert.Equal(0, DiagnosticsOf(r).Count);
+            // a Jinja template is still checked
+            var svc = new LanguageService();
+            string dir = Path.Combine(Path.GetTempPath(), "pymagic_jinja_" + Guid.NewGuid().ToString("N"));
+            svc.AddSourceRoot(dir);
+            string jinja = LanguageService.UriOfPath(Path.Combine(dir, "shop", "jinja2", "page.html"));
+            svc.Open(jinja, "{% load static %}\n", 1);
+            Assert.True(svc.Diagnostics(jinja).Any(d => d.Code == "jinja-tag"));
+        }
+        finally { Plugins.Load("{}"); }
+        Assert.True(DiagnosticsOf(r).Any(x => x.Message.Contains("Unclosed tag 'for'")));
+    }
+
+    [Fact]
     public void AnEndWithoutItsStartIsAnError()
     {
         Assert.True(DiagnosticsOf(Make("text\n{% endif %}\n")).Any(x => x.Message.Contains("'endif' has no matching")));

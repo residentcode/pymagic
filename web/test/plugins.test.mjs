@@ -42,3 +42,13 @@ test('Pull Requests is off with Git, and the New Project kinds of plugins that a
     assert.deepEqual(hiddenElements({ git: false }), ['t-git', 'git-tab', 'r-git', 'branch-chip', 'b-update', 'b-commit', 'b-push', 't-prs', 'prs-tab']);
     assert.deepEqual(hiddenElements({ django: false }), ['t-django', 'django-tab', 'st-django']);
 });
+
+test('Flask, FastAPI, WSL, SSH, coverage and diagrams: their kinds and parts; the remote interpreter button only while a remote kind is left', async () => {
+    const { kindsOff, remoteKindsLeft } = await import('../src/plugin-model.js');
+    assert.deepEqual(kindsOff({ django: false, notebooks: false, flask: false, fastapi: false }), ['django', 'flask', 'fastapi', 'jupyter']);
+    assert.deepEqual(hiddenElements({ coverage: false }), ['t-coverage', 'coverage-tab', 'b-cov']);
+    assert.deepEqual(hiddenElements({ diagrams: false, wsl: false, ssh: false }), []);
+    assert.ok(remoteKindsLeft({ wsl: false, ssh: false }));
+    assert.ok(!remoteKindsLeft({ wsl: false, ssh: false, docker: false }));
+    assert.deepEqual(hiddenElements({ wsl: false, ssh: false, docker: false }), ['b-remote']);
+});

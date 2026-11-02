@@ -1090,7 +1090,7 @@ async function main() {
     });
     setupInspections(lsp);
     const pyConsole = setupPythonConsole({ editor, saveAll: common.saveAll, relOf: (model) => model && relPathOf.get(normalise(serverUri.get(model) ?? '')) });
-    const diagrams = setupDiagrams({ lsp, relOfUri, currentUri: () => { const m = editor.getModel(); return m && m.getLanguageId() === 'python' ? serverUri.get(m) : null; },
+    const diagrams = !plugin('diagrams') ? null : setupDiagrams({ lsp, relOfUri, currentUri: () => { const m = editor.getModel(); return m && m.getLanguageId() === 'python' ? serverUri.get(m) : null; },
         openAt: (rel, line) => openFile(rel, new monaco.Range(line, 1, line, 1)),
         askText: (...a) => explorer.askText(...a),
         // a box's menu: the file opened with the cursor on the name, then an editor command on it (find usages, rename, refactor)
@@ -1103,6 +1103,7 @@ async function main() {
             if (action) editor.trigger('diagram', action, null);
         } });
     window.addEventListener('pymagic:diagram', (e) => {
+        if (!diagrams) return;   // Settings > Plugins: Diagrams off
         if (e.detail !== 'model') { void diagrams.open(e.detail); return; }
         // the model at the cursor: the word there, as a class name
         const m = editor.getModel(), pos = editor.getPosition();
@@ -1155,7 +1156,7 @@ async function main() {
         defaultLanguage: (rel) => (rel.endsWith('.py') ? 'python' : languageFor(rel)),
     });
     fileActions.attachEditor(editor, monaco, () => refactorMenu(editor, refactor));
-    const coverage = setupCoverage(common);
+    const coverage = plugin('coverage') ? setupCoverage(common) : null;
     setupRequirementsCheck(common);
     setupFileChecks(common);
     if (plugin('schemas'))
@@ -1325,7 +1326,7 @@ async function main() {
             // breakpoints, the run and debug keys, the Git change bars, coverage and inheritance marks on this side too
             runHooks.attach(e);
             git.attach(e);
-            coverage.attach(e);
+            coverage?.attach(e);
             hierarchy.attach(e);
             codeVision.attach(e);
             editorNav.attach(e);

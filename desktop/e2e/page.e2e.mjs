@@ -3057,4 +3057,39 @@ describe('Settings > Plugins', () => {
         assert.equal(await page.evaluate(`getComputedStyle(document.getElementById('np-git').closest('label')).display`), 'none');
         await page.evaluate(`document.getElementById('np-cancel').click()`);
     });
+
+    test('Flask, FastAPI, Coverage, Diagrams, Docker, WSL and SSH switched off: their parts gone, and no remote interpreter button with no kind left', async () => {
+        const off = { flask: false, fastapi: false, coverage: false, diagrams: false, docker: false, wsl: false, ssh: false };
+        await page.evaluate(`window.pymagic.changeSetting({ plugins: ${JSON.stringify(off)} })`);
+        await reload(off);
+        for (const id of ['t-coverage', 'coverage-tab', 'b-cov', 'b-remote'])
+            assert.equal(await page.evaluate(`getComputedStyle(${$(id)}).display`), 'none', id + ' hidden');
+        assert.notEqual(await page.evaluate(`getComputedStyle(${$('t-git')}).display`), 'none', 'Git is back on');
+        // the main menu: no Diagrams, no Run with coverage, no remote interpreter
+        const menuOf = async (label) => {
+            await page.evaluate(`document.querySelector('#brand .mark').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+            await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim() === ${JSON.stringify(label)})`, 5000, 'the main menu');
+            await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim() === ${JSON.stringify(label)}).click()`);
+            await sleep(200);
+            const text = await page.evaluate(`[...document.querySelectorAll('.ctx-menu')].pop().textContent`);
+            await page.key(27, 'Escape');
+            await page.waitFor(`!document.querySelector('.ctx-menu')`, 5000, 'the menu closed');
+            return text;
+        };
+        const tools = await menuOf('Tools');
+        assert.ok(!tools.includes('Diagrams') && !tools.includes('WSL, Docker or SSH'), tools);
+        assert.ok(!(await menuOf('Run')).includes('coverage'));
+        // New Project offers neither Flask nor FastAPI
+        await page.evaluate(`document.querySelector('#brand .mark').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim() === 'File')`, 5000, 'the main menu');
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim() === 'File').click()`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim().startsWith('New project'))`, 5000, 'the File menu');
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim().startsWith('New project')).click()`);
+        await page.waitFor(`document.querySelector('#np-kinds button')`, 10000, 'New Project');
+        assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#np-kinds button')].map((b) => b.textContent)`), ['Pure Python', 'Django', 'Jupyter']);
+        await page.evaluate(`document.getElementById('np-cancel').click()`);
+        // the engine lists no remote interpreter kinds
+        const targets = await page.evaluate(`fetch('/api/interpreter/targets').then((r) => r.json())`);
+        assert.deepEqual([targets.wsl.length, targets.ssh.installed, targets.docker.available, targets.compose.services.length], [0, false, false, 0]);
+    });
 });

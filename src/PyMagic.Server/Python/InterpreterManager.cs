@@ -24,7 +24,8 @@ public sealed class InterpreterManager
     }
 
     public string SettingsFile => Path.Combine(_root, ".pymagic", "settings.json");
-    public PythonInterpreter? Current { get { lock (_gate) return _current; } }
+    /// <summary>The project's interpreter; none while it is one of a plugin switched off in Settings > Plugins (Docker, WSL, SSH), which is kept for when it is on again.</summary>
+    public PythonInterpreter? Current { get { lock (_gate) return _current is { } c && !Plugins.TargetOn(c.Target.Kind) ? null : _current; } }
 
     /// <summary>Raised after the selection changed (also for the first automatic choice).</summary>
     public event Action<PythonInterpreter?>? Changed;

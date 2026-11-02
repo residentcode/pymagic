@@ -50,6 +50,33 @@ public class FastApiEndpointTests
     }
 
     [Fact]
+    public void WithTheFastApiPluginOffItsRoutesAreNotRead()
+    {
+        try
+        {
+            Plugins.Load("{\"plugins\": {\"fastapi\": false}}");
+            Assert.True(!RoutesOf(Head + Create).Any(r => r.Name == "create"));
+            Plugins.Load("{\"plugins\": {\"flask\": false}}");
+            Assert.True(RoutesOf(Head + Create).Any(r => r.Name == "create"), "Flask off leaves FastAPI's");
+        }
+        finally { Plugins.Load("{}"); }
+        Assert.True(RoutesOf(Head + Create).Any(r => r.Name == "create"));
+    }
+
+    [Fact]
+    public void ARemoteInterpreterIsUsedOnlyWhileItsPluginIsOn()
+    {
+        Assert.True(Plugins.OfTarget("compose") == "docker" && Plugins.OfTarget("container") == "docker" && Plugins.OfTarget("wsl") == "wsl" && Plugins.OfTarget("ssh") == "ssh" && Plugins.OfTarget("local") == null);
+        try
+        {
+            Plugins.Load("{\"plugins\": {\"docker\": false, \"ssh\": false}}");
+            Assert.True(!Plugins.TargetOn("docker") && !Plugins.TargetOn("container") && !Plugins.TargetOn("ssh") && Plugins.TargetOn("wsl") && Plugins.TargetOn("local"));
+        }
+        finally { Plugins.Load("{}"); }
+        Assert.True(Plugins.TargetOn("docker"));
+    }
+
+    [Fact]
     public void WhatFastApiHandsOverItselfIsLeftOut()
     {
         Assert.True(!Create_().Params!.Any(p => p.Name == "request"));

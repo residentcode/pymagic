@@ -2,7 +2,7 @@
 // Navigate, Code, Run, Tools, Git and Help. A command is the editor's own action, a button the tool already has, or a function of its script.
 import { openMenu } from './menu';
 import { change, settings, pluginsAtStart } from './settings';
-import { toolOff } from './plugin-model';
+import { toolOff, pluginOn, remoteKindsLeft } from './plugin-model';
 import { openSettings } from './settings-ui';
 import { openNewProject } from './newproject';
 import { defineCommand } from './commands.js';
@@ -205,7 +205,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 '-',
                 { label: 'Run', key: 'Ctrl+F5', run: press('b-run'), disabled: $('b-run').disabled },
                 { label: 'Debug', key: 'F5', run: press('b-debug'), disabled: $('b-debug').disabled },
-                { label: 'Run with coverage', run: press('b-cov') },
+                ...(toolOff(pluginsAtStart(), 'coverage') ? [] : [{ label: 'Run with coverage', run: press('b-cov') }]),
                 ...(toolOff(pluginsAtStart(), 'profiler') ? [] : [{ label: 'Profile', run: press('b-profile'), disabled: $('b-profile').disabled }]),
                 { label: 'Stop', key: 'Shift+F5', run: press('b-stop'), disabled: $('b-stop').disabled },
                 { label: 'Attach to process…', run: () => debug.attach(), disabled: debug.running() },
@@ -236,12 +236,13 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
             ] },
             { label: 'Tools', submenu: [
                 { label: 'Python console', run: dock('pyconsole') },
-                { label: 'Diagrams', submenu: [['file', 'Classes of this file'], ['classes', 'Classes of the project'], ['modules', 'Modules and imports'], ['models', 'Django models'], ['model', 'This model and its relations (the name at the cursor)']]
-                    .map(([kind, label]) => ({ label, run: () => window.dispatchEvent(new CustomEvent('pymagic:diagram', { detail: kind })) })) },
+                ...(!pluginOn(pluginsAtStart(), 'diagrams') ? [] : [{ label: 'Diagrams', submenu: [['file', 'Classes of this file'], ['classes', 'Classes of the project'], ['modules', 'Modules and imports'], ['models', 'Django models'], ['model', 'This model and its relations (the name at the cursor)']]
+                    .filter(([kind]) => pluginOn(pluginsAtStart(), 'django') || !['models', 'model'].includes(kind))   // Django's models, with the Django plugin
+                    .map(([kind, label]) => ({ label, run: () => window.dispatchEvent(new CustomEvent('pymagic:diagram', { detail: kind })) })) }]),
                 '-',
                 { label: 'Python interpreter…', run: () => openSettings('python') },
                 { label: 'Create a .venv…', run: press('b-venv') },
-                { label: 'WSL, Docker or SSH interpreter…', run: press('b-remote') },
+                ...(remoteKindsLeft(pluginsAtStart()) ? [{ label: 'WSL, Docker or SSH interpreter…', run: press('b-remote') }] : []),
                 { label: 'Packages', run: dock('packages') },
                 '-',
                 { label: 'Terminal', key: 'Ctrl+`', run: dock('terminal') },

@@ -58,7 +58,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 **Plugins** (asked for by the user on 2 November 2026: optional features as built-in plugins, switched on and off in Settings > Plugins, as PyCharm's bundled ones)
 - ~~Settings > Plugins, and JSON Schema, HTTP Client, Database Tools and SQL, Profiler, Pull Requests, Deployment, Markdown and Macros as plugins~~ (done, item 289).
-- ~~The features that reach into the engine and the rest of the window, as plugins too: Django, Jupyter notebooks, Docker, Git~~ (done, item 290). Not done: Flask and FastAPI, the WSL and SSH interpreters, coverage and the diagrams as plugins; with Django off, the template features (shared with Jinja) and the Endpoints panel's Django routes stay; an interpreter already chosen in Docker keeps running with Docker off.
+- ~~The features that reach into the engine and the rest of the window, as plugins too: Django, Jupyter notebooks, Docker, Git~~ (done, item 290). ~~Flask and FastAPI, the WSL and SSH interpreters, coverage and the diagrams as plugins; with Django off, Django templates and the Endpoints panel's Django routes left alone; an interpreter chosen before in Docker, WSL or SSH not used while its plugin is off~~ (done, item 291).
 
 **Editor**
 - ~~Hover and signature help: a parameter's documentation in hover and in completion's `name=` items, the class docstring for a constructor call, `name=` after a `*`, documentation of methods of library base classes (119, 121); signature help inside decorators and class bases (118)~~ (done, item 210).
@@ -177,4 +177,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 290 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 291 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

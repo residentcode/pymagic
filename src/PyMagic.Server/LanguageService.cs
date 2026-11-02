@@ -364,9 +364,12 @@ public sealed partial class LanguageService
 
     // ------------------------------------------------------------ diagnostics
 
+    /// <summary>A Django template (not a Jinja one) while the Django plugin is off: the template features leave it alone.</summary>
+    bool DjangoTemplateOff(string uri) => !Plugins.On("django") && !IsJinjaTemplate(uri, Current());
+
     public IReadOnlyList<LspDiagnostic> Diagnostics(string uri)
     {
-        if (_templateDocs.ContainsKey(uri)) return TemplateDiagnostics(uri);
+        if (_templateDocs.ContainsKey(uri)) return DjangoTemplateOff(uri) ? Array.Empty<LspDiagnostic>() : TemplateDiagnostics(uri);
         var m = ModuleFor(uri);
         if (m == null) return Array.Empty<LspDiagnostic>();
         var lines = Lines(m);
@@ -468,7 +471,7 @@ public sealed partial class LanguageService
 
     public Hover? Hover(string uri, Position pos)
     {
-        if (_templateDocs.ContainsKey(uri)) return TemplateHover(uri, pos);
+        if (_templateDocs.ContainsKey(uri)) return DjangoTemplateOff(uri) ? null : TemplateHover(uri, pos);
         var m = ModuleFor(uri);
         if (m == null) return null;
         var lines = Lines(m);
@@ -644,7 +647,7 @@ public sealed partial class LanguageService
 
     public IReadOnlyList<Location> Definition(string uri, Position pos)
     {
-        if (_templateDocs.ContainsKey(uri)) return TemplateDefinition(uri, pos);
+        if (_templateDocs.ContainsKey(uri)) return DjangoTemplateOff(uri) ? Array.Empty<Location>() : TemplateDefinition(uri, pos);
         var m = ModuleFor(uri);
         if (m == null) return Array.Empty<Location>();
         var ws = Current().Workspace;
@@ -654,7 +657,7 @@ public sealed partial class LanguageService
 
         if (FixtureDefinition(uri, pos) is { Count: > 0 } fixtureLocations) return fixtureLocations;
         if (Plugins.On("django") && DjangoDefinition(uri, pos) is { Count: > 0 } djangoLocations) return djangoLocations;
-        if (FastApiDependencyDefinition(m, ev, offset) is { Count: > 0 } dependencyLocations) return dependencyLocations;
+        if (Plugins.On("fastapi") && FastApiDependencyDefinition(m, ev, offset) is { Count: > 0 } dependencyLocations) return dependencyLocations;
 
         void AddNode(ModuleInfo? module, Node node)
         {

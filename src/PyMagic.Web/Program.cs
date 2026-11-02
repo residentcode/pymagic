@@ -1001,13 +1001,16 @@ object Describe(PythonInterpreter i) => new
 
 app.MapGet("/api/interpreter", () => interpreters.Current is { } c ? Results.Json(Describe(c)) : Results.Json(new { }));
 
-app.MapGet("/api/interpreters", async () => (await interpreters.ListAsync()).Select(Describe).ToList());
+// an interpreter of a plugin switched off (Docker, WSL, SSH) is neither listed nor chosen
+app.MapGet("/api/interpreters", async () => (await interpreters.ListAsync()).Where(i => Plugins.TargetOn(i.Target.Kind)).Select(Describe).ToList());
 
 app.MapPost("/api/interpreter", async (HttpRequest req) =>
 {
     var body = await JsonNode.ParseAsync(req.Body);
     string? path = body?["path"]?.GetValue<string>();
     if (string.IsNullOrWhiteSpace(path)) return Results.BadRequest(new { error = "path is required" });
+    if (ExecutionTarget.Parse(path) is { } spec && Plugins.OfTarget(spec.Target.Kind) is { } off && !Plugins.On(off))
+        return Results.BadRequest(new { error = $"{PluginName(off)} is switched off in Settings > Plugins" });
     try { return Results.Json(Describe(await Task.Run(() => interpreters.Select(path)))); }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
 });
@@ -1015,8 +1018,9 @@ app.MapPost("/api/interpreter", async (HttpRequest req) =>
 // WSL distributions and Docker images an interpreter can be taken from
 app.MapGet("/api/interpreter/targets", async (string? composeFile) => await Task.Run(() => new
 {
-    wsl = WslTarget.Distros(),
-    ssh = new { installed = SshTarget.Installed(), hosts = SshConfigHosts() },
+    // the WSL and SSH plugins switched off: wsl and ssh are not run
+    wsl = Plugins.On("wsl") ? WslTarget.Distros() : [],
+    ssh = Plugins.On("ssh") ? new { installed = SshTarget.Installed(), hosts = SshConfigHosts() } : new { installed = false, hosts = Array.Empty<string>() },
     // the Docker plugin switched off: docker is not run at all
     docker = new { available = Plugins.On("docker") && DockerTarget.Available() },
     dockerImages = Plugins.On("docker") && DockerTarget.Available() ? DockerTarget.Images() : Array.Empty<string>(),
@@ -1028,6 +1032,8 @@ app.MapGet("/api/interpreter/targets", async (string? composeFile) => await Task
         services = Plugins.On("docker") ? ComposeTarget.Services(root, string.IsNullOrWhiteSpace(composeFile) ? null : composeFile) : Array.Empty<string>(),
     },
 }));
+
+static string PluginName(string id) => id switch { "docker" => "Docker", "wsl" => "WSL", "ssh" => "SSH", _ => id };
 
 // the names in the user's ~/.ssh/config that can be connected to (wildcard entries are patterns, not hosts)
 string[] SshConfigHosts()
@@ -1049,6 +1055,7 @@ app.MapPost("/api/interpreter/remote", async (HttpRequest req) =>
     string kind = body?["kind"]?.GetValue<string>() ?? "", name = body?["name"]?.GetValue<string>()?.Trim() ?? "";
     string py = body?["python"]?.GetValue<string>()?.Trim() is { Length: > 0 } given ? given : kind == "wsl" ? "python3" : "python";
     if (name.Length == 0 || name.Contains('|') || py.Contains('|') || py.StartsWith('-')) return Results.BadRequest(new { error = "give the distribution or image, and the interpreter in it" });
+    if (Plugins.OfTarget(kind) is { } off && !Plugins.On(off)) return Results.BadRequest(new { error = $"{PluginName(off)} is switched off in Settings > Plugins" });
     string identity = body?["identity"]?.GetValue<string>()?.Trim() ?? "", knownHosts = body?["knownHosts"]?.GetValue<string>()?.Trim() ?? "";
     ExecutionTarget target = kind switch
     {

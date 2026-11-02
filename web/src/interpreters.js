@@ -140,8 +140,9 @@ export function setupInterpreters() {
         const shade = el('div', 'ask-shade');
         const box = el('div', 'ask-box');
         const kind = el('select');
-        const dockerOn = pluginOn(pluginsAtStart(), 'docker');   // Settings > Plugins: Docker off, its three kinds are not offered
-        for (const [value, label] of [['wsl', 'WSL distribution'], ['docker', 'Docker image'], ['container', 'Docker container that is running'], ['compose', 'Docker Compose service'], ['ssh', 'SSH host']].filter(([v]) => dockerOn || !['docker', 'container', 'compose'].includes(v))) { const o = el('option', '', label); o.value = value; kind.append(o); }
+        // Settings > Plugins: the kinds of the plugins that are off (Docker's three, WSL, SSH) are not offered
+        const pluginOfKind = { wsl: 'wsl', docker: 'docker', container: 'docker', compose: 'docker', ssh: 'ssh' };
+        for (const [value, label] of [['wsl', 'WSL distribution'], ['docker', 'Docker image'], ['container', 'Docker container that is running'], ['compose', 'Docker Compose service'], ['ssh', 'SSH host']].filter(([v]) => pluginOn(pluginsAtStart(), pluginOfKind[v]))) { const o = el('option', '', label); o.value = value; kind.append(o); }
         const nameLabel = el('div', 'ask-hint');
         const nameSelect = el('select');
         const nameInput = el('input');

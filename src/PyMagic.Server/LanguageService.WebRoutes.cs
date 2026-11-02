@@ -179,6 +179,7 @@ public sealed partial class LanguageService
                 string? receiver = ReceiverName(access.Value);
                 var (prefix, info) = resolve((access.Value, receiver));
                 bool flask = info != null ? FlaskConstructors.Contains(info.Kind) : path.Value.Contains('<');
+                if (!Plugins.On(flask ? "flask" : "fastapi")) continue;   // Settings > Plugins: the routes of a framework whose plugin is off are not read
                 string plain = StringKeyword(call, flask ? "endpoint" : "name") ?? def.Name;
                 string endpoint = info?.BlueprintName != null ? $"{info.BlueprintName}.{plain}" : plain;
                 yield return new RouteDef(m, def, flask, methods, JoinPath(prefix, path.Value) is { Length: > 0 } full ? full : "/", path.Value, path.Start, path.End, endpoint, plain, receiver ?? "", prefix, info);
@@ -231,8 +232,8 @@ public sealed partial class LanguageService
         return RouteIndexOf(snap).Routes
             .Select(r => Describe(r, ev))
             .Where(e => e.Uri.Length > 0)
-            .Concat(FlaskExtraRoutes())
-            .Concat(DjangoRoutes())
+            .Concat(Plugins.On("flask") ? FlaskExtraRoutes() : [])
+            .Concat(Plugins.On("django") ? DjangoRoutes() : [])
             .Concat(TestRequests())
             .ToList();
     }

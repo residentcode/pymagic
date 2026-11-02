@@ -14,6 +14,18 @@ public static class Plugins
     /// <summary>Whether a plugin is on.</summary>
     public static bool On(string id) => !_off.Contains(id);
 
+    /// <summary>The plugin an interpreter's target belongs to (Docker for an image, a container and a Compose service; WSL; SSH), or null for a local one.</summary>
+    public static string? OfTarget(string kind) => kind switch
+    {
+        "docker" or "container" or "compose" => "docker",
+        "wsl" => "wsl",
+        "ssh" => "ssh",
+        _ => null,
+    };
+
+    /// <summary>Whether an interpreter of this target kind can be used: a local one always, a remote one while its plugin is on.</summary>
+    public static bool TargetOn(string kind) => OfTarget(kind) is not { } id || On(id);
+
     /// <summary>Reads the plugins that are off from the settings' JSON text; text that does not parse leaves every plugin on.</summary>
     public static void Load(string? settingsJson)
     {
