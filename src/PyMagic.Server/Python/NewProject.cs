@@ -8,8 +8,9 @@ namespace PyMagic.Server;
 /// <param name="Kind">python, fastapi, flask, django or jupyter.</param>
 /// <param name="Environment">venv (a project .venv made by <paramref name="Python"/>), uv (`uv venv` with <paramref name="PythonVersion"/>),
 /// interpreter (an existing one, such as conda's base: <paramref name="Python"/>), or none.</param>
+/// <param name="InstallDjango">For a Django project in a new environment: install Django there (a download from PyPI) so its own startproject writes the project.</param>
 public sealed record NewProjectRequest(string Location, string Kind, bool Git, bool Welcome, string Environment, string? Python, string? UvPath, string? PythonVersion,
-    DjangoProjectOptions? Django = null);
+    DjangoProjectOptions? Django = null, bool InstallDjango = true);
 
 /// <summary>The Django choices of New Project: the template language (django or jinja2), the name of the templates folder, a first app, and the admin.</summary>
 public sealed record DjangoProjectOptions(string TemplateLanguage = "django", string TemplatesFolder = "templates", string? AppName = null, bool Admin = true);
@@ -26,7 +27,8 @@ public static class NewProject
     public static readonly string[] Kinds = { "python", "fastapi", "flask", "django", "jupyter" };
 
     /// <summary>The files of a kind of project, by path, for a project named <paramref name="name"/>.</summary>
-    public static Dictionary<string, string> Files(string kind, string name, bool welcome, DjangoProjectOptions? django = null)
+    /// <param name="python">An interpreter that may already have Django: its own startproject writes a Django project.</param>
+    public static Dictionary<string, string> Files(string kind, string name, bool welcome, DjangoProjectOptions? django = null, string? python = null)
     {
         string module = ModuleName(name);
         var files = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -48,7 +50,7 @@ public static class NewProject
                 files["requirements.txt"] = "flask\n";
                 break;
             case "django":
-                foreach (var (path, text) in DjangoFiles(module, django ?? new DjangoProjectOptions())) files[path] = text;
+                foreach (var (path, text) in DjangoFiles(module, django ?? new DjangoProjectOptions(), python)) files[path] = text;
                 break;
             case "jupyter":
                 files["notebook.ipynb"] = new JsonObject
@@ -68,50 +70,19 @@ public static class NewProject
         return files;
     }
 
-    /// <summary>A Django project as startproject makes it, with the choices of the dialog.</summary>
-    static Dictionary<string, string> DjangoFiles(string module, DjangoProjectOptions o)
+    /// <summary>
+    /// A Django project as startproject makes it, comments and docstrings included, with the choices of the dialog: Django's own templates
+    /// (DjangoTemplates), or what the chosen interpreter's Django writes when it has one (<paramref name="python"/>).
+    /// </summary>
+    static Dictionary<string, string> DjangoFiles(string module, DjangoProjectOptions o, string? python = null)
     {
         bool jinja = o.TemplateLanguage == "jinja2";
         string folder = System.Text.RegularExpressions.Regex.IsMatch(o.TemplatesFolder ?? "", @"^[\w.-]+(/[\w.-]+)*$") ? o.TemplatesFolder! : "templates";
         string? app = string.IsNullOrWhiteSpace(o.AppName) ? null : ModuleName(o.AppName!);
         if (app == module) throw new ServiceException("The app needs another name than the project's package.");
-        var files = new Dictionary<string, string>(StringComparer.Ordinal);
-        string secret = "django-insecure-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
-        files["manage.py"] = "#!/usr/bin/env python\n\"\"\"Django's command-line utility for administrative tasks.\"\"\"\nimport os\nimport sys\n\n\ndef main():\n    os.environ.setdefault(\"DJANGO_SETTINGS_MODULE\", \"" + module + ".settings\")\n    from django.core.management import execute_from_command_line\n\n    execute_from_command_line(sys.argv)\n\n\nif __name__ == \"__main__\":\n    main()\n";
-        files[module + "/__init__.py"] = "";
-        var apps = new List<string>();
-        if (o.Admin) apps.Add("django.contrib.admin");
-        apps.AddRange(new[] { "django.contrib.auth", "django.contrib.contenttypes", "django.contrib.sessions", "django.contrib.messages", "django.contrib.staticfiles" });
-        if (app != null) apps.Add(app);
-        string djangoBackend = "    {\n        \"BACKEND\": \"django.template.backends.django.DjangoTemplates\",\n        \"DIRS\": " + (jinja ? "[]" : $"[BASE_DIR / \"{folder}\"]") + ",\n        \"APP_DIRS\": True,\n        \"OPTIONS\": {\n            \"context_processors\": [\n                \"django.template.context_processors.request\",\n                \"django.contrib.auth.context_processors.auth\",\n                \"django.contrib.messages.context_processors.messages\",\n            ],\n        },\n    },\n";
-        // Jinja2 reads the project's templates; Django's own engine stays for the admin and the apps' templates
-        string jinjaBackend = "    {\n        \"BACKEND\": \"django.template.backends.jinja2.Jinja2\",\n        \"DIRS\": [BASE_DIR / \"" + folder + "\"],\n        \"APP_DIRS\": True,\n        \"OPTIONS\": {},\n    },\n";
-        files[module + "/settings.py"] =
-            "from pathlib import Path\n\nBASE_DIR = Path(__file__).resolve().parent.parent\n\nSECRET_KEY = \"" + secret + "\"\n\nDEBUG = True\n\nALLOWED_HOSTS = []\n\n" +
-            "INSTALLED_APPS = [\n" + string.Concat(apps.Select(a => $"    \"{a}\",\n")) + "]\n\n" +
-            "MIDDLEWARE = [\n    \"django.middleware.security.SecurityMiddleware\",\n    \"django.contrib.sessions.middleware.SessionMiddleware\",\n    \"django.middleware.common.CommonMiddleware\",\n    \"django.middleware.csrf.CsrfViewMiddleware\",\n    \"django.contrib.auth.middleware.AuthenticationMiddleware\",\n    \"django.contrib.messages.middleware.MessageMiddleware\",\n    \"django.middleware.clickjacking.XFrameOptionsMiddleware\",\n]\n\n" +
-            "ROOT_URLCONF = \"" + module + ".urls\"\n\n" +
-            "TEMPLATES = [\n" + (jinja ? jinjaBackend : "") + djangoBackend + "]\n\n" +
-            "WSGI_APPLICATION = \"" + module + ".wsgi.application\"\n\n" +
-            "DATABASES = {\n    \"default\": {\n        \"ENGINE\": \"django.db.backends.sqlite3\",\n        \"NAME\": BASE_DIR / \"db.sqlite3\",\n    }\n}\n\n" +
-            "LANGUAGE_CODE = \"en-us\"\nTIME_ZONE = \"UTC\"\nUSE_I18N = True\nUSE_TZ = True\n\nSTATIC_URL = \"static/\"\n\nDEFAULT_AUTO_FIELD = \"django.db.models.BigAutoField\"\n";
-        files[module + "/urls.py"] = o.Admin
-            ? "from django.contrib import admin\nfrom django.urls import path\n\nurlpatterns = [\n    path(\"admin/\", admin.site.urls),\n]\n"
-            : "from django.urls import path\n\nurlpatterns = [\n]\n";
-        files[module + "/wsgi.py"] = "import os\n\nfrom django.core.wsgi import get_wsgi_application\n\nos.environ.setdefault(\"DJANGO_SETTINGS_MODULE\", \"" + module + ".settings\")\n\napplication = get_wsgi_application()\n";
-        files[module + "/asgi.py"] = "import os\n\nfrom django.core.asgi import get_asgi_application\n\nos.environ.setdefault(\"DJANGO_SETTINGS_MODULE\", \"" + module + ".settings\")\n\napplication = get_asgi_application()\n";
+        var files = python != null && DjangoTemplates.VersionOf(python) != null ? DjangoTemplates.FromDjango(python, module, app) : DjangoTemplates.Builtin(module, app);
+        DjangoTemplates.Apply(files, module, app, folder, jinja, o.Admin);
         files[folder + "/.gitkeep"] = "";
-        if (app != null)
-        {
-            string config = string.Concat(app.Split('_', StringSplitOptions.RemoveEmptyEntries).Select(w => char.ToUpperInvariant(w[0]) + w[1..])) + "Config";
-            files[app + "/__init__.py"] = "";
-            files[app + "/apps.py"] = $"from django.apps import AppConfig\n\n\nclass {config}(AppConfig):\n    default_auto_field = \"django.db.models.BigAutoField\"\n    name = \"{app}\"\n";
-            files[app + "/models.py"] = "from django.db import models\n\n# Create your models here.\n";
-            files[app + "/views.py"] = "from django.shortcuts import render\n\n# Create your views here.\n";
-            files[app + "/tests.py"] = "from django.test import TestCase\n\n# Create your tests here.\n";
-            files[app + "/migrations/__init__.py"] = "";
-            if (o.Admin) files[app + "/admin.py"] = "from django.contrib import admin\n\n# Register your models here.\n";
-        }
         files["requirements.txt"] = jinja ? "django\njinja2\n" : "django\n";
         return files;
     }
@@ -133,26 +104,14 @@ public static class NewProject
         if (File.Exists(folder)) throw new ServiceException("There is a file of that name.");
         if (Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).Any()) throw new ServiceException("The folder is not empty.");
         string name = System.IO.Path.GetFileName(folder.TrimEnd('\\', '/'));
-        var files = Files(r.Kind, name, r.Welcome, r.Django);
-        if (r.Git) files[".gitignore"] = "__pycache__/\n*.py[cod]\n.venv/\n.pymagic/\n*.egg-info/\n.pytest_cache/\n" + (r.Kind == "django" ? "db.sqlite3\n" : "");
-
         Directory.CreateDirectory(folder);
-        foreach (var (rel, text) in files)
-        {
-            string full = System.IO.Path.Combine(folder, rel.Replace('/', System.IO.Path.DirectorySeparatorChar));
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full)!);
-            File.WriteAllText(full, text.Replace("\r\n", "\n"), new System.Text.UTF8Encoding(false));
-        }
         var notes = new List<string>();
-        if (r.Git)
-        {
-            try { Run(Environment.GetEnvironmentVariable("PYMAGIC_GIT") is { Length: > 0 } g ? g : "git", folder, "init"); }
-            catch (ServiceException e) { notes.Add("Git: " + e.Message); }
-        }
 
+        // the environment first: a Django project is then written by that environment's own Django
         string? interpreter = null;
         string venv = System.IO.Path.Combine(folder, ".venv");
         string venvPython = OperatingSystem.IsWindows() ? System.IO.Path.Combine(venv, "Scripts", "python.exe") : System.IO.Path.Combine(venv, "bin", "python");
+        string uv = string.IsNullOrWhiteSpace(r.UvPath) ? "uv" : r.UvPath.Trim();
         switch (r.Environment)
         {
             case "venv":
@@ -164,7 +123,7 @@ public static class NewProject
                 var args = new List<string> { "venv" };
                 if (!string.IsNullOrWhiteSpace(r.PythonVersion)) { args.Add("--python"); args.Add(r.PythonVersion.Trim()); }
                 args.Add(venv);
-                Run(string.IsNullOrWhiteSpace(r.UvPath) ? "uv" : r.UvPath.Trim(), folder, args.ToArray());
+                Run(uv, folder, args.ToArray());
                 interpreter = venvPython;
                 break;
             case "interpreter":
@@ -176,14 +135,48 @@ public static class NewProject
             default:
                 throw new ServiceException($"'{r.Environment}' is not a kind of environment.");
         }
+        if (interpreter != null && !File.Exists(interpreter)) throw new ServiceException("The environment was made but has no interpreter.");
+
+        // Django: the project's own environment gets Django (from PyPI), then Django's startproject writes the project; an interpreter that was
+        // chosen as it is is used when it has Django and left alone when it does not; without Django, Django's own templates are written by PyMagic
+        string? django = null;
+        if (r.Kind == "django" && interpreter != null)
+        {
+            django = DjangoTemplates.VersionOf(interpreter);
+            if (django == null && r.Environment is "venv" or "uv" && r.InstallDjango)
+            {
+                try
+                {
+                    if (r.Environment == "uv") Run(uv, folder, "pip", "install", "--python", interpreter, "django");
+                    else Run(interpreter, folder, "-m", "pip", "install", "--disable-pip-version-check", "django");
+                    django = DjangoTemplates.VersionOf(interpreter);
+                    if (django != null) notes.Add($"Django {django} was installed in .venv; django-admin startproject wrote the project.");
+                }
+                catch (ServiceException e) { notes.Add("Django could not be installed (" + e.Message + "): the project is Django " + DjangoTemplates.Version + "'s own template, and requirements.txt lists it for the Packages panel."); }
+            }
+            else if (django != null) notes.Add($"django-admin startproject of Django {django} wrote the project.");
+        }
+        var files = Files(r.Kind, name, r.Welcome, r.Django, django != null ? interpreter : null);
+        if (r.Git) files[".gitignore"] = "__pycache__/\n*.py[cod]\n.venv/\n.pymagic/\n*.egg-info/\n.pytest_cache/\n" + (r.Kind == "django" ? "db.sqlite3\n" : "");
+
+        foreach (var (rel, text) in files)
+        {
+            string full = System.IO.Path.Combine(folder, rel.Replace('/', System.IO.Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, text.Replace("\r\n", "\n"), new System.Text.UTF8Encoding(false));
+        }
+        if (r.Git)
+        {
+            try { Run(Environment.GetEnvironmentVariable("PYMAGIC_GIT") is { Length: > 0 } g ? g : "git", folder, "init"); }
+            catch (ServiceException e) { notes.Add("Git: " + e.Message); }
+        }
         if (interpreter != null)
         {
-            if (!File.Exists(interpreter)) throw new ServiceException("The environment was made but has no interpreter.");
             string settings = System.IO.Path.Combine(folder, ".pymagic", "settings.json");
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(settings)!);
             File.WriteAllText(settings, new JsonObject { ["interpreter"] = interpreter }.ToJsonString() + "\n");
         }
-        if (files.ContainsKey("requirements.txt"))
+        if (files.ContainsKey("requirements.txt") && django == null)
             notes.Add("The packages it needs are in requirements.txt; the Packages panel installs them.");
         return new NewProjectResult(folder, files.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList(), interpreter, notes);
     }
