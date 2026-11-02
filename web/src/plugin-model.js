@@ -7,6 +7,7 @@ export const PLUGINS = [
     { id: 'django', name: 'Django', about: "Django's inspections, completion, navigation and rename (URL names, models, settings, templates' views, REST framework), Django templates, its routes in the Endpoints panel, the Django panel and Structure's Django view, and Django in New Project.", tab: 'django', owns: ['st-django'], kind: 'django' },
     { id: 'flask', name: 'Flask', about: "Flask's routes: their checks (parameters, request.args and forms against the templates), url_for completion and navigation, and in the Endpoints panel; Flask in New Project.", kind: 'flask' },
     { id: 'fastapi', name: 'FastAPI', about: "FastAPI's routes and their checks (path parameters, Depends, request bodies, responses), url_path_for completion and navigation, and in the Endpoints panel; FastAPI in New Project.", kind: 'fastapi' },
+    { id: 'javascript', name: 'JavaScript projects', about: 'The other kinds of New Project, made with Node.js: HTML5 Boilerplate, Bootstrap, Vite, React Native, Next.js, Node.js and Express.', kind: ['html5boilerplate', 'bootstrap', 'vite', 'reactnative', 'nextjs', 'nodejs', 'express'] },
     { id: 'notebooks', name: 'Jupyter Notebooks', about: '.ipynb files opened as notebooks: cells run and debugged in a kernel, their outputs, the Variables window and Jupyter servers, and Jupyter in New Project. Off, a notebook opens as its JSON text.', kind: 'jupyter' },
     { id: 'docker', name: 'Docker', about: 'Interpreters in a Docker image, a running container or a Docker Compose service; off, docker is not run to list them and one chosen before is not used.' },
     { id: 'wsl', name: 'WSL', about: 'Interpreters in a WSL distribution; off, wsl is not run to list them and one chosen before is not used.' },
@@ -38,9 +39,9 @@ export function requiredName(id) {
     return needs ? PLUGINS.find((p) => p.id === needs)?.name ?? null : null;
 }
 
-/** The New Project kinds of the plugins that are off ('django', 'jupyter'). */
+/** The New Project kinds of the plugins that are off ('django', 'jupyter'; a plugin may bring several, as JavaScript projects does). */
 export function kindsOff(setting) {
-    return PLUGINS.filter((p) => p.kind && pluginsOff(setting).has(p.id)).map((p) => p.kind);
+    return PLUGINS.filter((p) => p.kind && pluginsOff(setting).has(p.id)).flatMap((p) => p.kind);
 }
 
 /** Whether a plugin is on (every plugin is, unless the setting says false). */

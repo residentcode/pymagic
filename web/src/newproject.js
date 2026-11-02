@@ -1,6 +1,7 @@
-// File > New project…: where it goes, its kind (pure Python, FastAPI, Flask, Django, Jupyter), Git, a welcome script, and its
-// environment (a project venv, uv, an existing interpreter such as conda's base, or none). The engine makes it (/api/newproject)
-// and the desktop app opens it; in a browser the page says where it is.
+// File > New project…: where it goes, its kind (pure Python, FastAPI, Flask, Django, Jupyter, or one of the other kinds PyCharm has: HTML5
+// Boilerplate, Bootstrap, Vite, React Native, Next.js, Node.js, Express), Git, a welcome script, and for a Python kind its environment (a project
+// venv, uv, an existing interpreter such as conda's base, or none). The engine makes it (/api/newproject) and the desktop app opens it; in a
+// browser the page says where it is.
 import { toast } from './toast';
 import { pluginsAtStart } from './settings';
 import { kindsOff, pluginOn } from './plugin-model.js';
@@ -11,7 +12,22 @@ const KINDS = [
     ['flask', 'Flask', 'app.py, templates and static folders, and requirements.txt.'],
     ['django', 'Django', 'manage.py and the project package (settings, urls, wsgi, asgi), a templates folder, a first app if you name one, and requirements.txt.'],
     ['jupyter', 'Jupyter', 'A first notebook and requirements.txt.'],
+    // the other kinds, made by their own generators with Node.js (npm downloads them)
+    ['html5boilerplate', 'HTML5 Boilerplate', 'HTML5 Boilerplate of the chosen version: index.html, its css, js and images, as its makers ship it.', 'other'],
+    ['bootstrap', 'Bootstrap', "Bootstrap of the chosen version (its css and js folders) and Bootstrap's starter page as index.html.", 'other'],
+    ['vite', 'Vite', 'A Vite project from the template chosen (create-vite), its packages installed with npm.', 'other'],
+    ['reactnative', 'React Native', 'A React Native app made by the React Native CLI (a large download).', 'other'],
+    ['nextjs', 'Next.js', 'A Next.js app made by create-next-app with the choices below. The folder name must be in lower case.', 'other'],
+    ['nodejs', 'Node.js', 'package.json and index.js; nothing is downloaded.', 'other'],
+    ['express', 'Express', 'An Express app made by express-generator with the view engine chosen, its packages installed with npm.', 'other'],
 ];
+
+const VITE_TEMPLATES = ['vanilla', 'vanilla-ts', 'vue', 'vue-ts', 'react', 'react-ts', 'react-swc', 'react-swc-ts', 'preact', 'preact-ts', 'lit', 'lit-ts', 'svelte', 'svelte-ts', 'solid', 'solid-ts', 'qwik', 'qwik-ts'];
+const EXPRESS_VIEWS = [['pug', 'Pug'], ['ejs', 'EJS'], ['hbs', 'Handlebars'], ['hjs', 'Hogan.js'], ['twig', 'Twig'], ['vash', 'Vash'], ['none', 'None (an API)']];
+/** The kinds whose version is chosen (the npm registry lists them). */
+const VERSIONED = new Set(['html5boilerplate', 'bootstrap', 'nextjs', 'reactnative']);
+/** Whether a kind is one of the other kinds (no Python environment). */
+export const isOtherKind = (kind) => KINDS.some(([id, , , group]) => id === kind && group === 'other');
 
 /** The folder a new project is suggested in: beside the open one. */
 export const suggestedLocation = (root, name = 'untitled') => {
@@ -33,7 +49,10 @@ export async function openNewProject() {
     box.innerHTML = `
       <h3>New project</h3>
       <label class="np-row">Location <span class="np-loc"><input id="np-location" spellcheck="false"><button id="np-browse" type="button">Browse…</button></span></label>
+      <div class="np-group">Python</div>
       <div class="np-kinds" id="np-kinds"></div>
+      <div class="np-group" id="np-other-head">Other</div>
+      <div class="np-kinds" id="np-kinds-other"></div>
       <p class="set-note" id="np-kind-note"></p>
       <label class="np-check"><input type="checkbox" id="np-git" checked> Create a Git repository</label>
       <label class="np-check" id="np-welcome-row"><input type="checkbox" id="np-welcome" checked> Create a welcome script (main.py)</label>
@@ -43,11 +62,27 @@ export async function openNewProject() {
         <label class="np-check">First app <input id="np-dj-app" placeholder="none (an app's name, such as shop)" spellcheck="false"></label>
         <label class="np-check"><input type="checkbox" id="np-dj-admin" checked> The admin (django.contrib.admin and its URL)</label>
       </div>
+      <div id="np-js" class="np-django" style="display:none">
+        <label class="np-check" id="np-js-version-row">Version <select id="np-js-version"><option value="">latest</option></select> <span class="set-note" id="np-js-versions-note"></span></label>
+        <label class="np-check" id="np-js-template-row">Template <select id="np-js-template"></select></label>
+        <label class="np-check" id="np-js-view-row">View engine <select id="np-js-view"></select></label>
+        <div id="np-js-next" class="np-next">
+          <label class="np-check"><input type="checkbox" id="np-js-ts" checked> TypeScript</label>
+          <label class="np-check"><input type="checkbox" id="np-js-eslint" checked> ESLint</label>
+          <label class="np-check"><input type="checkbox" id="np-js-tailwind" checked> Tailwind CSS</label>
+          <label class="np-check"><input type="checkbox" id="np-js-app" checked> App Router</label>
+          <label class="np-check"><input type="checkbox" id="np-js-src"> A src folder</label>
+        </div>
+        <label class="np-check" id="np-js-install-row"><input type="checkbox" id="np-js-install" checked> Install its packages (npm install)</label>
+        <p class="set-note" id="np-js-node"></p>
+      </div>
+      <div id="np-python-env">
       <h4>Interpreter</h4>
       <label class="np-check"><input type="radio" name="np-env" value="venv" checked> A project venv (.venv), made by <select id="np-base"></select></label>
       <label class="np-check"><input type="radio" name="np-env" value="uv"> uv: <input id="np-uv" value="uv" spellcheck="false" title="The uv program, or its path"> Python <input id="np-version" placeholder="3.13" spellcheck="false" size="6"></label>
       <label class="np-check"><input type="radio" name="np-env" value="interpreter"> An existing interpreter (base conda, or any other) <select id="np-existing"></select></label>
       <label class="np-check"><input type="radio" name="np-env" value="none"> None for now</label>
+      </div>
       <p class="set-note" id="np-status"></p>
       <div class="set-buttons"><button id="np-cancel" type="button">Cancel</button><button id="np-create" class="primary" type="button">Create</button></div>`;
     shade.append(box);
@@ -62,20 +97,62 @@ export async function openNewProject() {
         $('np-git').checked = false;
         $('np-git').closest('label').style.display = 'none';
     }
-    for (const [id, label, note] of KINDS.filter(([k]) => !offKinds.includes(k))) {
+    for (const t of VITE_TEMPLATES)
+        $('np-js-template').add(new Option(t, t));
+    $('np-js-template').value = 'react-ts';
+    for (const [v, label] of EXPRESS_VIEWS)
+        $('np-js-view').add(new Option(label, v));
+    const versionsAsked = new Map();   // kind -> its versions (asked once)
+    async function showVersions(id) {
+        const select = $('np-js-version');
+        select.replaceChildren(new Option('latest', ''));
+        $('np-js-versions-note').textContent = '';
+        if (!VERSIONED.has(id))
+            return;
+        $('np-js-versions-note').textContent = 'asking npm for its versions…';
+        if (!versionsAsked.has(id))
+            versionsAsked.set(id, fetch('/api/newproject/versions?kind=' + id).then((r) => r.json()).catch(() => []));
+        const list = await versionsAsked.get(id);
+        if (kind !== id)
+            return;
+        for (const v of list)
+            select.add(new Option(v, v));
+        if (list.length)
+            select.value = list[0];
+        $('np-js-versions-note').textContent = list.length ? '' : 'npm could not be reached: the latest is taken';
+    }
+    let nodeChecked = null;
+    function pick(id, note, b) {
+        kind = id;
+        for (const x of [...$('np-kinds').children, ...$('np-kinds-other').children]) x.classList.toggle('active', x === b);
+        $('np-kind-note').textContent = note;
+        const other = isOtherKind(id);
+        $('np-welcome-row').style.display = id === 'python' ? '' : 'none';
+        $('np-django').style.display = id === 'django' ? '' : 'none';
+        $('np-python-env').style.display = other ? 'none' : '';
+        $('np-js').style.display = other ? '' : 'none';
+        if (!other)
+            return;
+        $('np-js-version-row').style.display = VERSIONED.has(id) ? '' : 'none';
+        $('np-js-template-row').style.display = id === 'vite' ? '' : 'none';
+        $('np-js-view-row').style.display = id === 'express' ? '' : 'none';
+        $('np-js-next').style.display = id === 'nextjs' ? '' : 'none';
+        $('np-js-install-row').style.display = ['vite', 'express', 'nextjs', 'reactnative'].includes(id) ? '' : 'none';
+        void showVersions(id);
+        // Node.js is needed for every one but a Node.js project's own files
+        nodeChecked ??= fetch('/api/newproject/node').then((r) => r.json()).catch(() => ({ found: false }));
+        void nodeChecked.then((n) => { if (kind === id) $('np-js-node').textContent = n.found || id === 'nodejs' ? '' : 'Node.js was not found: install it from nodejs.org to make this kind of project.'; });
+    }
+    for (const [id, label, note, group] of KINDS.filter(([k]) => !offKinds.includes(k))) {
         const b = document.createElement('button');
         b.type = 'button';
         b.textContent = label;
         b.dataset.kind = id;
-        b.onclick = () => {
-            kind = id;
-            for (const x of $('np-kinds').children) x.classList.toggle('active', x === b);
-            $('np-kind-note').textContent = note;
-            $('np-welcome-row').style.display = id === 'python' ? '' : 'none';
-            $('np-django').style.display = id === 'django' ? '' : 'none';
-        };
-        $('np-kinds').append(b);
+        b.onclick = () => pick(id, note, b);
+        $(group === 'other' ? 'np-kinds-other' : 'np-kinds').append(b);
     }
+    // a group with no kind left (Settings > Plugins) is not shown
+    $('np-other-head').style.display = $('np-kinds-other').childElementCount ? '' : 'none';
     $('np-kinds').firstElementChild.click();
     for (const select of [$('np-base'), $('np-existing')])
         for (const i of local)
@@ -102,15 +179,21 @@ export async function openNewProject() {
     shade.onmousedown = (e) => { if (e.target === shade) close(); };
     box.onkeydown = (e) => { if (e.key === 'Escape') close(); };
     $('np-create').onclick = async () => {
-        const environment = box.querySelector('input[name="np-env"]:checked').value;
+        const other = isOtherKind(kind);
+        const environment = other ? 'none' : box.querySelector('input[name="np-env"]:checked').value;
         const body = {
             location: location.value.trim(), kind, git: $('np-git').checked, welcome: $('np-welcome').checked, environment,
             python: environment === 'venv' ? $('np-base').value : environment === 'interpreter' ? $('np-existing').value : undefined,
             uvPath: $('np-uv').value, pythonVersion: $('np-version').value,
+            installPackages: other ? $('np-js-install').checked : undefined,
+            js: other ? {
+                version: $('np-js-version').value || undefined, template: $('np-js-template').value, view: $('np-js-view').value,
+                typeScript: $('np-js-ts').checked, eslint: $('np-js-eslint').checked, tailwind: $('np-js-tailwind').checked, appRouter: $('np-js-app').checked, srcDir: $('np-js-src').checked,
+            } : undefined,
             django: kind === 'django' ? { templateLanguage: $('np-dj-lang').value, templatesFolder: $('np-dj-folder').value.trim() || 'templates', appName: $('np-dj-app').value.trim() || undefined, admin: $('np-dj-admin').checked } : undefined,
         };
         $('np-create').disabled = true;
-        $('np-status').textContent = environment === 'none' ? 'Creating…' : 'Creating the project and its environment…';
+        $('np-status').textContent = other ? (kind === 'nodejs' ? 'Creating…' : 'Creating it with npm (this can take a few minutes)…') : environment === 'none' ? 'Creating…' : 'Creating the project and its environment…';
         let res;
         try {
             res = await fetch('/api/newproject', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });

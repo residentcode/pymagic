@@ -5,12 +5,12 @@ using System.Text.Json.Nodes;
 namespace PyMagic.Server;
 
 /// <summary>What the New Project dialog asks for.</summary>
-/// <param name="Kind">python, fastapi, flask, django or jupyter.</param>
+/// <param name="Kind">python, fastapi, flask, django or jupyter; or one of the other kinds (<see cref="JsProjects.Kinds"/>: HTML5 Boilerplate, Bootstrap, Vite, React Native, Next.js, Node.js, Express).</param>
 /// <param name="Environment">venv (a project .venv made by <paramref name="Python"/>), uv (`uv venv` with <paramref name="PythonVersion"/>),
 /// interpreter (an existing one, such as conda's base: <paramref name="Python"/>), or none.</param>
 /// <param name="InstallPackages">In a new environment: install what the project needs (a download from PyPI): Django, so its own startproject writes the project; with uv, the packages its kind needs (uv add).</param>
 public sealed record NewProjectRequest(string Location, string Kind, bool Git, bool Welcome, string Environment, string? Python, string? UvPath, string? PythonVersion,
-    DjangoProjectOptions? Django = null, bool InstallPackages = true);
+    DjangoProjectOptions? Django = null, bool InstallPackages = true, JsProjectOptions? Js = null);
 
 /// <summary>The Django choices of New Project: the template language (django or jinja2), the name of the templates folder, a first app, and the admin.</summary>
 public sealed record DjangoProjectOptions(string TemplateLanguage = "django", string TemplatesFolder = "templates", string? AppName = null, bool Admin = true);
@@ -105,6 +105,8 @@ public static class NewProject
         if (Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).Any()) throw new ServiceException("The folder is not empty.");
         string name = System.IO.Path.GetFileName(folder.TrimEnd('\\', '/'));
         Directory.CreateDirectory(folder);
+        // the other kinds are made by their own generators, with no Python environment
+        if (JsProjects.IsJs(r.Kind)) return JsProjects.Create(r, folder);
         var notes = new List<string>();
 
         // the environment first: a Django project is then written by that environment's own Django

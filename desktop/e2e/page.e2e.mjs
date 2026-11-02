@@ -2961,6 +2961,37 @@ describe('a notebook on a real Jupyter server: Variables and Debug Cell', { skip
     });
 });
 
+describe('New Project: the other kinds', () => {
+    test('the Python and Other groups; a kind of Other has its own choices and no interpreter', async () => {
+        await page.evaluate(`document.querySelector('#brand .mark').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim() === 'File')`, 5000, 'the main menu');
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim() === 'File').click()`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim().startsWith('New project'))`, 5000, 'the File menu');
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim().startsWith('New project')).click()`);
+        await page.waitFor(`document.querySelector('#np-kinds-other button')`, 10000, 'New Project');
+        assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#np-kinds button')].map((b) => b.textContent)`), ['Pure Python', 'FastAPI', 'Flask', 'Django', 'Jupyter']);
+        assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#np-kinds-other button')].map((b) => b.textContent)`),
+            ['HTML5 Boilerplate', 'Bootstrap', 'Vite', 'React Native', 'Next.js', 'Node.js', 'Express']);
+        const shown = (id) => page.evaluate(`getComputedStyle(document.getElementById('${id}')).display !== 'none'`);
+        const pick = (label) => page.evaluate(`[...document.querySelectorAll('#np-kinds-other button, #np-kinds button')].find((b) => b.textContent === '${label}').click()`);
+        // Vite: its templates, no interpreter, no version
+        await pick('Vite');
+        assert.deepEqual([await shown('np-js'), await shown('np-python-env'), await shown('np-js-template-row'), await shown('np-js-version-row'), await shown('np-js-view-row')], [true, false, true, false, false]);
+        assert.equal(await page.evaluate(`document.getElementById('np-js-template').value`), 'react-ts');
+        // Express: its view engines
+        await pick('Express');
+        assert.deepEqual([await shown('np-js-view-row'), await shown('np-js-template-row')], [true, false]);
+        assert.ok((await page.evaluate(`[...document.getElementById('np-js-view').options].map((o) => o.value).join()`)).startsWith('pug,ejs'));
+        // Node.js: nothing to choose, nothing to install
+        await pick('Node.js');
+        assert.deepEqual([await shown('np-js-install-row'), await shown('np-js-view-row')], [false, false]);
+        // back to a Python kind: the interpreter again
+        await pick('Flask');
+        assert.deepEqual([await shown('np-js'), await shown('np-python-env')], [false, true]);
+        await page.evaluate(`document.getElementById('np-cancel').click()`);
+    });
+});
+
 describe('Settings > Plugins', () => {
     const openPlugins = async () => {
         await page.evaluate(`${$('b-gear')}.click()`);

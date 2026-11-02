@@ -52,3 +52,9 @@ test('Flask, FastAPI, WSL, SSH, coverage and diagrams: their kinds and parts; th
     assert.ok(!remoteKindsLeft({ wsl: false, ssh: false, docker: false }));
     assert.deepEqual(hiddenElements({ wsl: false, ssh: false, docker: false }), ['b-remote']);
 });
+
+test('JavaScript projects brings the seven other kinds of New Project', async () => {
+    const { kindsOff } = await import('../src/plugin-model.js');
+    assert.deepEqual(kindsOff({ javascript: false }), ['html5boilerplate', 'bootstrap', 'vite', 'reactnative', 'nextjs', 'nodejs', 'express']);
+    assert.deepEqual(kindsOff({ javascript: false, django: false }), ['django', 'html5boilerplate', 'bootstrap', 'vite', 'reactnative', 'nextjs', 'nodejs', 'express']);
+});

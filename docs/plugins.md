@@ -11,8 +11,8 @@ Every plugin is on until the person switches it off. The setting keeps only the 
 person's settings), and Settings > Plugins is the only place that writes it. A change takes effect when the window reloads: the page says so and
 offers **Reload PyMagic**. The engine follows the setting as soon as it is saved.
 
-The plugins that exist are listed in [`web/src/plugin-model.js`](../web/src/plugin-model.js): Django, Flask, FastAPI, Jupyter Notebooks, Docker,
-WSL, SSH, Git, JSON Schema, HTTP Client, Database Tools and SQL, Coverage, Diagrams, Profiler, Pull Requests, Deployment, Markdown and Macros.
+The plugins that exist are listed in [`web/src/plugin-model.js`](../web/src/plugin-model.js): Django, Flask, FastAPI, JavaScript projects, Jupyter
+Notebooks, Docker, WSL, SSH, Git, JSON Schema, HTTP Client, Database Tools and SQL, Coverage, Diagrams, Profiler, Pull Requests, Deployment, Markdown and Macros.
 Any of them is a working example.
 
 ## 1. Register the plugin
@@ -29,7 +29,7 @@ Add an entry to `PLUGINS` in `web/src/plugin-model.js`. Settings > Plugins lists
 | `name`, `about` | What Settings > Plugins shows. Say what the person loses when it is off. |
 | `tab` | Optional. The panel tool window it owns: the tab button `t-<tab>` and the panel `<tab>-tab` are hidden while it is off, and its entries leave the tool-window lists of the main menu. |
 | `owns` | Optional. The ids of other elements of `index.html` that are hidden while it is off (toolbar buttons, rail buttons). |
-| `kind` | Optional. The New Project kind it brings (`'django'`, `'jupyter'`, `'flask'`, `'fastapi'`); New Project does not offer it while the plugin is off. |
+| `kind` | Optional. The New Project kind it brings (`'django'`, `'jupyter'`, `'flask'`, `'fastapi'`), or a list of them (JavaScript projects brings seven); New Project does not offer them while the plugin is off. |
 | `requires` | Optional. Another plugin it needs (`prs` needs `git`). It is off whenever that one is, and its row says so. |
 
 The functions beside `PLUGINS` are what everything else uses: `pluginOn(setting, id)`, `pluginsOff(setting)`, `hiddenElements(setting)`,

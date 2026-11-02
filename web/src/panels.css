@@ -480,6 +480,9 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 .np-box input:not([type]), .np-box select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
 .np-box select { max-width: 330px; }
 .np-kinds { display: flex; gap: 6px; flex-wrap: wrap; }
+.np-group { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 12px; margin-top: 2px; }
+.np-group::before, .np-group::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
+.np-next { display: flex; gap: 4px 14px; flex-wrap: wrap; }
 .np-kinds button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .np-check { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 

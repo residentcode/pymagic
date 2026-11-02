@@ -9,7 +9,8 @@ What it does, in short:
 - **Editing**: completion, hover, go to definition, find usages, rename and the other refactorings, inspections with quick fixes (PyCharm's
   Python inspections and PyMagic's own), code vision and inlay hints, formatting (black and ruff style), VS Code's colours for code, a keymap you can change.
 - **Frameworks**: Django (models, URLs, templates, settings, REST framework, New Project through Django's own `startproject`), Flask, FastAPI,
-  Jinja, pytest.
+  Jinja, pytest. New Project also makes the other kinds PyCharm has: HTML5 Boilerplate, Bootstrap, Vite, React Native, Next.js, Node.js and
+  Express, each by its own generator (Node.js needed).
 - **Running**: run configurations, a debugger, tests with coverage, a profiler, a Python console, Jupyter notebooks, a terminal.
 - **Environments**: venv, uv projects (`uv add` / `uv remove`), conda, and interpreters in WSL, Docker and on SSH hosts.
 - **Tools**: Git (commit, log graph, rebase, three-way merge, changelists, shelf, pull requests), a database tool, an HTTP client, deployment
@@ -113,7 +114,7 @@ Visual Studio Code works too: open the folder, and use `dotnet build` and `node`
 
 ## Plugins
 
-The optional parts of PyMagic are built-in plugins, switched on and off in **Settings > Plugins**: Django, Flask, FastAPI, Jupyter Notebooks,
+The optional parts of PyMagic are built-in plugins, switched on and off in **Settings > Plugins**: Django, Flask, FastAPI, JavaScript projects, Jupyter Notebooks,
 Docker, WSL, SSH, Git, JSON Schema, HTTP Client, Database Tools and SQL, Coverage, Diagrams, Profiler, Pull Requests, Deployment, Markdown and
 Macros. How to make one is in [docs/plugins.md](docs/plugins.md).
 
@@ -219,4 +220,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 292 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 293 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

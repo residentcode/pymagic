@@ -1093,11 +1093,20 @@ app.MapPost("/api/newproject", async (HttpRequest req) =>
     var request = new NewProjectRequest(Str("location") ?? "", Str("kind") ?? "python", b?["git"]?.GetValue<bool>() == true, b?["welcome"]?.GetValue<bool>() == true,
         Str("environment") ?? "none", Str("python"), Str("uvPath"), Str("pythonVersion"),
         b?["django"] is JsonObject dj ? new DjangoProjectOptions(dj["templateLanguage"]?.GetValue<string>() ?? "django", dj["templatesFolder"]?.GetValue<string>() ?? "templates",
-            dj["appName"]?.GetValue<string>(), dj["admin"]?.GetValue<bool>() != false) : null);
+            dj["appName"]?.GetValue<string>(), dj["admin"]?.GetValue<bool>() != false) : null,
+        InstallPackages: b?["installPackages"]?.GetValue<bool>() != false,
+        Js: b?["js"] is JsonObject js ? new JsProjectOptions(js["version"]?.GetValue<string>(), js["template"]?.GetValue<string>(), js["typeScript"]?.GetValue<bool>() != false,
+            js["eslint"]?.GetValue<bool>() != false, js["tailwind"]?.GetValue<bool>() != false, js["appRouter"]?.GetValue<bool>() != false, js["srcDir"]?.GetValue<bool>() == true,
+            js["view"]?.GetValue<string>()) : null);
     try { return Results.Json(await Task.Run(() => NewProject.Create(request))); }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.BadRequest(new { error = e.Message }); }
 });
+
+// the versions New Project offers for HTML5 Boilerplate, Bootstrap, Next.js and React Native (the npm registry is asked); none when it cannot be reached
+app.MapGet("/api/newproject/versions", async (string kind) => Results.Json(await Task.Run(() => JsProjects.Versions(kind))));
+// whether Node.js is there, for the other kinds
+app.MapGet("/api/newproject/node", () => { try { var n = Npm.Find(); return Results.Json(new { found = true, node = n.Node }); } catch (ServiceException e) { return Results.Json(new { found = false, error = e.Message }); } });
 
 app.MapPost("/api/venv", async (HttpRequest req) =>
 {
