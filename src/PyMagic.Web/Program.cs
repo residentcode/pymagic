@@ -1199,7 +1199,9 @@ app.MapGet("/api/packages/tree", async (string? name, bool? reverse) =>
 app.MapGet("/api/packages/locks", async () =>
 {
     bool pipTools = interpreters.Current is { } c && (await Task.Run(() => PackageManager.List(c.Python, target: c.Target))).Packages.Any(p => PackageManager.Normalize(p.Name) == "pip-tools");
-    var found = LockFiles.Detect(root, LockFiles.Find, pipTools);
+    // an interpreter of another system syncs with its own modules (python -m uv); whether a lock file is out of date is still told here
+    var found = interpreters.Current is { Target.IsLocal: false } remote ? await Task.Run(() => LockFiles.DetectIn(root, LockFiles.SyncModules(remote.Python, remote.Target)))
+        : LockFiles.Detect(root, LockFiles.Find, pipTools);
     // and whether each still matches what it was made from (uv and poetry are asked, a compiled requirements.txt is compared with its .in)
     return Results.Json(await Task.Run(() => LockFiles.CheckStale(root, found, LockFiles.Find, LockFiles.RunTool)), camelCase);
 });
@@ -1810,6 +1812,23 @@ app.Map("/run", async (HttpContext ctx) =>
                         var checkedSource = PackageSource.Redeem(msg["token"]?.GetValue<string>());
                         if (checkedSource == null || checkedSource.Source != (msg["source"]?.GetValue<string>() ?? "")) { refusal = "that source was not confirmed (or the confirmation is too old): check it again"; break; }
                         pipArgs.AddRange(PipCommands.InstallSource(checkedSource, msg["user"]?.GetValue<bool>() == true, target.IsVenv, PackageSettings.Load(root)));
+                        break;
+                    }
+                    case "lockSync" when !target.Target.IsLocal:
+                    {
+                        // in WSL, over SSH, in a running container: the interpreter's own module, in the project folder as that system sees it
+                        try
+                        {
+                            var remotePlan = LockFiles.MakeRemotePlan(root, msg["file"]?.GetValue<string>() ?? "", target.Target, target.Prefix, target.IsVenv, LockFiles.SyncModules(target.Python, target.Target));
+                            packageOperation = true;
+                            session.Python = target.Python; session.Target = target.Target;
+                            var before = session.ExtraEnvironment;
+                            session.ExtraEnvironment = remotePlan.Env;
+                            try { session.StartModule(root, remotePlan.Module, remotePlan.Args); }
+                            finally { session.ExtraEnvironment = before; }
+                            startedProgram = true;
+                        }
+                        catch (ServiceException e) { refusal = e.Message; }
                         break;
                     }
                     case "lockSync":

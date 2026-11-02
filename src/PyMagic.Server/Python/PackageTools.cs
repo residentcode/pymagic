@@ -526,19 +526,21 @@ public static class LockFiles
 
     /// <param name="which">Finds a program on the PATH (null when it is not there).</param>
     /// <param name="hasPipTools">Whether the selected interpreter has pip-tools installed.</param>
-    public static List<Found> Detect(string root, Func<string, string?> which, bool hasPipTools)
+    /// <param name="inInterpreter">The tools are looked for in an interpreter of another system (<c>python -m uv</c>), not on this computer's PATH.</param>
+    public static List<Found> Detect(string root, Func<string, string?> which, bool hasPipTools, bool inInterpreter = false)
     {
+        string where = inInterpreter ? " in that interpreter" : "";
         var list = new List<Found>();
         bool pyproject = File.Exists(Path.Combine(root, "pyproject.toml"));
         if (File.Exists(Path.Combine(root, "uv.lock")))
         {
             bool ok = which("uv") != null && pyproject;
-            list.Add(new Found("uv.lock", "uv", "uv", ok, "uv sync --frozen", ok ? null : !pyproject ? "there is no pyproject.toml next to it" : "uv is not installed"));
+            list.Add(new Found("uv.lock", "uv", "uv", ok, (inInterpreter ? "python -m " : "") + "uv sync --frozen", ok ? null : !pyproject ? "there is no pyproject.toml next to it" : "uv is not installed" + where));
         }
         if (File.Exists(Path.Combine(root, "poetry.lock")))
         {
             bool ok = which("poetry") != null && pyproject;
-            list.Add(new Found("poetry.lock", "poetry", "poetry", ok, "poetry install --sync --no-interaction", ok ? null : !pyproject ? "there is no pyproject.toml next to it" : "poetry is not installed"));
+            list.Add(new Found("poetry.lock", "poetry", "poetry", ok, (inInterpreter ? "python -m " : "") + "poetry install --sync --no-interaction", ok ? null : !pyproject ? "there is no pyproject.toml next to it" : "poetry is not installed" + where));
         }
         string req = Path.Combine(root, "requirements.txt");
         bool compiled = File.Exists(req) && (File.ReadLines(req).Take(8).Any(l => l.Contains("pip-compile", StringComparison.OrdinalIgnoreCase)) || File.Exists(Path.Combine(root, "requirements.in")));
@@ -763,6 +765,43 @@ public static class LockFiles
             default:
                 throw new ServiceException("that kind of lock file is not supported");
         }
+    }
+
+    /// <summary>A sync in an interpreter of another system: a module of that interpreter run in the project folder as that system sees it.</summary>
+    public sealed record RemotePlan(string Module, IReadOnlyList<string> Args, IReadOnlyDictionary<string, string> Env);
+
+    /// <summary>The modules an interpreter has to sync with: uv and poetry are Python packages too (<c>python -m uv</c>), pip-tools is <c>piptools</c>. Asked without pip.</summary>
+    public static HashSet<string> SyncModules(string python, ExecutionTarget target)
+    {
+        var (code, output, _) = PackageManager.Exec(python, new[] { "-c", "import importlib.util as u; print(' '.join(m for m in ('uv', 'poetry', 'piptools') if u.find_spec(m)))" }, 60000, target);
+        return code == 0 ? output.Split(new[] { ' ', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).ToHashSet() : new HashSet<string>();
+    }
+
+    /// <summary>The lock files as an interpreter of another system can sync them (its own modules; see <see cref="SyncModules"/>).</summary>
+    public static List<Found> DetectIn(string root, IReadOnlySet<string> modules) =>
+        Detect(root, m => modules.Contains(m) ? m : null, modules.Contains("piptools"), inInterpreter: true)
+            .Select(f => f with { Compile = null }).ToList();   // compiling requirements.in is for this computer only
+
+    /// <summary>
+    /// The sync of a lock file in an interpreter of WSL, SSH, a running container or a Compose service run with exec, into that system's
+    /// virtual environment. Not for a Docker image (or a Compose service started anew each time): every run is a new container, and what
+    /// a sync put in it would be gone.
+    /// </summary>
+    public static RemotePlan MakeRemotePlan(string root, string file, ExecutionTarget target, string prefix, bool isVenv, IReadOnlySet<string> modules)
+    {
+        if (target.IsLocal) throw new ServiceException("that interpreter is of this computer");
+        if (target.Kind == "docker" || target is ComposeTarget { Exec: false })
+            throw new ServiceException("every run of this interpreter starts a new container, so what a sync installs would be gone: use a container that is running, or a Compose service with exec");
+        if (!isVenv) throw new ServiceException("select a virtual environment of that system first: a sync removes packages the lock file does not list");
+        var found = DetectIn(root, modules).FirstOrDefault(f => f.File == file) ?? throw new ServiceException("that is not a lock file of this project");
+        if (!found.Available) throw new ServiceException($"{found.Tool} cannot be used: {found.Note}");
+        return found.Kind switch
+        {
+            "uv" => new RemotePlan("uv", new[] { "sync", "--frozen" }, new Dictionary<string, string> { ["UV_PROJECT_ENVIRONMENT"] = prefix }),
+            "poetry" => new RemotePlan("poetry", new[] { "install", "--sync", "--no-interaction" }, new Dictionary<string, string> { ["VIRTUAL_ENV"] = prefix, ["POETRY_VIRTUALENVS_CREATE"] = "false" }),
+            "pip-tools" => new RemotePlan("piptools", new[] { "sync", "requirements.txt" }, new Dictionary<string, string>()),
+            _ => throw new ServiceException("that kind of lock file is not supported"),
+        };
     }
 
     /// <summary>A program on the PATH, with the Windows extensions (null when there is none).</summary>

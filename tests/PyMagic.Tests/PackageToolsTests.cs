@@ -536,6 +536,42 @@ public class PackageToolsTests
         Assert.Throws<ServiceException>(() => LockFiles.CompilePlan(t.Root, "p", true, Which, true, settings));
     }
 
+    [Fact]
+    public void ALockFileIsSyncedInAnotherSystemWithThatInterpretersOwnModules()
+    {
+        using var t = new Temp();
+        File.WriteAllText(Path.Combine(t.Root, "pyproject.toml"), "[project]\nname = \"x\"\n");
+        File.WriteAllText(Path.Combine(t.Root, "uv.lock"), "version = 1\n");
+        File.WriteAllText(Path.Combine(t.Root, "poetry.lock"), "# poetry\n");
+        File.WriteAllText(Path.Combine(t.Root, "requirements.in"), "requests\n");
+        File.WriteAllText(Path.Combine(t.Root, "requirements.txt"), "requests==2.31.0\n");
+        var wsl = new WslTarget("Ubuntu");
+        var modules = new HashSet<string> { "uv", "piptools" };
+
+        var found = LockFiles.DetectIn(t.Root, modules);
+        Assert.Equal("python -m uv sync --frozen", found[0].Command);
+        Assert.True(found[0].Available);
+        Assert.Equal("poetry is not installed in that interpreter", found[1].Note);
+        Assert.True(found[2].Available);
+        A.Null(found[2].Compile);
+
+        var uv = LockFiles.MakeRemotePlan(t.Root, "uv.lock", wsl, "/home/me/venv", isVenv: true, modules);
+        Assert.Equal(("uv", "sync --frozen", "/home/me/venv"), (uv.Module, string.Join(" ", uv.Args), uv.Env["UV_PROJECT_ENVIRONMENT"]));
+        var tools = LockFiles.MakeRemotePlan(t.Root, "requirements.txt", wsl, "/home/me/venv", true, modules);
+        Assert.Equal(("piptools", "sync requirements.txt"), (tools.Module, string.Join(" ", tools.Args)));
+        var poetry = LockFiles.MakeRemotePlan(t.Root, "poetry.lock", wsl, "/v", true, new HashSet<string> { "poetry" });
+        Assert.Equal(("poetry", "/v", "false"), (poetry.Module, poetry.Env["VIRTUAL_ENV"], poetry.Env["POETRY_VIRTUALENVS_CREATE"]));
+
+        // refused: a tool the interpreter lacks, not a virtual environment, a new container each run, this computer
+        Assert.Throws<ServiceException>(() => LockFiles.MakeRemotePlan(t.Root, "poetry.lock", wsl, "/v", true, modules));
+        Assert.Throws<ServiceException>(() => LockFiles.MakeRemotePlan(t.Root, "uv.lock", wsl, "/usr", isVenv: false, modules));
+        string refusal = "";
+        try { LockFiles.MakeRemotePlan(t.Root, "uv.lock", new DockerTarget("python:3.12-slim"), "/v", true, modules); }
+        catch (ServiceException e) { refusal = e.Message; }
+        A.Contains("new container", refusal);
+        Assert.Throws<ServiceException>(() => LockFiles.MakeRemotePlan(t.Root, "uv.lock", ExecutionTarget.Local, "/v", true, modules));
+    }
+
     /// <summary>With uv on this computer: its own check of uv.lock, offline (a project without dependencies, so nothing is fetched).</summary>
     [Fact]
     public void LiveUvTellsWhetherUvLockIsOutOfDate()

@@ -205,4 +205,62 @@ public class RemoteRunTests
         Assert.True(File.Exists(Path.Combine(i.Stdlib!, "os.py")), "os.py is not in " + i.Stdlib);
         Assert.True(i.StdlibModules.Contains("os"));
     });
+
+    /// <summary>
+    /// A lock file synced in a virtual environment of WSL or an SSH host (not a Docker image: each run is a new container). That system has no
+    /// pip-tools or uv here, so stand-ins of the two modules are put in the environment: they write down what they were run with, in the project folder.
+    /// </summary>
+    [Fact]
+    public void ALockFileIsSyncedInTheVirtualEnvironmentOfAnotherSystem()
+    {
+        Each((target, python, name) =>
+        {
+            if (target.Kind == "docker") return;
+            using var h = new Harness(target, python);
+            string venv = "/tmp/pm_sync_" + Guid.NewGuid().ToString("N")[..8];
+            string Run(string program, params string[] args)
+            {
+                var psi = target.Start(program, h.Root, args);
+                psi.RedirectStandardOutput = true; psi.RedirectStandardError = true; psi.UseShellExecute = false; psi.CreateNoWindow = true;
+                using var p = Process.Start(psi)!;
+                string output = p.StandardOutput.ReadToEnd(), error = p.StandardError.ReadToEnd();
+                Assert.True(p.WaitForExit(120000) && p.ExitCode == 0, $"{program} {string.Join(" ", args)}: {error}");
+                return output.Trim();
+            }
+            try
+            {
+                if (target is SshTarget) target.Prepare(h.Root, null, null);
+                Run(python, "-m", "venv", "--without-pip", venv);
+                string vpy = venv + "/bin/python";
+                string purelib = Run(vpy, "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])");
+                const string standIn = "import os, sys\nopen('synced_' + __package__ + '.txt', 'w').write(' '.join(sys.argv[1:]) + '|' + os.environ.get('UV_PROJECT_ENVIRONMENT', '') + '|' + sys.prefix)\n";
+                foreach (var module in new[] { "piptools", "uv" })
+                    Run(vpy, "-c", "import os, sys; d = os.path.join(sys.argv[1], sys.argv[2]); os.makedirs(d, exist_ok=True); open(os.path.join(d, '__init__.py'), 'w').close(); open(os.path.join(d, '__main__.py'), 'w').write(sys.argv[3])", purelib, module, standIn);
+                var modules = LockFiles.SyncModules(vpy, target);
+                Assert.Equal("piptools,uv", string.Join(",", modules.OrderBy(m => m)));
+
+                h.Script("pyproject.toml", "[project]\nname = \"x\"\n");
+                h.Script("uv.lock", "version = 1\n");
+                h.Script("requirements.in", "requests\n");
+                h.Script("requirements.txt", "requests==2.31.0\n");
+                foreach (var (file, module) in new[] { ("requirements.txt", "piptools"), ("uv.lock", "uv") })
+                {
+                    var plan = LockFiles.MakeRemotePlan(h.Root, file, target, venv, isVenv: true, modules);
+                    h.Session.Python = vpy;
+                    h.Session.ExtraEnvironment = plan.Env;
+                    h.Session.StartModule(h.Root, plan.Module, plan.Args);
+                    h.Session.ExtraEnvironment = null;
+                    var exited = h.Next(e => e["type"]?.GetValue<string>() is "exited" or "error");
+                    Assert.True(exited["type"]!.GetValue<string>() == "exited" && exited["code"]!.GetValue<int>() == 0, exited.ToJsonString() + " " + string.Join(" ", h.Seen.Select(s => s.ToJsonString())));
+                    if (target is SshTarget) target.Fetch(target.ToTarget(Path.Combine(h.Root, $"synced_{module}.txt")), Path.Combine(h.Root, $"synced_{module}.txt"));
+                    string seen = File.ReadAllText(Path.Combine(h.Root, $"synced_{module}.txt"));
+                    Assert.Equal(module == "uv" ? $"sync --frozen|{venv}|{venv}" : $"sync requirements.txt||{venv}", seen);
+                }
+            }
+            finally
+            {
+                try { Run(python, "-c", "import shutil, sys; shutil.rmtree(sys.argv[1], ignore_errors=True)", venv); } catch (AssertionException) { }
+            }
+        });
+    }
 }
