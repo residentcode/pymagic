@@ -121,6 +121,19 @@ public sealed class InterpreterManager
 
     /// <summary>Creates <c>.venv</c> (or the given name) in the project with the given interpreter and returns its python.</summary>
     /// <exception cref="ServiceException">The folder exists already or the interpreter could not create it.</exception>
+    /// <summary>`conda create -p` an environment in the project (Python of the version given, from the installation's channels; this downloads).</summary>
+    public string CreateCondaEnv(string conda, string? pythonVersion, string name = ".conda")
+    {
+        if (name.Contains('/') || name.Contains('\\') || name.Contains("..")) throw new ServiceException("the name must be a single folder name");
+        string dir = Path.Combine(_root, name);
+        if (Directory.Exists(dir)) throw new ServiceException($"'{name}' already exists in the project");
+        var (code, _, error) = Conda.Run(conda, Conda.CreateArgs(dir, pythonVersion), 15 * 60000);
+        if (code != 0) throw new ServiceException("conda create failed: " + (error.Trim().Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.Length > 0) ?? "exit code " + code));
+        string exe = OperatingSystem.IsWindows() ? Path.Combine(dir, "python.exe") : Path.Combine(dir, "bin", "python");
+        if (!File.Exists(exe)) throw new ServiceException("the environment was created but has no interpreter");
+        return exe;
+    }
+
     public string CreateVenv(string basePython, string name = ".venv", bool withPip = true, string? uv = null)
     {
         if (name.Contains('/') || name.Contains('\\') || name.Contains("..")) throw new ServiceException("the name must be a single folder name");

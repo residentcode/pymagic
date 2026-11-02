@@ -19,7 +19,7 @@ public sealed record DjangoProject(bool Found, string? Manage, string? SettingsM
 {
     static readonly HashSet<string> Skipped = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".git", ".hg", ".svn", ".venv", "venv", "env", "node_modules", "__pycache__", ".tox", ".idea", ".pymagic", "site-packages", "build", "dist", "static", "staticfiles", "media",
+        ".git", ".hg", ".svn", ".venv", "venv", ".conda", "env", "node_modules", "__pycache__", ".tox", ".idea", ".pymagic", "site-packages", "build", "dist", "static", "staticfiles", "media",
     };
 
     static readonly Regex Settings = new(@"DJANGO_SETTINGS_MODULE['""]\s*,\s*['""](?<m>[\w.]+)['""]", RegexOptions.Compiled);

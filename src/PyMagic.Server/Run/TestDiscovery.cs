@@ -14,7 +14,7 @@ public static class TestDiscovery
 {
     static readonly HashSet<string> SkippedDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".git", "__pycache__", "node_modules", ".venv", "venv", "env", ".tox", ".mypy_cache", "bin", "obj", "site-packages", "dist", "build",
+        ".git", "__pycache__", "node_modules", ".venv", "venv", ".conda", "env", ".tox", ".mypy_cache", "bin", "obj", "site-packages", "dist", "build",
     };
 
     public static bool IsTestFile(string fileName)

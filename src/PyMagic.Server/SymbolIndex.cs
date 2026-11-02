@@ -130,7 +130,7 @@ public sealed class SymbolIndex : IDisposable
 
     static readonly HashSet<string> Ignored = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".git", ".hg", ".svn", ".venv", "venv", "node_modules", "__pycache__", ".pymagic", ".idea", ".tox", ".mypy_cache", ".pytest_cache",
+        ".git", ".hg", ".svn", ".venv", "venv", ".conda", "node_modules", "__pycache__", ".pymagic", ".idea", ".tox", ".mypy_cache", ".pytest_cache",
     };
 
     void Watch(string root)

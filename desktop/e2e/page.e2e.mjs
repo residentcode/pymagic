@@ -1443,6 +1443,37 @@ describe('packages: index settings, versions, installing from a path, the depend
             rmSync(join(projectRoot, 'Pipfile.lock'), { force: true });
         }
     });
+
+    // PYMAGIC_TEST_CONDA names conda.exe (conda downloads Python from its channels the first time)
+    test('conda: a .conda made at the new-environment button, and a package installed into it with conda', { skip: (!process.env.PYMAGIC_TEST_CONDA && 'PYMAGIC_TEST_CONDA is not set') || (existsSync(join(projectRoot, '.conda')) && 'the project has a .conda already') }, async () => {
+        const env = join(projectRoot, '.conda');
+        try {
+            await page.evaluate(`${$('b-venv')}.click()`);
+            await page.waitFor(`document.querySelector('#venv-ask button[data-tool="conda"]')`, 10000, 'the conda choice');
+            await page.evaluate(`document.querySelector('#venv-ask button[data-tool="conda"]').click()`);
+            // the environment made and selected, or the reason it was not (the note beside the interpreter)
+            const outcome = await page.waitFor(`(async () => (await (await fetch('/api/packages')).json()).manager === 'conda' ? 'conda' : document.getElementById('interp-note').className === 'bad' && document.getElementById('interp-note').textContent)()`, 600000, 'the conda environment selected');
+            assert.equal(outcome, 'conda');
+            assert.ok(existsSync(join(env, 'conda-meta')) && existsSync(join(env, 'python.exe')));
+            await page.evaluate(`${$('pk-refresh')}.click()`);
+            await page.waitFor(`${$('pk-banner')}.className === 'info' && ${$('pk-banner')}.textContent.includes('conda environment')`, 30000, 'the conda note');
+            // the list is conda's: python is in it, with the version conda gave
+            await page.waitFor(`[...document.querySelectorAll('#pk-table .pkrow')].some((r) => r.children[0].textContent === 'python')`, 60000, 'python in the list');
+            await setValue('pk-install', 'six');
+            await page.evaluate(`${$('pk-go')}.click()`);
+            await logDone('conda install six');
+            await page.evaluate(`${$('pk-refresh')}.click()`);
+            await page.waitFor(`[...document.querySelectorAll('#pk-table .pkrow')].some((r) => r.children[0].textContent === 'six')`, 60000, 'six installed by conda');
+            const listed = JSON.parse(spawnSync(process.env.PYMAGIC_TEST_CONDA, ['list', '-p', env, 'six', '--json'], { encoding: 'utf8' }).stdout);
+            assert.equal(listed[0]?.channel, 'conda-forge', JSON.stringify(listed));
+        }
+        finally {
+            await page.evaluate(`fetch('/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: ${JSON.stringify(envPython)} }) })`);
+            await sleep(500);
+            if (existsSync(env)) spawnSync(process.env.PYMAGIC_TEST_CONDA, ['env', 'remove', '-p', env, '-y', '--quiet'], { encoding: 'utf8' });
+            removeTree(env);
+        }
+    });
 });
 
 // last: the notebook edits cells of the file and leaves it changed

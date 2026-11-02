@@ -23,7 +23,7 @@ public static class Databases
     static readonly string[] Extensions = { ".sqlite", ".sqlite3", ".db", ".db3" };
     static readonly HashSet<string> Skipped = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".git", "__pycache__", "node_modules", ".venv", "venv", "env", ".tox", ".mypy_cache", "site-packages", "dist", "build", ".pymagic",
+        ".git", "__pycache__", "node_modules", ".venv", "venv", ".conda", "env", ".tox", ".mypy_cache", "site-packages", "dist", "build", ".pymagic",
     };
 
     static string AddedFile(string root) => System.IO.Path.Combine(root, ".pymagic", "datasources.json");

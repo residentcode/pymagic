@@ -253,7 +253,7 @@ public sealed class SshTarget : ExecutionTarget
 
     static readonly HashSet<string> SkippedFolders = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".git", ".hg", ".svn", ".venv", "venv", "env", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".idea", ".vscode", ".pymagic", "site-packages",
+        ".git", ".hg", ".svn", ".venv", "venv", ".conda", "env", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".idea", ".vscode", ".pymagic", "site-packages",
     };
 
     const int MaxFiles = 20_000;

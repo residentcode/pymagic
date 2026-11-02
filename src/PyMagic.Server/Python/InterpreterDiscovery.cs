@@ -73,6 +73,16 @@ public static class InterpreterDiscovery
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
 
+        // conda environments in the project (conda create -p .conda): python.exe at the top on Windows
+        try
+        {
+            foreach (var sub in Directory.EnumerateDirectories(env.Root).OrderBy(s => s, StringComparer.OrdinalIgnoreCase))
+                if (Directory.Exists(Path.Combine(sub, "conda-meta")))
+                    Add(env.IsWindows ? Path.Combine(sub, "python.exe") : Path.Combine(sub, "bin", "python"), "conda", Path.GetFileName(sub));
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+
         // pipenv keeps a project's environment under ~/.virtualenvs (or WORKON_HOME), named after the project folder and a hash of its path
         string workon = Environment.GetEnvironmentVariable("WORKON_HOME") is { Length: > 0 } w ? w : Path.Combine(env.Home, ".virtualenvs");
         if (File.Exists(Path.Combine(env.Root, "Pipfile")))
@@ -94,8 +104,16 @@ public static class InterpreterDiscovery
             foreach (var path in LauncherList())
                 Add(path, Classify(path, env), "py launcher");
 
-        // 5. well-known install locations
+        // 5. well-known install locations, and the environments conda keeps a list of
         foreach (var (path, kind) in KnownLocations(env)) Add(path, kind, "installed");
+        foreach (var prefix in Conda.Registered(env.Home)) Add(env.IsWindows ? Path.Combine(prefix, "python.exe") : Path.Combine(prefix, "bin", "python"), "conda", "conda");
+        if (env.IsWindows && env.UsePyLauncher && Environment.GetEnvironmentVariable("ProgramData") is { Length: > 0 } programData)
+            foreach (var root in Conda.RootNames.Select(n => Path.Combine(programData, n)))
+            {
+                Add(Path.Combine(root, "python.exe"), "conda", "installed");
+                try { if (Directory.Exists(Path.Combine(root, "envs"))) foreach (var d in Directory.EnumerateDirectories(Path.Combine(root, "envs"))) Add(Path.Combine(d, "python.exe"), "conda", "installed"); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
 
         return result;
     }

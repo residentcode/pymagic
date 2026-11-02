@@ -255,7 +255,7 @@ public sealed partial class LanguageService
 
     static readonly HashSet<string> SkippedDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".git", "__pycache__", "node_modules", ".venv", "venv", "env", ".tox", ".mypy_cache", "bin", "obj", "site-packages",
+        ".git", "__pycache__", "node_modules", ".venv", "venv", ".conda", "env", ".tox", ".mypy_cache", "bin", "obj", "site-packages",
     };
 
     List<string>? _projectFilesOverride;

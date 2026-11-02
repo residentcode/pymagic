@@ -407,7 +407,7 @@ app.MapPut("/api/settings", async (HttpRequest req) =>
 
 app.MapGet("/api/files", () =>
 {
-    var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", "node_modules", ".venv", "venv", "bin", "obj" };
+    var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", "node_modules", ".venv", "venv", ".conda", "bin", "obj" };
     var list = new List<string>();
     void Walk(string dir)
     {
@@ -423,7 +423,7 @@ app.MapGet("/api/files", () =>
 // everything the explorer shows: folders and files (what the language server needs is /api/files)
 app.MapGet("/api/tree", () =>
 {
-    var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", "node_modules", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".pymagic", ".idea", ".vs", ".tox", ".eggs" };
+    var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", "node_modules", ".venv", "venv", ".conda", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".pymagic", ".idea", ".vs", ".tox", ".eggs" };
     var dirs = new List<string>();
     var files = new List<(string Path, long Size)>();
     int budget = 20000;
@@ -520,7 +520,7 @@ app.MapGet("/api/history/text", (string path, string id) =>
 // labels of the whole project (by hand, or put by PyMagic before a refactoring, a test run, a Git update) and what they allow
 IEnumerable<(string Rel, string Text)> TrackedFiles()
 {
-    var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", "node_modules", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".pymagic", ".idea", ".vs", ".tox", ".eggs", "bin", "obj", "dist", "build" };
+    var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", "node_modules", ".venv", "venv", ".conda", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".pymagic", ".idea", ".vs", ".tox", ".eggs", "bin", "obj", "dist", "build" };
     var binary = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp", ".zip", ".gz", ".tar", ".whl", ".pdf", ".dll", ".exe", ".pyc", ".pyd", ".so", ".sqlite3", ".sqlite", ".db", ".woff", ".woff2", ".ttf", ".mp3", ".mp4", ".pstats" };
     int count = 0;
     var stack = new Stack<string>();
@@ -1063,6 +1063,13 @@ app.MapPost("/api/venv", async (HttpRequest req) =>
     if (basePython == null) return Results.BadRequest(new { error = "no interpreter to create the environment with" });
     try
     {
+        if (body?["tool"]?.GetValue<string>() == "conda")
+        {
+            // a conda environment in the project, with the selected interpreter's version of Python (conda downloads it)
+            if (Conda.FindTool() is not { } conda) return Results.BadRequest(new { error = "conda is not installed" });
+            string? version = interpreters.Current is { } cur ? $"{cur.Major}.{cur.Minor}" : null;
+            return Results.Json(new { path = await Task.Run(() => interpreters.CreateCondaEnv(conda, version)) });
+        }
         string? uv = null;
         if (body?["tool"]?.GetValue<string>() == "uv" && (uv = LockFiles.Find("uv")) == null) return Results.BadRequest(new { error = "uv is not installed" });
         string exe = await Task.Run(() => interpreters.CreateVenv(basePython, body?["name"]?.GetValue<string>() ?? ".venv", uv: uv));
@@ -1071,7 +1078,7 @@ app.MapPost("/api/venv", async (HttpRequest req) =>
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
 });
 // what can make an environment: venv always, uv when it is installed
-app.MapGet("/api/venv", () => Results.Json(new { uv = LockFiles.Find("uv") != null }));
+app.MapGet("/api/venv", () => Results.Json(new { uv = LockFiles.Find("uv") != null, conda = Conda.FindTool() != null }));
 
 
 // ---- packages ----------------------------------------------------------------------------------------------------
@@ -1085,7 +1092,7 @@ app.MapGet("/api/packages", async () =>
     {
         interpreter = Describe(current), hasPip = list.HasPip, error = list.Error, packages = list.Packages,
         isVenv = current.IsVenv, canInstall = PackageManager.CanInstallGlobally(current),
-        manager = current.Target.IsLocal && UvPip.For(current.Python) != null ? "uv" : "pip",
+        manager = !current.Target.IsLocal ? "pip" : Conda.For(current.Python) != null ? "conda" : UvPip.For(current.Python) != null ? "uv" : "pip",
     });
 });
 
@@ -1156,6 +1163,13 @@ app.MapGet("/api/packages/versions", async (string name) =>
     var settings = PackageSettings.Load(root);
     try
     {
+        // a conda environment: the versions in conda's channels, which is where it installs from
+        if (interpreters.Current is { Target.IsLocal: true } ce && Conda.For(ce.Python) is { } conda)
+        {
+            var (searched, found, _) = await Task.Run(() => Conda.Run(conda.Tool, new[] { "search", name, "--json" }, 60000));
+            if (searched != 0) return Results.Json(new { error = "conda has no package " + name }, statusCode: 404);
+            return Results.Json(new { name, source = "conda", versions = Conda.ParseSearch(found, name) });
+        }
         if (settings.IndexUrl.Length == 0 && settings.ExtraIndexUrls.Count == 0)
         {
             using var res = await pypi.GetAsync($"https://pypi.org/pypi/{Uri.EscapeDataString(name)}/json");
@@ -1890,6 +1904,24 @@ app.Map("/run", async (HttpContext ctx) =>
                 }
                 if (refusal != null) { outbox.Add(new JsonObject { ["type"] = "error", ["message"] = refusal }.ToJsonString()); continue; }
                 if (startedProgram) continue;
+                // a conda environment: names and simple requirements through conda, from its channels (what pip installed is removed by pip)
+                if (module == "pip" && target.Target.IsLocal && op is "install" or "uninstall" && Conda.For(target.Python) is { } conda)
+                {
+                    List<string>? condaArgs = null;
+                    if (op == "install") condaArgs = Conda.InstallArgs(conda.Prefix, names, msg["upgrade"]?.GetValue<bool>() == true);
+                    else
+                    {
+                        var have = Conda.List(conda.Tool, conda.Prefix) ?? new List<Conda.Package>();
+                        if (Conda.MixesPip(names, have)) { outbox.Add(new JsonObject { ["type"] = "error", ["message"] = "some of these were installed by pip and some by conda: remove them separately" }.ToJsonString()); continue; }
+                        condaArgs = Conda.RemoveArgs(conda.Prefix, names, have);
+                    }
+                    if (condaArgs != null)
+                    {
+                        packageOperation = true;
+                        session.StartProgram(root, conda.Tool, condaArgs, new Dictionary<string, string> { ["NO_COLOR"] = "1", ["CONDA_QUIET"] = "1" });
+                        continue;
+                    }
+                }
                 // an environment uv made has no pip: the same command through uv pip
                 if (module == "pip" && target.Target.IsLocal && UvPip.For(target.Python) is { } uvExe && UvPip.Translate(uvExe, target.Python, pipArgs) is { } uvCommand)
                 {

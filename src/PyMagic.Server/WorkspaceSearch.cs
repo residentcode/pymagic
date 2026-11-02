@@ -27,7 +27,7 @@ public sealed record SearchResult(List<SearchFile> Files, int Total, bool Trunca
 public static class WorkspaceSearch
 {
     static readonly HashSet<string> SkipDirectories = new(StringComparer.OrdinalIgnoreCase)
-        { ".git", ".hg", ".svn", "__pycache__", "node_modules", ".venv", "venv", "env", ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", "bin", "obj", "dist", "build", ".idea", ".vs", ".pymagic" };
+        { ".git", ".hg", ".svn", "__pycache__", "node_modules", ".venv", "venv", ".conda", "env", ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", "bin", "obj", "dist", "build", ".idea", ".vs", ".pymagic" };
 
     static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
         { ".py", ".pyi", ".pyw", ".txt", ".md", ".rst", ".toml", ".cfg", ".ini", ".json", ".yaml", ".yml", ".csv", ".html", ".css", ".js", ".ts", ".sh", ".bat", ".ps1", ".sql", ".xml", ".lock", ".in" };

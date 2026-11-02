@@ -28,6 +28,9 @@ public static class PackageManager
 
     public static PackageList List(string python, int timeoutMs = 60000, ExecutionTarget? target = null)
     {
+        // a conda environment: conda's own list, which has what pip installed too (channel "pypi")
+        if ((target ?? ExecutionTarget.Local).IsLocal && Conda.For(python) is { } conda && Conda.List(conda.Tool, conda.Prefix) is { } condaList)
+            return new PackageList(true, null, condaList.Select(p => new InstalledPackage(p.Name, p.Version, false, null)).ToList());
         var (code, output, error) = Exec(python, new[] { "-m", "pip", "list", "--format=json", "--disable-pip-version-check" }, timeoutMs, target);
         if (code != 0)
         {
@@ -51,6 +54,14 @@ public static class PackageManager
     /// <summary>Packages with a newer release (asks the package index, so it needs the network and can take a while).</summary>
     public static IReadOnlyList<OutdatedPackage> Outdated(string python, int timeoutMs = 120000, ExecutionTarget? target = null, PackageSettings? settings = null)
     {
+        // a conda environment: what `conda update --all` would bring in (asked as a dry run, nothing is changed)
+        if ((target ?? ExecutionTarget.Local).IsLocal && Conda.For(python) is { } conda)
+        {
+            var installed = Conda.List(conda.Tool, conda.Prefix) ?? new List<Conda.Package>();
+            var (c, o, _) = Conda.Run(conda.Tool, new[] { "update", "--all", "-p", conda.Prefix, "--dry-run", "--json" }, timeoutMs);
+            try { return c == 0 ? Conda.ParseUpdates(o, installed) : Array.Empty<OutdatedPackage>(); }
+            catch (System.Text.Json.JsonException) { return Array.Empty<OutdatedPackage>(); }
+        }
         var (code, output, _) = Exec(python, PipCommands.WithIndex(new[] { "-m", "pip", "list", "--outdated", "--format=json", "--disable-pip-version-check" }, settings), timeoutMs, target);
         if (code != 0) return Array.Empty<OutdatedPackage>();
         try

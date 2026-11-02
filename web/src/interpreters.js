@@ -74,17 +74,18 @@ export function setupInterpreters() {
         // with uv installed, the environment can be made by uv too (its packages then go through uv pip)
         let tool = 'venv';
         try {
-            if ((await (await fetch('/api/venv')).json()).uv) {
-                tool = await askVenvTool();
+            const tools = await (await fetch('/api/venv')).json();
+            if (tools.uv || tools.conda) {
+                tool = await askVenvTool(tools);
                 if (!tool)
                     return;
             }
         }
         catch { /* the host is not reachable: venv is tried */ }
         venvButton.disabled = true;
-        say(tool === 'uv' ? 'Creating .venv with uv…' : 'Creating .venv…');
+        say(tool === 'conda' ? 'Creating .conda with conda (it downloads Python, which can take a few minutes)…' : tool === 'uv' ? 'Creating .venv with uv…' : 'Creating .venv…');
         try {
-            const res = await fetch('/api/venv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tool === 'uv' ? { tool } : {}) });
+            const res = await fetch('/api/venv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tool === 'venv' ? {} : { tool }) });
             const body = await res.json();
             if (!res.ok) {
                 say(body.error ?? 'Could not create the environment', true);
@@ -96,8 +97,8 @@ export function setupInterpreters() {
             venvButton.disabled = false;
         }
     };
-    /** Asks which tool makes the .venv: 'venv', 'uv', or null when the person cancels. */
-    function askVenvTool() {
+    /** Asks which tool makes the environment: 'venv', 'uv', 'conda' (those that are installed), or null when the person cancels. */
+    function askVenvTool(tools) {
         return new Promise((resolve) => {
             const shade = document.createElement('div');
             shade.className = 'ask-shade';
@@ -106,14 +107,15 @@ export function setupInterpreters() {
             box.className = 'ask-box';
             const title = document.createElement('div');
             title.className = 'ask-title';
-            title.textContent = 'Create .venv in the project';
+            title.textContent = 'Create an environment in the project';
             const hint = document.createElement('div');
             hint.className = 'ask-hint';
-            hint.textContent = 'With the selected interpreter. uv makes it faster, without pip: its packages are then handled with uv pip.';
+            hint.textContent = 'venv and uv make .venv with the selected interpreter (uv without pip: its packages are then handled with uv pip). conda makes .conda with the same version of Python, downloaded from its channels.';
             const row = document.createElement('div');
             row.className = 'ask-buttons';
             const finish = (value) => { shade.remove(); resolve(value); };
-            for (const [value, label] of [['venv', 'venv (with pip)'], ['uv', 'uv venv'], [null, 'Cancel']]) {
+            const choices = [['venv', 'venv (with pip)'], tools.uv && ['uv', 'uv venv'], tools.conda && ['conda', 'conda (.conda)'], [null, 'Cancel']].filter(Boolean);
+            for (const [value, label] of choices) {
                 const b = document.createElement('button');
                 b.textContent = label;
                 if (value)

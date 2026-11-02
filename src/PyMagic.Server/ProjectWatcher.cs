@@ -19,7 +19,7 @@ public sealed class ProjectWatcher : IDisposable
 
     static readonly HashSet<string> SkippedFolders = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".git", ".pymagic", "__pycache__", "node_modules", ".venv", "venv", "env", ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vs", "site-packages",
+        ".git", ".pymagic", "__pycache__", "node_modules", ".venv", "venv", ".conda", "env", ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vs", "site-packages",
     };
 
     /// <summary>True for a path (relative, with / or \) the page has no use for: inside one of the skipped folders, or an editor's temporary file.</summary>

@@ -302,7 +302,7 @@ public static class Deployment
 {
     public const long MaxFile = 50L * 1024 * 1024;
 
-    static readonly string[] AlwaysExcluded = { ".git", ".pymagic", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vs" };
+    static readonly string[] AlwaysExcluded = { ".git", ".pymagic", "__pycache__", ".venv", "venv", ".conda", "node_modules", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vs" };
 
     public static IRemote Open(string root, DeployServer server)
     {

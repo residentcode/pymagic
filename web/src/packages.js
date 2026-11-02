@@ -69,6 +69,10 @@ export function setupPackages() {
             add(data.error);
         else if (!isVenv && !data.canInstall)
             add('This is a system interpreter and its folders are read-only: installing may fail. Use a virtual environment.', ['Create .venv', () => $('b-venv').click()]);
+        else if (data.manager === 'conda') {
+            banner.className = 'info';
+            banner.textContent = 'A conda environment: packages are listed, installed and removed with conda, from its channels. Paths, git addresses, requirement files and what pip installed go through pip.';
+        }
         else if (data.manager === 'uv') {
             banner.className = 'info';
             banner.textContent = 'This environment was made by uv: its packages are listed, installed and removed with uv pip.';
