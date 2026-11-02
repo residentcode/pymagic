@@ -77,7 +77,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 **Git, packages and interpreters**
 - Git: ~~pushing tags (and deleting one on the remote); rebasing onto another branch with or without `--rebase-merges`; interactive rebase's *edit*; comparing two branches; binary-file conflicts (take a side)~~ (done, item 252). Still open: choosing lines from the editor's gutter and moving single lines between changelists (73); a merge result built from three editors and picking lines inside one side (116); reordering a rebase by dragging (117); a button that amends and continues when a rebase stops at *edit*.
-- Packages: ~~extra index URLs, trusted hosts and a proxy; installing from a path or a git URL after a confirmation; a version picker; dependency trees; lock files (uv, poetry, pip-tools) with a sync~~ (done, item 253). ~~Compiling `requirements.in`, showing that a lock file is out of date, masking credentials in index URLs~~ (done, item 270). Still open: conda environments and uv-managed ones (creating a uv venv, `uv pip`), pipenv, the version picker and sync for WSL, Docker and SSH interpreters.
+- Packages: ~~extra index URLs, trusted hosts and a proxy; installing from a path or a git URL after a confirmation; a version picker; dependency trees; lock files (uv, poetry, pip-tools) with a sync~~ (done, item 253). ~~Compiling `requirements.in`, showing that a lock file is out of date, masking credentials in index URLs~~ (done, item 270). ~~uv-managed environments (creating a uv venv, `uv pip`)~~ (done, item 271). Still open: conda environments, pipenv, the version picker and sync for WSL, Docker and SSH interpreters.
 - Remote interpreters: ~~a terminal inside the interpreter's target, Linux paths in tracebacks, a Docker container that is already running~~ (done, item 254; the WSL and SSH terminals only checked as command lines). Still open: the container's mount point found from `docker inspect`, and the debugger, test runner and notebooks in the exec forms (a container, a Compose `exec`).
 
 **Installer**
@@ -173,4 +173,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 270 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 271 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { launch, project, sleep } from './app.mjs';
+import { launch, project, removeTree, sleep } from './app.mjs';
 
 const FILES = {
     'calc.py': 'import json\n\n\ndef total(prices):\n    """The sum of the prices."""\n    return sum(prices)\n\n\nprint(json.dumps({"total": total([1, 2, 3])}))\nprint(undefined_name)\n',
@@ -1381,6 +1381,33 @@ describe('packages: index settings, versions, installing from a path, the depend
             await setValue('pk-index-url', indexUrl);
             await page.evaluate(`${$('pk-config-save')}.click()`);
             await page.evaluate(`${$('pk-config-close')}.click()`);
+        }
+    });
+
+    test('a .venv made by uv: chosen at the new-environment button, and its packages installed and listed through uv pip', { skip: (!spawnSync('uv', ['--version']).stdout?.length && 'uv is not installed') || (existsSync(join(projectRoot, '.venv')) && 'the project has a .venv already') }, async () => {
+        const venv = join(projectRoot, '.venv');
+        try {
+            await page.evaluate(`${$('b-venv')}.click()`);
+            await page.waitFor(`document.querySelector('#venv-ask button[data-tool="uv"]')`, 10000, 'the choice of tool');
+            await page.evaluate(`document.querySelector('#venv-ask button[data-tool="uv"]').click()`);
+            // made by uv, and selected
+            await page.waitFor(`(async () => (await (await fetch('/api/packages')).json()).manager === 'uv')()`, 90000, 'the uv environment selected');
+            assert.match(readFileSync(join(venv, 'pyvenv.cfg'), 'utf8'), /^uv = /m);
+            await page.evaluate(`${$('pk-refresh')}.click()`);
+            await page.waitFor(`${$('pk-banner')}.className === 'info' && ${$('pk-banner')}.textContent.includes('uv pip')`, 30000, 'the uv note');
+            // no "pip is not installed" for it, and an install goes through uv pip (from the test's index)
+            await setValue('pk-install', 'e2elib==1.0');
+            await page.evaluate(`${$('pk-go')}.click()`);
+            await logDone('the install through uv pip');
+            assert.match(await page.evaluate(`${$('pk-log')}.textContent`), /uv|Installed|e2elib/i);
+            await page.evaluate(`${$('pk-refresh')}.click()`);
+            await page.waitFor(`[...document.querySelectorAll('#pk-table .pkrow')].some((r) => r.children[0].textContent === 'e2elib' && r.children[1].textContent === '1.0')`, 30000, 'e2elib in the uv environment');
+            assert.ok(!existsSync(join(venv, 'Scripts', 'pip.exe')), 'uv made it without pip');
+        }
+        finally {
+            await page.evaluate(`fetch('/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: ${JSON.stringify(envPython)} }) })`);
+            await sleep(500);
+            removeTree(venv);
         }
     });
 });

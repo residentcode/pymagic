@@ -580,6 +580,71 @@ public class PackageToolsTests
         Assert.Equal("requirements.in asks for pmtiny>=2, requirements.txt has 1.2.0", LockFiles.CompiledDifference("pmtiny>=2\n", txt));
     }
 
+    // ------------------------------------------------------------ environments made by uv
+
+    [Fact]
+    public void PipCommandsBecomeUvPipCommands()
+    {
+        var settings = new PackageSettings { IndexUrl = "https://idx.example.org/simple", TrustedHosts = { "idx.example.org" }, Proxy = "http://proxy.example.org:3128" };
+        var install = UvPip.Translate("/bin/uv", "/p/.venv/Scripts/python.exe", PipCommands.Install(new[] { "requests>=2" }, upgrade: true, user: false, isVenv: true, settings))!;
+        Assert.Equal("/bin/uv", install.Program);
+        Assert.Equal("pip install --python /p/.venv/Scripts/python.exe --no-progress --upgrade --index-url https://idx.example.org/simple --allow-insecure-host idx.example.org requests>=2", string.Join(" ", install.Args));
+        Assert.Equal("http://proxy.example.org:3128", install.Env["HTTPS_PROXY"]);
+        Assert.Equal("pip uninstall --python py --no-progress six", string.Join(" ", UvPip.Translate("uv", "py", new[] { "uninstall", "-y", "--disable-pip-version-check", "six" })!.Args));
+        Assert.Equal("pip list --python py --no-progress --format=json --outdated", string.Join(" ", UvPip.Translate("uv", "py", new[] { "list", "--format=json", "--outdated" })!.Args));
+        Assert.Equal("pip install --python py --no-progress --prerelease allow x", string.Join(" ", UvPip.Translate("uv", "py", new[] { "install", "--pre", "x" })!.Args));
+        // what uv has no counterpart for stays pip's
+        A.Null(UvPip.Translate("uv", "py", new[] { "index", "versions", "x" }));
+        A.Null(UvPip.Translate("uv", "py", new[] { "install", "--user", "x" }));
+        A.Null(UvPip.Translate("uv", "py", Array.Empty<string>()));
+    }
+
+    [Fact]
+    public void AnEnvironmentMadeByUvIsToldByItsPyvenvCfg()
+    {
+        using var t = new Temp();
+        string env = Path.Combine(t.Root, ".venv"), scripts = Path.Combine(env, "Scripts");
+        Directory.CreateDirectory(scripts);
+        string python = Path.Combine(scripts, "python.exe");
+        File.WriteAllText(python, "");
+        File.WriteAllText(Path.Combine(env, "pyvenv.cfg"), "home = C:\\Python313\ninclude-system-site-packages = false\nversion = 3.13.1\n");
+        Assert.Equal(env, UvPip.PrefixOf(python));
+        A.False(UvPip.IsUvVenv(env));
+        A.Null(UvPip.For(python, _ => "/bin/uv"));
+        File.AppendAllText(Path.Combine(env, "pyvenv.cfg"), "uv = 0.12.3\n");
+        Assert.True(UvPip.IsUvVenv(env));
+        Assert.Equal("/bin/uv", UvPip.For(python, _ => "/bin/uv"));
+        A.Null(UvPip.For(python, _ => null));                    // uv is not installed: pip is tried
+        A.Null(UvPip.PrefixOf(Path.Combine(t.Root, "python.exe")));
+    }
+
+    /// <summary>With uv on this computer: a .venv made by uv, and its packages listed, installed, shown and removed through uv pip (from a wheel file, nothing is fetched).</summary>
+    [Fact]
+    public void LiveAnEnvironmentMadeByUvIsManagedWithUvPip()
+    {
+        if (LockFiles.Find("uv") is not { } uv || RealPython == null) return;
+        using var t = new Temp();
+        string python = new InterpreterManager(t.Root).CreateVenv(RealPython, ".venv", uv: uv);
+        Assert.True(UvPip.IsUvVenv(Path.Combine(t.Root, ".venv")));
+        Assert.Equal(uv, UvPip.For(python));
+        var empty = PackageManager.List(python);
+        Assert.True(empty.HasPip && empty.Error == null, empty.Error ?? "no pip");
+        A.Empty(empty.Packages.Select(p => p.Name));
+
+        string wheel = t.Wheel("pmuvlib", "3.1.0");
+        var installed = PackageManager.Exec(python, new[] { "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--progress-bar", "off", "--offline", wheel }, 120000);
+        Assert.True(installed.Code == 0, installed.Error);
+        Assert.Equal("pmuvlib 3.1.0", string.Join(",", PackageManager.List(python).Packages.Select(p => p.Name + " " + p.Version)));
+        var info = PackageManager.Show(python, "pmuvlib");
+        Assert.Equal(("pmuvlib", "3.1.0"), (info!.Name, info.Version));
+        var removed = PackageManager.Exec(python, new[] { "-m", "pip", "uninstall", "-y", "--disable-pip-version-check", "pmuvlib" }, 60000);
+        Assert.True(removed.Code == 0, removed.Error);
+        A.Empty(PackageManager.List(python).Packages.Select(p => p.Name));
+        // the environment really has no pip: the same list through its own python fails
+        var own = PackageManager.Exec(python, new[] { "-c", "import pip" }, 30000);
+        A.NotEqual(0, own.Code);
+    }
+
     [Fact]
     public void AProgramRunsInTheProjectAndItsOutputStreams()
     {

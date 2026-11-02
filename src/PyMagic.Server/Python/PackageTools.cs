@@ -784,3 +784,64 @@ public static class LockFiles
         return null;
     }
 }
+
+/// <summary>
+/// A virtual environment made by uv (its pyvenv.cfg has a <c>uv = </c> line) has no pip of its own: its packages are listed, installed and
+/// removed with <c>uv pip ... --python</c> that environment's interpreter, the way uv's own commands do. The pip commands PyMagic builds are
+/// turned into uv's (<see cref="Translate"/>); one uv has no counterpart for (<c>pip index versions</c>, <c>--user</c>) stays pip's.
+/// Only for an environment on this computer, and only when uv is installed.
+/// </summary>
+public static class UvPip
+{
+    public sealed record Command(string Program, IReadOnlyList<string> Args, IReadOnlyDictionary<string, string> Env);
+
+    static readonly HashSet<string> Supported = new() { "install", "uninstall", "list", "show", "freeze", "check" };
+
+    /// <summary>Whether the environment in this folder was made by uv.</summary>
+    public static bool IsUvVenv(string prefix)
+    {
+        try { return File.ReadLines(Path.Combine(prefix, "pyvenv.cfg")).Any(l => Regex.IsMatch(l, @"^\s*uv\s*=")); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
+    }
+
+    /// <summary>The folder of the virtual environment an interpreter belongs to (Scripts\python.exe or bin/python inside it), or null.</summary>
+    public static string? PrefixOf(string python)
+    {
+        try
+        {
+            string? folder = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(python)));
+            return folder != null && File.Exists(Path.Combine(folder, "pyvenv.cfg")) ? folder : null;
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return null; }
+    }
+
+    /// <summary>uv, when this interpreter is that of an environment uv made and uv is installed (null otherwise: pip is used).</summary>
+    public static string? For(string python, Func<string, string?>? which = null) =>
+        PrefixOf(python) is { } prefix && IsUvVenv(prefix) ? (which ?? LockFiles.Find)("uv") : null;
+
+    /// <summary>The uv command for the arguments of a pip command (what follows <c>-m pip</c>), or null when uv has no counterpart.</summary>
+    public static Command? Translate(string uv, string python, IEnumerable<string> pipArgs)
+    {
+        var a = pipArgs.ToList();
+        if (a.Count == 0 || !Supported.Contains(a[0])) return null;
+        var args = new List<string> { "pip", a[0], "--python", python, "--no-progress" };
+        var env = new Dictionary<string, string> { ["NO_COLOR"] = "1" };
+        for (int i = 1; i < a.Count; i++)
+        {
+            string x = a[i];
+            switch (x)
+            {
+                case "--disable-pip-version-check" or "--no-input" or "-y" or "--yes": break;   // uv neither checks its version nor asks
+                case "--progress-bar": i++; break;
+                case "--trusted-host" when i + 1 < a.Count: args.Add("--allow-insecure-host"); args.Add(a[++i]); break;
+                case "--proxy" when i + 1 < a.Count: env["HTTPS_PROXY"] = env["HTTP_PROXY"] = a[++i]; break;
+                case "--pre": args.Add("--prerelease"); args.Add("allow"); break;
+                case "--user": return null;   // uv installs into an environment, never for the user
+                default:
+                    if (!x.StartsWith("--progress-bar=")) args.Add(x);
+                    break;
+            }
+        }
+        return new Command(uv, args, env);
+    }
+}

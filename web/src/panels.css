@@ -339,7 +339,7 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 #pk-bar button:disabled { opacity: .4; cursor: default; }
 #pk-bar label { color: var(--dim); white-space: nowrap; }
 #pk-hint { padding: 0 8px; color: var(--dim); min-height: 0; font-size: 12px; } #pk-hint:not(:empty) { padding: 2px 8px; }
-#pk-banner.warn { padding: 4px 8px; background: var(--warn)22; color: var(--amber); } #pk-banner button { margin-left: 6px; }
+#pk-banner.warn { padding: 4px 8px; background: var(--warn)22; color: var(--amber); } #pk-banner.info { padding: 4px 8px; opacity: .8; } #pk-banner button { margin-left: 6px; }
 #pk-reqs .reqrow { padding: 2px 8px; border-bottom: 1px solid var(--line); } #pk-reqs .missing { color: var(--amber); } #pk-reqs button { margin-left: 8px; }
 #pk-config, #pk-source { padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--panel); } #pk-config[hidden], #pk-source[hidden], #pk-confirm[hidden] { display: none; }
 #pk-config label { display: block; margin-bottom: 4px; color: var(--dim); } #pk-config input, #pk-config textarea, #pk-source input[type=text], #pk-source input:not([type]) { display: block; width: 100%; box-sizing: border-box; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; font: inherit; }

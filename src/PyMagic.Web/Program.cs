@@ -1063,11 +1063,15 @@ app.MapPost("/api/venv", async (HttpRequest req) =>
     if (basePython == null) return Results.BadRequest(new { error = "no interpreter to create the environment with" });
     try
     {
-        string exe = await Task.Run(() => interpreters.CreateVenv(basePython, body?["name"]?.GetValue<string>() ?? ".venv"));
+        string? uv = null;
+        if (body?["tool"]?.GetValue<string>() == "uv" && (uv = LockFiles.Find("uv")) == null) return Results.BadRequest(new { error = "uv is not installed" });
+        string exe = await Task.Run(() => interpreters.CreateVenv(basePython, body?["name"]?.GetValue<string>() ?? ".venv", uv: uv));
         return Results.Json(new { path = exe });
     }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
 });
+// what can make an environment: venv always, uv when it is installed
+app.MapGet("/api/venv", () => Results.Json(new { uv = LockFiles.Find("uv") != null }));
 
 
 // ---- packages ----------------------------------------------------------------------------------------------------
@@ -1081,6 +1085,7 @@ app.MapGet("/api/packages", async () =>
     {
         interpreter = Describe(current), hasPip = list.HasPip, error = list.Error, packages = list.Packages,
         isVenv = current.IsVenv, canInstall = PackageManager.CanInstallGlobally(current),
+        manager = current.Target.IsLocal && UvPip.For(current.Python) != null ? "uv" : "pip",
     });
 });
 
@@ -1857,6 +1862,13 @@ app.Map("/run", async (HttpContext ctx) =>
                 }
                 if (refusal != null) { outbox.Add(new JsonObject { ["type"] = "error", ["message"] = refusal }.ToJsonString()); continue; }
                 if (startedProgram) continue;
+                // an environment uv made has no pip: the same command through uv pip
+                if (module == "pip" && target.Target.IsLocal && UvPip.For(target.Python) is { } uvExe && UvPip.Translate(uvExe, target.Python, pipArgs) is { } uvCommand)
+                {
+                    packageOperation = true;
+                    session.StartProgram(root, uvCommand.Program, uvCommand.Args, uvCommand.Env);
+                    continue;
+                }
                 packageOperation = true;
                 session.Python = target.Python; session.Target = target.Target;
                 session.StartModule(root, module, pipArgs);

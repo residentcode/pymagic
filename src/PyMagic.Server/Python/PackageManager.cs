@@ -13,7 +13,10 @@ public sealed record PackageList(bool HasPip, string? Error, IReadOnlyList<Insta
 public sealed record PackageInfo(string Name, string Version, string Summary, string? HomePage, string? License, string? Location,
     IReadOnlyList<string> Requires, IReadOnlyList<string> RequiredBy, bool Editable);
 
-/// <summary>Reads what is installed in an interpreter by asking its own pip (installing and removing go through <see cref="RunSession.StartModule"/> so the output streams).</summary>
+/// <summary>
+/// Reads what is installed in an interpreter by asking its own pip (installing and removing go through <see cref="RunSession.StartModule"/> so the output streams).
+/// An environment made by uv is asked with <c>uv pip</c> instead (<see cref="UvPip"/>).
+/// </summary>
 public static class PackageManager
 {
     /// <summary>PEP 503 normalisation: case-insensitive, runs of - _ . are the same.</summary>
@@ -97,7 +100,17 @@ public static class PackageManager
 
     public static (int Code, string Output, string Error) Exec(string python, IEnumerable<string> args, int timeoutMs, ExecutionTarget? target = null)
     {
-        var psi = (target ?? ExecutionTarget.Local).Start(python, Path.GetTempPath(), args, new Dictionary<string, string> { ["PYTHONIOENCODING"] = "utf-8" });
+        var list = args.ToList();
+        ProcessStartInfo psi;
+        // `-m pip ...` in an environment uv made: uv pip, for that interpreter
+        if ((target ?? ExecutionTarget.Local).IsLocal && list.Count > 2 && list[0] == "-m" && list[1] == "pip"
+            && UvPip.For(python) is { } uv && UvPip.Translate(uv, python, list.Skip(2)) is { } command)
+        {
+            psi = new ProcessStartInfo(command.Program) { WorkingDirectory = Path.GetTempPath() };
+            foreach (var a in command.Args) psi.ArgumentList.Add(a);
+            foreach (var (k, v) in command.Env) psi.Environment[k] = v;
+        }
+        else psi = (target ?? ExecutionTarget.Local).Start(python, Path.GetTempPath(), list, new Dictionary<string, string> { ["PYTHONIOENCODING"] = "utf-8" });
         psi.RedirectStandardOutput = true; psi.RedirectStandardError = true; psi.UseShellExecute = false; psi.CreateNoWindow = true;
         psi.StandardOutputEncoding = Encoding.UTF8; psi.StandardErrorEncoding = Encoding.UTF8;
         try

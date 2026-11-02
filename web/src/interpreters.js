@@ -71,10 +71,20 @@ export function setupInterpreters() {
     select.onchange = () => { if (select.value)
         void choose(select.value); };
     venvButton.onclick = async () => {
-        venvButton.disabled = true;
-        say('Creating .venv…');
+        // with uv installed, the environment can be made by uv too (its packages then go through uv pip)
+        let tool = 'venv';
         try {
-            const res = await fetch('/api/venv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            if ((await (await fetch('/api/venv')).json()).uv) {
+                tool = await askVenvTool();
+                if (!tool)
+                    return;
+            }
+        }
+        catch { /* the host is not reachable: venv is tried */ }
+        venvButton.disabled = true;
+        say(tool === 'uv' ? 'Creating .venv with uv…' : 'Creating .venv…');
+        try {
+            const res = await fetch('/api/venv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tool === 'uv' ? { tool } : {}) });
             const body = await res.json();
             if (!res.ok) {
                 say(body.error ?? 'Could not create the environment', true);
@@ -86,6 +96,39 @@ export function setupInterpreters() {
             venvButton.disabled = false;
         }
     };
+    /** Asks which tool makes the .venv: 'venv', 'uv', or null when the person cancels. */
+    function askVenvTool() {
+        return new Promise((resolve) => {
+            const shade = document.createElement('div');
+            shade.className = 'ask-shade';
+            shade.id = 'venv-ask';
+            const box = document.createElement('div');
+            box.className = 'ask-box';
+            const title = document.createElement('div');
+            title.className = 'ask-title';
+            title.textContent = 'Create .venv in the project';
+            const hint = document.createElement('div');
+            hint.className = 'ask-hint';
+            hint.textContent = 'With the selected interpreter. uv makes it faster, without pip: its packages are then handled with uv pip.';
+            const row = document.createElement('div');
+            row.className = 'ask-buttons';
+            const finish = (value) => { shade.remove(); resolve(value); };
+            for (const [value, label] of [['venv', 'venv (with pip)'], ['uv', 'uv venv'], [null, 'Cancel']]) {
+                const b = document.createElement('button');
+                b.textContent = label;
+                if (value)
+                    b.dataset.tool = value;
+                b.onclick = () => finish(value);
+                row.append(b);
+            }
+            shade.onkeydown = (e) => { if (e.key === 'Escape')
+                finish(null); };
+            box.append(title, hint, row);
+            shade.append(box);
+            document.body.append(shade);
+            row.querySelector('button').focus();
+        });
+    }
     // ---- an interpreter from a WSL distribution or a Docker image
     $('b-remote').onclick = () => openRemoteDialog();
     function openRemoteDialog() {

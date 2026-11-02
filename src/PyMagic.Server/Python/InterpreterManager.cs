@@ -121,11 +121,12 @@ public sealed class InterpreterManager
 
     /// <summary>Creates <c>.venv</c> (or the given name) in the project with the given interpreter and returns its python.</summary>
     /// <exception cref="ServiceException">The folder exists already or the interpreter could not create it.</exception>
-    public string CreateVenv(string basePython, string name = ".venv", bool withPip = true)
+    public string CreateVenv(string basePython, string name = ".venv", bool withPip = true, string? uv = null)
     {
         if (name.Contains('/') || name.Contains('\\') || name.Contains("..")) throw new ServiceException("the name must be a single folder name");
         string dir = Path.Combine(_root, name);
         if (Directory.Exists(dir)) throw new ServiceException($"'{name}' already exists in the project");
+        if (uv != null) return CreateUvVenv(uv, basePython, dir);
 
         // an interpreter in WSL or Docker creates the environment there: for the project folder, which that system shares
         var remote = ExecutionTarget.Parse(basePython);
@@ -155,6 +156,27 @@ public sealed class InterpreterManager
             if (!target.Exists(inside)) throw new ServiceException("the environment was created but has no interpreter");
             return target.Spec(inside);
         }
+        string exe = OperatingSystem.IsWindows() ? Path.Combine(dir, "Scripts", "python.exe") : Path.Combine(dir, "bin", "python");
+        if (!File.Exists(exe)) throw new ServiceException("the environment was created but has no interpreter");
+        return exe;
+    }
+
+    /// <summary>`uv venv` with the chosen interpreter (no Python is downloaded): an environment without pip, whose packages go through uv pip.</summary>
+    string CreateUvVenv(string uv, string basePython, string dir)
+    {
+        if (ExecutionTarget.Parse(basePython) != null) throw new ServiceException("uv makes environments on this computer only: choose an interpreter of this computer");
+        var psi = new ProcessStartInfo(uv) { WorkingDirectory = _root, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in new[] { "venv", dir, "--python", basePython, "--no-python-downloads", "--no-progress" }) psi.ArgumentList.Add(a);
+        psi.Environment["NO_COLOR"] = "1";
+        try
+        {
+            using var p = Process.Start(psi) ?? throw new ServiceException("cannot start uv");
+            var err = p.StandardError.ReadToEndAsync();
+            p.StandardOutput.ReadToEnd();
+            if (!p.WaitForExit(180000)) { try { p.Kill(true); } catch (InvalidOperationException) { } throw new ServiceException("creating the environment took too long"); }
+            if (p.ExitCode != 0) throw new ServiceException("uv venv failed: " + (err.Result.Trim().Split('\n').LastOrDefault(l => !l.TrimStart().StartsWith("hint:")) ?? "exit code " + p.ExitCode).Trim());
+        }
+        catch (System.ComponentModel.Win32Exception e) { throw new ServiceException(e.Message); }
         string exe = OperatingSystem.IsWindows() ? Path.Combine(dir, "Scripts", "python.exe") : Path.Combine(dir, "bin", "python");
         if (!File.Exists(exe)) throw new ServiceException("the environment was created but has no interpreter");
         return exe;
