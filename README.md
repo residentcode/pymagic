@@ -220,4 +220,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 293 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 294 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

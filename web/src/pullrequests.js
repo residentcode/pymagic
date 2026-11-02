@@ -6,6 +6,7 @@ import * as monaco from 'monaco-editor';
 import { showTab } from './panel';
 import { baseChoices, changeText, checksText, newProblem, nounOf, patchRows, refOf, reviewChoices, splitPatch, startTitle, stateText, statusLetter, subjectOf, tokenHint, whoWants } from './pr-model.js';
 import { toast } from './toast';
+import { languageFor } from './file-language';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...children) => { const e = Object.assign(document.createElement(tag), props); e.append(...children); return e; };
@@ -156,10 +157,7 @@ export function setupPullRequests() {
 
     // ------------------------------------------------------------ a file's diff
 
-    function languageOf(path) {
-        const lower = path.toLowerCase();
-        return monaco.languages.getLanguages().find((l) => (l.extensions ?? []).some((e) => lower.endsWith(e)))?.id ?? 'plaintext';
-    }
+    const languageOf = (path) => languageFor(monaco, path);
 
     function diff(file) {
         if (!file.patch) { toast(`${file.path} has no text to compare (it may be binary or too large for ${info.host} to show).`); return; }

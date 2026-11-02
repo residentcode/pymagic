@@ -31,6 +31,8 @@ import { setupSemantic } from './semantic';
 import { setupProfiler } from './profiler';
 import { setupDatabase } from './database';
 import { setupHttpClient } from './http';
+import './ejs-language';
+import { languageFor as languageForFile } from './file-language';
 import { setupNotebook } from './notebook';
 import { buildInfo, buildLabel } from './build-info.js';
 import { setupGitSync } from './git-sync';
@@ -152,12 +154,9 @@ function templateLanguageOf(rel) {
     const chosen = templateLanguages[ext] ?? (/^\.(jinja2?|j2)$/.test(ext) ? 'jinja' : /^\.html?$/.test(ext) ? 'django' : 'none');
     return chosen === 'django' && templateLanguages.__off ? 'none' : chosen;
 }
-function languageFor(rel) {
-    const lower = rel.toLowerCase();
-    if (/\.(html?|jinja2?|j2)$/.test(lower))
-        return 'django-html';
-    const id = monaco.languages.getLanguages().find((l) => l.extensions?.some((x) => lower.endsWith(x)))?.id ?? 'plaintext';
-    return id;
+// the language a file is shown in: Monaco's, and what it leaves out (view engines, components, files known by name or by their #! line)
+function languageFor(rel, text = '') {
+    return languageForFile(monaco, rel, text);
 }
 async function loadModel(rel, key) {
     const uri = uriFor(rel);
@@ -167,7 +166,7 @@ async function loadModel(rel, key) {
     const text = await res.text();
     // search results can lead to files that are not Python: they are shown; only templates are known to the language server
     if (!rel.endsWith('.py')) {
-        const lang = languageFor(rel);
+        const lang = languageFor(rel, text);
         const plain = monaco.editor.createModel(text, lang, monaco.Uri.parse('pymagic:///' + rel));
         models.set(key, plain);
         serverUri.set(plain, uri);

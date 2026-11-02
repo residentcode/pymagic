@@ -5,6 +5,7 @@
 // file and, when no marker is left, tells git it is resolved.
 import { findConflicts, settle, settleAll, settlePicked, sideView, conflictLines } from './merge-model.js';
 import { toast } from './toast';
+import { languageFor } from './file-language';
 
 const el = (tag, cls, text) => {
     const e = document.createElement(tag);
@@ -14,8 +15,7 @@ const el = (tag, cls, text) => {
 };
 
 function languageOf(monaco, path) {
-    const ext = path.slice(path.lastIndexOf('.')).toLowerCase();
-    return monaco.languages.getLanguages().find((l) => (l.extensions ?? []).includes(ext))?.id ?? 'plaintext';
+    return languageFor(monaco, path);
 }
 
 /**

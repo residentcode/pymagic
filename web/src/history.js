@@ -5,6 +5,7 @@
 import { showTab } from './panel';
 import { ago, clock, interleave, selectionHistory, size } from './history-model.js';
 import { toast } from './toast';
+import { languageFor } from './file-language';
 
 const $ = (id) => document.getElementById(id);
 
@@ -201,7 +202,7 @@ export function setupHistory({ monaco, editor, currentFile, openFile, askText })
         });
     }
 
-    const languageOf = (path) => (path.endsWith('.py') ? 'python' : path.endsWith('.md') ? 'markdown' : path.endsWith('.json') ? 'json' : path.endsWith('.js') ? 'javascript' : path.endsWith('.html') ? 'html' : path.endsWith('.css') ? 'css' : path.endsWith('.yml') || path.endsWith('.yaml') ? 'yaml' : 'plaintext');
+    const languageOf = (path) => languageFor(monaco, path);
 
     async function restoreDeleted(v) {
         if (!window.confirm(`${v.path} was deleted. Write this version back to it?`)) return;

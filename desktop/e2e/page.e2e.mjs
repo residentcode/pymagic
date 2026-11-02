@@ -41,6 +41,10 @@ const FILES = {
     'openapi.yaml': 'openapi: 3.0.3\ninfo:\n  title: t\n',
     'openapi31.yaml': 'openapi: 3.1.0\ninfo:\n  title: t\n',
     '.pymagic/schemas/k8s-service-v1.json': '{"type":"object","properties":{"spec":{"type":["object","null"],"properties":{"ports":{"type":"array","items":{"type":"object","properties":{"port":{"type":"integer"}}}}}}}}',
+    // Express's view engines and a script known by its #! line
+    'express/views/index.hjs': '<h1>{{ title }}</h1>\n',
+    'express/views/index.ejs': '<a href="<%= url %>"><%- title %></a>\n<%# a note %>\n',
+    'express/bin/www': '#!/usr/bin/env node\nvar app = require("../app");\n',
     // checked against the schemas built into PyMagic (no stand-in kept for these)
     '.github/dependabot.yml': 'version: 3\nupdates: []\n',
     'infra/deploy.yaml': 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: two\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n        - name: web\n          image: nginx\n',
@@ -2962,6 +2966,17 @@ describe('a notebook on a real Jupyter server: Variables and Debug Cell', { skip
 });
 
 describe('New Project: the other kinds', () => {
+    test("Express's view engines and bin/www are shown in their languages, EJS's code as JavaScript", async () => {
+        const languageOf = async (rel) => { await open(rel); return page.evaluate('window.pymagic.editor.getModel().getLanguageId()'); };
+        assert.equal(await languageOf('express/views/index.hjs'), 'handlebars');
+        assert.equal(await languageOf('express/bin/www'), 'javascript');
+        assert.equal(await languageOf('express/views/index.ejs'), 'ejs');
+        // the tag, the attribute, the code inside its value and the comment each have their token
+        const tokens = await page.evaluate(`window.pymagic.monaco.editor.tokenize(window.pymagic.editor.getModel().getValue(), 'ejs').flat().map((t) => t.type)`);
+        for (const want of ['tag.ejs', 'attribute.name.ejs', 'delimiter.ejs', 'identifier.js', 'comment.ejs'])
+            assert.ok(tokens.includes(want), want + ' in ' + tokens.join(' '));
+    });
+
     test('the Python and Other groups; a kind of Other has its own choices and no interpreter', async () => {
         await page.evaluate(`document.querySelector('#brand .mark').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
         await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim() === 'File')`, 5000, 'the main menu');
