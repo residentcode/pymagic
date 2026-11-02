@@ -73,6 +73,10 @@ export function setupPackages() {
             banner.className = 'info';
             banner.textContent = 'A conda environment: packages are listed, installed and removed with conda, from its channels. Paths, git addresses, requirement files and what pip installed go through pip.';
         }
+        else if (data.manager === 'uv-project') {
+            banner.className = 'info';
+            banner.textContent = 'A uv project: Install adds the package to pyproject.toml (uv add) and Uninstall takes it out (uv remove); uv.lock and .venv follow.';
+        }
         else if (data.manager === 'uv') {
             banner.className = 'info';
             banner.textContent = 'This environment was made by uv: its packages are listed, installed and removed with uv pip.';

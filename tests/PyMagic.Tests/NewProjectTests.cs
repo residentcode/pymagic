@@ -78,7 +78,7 @@ public class NewProjectTests
         string folder = TempFolder();
         try
         {
-            var made = NewProject.Create(new NewProjectRequest(folder, "django", false, false, "venv", python, null, null, new DjangoProjectOptions(AppName: "blog"), InstallDjango: false));
+            var made = NewProject.Create(new NewProjectRequest(folder, "django", false, false, "venv", python, null, null, new DjangoProjectOptions(AppName: "blog"), InstallPackages: false));
             Assert.True(File.Exists(made.Interpreter!));
             string settings = File.ReadAllText(Path.Combine(folder, "my_site", "settings.py"));
             Assert.True(settings.Contains($"using Django {DjangoTemplates.Version}.") && settings.Contains("    'blog',\n]"), settings);

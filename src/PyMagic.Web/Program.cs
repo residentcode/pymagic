@@ -1126,7 +1126,7 @@ app.MapGet("/api/packages", async () =>
     {
         interpreter = Describe(current), hasPip = list.HasPip, error = list.Error, packages = list.Packages,
         isVenv = current.IsVenv, canInstall = PackageManager.CanInstallGlobally(current),
-        manager = !current.Target.IsLocal ? "pip" : Conda.For(current.Python) != null ? "conda" : UvPip.For(current.Python) != null ? "uv" : "pip",
+        manager = !current.Target.IsLocal ? "pip" : Conda.For(current.Python) != null ? "conda" : UvProject.For(root, current.Python) != null ? "uv-project" : UvPip.For(current.Python) != null ? "uv" : "pip",
     });
 });
 
@@ -1953,6 +1953,21 @@ app.Map("/run", async (HttpContext ctx) =>
                     {
                         packageOperation = true;
                         session.StartProgram(root, conda.Tool, condaArgs, new Dictionary<string, string> { ["NO_COLOR"] = "1", ["CONDA_QUIET"] = "1" });
+                        continue;
+                    }
+                }
+                // a uv project (pyproject.toml kept by uv, its own .venv): installing adds to its dependencies and removing takes from them (uv add,
+                // uv remove: pyproject.toml and uv.lock follow); a package that is not a dependency of it, or an index of the settings, goes through uv pip
+                if (module == "pip" && target.Target.IsLocal && op is "install" or "uninstall" && names.Count > 0 && UvProject.For(root, target.Python) is { } uvProj)
+                {
+                    var indexes = PackageSettings.Load(root);
+                    List<string>? uvArgs = op == "install"
+                        ? (indexes.IndexUrl.Length == 0 && indexes.ExtraIndexUrls.Count == 0 ? UvProject.AddArgs(names, msg["upgrade"]?.GetValue<bool>() == true) : null)
+                        : UvProject.RemoveArgs(names, UvProject.Dependencies(root));
+                    if (uvArgs != null)
+                    {
+                        packageOperation = true;
+                        session.StartProgram(root, uvProj, uvArgs, new Dictionary<string, string> { ["NO_COLOR"] = "1" });
                         continue;
                     }
                 }

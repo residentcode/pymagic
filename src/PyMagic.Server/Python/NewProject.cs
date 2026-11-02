@@ -8,9 +8,9 @@ namespace PyMagic.Server;
 /// <param name="Kind">python, fastapi, flask, django or jupyter.</param>
 /// <param name="Environment">venv (a project .venv made by <paramref name="Python"/>), uv (`uv venv` with <paramref name="PythonVersion"/>),
 /// interpreter (an existing one, such as conda's base: <paramref name="Python"/>), or none.</param>
-/// <param name="InstallDjango">For a Django project in a new environment: install Django there (a download from PyPI) so its own startproject writes the project.</param>
+/// <param name="InstallPackages">In a new environment: install what the project needs (a download from PyPI): Django, so its own startproject writes the project; with uv, the packages its kind needs (uv add).</param>
 public sealed record NewProjectRequest(string Location, string Kind, bool Git, bool Welcome, string Environment, string? Python, string? UvPath, string? PythonVersion,
-    DjangoProjectOptions? Django = null, bool InstallDjango = true);
+    DjangoProjectOptions? Django = null, bool InstallPackages = true);
 
 /// <summary>The Django choices of New Project: the template language (django or jinja2), the name of the templates folder, a first app, and the admin.</summary>
 public sealed record DjangoProjectOptions(string TemplateLanguage = "django", string TemplatesFolder = "templates", string? AppName = null, bool Admin = true);
@@ -137,18 +137,48 @@ public static class NewProject
         }
         if (interpreter != null && !File.Exists(interpreter)) throw new ServiceException("The environment was made but has no interpreter.");
 
-        // Django: the project's own environment gets Django (from PyPI), then Django's startproject writes the project; an interpreter that was
-        // chosen as it is is used when it has Django and left alone when it does not; without Django, Django's own templates are written by PyMagic
+        // uv: a uv project, as `uv init` makes one: pyproject.toml, and the packages of its kind added with `uv add` (pyproject.toml lists them,
+        // uv.lock pins them, .venv has them; a download from PyPI). Offline, they are written into pyproject.toml only (`uv add --frozen`)
+        bool uvProject = r.Environment == "uv";
+        if (uvProject)
+        {
+            var init = new List<string> { "init", "--bare", "--no-workspace", "--vcs", "none", "--name", ModuleName(name) };
+            if (!string.IsNullOrWhiteSpace(r.PythonVersion)) { init.Add("--python"); init.Add(r.PythonVersion.Trim()); }
+            Run(uv, folder, init.ToArray());
+            // an application, not a package to build (uv's own setting for that); it also says the project is uv's before uv.lock is there (offline)
+            try { File.AppendAllText(System.IO.Path.Combine(folder, "pyproject.toml"), "\n[tool.uv]\npackage = false\n"); }
+            catch (IOException) { }
+            var packages = UvProject.PackagesOf(r.Kind, r.Django?.TemplateLanguage == "jinja2");
+            if (packages.Count > 0)
+            {
+                try
+                {
+                    if (!r.InstallPackages) throw new ServiceException("installing was left out");
+                    Run(uv, folder, UvProject.AddArgs(packages, false).ToArray());
+                    notes.Add($"uv added {string.Join(", ", packages)}: pyproject.toml lists them, uv.lock pins them, and .venv has them.");
+                }
+                catch (ServiceException e)
+                {
+                    var frozen = new List<string> { "add", "--frozen" };
+                    frozen.AddRange(packages);
+                    Run(uv, folder, frozen.ToArray());
+                    notes.Add($"pyproject.toml lists {string.Join(", ", packages)}, but they are not installed ({e.Message}): `uv sync` (the lock file's Sync in the Packages panel) installs them.");
+                }
+            }
+        }
+
+        // Django: the project's own environment gets Django (from PyPI; with uv, by the uv add above), then Django's startproject writes the project;
+        // an interpreter that was chosen as it is is used when it has Django and left alone when it does not; without Django, Django's own templates are
+        // written by PyMagic
         string? django = null;
         if (r.Kind == "django" && interpreter != null)
         {
             django = DjangoTemplates.VersionOf(interpreter);
-            if (django == null && r.Environment is "venv" or "uv" && r.InstallDjango)
+            if (django == null && r.Environment == "venv" && r.InstallPackages)
             {
                 try
                 {
-                    if (r.Environment == "uv") Run(uv, folder, "pip", "install", "--python", interpreter, "django");
-                    else Run(interpreter, folder, "-m", "pip", "install", "--disable-pip-version-check", "django");
+                    Run(interpreter, folder, "-m", "pip", "install", "--disable-pip-version-check", "django");
                     django = DjangoTemplates.VersionOf(interpreter);
                     if (django != null) notes.Add($"Django {django} was installed in .venv; django-admin startproject wrote the project.");
                 }
@@ -157,6 +187,8 @@ public static class NewProject
             else if (django != null) notes.Add($"django-admin startproject of Django {django} wrote the project.");
         }
         var files = Files(r.Kind, name, r.Welcome, r.Django, django != null ? interpreter : null);
+        // a uv project's packages are in pyproject.toml
+        if (uvProject) files.Remove("requirements.txt");
         if (r.Git) files[".gitignore"] = "__pycache__/\n*.py[cod]\n.venv/\n.pymagic/\n*.egg-info/\n.pytest_cache/\n" + (r.Kind == "django" ? "db.sqlite3\n" : "");
 
         foreach (var (rel, text) in files)
@@ -178,7 +210,11 @@ public static class NewProject
         }
         if (files.ContainsKey("requirements.txt") && django == null)
             notes.Add("The packages it needs are in requirements.txt; the Packages panel installs them.");
-        return new NewProjectResult(folder, files.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList(), interpreter, notes);
+        // what uv wrote is part of the project too
+        var made = files.Keys.ToList();
+        foreach (var own in new[] { "pyproject.toml", "uv.lock", ".python-version" })
+            if (!files.ContainsKey(own) && File.Exists(System.IO.Path.Combine(folder, own))) made.Add(own);
+        return new NewProjectResult(folder, made.OrderBy(k => k, StringComparer.Ordinal).ToList(), interpreter, notes);
     }
 
     static void Run(string program, string folder, params string[] args)
