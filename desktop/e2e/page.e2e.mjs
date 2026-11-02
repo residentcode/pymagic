@@ -45,6 +45,9 @@ const FILES = {
     'express/views/index.hjs': '<h1>{{ title }}</h1>\n',
     'express/views/index.ejs': '<a href="<%= url %>"><%- title %></a>\n<%# a note %>\n',
     'express/bin/www': '#!/usr/bin/env node\nvar app = require("../app");\n',
+    // Emmet: an abbreviation on the first line; the second is a tag with the abbreviation inside it, where nothing is offered
+    'emmet/page.html': 'ul>li*2\n<div div.x class="a"></div>\n',
+    'emmet/site.css': 'a {\n  m10\n}\n',
     // checked against the schemas built into PyMagic (no stand-in kept for these)
     '.github/dependabot.yml': 'version: 3\nupdates: []\n',
     'infra/deploy.yaml': 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: two\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n        - name: web\n          image: nginx\n',
@@ -2971,10 +2974,36 @@ describe('New Project: the other kinds', () => {
         assert.equal(await languageOf('express/views/index.hjs'), 'handlebars');
         assert.equal(await languageOf('express/bin/www'), 'javascript');
         assert.equal(await languageOf('express/views/index.ejs'), 'ejs');
-        // the tag, the attribute, the code inside its value and the comment each have their token
+        // the tag, the attribute, the code inside its value and the comment each have their token (named as Monaco's HTML names them)
         const tokens = await page.evaluate(`window.pymagic.monaco.editor.tokenize(window.pymagic.editor.getModel().getValue(), 'ejs').flat().map((t) => t.type)`);
-        for (const want of ['tag.ejs', 'attribute.name.ejs', 'delimiter.ejs', 'identifier.js', 'comment.ejs'])
+        for (const want of ['tag.html', 'attribute.name.html', 'delimiter.html', 'identifier.js', 'comment.html'])
             assert.ok(tokens.includes(want), want + ' in ' + tokens.join(' '));
+    });
+
+    test('Emmet: an abbreviation is expanded by completion in a template and in a stylesheet, not inside a tag', async () => {
+        // the abbreviation at the end of the first line, Emmet's suggestion chosen among the others, the expansion read back, the file put back
+        // shown: the text of Emmet's row (HTML shows the abbreviation, CSS what it expands to)
+        const expand = async (rel, shown, line = 1) => {
+            await open(rel);
+            const before = await page.evaluate('window.pymagic.editor.getModel().getValue()');
+            await page.evaluate(`(() => { const e = window.pymagic.editor; const text = e.getModel().getLineContent(${line}); e.setPosition({ lineNumber: ${line}, column: text.length + 1 }); e.focus(); e.trigger('test', 'editor.action.triggerSuggest', {}); })()`);
+            const row = `[...document.querySelectorAll('.suggest-widget .monaco-list-row')].find((r) => r.textContent.includes(${JSON.stringify(shown)}))`;
+            const index = await page.waitFor(`(() => { const r = ${row}; return r ? Number(r.dataset.index) + 1 : 0; })()`, 15000, "Emmet's suggestion " + shown) - 1;
+            for (let i = 0; i < index; i++) await page.evaluate(`window.pymagic.editor.trigger('test', 'selectNextSuggestion', {})`);
+            await page.evaluate(`window.pymagic.editor.trigger('test', 'acceptSelectedSuggestion', {})`);
+            const after = await page.evaluate('window.pymagic.editor.getModel().getValue()');
+            await page.evaluate(`window.pymagic.editor.getModel().setValue(${JSON.stringify(before)})`);
+            return after;
+        };
+        const html = await expand('emmet/page.html', 'ul>li*2');
+        assert.match(html, /<ul>\s*<li><\/li>\s*<li><\/li>\s*<\/ul>/, html);
+        assert.match(await expand('emmet/site.css', 'margin: 10px', 2), /a \{\s*margin: 10px;\s*\}/);
+        // inside a tag nothing is offered: the place is told from the tokens
+        await open('emmet/page.html');
+        await page.evaluate(`(() => { const e = window.pymagic.editor; e.setPosition({ lineNumber: 2, column: 11 }); e.focus(); e.trigger('test', 'editor.action.triggerSuggest', {}); })()`);
+        await sleep(1500);
+        assert.equal(await page.evaluate(`[...document.querySelectorAll('.suggest-widget .monaco-list-row')].some((r) => r.textContent.includes('div.x'))`), false);
+        await page.key(27, 'Escape');
     });
 
     test('the Python and Other groups; a kind of Other has its own choices and no interpreter', async () => {

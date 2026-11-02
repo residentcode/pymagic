@@ -7,7 +7,7 @@ The editor is Monaco (the editor of VS Code), in an Electron window.
 What it does, in short:
 
 - **Editing**: completion, hover, go to definition, find usages, rename and the other refactorings, inspections with quick fixes (PyCharm's
-  Python inspections and PyMagic's own), code vision and inlay hints, formatting (black and ruff style), VS Code's colours for code, a keymap you can change.
+  Python inspections and PyMagic's own), Emmet in HTML, templates and stylesheets, code vision and inlay hints, formatting (black and ruff style), VS Code's colours for code, a keymap you can change.
 - **Frameworks**: Django (models, URLs, templates, settings, REST framework, New Project through Django's own `startproject`), Flask, FastAPI,
   Jinja, pytest. New Project also makes the other kinds PyCharm has: HTML5 Boilerplate, Bootstrap, Vite, React Native, Next.js, Node.js and
   Express, each by its own generator (Node.js needed).
@@ -114,7 +114,7 @@ Visual Studio Code works too: open the folder, and use `dotnet build` and `node`
 
 ## Plugins
 
-The optional parts of PyMagic are built-in plugins, switched on and off in **Settings > Plugins**: Django, Flask, FastAPI, JavaScript projects, Jupyter Notebooks,
+The optional parts of PyMagic are built-in plugins, switched on and off in **Settings > Plugins**: Django, Flask, FastAPI, JavaScript projects, Emmet, Jupyter Notebooks,
 Docker, WSL, SSH, Git, JSON Schema, HTTP Client, Database Tools and SQL, Coverage, Diagrams, Profiler, Pull Requests, Deployment, Markdown and
 Macros. How to make one is in [docs/plugins.md](docs/plugins.md).
 
@@ -220,4 +220,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 295 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 296 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

@@ -10,6 +10,7 @@ const codeOpen = [/<%[_=-]?/, { token: 'delimiter', next: '@ejsCode', nextEmbedd
 
 monaco.languages.setMonarchTokensProvider('ejs', {
     defaultToken: '',
+    tokenPostfix: '.html',   // named as Monaco's HTML names its tokens (delimiter.html), which Emmet reads
     ignoreCase: true,
     tokenizer: {
         root: [

@@ -58,3 +58,8 @@ test('JavaScript projects brings the seven other kinds of New Project', async ()
     assert.deepEqual(kindsOff({ javascript: false }), ['html5boilerplate', 'bootstrap', 'vite', 'reactnative', 'nextjs', 'nodejs', 'express']);
     assert.deepEqual(kindsOff({ javascript: false, django: false }), ['django', 'html5boilerplate', 'bootstrap', 'vite', 'reactnative', 'nextjs', 'nodejs', 'express']);
 });
+
+test('Emmet is a plugin that hides nothing of its own (its completion is simply not set up)', () => {
+    assert.deepEqual(findPlugins('emmet').map((p) => p.id), ['emmet']);
+    assert.deepEqual(hiddenElements({ emmet: false }), []);
+});

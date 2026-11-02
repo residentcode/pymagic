@@ -33,6 +33,7 @@ import { setupDatabase } from './database';
 import { setupHttpClient } from './http';
 import './ejs-language';
 import { languageFor as languageForFile } from './file-language';
+import { setupEmmet } from './emmet';
 import { setupNotebook } from './notebook';
 import { buildInfo, buildLabel } from './build-info.js';
 import { setupGitSync } from './git-sync';
@@ -123,14 +124,16 @@ function ensureModel(rel) {
 // Django and Jinja templates: HTML with {{ variables }}, {% tags %} and {# comments #} (Jinja's may span lines). Monaco's own HTML mode needs a language worker this page does not ship.
 monaco.languages.register({ id: 'django-html', extensions: ['.html', '.htm', '.jinja', '.jinja2', '.j2'], aliases: ['Django template'] });
 monaco.languages.setMonarchTokensProvider('django-html', {
+    tokenPostfix: '.html',   // its tokens are named as Monaco's HTML names them (delimiter.html): Emmet tells from them where an element may start
+    defaultToken: '',        // plain text has no name, as in Monaco's HTML (Emmet expands only there)
     tokenizer: {
         root: [
             [/\{#/, 'comment', '@djangoComment'],
             [/\{%[-+]?/, { token: 'keyword', next: '@djangoTag' }],
             [/\{\{[-+]?/, { token: 'variable', next: '@djangoVariable' }],
             [/<!--/, 'comment', '@htmlComment'],
-            [/(<\/?)([\w:-]+)/, ['delimiter.html', 'tag']],
-            [/\/?>/, 'delimiter.html'],
+            [/(<\/?)([\w:-]+)/, ['delimiter', 'tag']],
+            [/\/?>/, 'delimiter'],
             [/([\w:-]+)(\s*=)/, ['attribute.name', 'delimiter']],
             [/"[^"{]*/, { token: 'attribute.value', next: '@dq' }],
             [/'[^'{]*/, { token: 'attribute.value', next: '@sq' }],
@@ -1160,6 +1163,8 @@ async function main() {
     setupFileChecks(common);
     if (plugin('schemas'))
         setupSchemaCheck(common);
+    if (plugin('emmet'))
+        setupEmmet();
     if (plugin('profiler'))
         setupProfiler({ ...common, askText: (...a) => explorer.askText(...a) });
     if (plugin('httpclient'))
