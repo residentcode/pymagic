@@ -66,8 +66,35 @@ public class ComposeTargetTests
         Assert.Equal("/app/tests/t.py", t.ToTarget(Path.Combine(root, "tests", "t.py")));
         Assert.Equal(Path.Combine(Path.GetFullPath(root), "tests", "t.py"), t.ToHost("/app/tests/t.py"));
         Assert.Equal(Path.GetFullPath(root), t.ToHost("/app"));
-        // a folder of helper scripts cannot be mounted into a running container
-        Assert.Throws<ServiceException>(() => t.Start("python", root, new[] { "x" }, null, new[] { Path.Combine(Path.GetTempPath(), "helpers") }));
+    }
+
+    [Fact]
+    public void ExecFindsWhereTheServiceMountsTheProjectAndCopiesTheHelperScriptsIn()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "proj"), helpers = Path.Combine(Path.GetTempPath(), "helpers");
+        string id = "0123456789abcdef0123";
+        var calls = new List<string>();
+        string? Docker(string[] a)
+        {
+            string line = string.Join(" ", a);
+            calls.Add(line);
+            if (line == "compose -f dev.yml ps -q api") return id + "\n";
+            if (line == $"inspect --format {{{{json .Mounts}}}} {id}") return $$"""[{"Type":"bind","Source":"{{Path.GetFullPath(root).Replace("\\", "\\\\")}}","Destination":"/srv/code"}]""";
+            if (line == $"inspect --format {{{{.Id}}}} {id}") return id + "\n";
+            return "";
+        }
+        var t = new ComposeTarget("api", "dev.yml", exec: true, docker: Docker) { Project = root };
+        Assert.Equal("/srv/code", t.WorkDirInService);
+        Assert.Equal("compose:api?f=dev.yml&exec=1|python", t.Spec("python"));   // a found place is not written into the spec
+        var psi = t.Start("python", root, new[] { Path.Combine(helpers, "pm_tests.py") }, null, new[] { helpers });
+        Assert.Equal("compose -f dev.yml exec -T -w /srv/code api python /pymagic/0/pm_tests.py", Args(psi));
+        Assert.True(calls.Contains($"cp {Path.Combine(Path.GetFullPath(helpers), ".")} {id}:/pymagic/0"), string.Join(" | ", calls));
+        Assert.True(calls.Contains($"exec -u 0 {id} sh -c rm -rf /pymagic/0 && mkdir -p /pymagic"), string.Join(" | ", calls));
+
+        // no running container: said so
+        var stopped = new ComposeTarget("api", null, exec: true, docker: _ => "") { Project = root };
+        Assert.Equal("/workspace", stopped.WorkDirInService);
+        Assert.Throws<ServiceException>(() => stopped.Start("python", root, new[] { "x" }, null, new[] { helpers }));
     }
 
     [Fact]
@@ -165,5 +192,56 @@ public class ComposeTargetTests
             Assert.Contains("hi from /workspace", output + error);
         }
         finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    static string? ComposeIn(string folder, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("docker") { WorkingDirectory = folder, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        psi.ArgumentList.Add("compose");
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        var output = p.StandardOutput.ReadToEndAsync();
+        string error = p.StandardError.ReadToEnd();
+        p.WaitForExit();
+        return p.ExitCode == 0 ? output.Result : "FAILED " + error;
+    }
+
+    /// <summary>
+    /// With PYMAGIC_TEST_COMPOSE=1 and a running Docker engine (python:3.12-slim present): a service that is up and mounts the project at /code
+    /// is used with exec and without saying where; the place comes from docker inspect of its container, and a helper script is copied in and runs.
+    /// </summary>
+    [Fact]
+    public void ARunningServiceSaysWhereItHasTheProjectAndTakesTheHelperScripts()
+    {
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_COMPOSE") != "1") return;
+        string root = Path.Combine(Path.GetTempPath(), "pm_compose_" + Guid.NewGuid().ToString("N"));
+        string helpers = Path.Combine(Path.GetTempPath(), "pm_hlp_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(helpers);
+        try
+        {
+            string nl = Environment.NewLine;
+            File.WriteAllText(Path.Combine(root, "compose.yaml"), string.Join(nl, "services:", "  web:", "    image: python:3.12-slim", "    command: sleep 600", "    volumes:", "      - ./:/code", ""));
+            File.WriteAllText(Path.Combine(helpers, "helper.py"), "import os\nprint('helper in', os.getcwd(), sorted(os.listdir('.')))\n");
+            string? up = ComposeIn(root, "up", "-d");
+            Assert.True(up != null && !up.StartsWith("FAILED", StringComparison.Ordinal), up);
+
+            var t = new ComposeTarget("web", null, exec: true) { Project = root };
+            Assert.Equal("/code", t.WorkDirInService);
+            var psi = t.Start("python", root, new[] { Path.Combine(helpers, "helper.py") }, null, new[] { helpers });
+            psi.WorkingDirectory = root;
+            psi.RedirectStandardOutput = psi.RedirectStandardError = true;
+            psi.UseShellExecute = false;
+            using var p = System.Diagnostics.Process.Start(psi)!;
+            string output = p.StandardOutput.ReadToEnd(), error = p.StandardError.ReadToEnd();
+            p.WaitForExit();
+            Assert.True(output.Contains("helper in /code ['compose.yaml']"), output + error);
+        }
+        finally
+        {
+            ComposeIn(root, "down", "-t", "1");
+            try { Directory.Delete(root, true); } catch { }
+            try { Directory.Delete(helpers, true); } catch { }
+        }
     }
 }

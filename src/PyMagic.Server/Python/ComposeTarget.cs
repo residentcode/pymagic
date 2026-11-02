@@ -12,8 +12,9 @@ namespace PyMagic.Server;
 /// <item>Without <c>exec</c> every process is <c>docker compose run --rm -T</c>: a new container of the service (and the services
 /// it depends on), with the project folder shared as /workspace and helper scripts as /pymagic/&lt;n&gt;, like the Docker target.</item>
 /// <item>With <c>exec</c> the process is <c>docker compose exec -T</c> in the service's running container. Nothing can be mounted
-/// into a running container, so the service has to mount the project itself: <c>w</c> is where (default /workspace). Programs
-/// that need helper scripts (debugger, test runner, notebook kernel) cannot use this form.</item>
+/// into a running container, so the service has to mount the project itself: <c>w</c> is where (without it, what <c>docker inspect</c>
+/// of the service's container says; else /workspace). The helper scripts of the debugger, test runner and notebook kernel are copied
+/// into that container with <c>docker cp</c>.</item>
 /// </list>
 /// Not tried against a real Docker engine yet.
 /// </summary>
@@ -23,19 +24,48 @@ public sealed class ComposeTarget : ExecutionTarget
     /// <summary>The compose file as the person wrote it (relative to the project, or absolute); null for the default names.</summary>
     public string? File { get; }
     public bool Exec { get; }
-    /// <summary>Where the project is inside the container of an exec service.</summary>
-    public string WorkDirInService { get; }
+    /// <summary>Where the project is inside the container of an exec service: <c>w</c> when the spec names it, else what <c>docker inspect</c> of the service's container says, else /workspace.</summary>
+    public string WorkDirInService
+    {
+        get
+        {
+            if (_workDir != null) return _workDir;
+            if (!Exec) return DockerTarget.Workspace;
+            // asked once the project is known ("" when docker says nothing useful)
+            if (_found == null && (_paths.Project ?? DockerTarget.DefaultProject) is { } project)
+                _found = (ContainerId() is { } id ? HelperCopies.FindMountOf(_docker, id, project) : null) ?? "";
+            return _found is { Length: > 0 } f ? f : DockerTarget.Workspace;
+        }
+    }
+
+    readonly string? _workDir;
+    string? _found;
+    readonly Func<string[], string?> _docker;
+    readonly HelperCopies _copies;
 
     // /workspace and /pymagic/<n> bookkeeping is the Docker target's
     readonly DockerTarget _paths;
 
-    public ComposeTarget(string service, string? file = null, bool exec = false, string? workDirInService = null)
+    /// <param name="docker">Runs the docker program in the project folder and gives its output (null when it fails); for tests.</param>
+    public ComposeTarget(string service, string? file = null, bool exec = false, string? workDirInService = null, Func<string[], string?>? docker = null)
     {
         Service = service;
         File = string.IsNullOrWhiteSpace(file) ? null : file;
         Exec = exec;
-        WorkDirInService = string.IsNullOrWhiteSpace(workDirInService) ? DockerTarget.Workspace : workDirInService.TrimEnd('/') is { Length: > 0 } w ? w : "/";
+        _workDir = string.IsNullOrWhiteSpace(workDirInService) ? null : workDirInService.TrimEnd('/') is { Length: > 0 } w ? w : "/";
         _paths = new DockerTarget("compose:" + service);
+        _docker = docker ?? (a => RunIn(_paths.Project ?? DockerTarget.DefaultProject ?? Path.GetTempPath(), a));
+        _copies = new HelperCopies(_docker);
+    }
+
+    /// <summary>The id of the service's running container (<c>docker compose ps -q</c>), or null.</summary>
+    string? ContainerId()
+    {
+        var args = new List<string> { "compose" };
+        if (File != null) { args.Add("-f"); args.Add(File); }
+        args.AddRange(new[] { "ps", "-q", Service });
+        string id = (_docker(args.ToArray()) ?? "").Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) ?? "";
+        return Regex.IsMatch(id, "^[0-9a-f]{12,64}$") ? id : null;
     }
 
     /// <summary>The target from what follows "compose:" in a spec; null when the service name is not one.</summary>
@@ -61,7 +91,7 @@ public sealed class ComposeTarget : ExecutionTarget
         var options = new List<string>();
         if (File != null) options.Add("f=" + File);
         if (Exec) options.Add("exec=1");
-        if (Exec && WorkDirInService != DockerTarget.Workspace) options.Add("w=" + WorkDirInService);
+        if (Exec && _workDir != null && _workDir != DockerTarget.Workspace) options.Add("w=" + _workDir);
         return $"compose:{Service}{(options.Count > 0 ? "?" + string.Join("&", options) : "")}|{python}";
     }
 
@@ -71,8 +101,9 @@ public sealed class ComposeTarget : ExecutionTarget
     public override ProcessStartInfo Start(string python, string workDir, IEnumerable<string> args, IReadOnlyDictionary<string, string>? env = null, IReadOnlyList<string>? mounts = null)
     {
         var (share, cwd) = _paths.PrepareShare(workDir, mounts);
+        // a running container cannot have anything mounted: the helper scripts are copied in where the run form mounts them
         if (Exec && _paths.Mounts.Count > 0)
-            throw new ServiceException($"{Name} runs in a container that is already running, so the helper scripts of the debugger, test runner or notebook cannot be shared with it: use the run form (without exec).");
+            _copies.CopyInto(ContainerId() ?? throw new ServiceException($"{Name}: the service has no running container (docker compose ps)"), _paths.Mounts, Name);
 
         string Map(string v) => HostPath.IsMatch(v) ? string.Join(":", v.Split(';').Select(Translate)) : v;
         var psi = new ProcessStartInfo("docker") { WorkingDirectory = Directory.Exists(share) ? share : Directory.Exists(workDir) ? workDir : Path.GetTempPath() };

@@ -43,12 +43,59 @@ public class ContainerTargetTests
     }
 
     [Fact]
-    public void ProgramsThatNeedHelperFoldersAreRefused()
+    public void TheHelperScriptsAreCopiedIntoTheContainerOnceAndNotWhenItIsGone()
     {
-        var t = new ContainerTarget("web");
         string root = Path.Combine(Path.GetTempPath(), "proj"), helpers = Path.Combine(Path.GetTempPath(), "helpers");
-        t.Project = root;
-        Assert.Throws<ServiceException>(() => t.Start("python", root, new[] { Path.Combine(helpers, "pm_kernel.py") }, null, new[] { helpers }));
+        var calls = new List<string>();
+        string id = "abc123";
+        string? Docker(string[] a)
+        {
+            string line = string.Join(" ", a);
+            calls.Add(line);
+            return line.StartsWith("inspect --format {{.Id}}", StringComparison.Ordinal) ? id + "\n" : line.StartsWith("inspect", StringComparison.Ordinal) ? "[]" : "";
+        }
+        var t = new ContainerTarget("web", "/app", Docker) { Project = root };
+        var psi = t.Start("python", root, new[] { Path.Combine(helpers, "pm_kernel.py") }, null, new[] { helpers });
+        Assert.True(Args(psi).EndsWith("exec \"$@\" sh python /pymagic/0/pm_kernel.py", StringComparison.Ordinal), Args(psi));
+        Assert.Equal(string.Join(" | ", "inspect --format {{.Id}} web", "exec -u 0 web sh -c rm -rf /pymagic/0 && mkdir -p /pymagic", $"cp {Path.Combine(Path.GetFullPath(helpers), ".")} web:/pymagic/0"), string.Join(" | ", calls));
+        // the same container: not copied again; a new one (another id): copied again
+        t.Start("python", root, new[] { "x" }, null, new[] { helpers });
+        Assert.Equal(1, calls.Count(c => c.StartsWith("cp ", StringComparison.Ordinal)));
+        id = "def456";
+        t.Start("python", root, new[] { "x" }, null, new[] { helpers });
+        Assert.Equal(2, calls.Count(c => c.StartsWith("cp ", StringComparison.Ordinal)));
+        // a container docker does not know, or one where nothing can be copied: said so
+        Assert.Throws<ServiceException>(() => new ContainerTarget("gone", "/app", _ => null) { Project = root }.Start("python", root, new[] { "x" }, null, new[] { helpers }));
+        Assert.Throws<ServiceException>(() => new ContainerTarget("web", "/app", a => a[0] == "inspect" ? "x1\n" : null) { Project = root }.Start("python", root, new[] { "x" }, null, new[] { helpers }));
+    }
+
+    [Fact]
+    public void WhereTheContainerHasTheProjectIsReadFromItsMounts()
+    {
+        // the forms Docker Desktop writes a Windows folder in, the deepest mount above the project, and what is not a bind mount
+        const string project = @"C:\Users\me\proj";
+        Assert.Equal("/app", HelperCopies.MountPointIn("""[{"Type":"bind","Source":"C:\\Users\\me\\proj","Destination":"/app"}]""", project));
+        Assert.Equal("/app", HelperCopies.MountPointIn("""[{"Type":"bind","Source":"/run/desktop/mnt/host/c/Users/me/proj","Destination":"/app/"}]""", project));
+        Assert.Equal("/code/proj", HelperCopies.MountPointIn("""[{"Type":"bind","Source":"/host_mnt/c/Users/me","Destination":"/code"}]""", project));
+        Assert.Equal("/deep", HelperCopies.MountPointIn("""[{"Type":"bind","Source":"/mnt/c/Users","Destination":"/top"},{"Type":"bind","Source":"c:/users/ME/proj","Destination":"/deep"}]""", project));
+        Assert.True(HelperCopies.MountPointIn("""[{"Type":"volume","Source":"/var/lib/docker/volumes/x","Destination":"/data"},{"Type":"bind","Source":"C:\\Users\\me\\other","Destination":"/o"}]""", project) == null);
+        Assert.True(HelperCopies.MountPointIn("""[{"Type":"bind","Source":"C:\\Users\\me\\proj2","Destination":"/p2"}]""", project) == null);   // a sibling with a longer name
+        Assert.True(HelperCopies.MountPointIn("not json", project) == null);
+        Assert.True(HelperCopies.MountPointIn("null", project) == null);
+        // a Linux host's folders as they are
+        Assert.Equal("/w/src", HelperCopies.MountPointIn("""[{"Type":"bind","Source":"/home/me/proj","Destination":"/w"}]""", "/home/me/proj/src"));
+
+        // a target without w asks docker once the project is known, and keeps the answer; a spec does not get it
+        int asked = 0;
+        var t = new ContainerTarget("web", null, a => { asked++; return a[2] == "{{json .Mounts}}" ? """[{"Type":"bind","Source":"C:\\Users\\me\\proj","Destination":"/srv"}]""" : null; });
+        t.Project = project;
+        Assert.Equal("/srv/a.py", t.ToTarget(@"C:\Users\me\proj\a.py"));
+        Assert.Equal(@"C:\Users\me\proj\a.py", t.ToHost("/srv/a.py"));
+        Assert.Equal("/srv", t.WorkDirInContainer);
+        Assert.Equal(1, asked);
+        Assert.Equal("docker:container=web|python", t.Spec("python"));
+        // nothing found: /workspace, as before
+        Assert.Equal("/workspace", new ContainerTarget("web", null, _ => "[]") { Project = project }.WorkDirInContainer);
     }
 
     [Fact]
@@ -158,6 +205,45 @@ public class ContainerTargetTests
         {
             Docker("rm", "-f", name);
             try { Directory.Delete(root, true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// With PYMAGIC_TEST_COMPOSE=1 and a running Docker engine (python:3.12-slim present): a container started with the project mounted at
+    /// /src/proj, used without saying where; the place is read from docker inspect, and a helper script is copied in and runs there.
+    /// </summary>
+    [Fact]
+    public void ARealContainerSaysWhereItHasTheProjectAndTakesTheHelperScripts()
+    {
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_COMPOSE") != "1") return;
+        string root = Path.Combine(Path.GetTempPath(), "pm_ctr_" + Guid.NewGuid().ToString("N"));
+        string helpers = Path.Combine(Path.GetTempPath(), "pm_hlp_" + Guid.NewGuid().ToString("N"));
+        string name = "pm_ctr_" + Guid.NewGuid().ToString("N")[..8];
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(Path.Combine(helpers, "sub"));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "data.txt"), "from the project\n");
+            File.WriteAllText(Path.Combine(helpers, "helper.py"), "import os, sys\nsys.path.insert(0, os.path.join(os.path.dirname(__file__), 'sub'))\nimport more\nprint('helper in', os.getcwd(), more.WORD, open(sys.argv[1]).read().strip())\n");
+            File.WriteAllText(Path.Combine(helpers, "sub", "more.py"), "WORD = 'copied'\n");
+            // a user that is not root, as many images have: the copy is made as root and can still be read
+            Assert.True(Docker("run", "-d", "--name", name, "-u", "1000", "-v", $"{root}:/src/proj", "python:3.12-slim", "sleep", "600") != null);
+
+            var t = new ContainerTarget(name) { Project = root };
+            Assert.Equal("/src/proj", t.WorkDirInContainer);
+            var psi = t.Start("python", root, new[] { Path.Combine(helpers, "helper.py"), Path.Combine(root, "data.txt") }, null, new[] { helpers });
+            psi.RedirectStandardOutput = psi.RedirectStandardError = true;
+            psi.UseShellExecute = false;
+            using var p = Process.Start(psi)!;
+            string output = p.StandardOutput.ReadToEnd(), error = p.StandardError.ReadToEnd();
+            p.WaitForExit();
+            Assert.True(output.Contains("helper in /src/proj copied from the project"), output + error);
+        }
+        finally
+        {
+            Docker("rm", "-f", name);
+            try { Directory.Delete(root, true); } catch { }
+            try { Directory.Delete(helpers, true); } catch { }
         }
     }
 }

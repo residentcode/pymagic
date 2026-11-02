@@ -1172,6 +1172,36 @@ describe('Linux paths of a remote interpreter, a running container, and a termin
         await page.waitFor(`${$('output')}.textContent.includes('exe ')`, 60000, 'the program\'s output');
         assert.match(await output(), /exe \/usr\/local/);
     });
+
+    test('in the running container the debugger stops at a breakpoint and the Tests panel runs the tests (their helper scripts copied in)', { skip }, async () => {
+        // the container is still the project's interpreter (the test above): Debug runs pm_debug.py in it through docker exec.
+        // The test above chose a run configuration; Debug is to start the file in the editor
+        await page.evaluate(`${$('run-config')}.click()`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim().endsWith('Current file'))`, 5000, 'the configuration menu');
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim().endsWith('Current file')).click()`);
+        await open('calc.py');
+        assert.equal(await clickMargin(6), true, 'a breakpoint on `return sum(prices)`');
+        await page.evaluate(`${$('output')}.textContent = ''`);
+        await page.evaluate(`${$('b-debug')}.click()`);
+        assert.equal(await page.waitFor(`!${$('b-over')}.disabled && document.querySelector('#frames div.sel')?.textContent`, 90000, 'the stop in the container')
+            .catch(async (e) => { throw new Error(e.message + '; the Run panel says: ' + await output()); }), 'total calc.py:6');
+        assert.match(await page.waitFor(`${$('vars')}.textContent.includes('prices') && ${$('vars')}.textContent`, 10000, 'the variables'), /prices = \[1, 2, 3\]/);
+        await page.evaluate(`${$('b-stop')}.click()`);
+        await page.waitFor(`${$('b-stop')}.disabled`, 15000, 'the end of the session');
+        assert.equal(await clickMargin(6), false, 'the breakpoint taken away');
+        // the helper folder is in the container where the run form would mount it
+        const listed = spawnSync('docker', ['exec', CONTAINER, 'sh', '-c', 'ls /pymagic/*/pm_debug.py'], { encoding: 'utf8' });
+        assert.match(listed.stdout, /\/pymagic\/\d+\/pm_debug\.py/, listed.stderr);
+
+        await page.evaluate(`(() => { const s = ${$('tests-fw')}; s.value = 'unittest'; s.dispatchEvent(new Event('change')); ${$('t-tests')}.click(); ${$('tests-all')}.click(); })()`);
+        await page.waitFor(`!${$('tests-all')}.disabled && ${$('tests-console')}.textContent.includes('finished')`, 90000, 'the test run in the container')
+            .catch(async (e) => { throw new Error(e.message + '; ' + await page.evaluate(`${$('tests-console')}.textContent.slice(-600)`)); });
+        for (let i = 0; i < 6; i++)
+            await page.evaluate(`[...document.querySelectorAll('#tests-tree .trow .caret')].find((c) => c.textContent === '▸')?.click()`);
+        const rows = await page.evaluate(`Object.fromEntries([...document.querySelectorAll('#tests-tree .trow')].map((r) => [r.querySelector('.tname').textContent, r.querySelector('.ticon').textContent]))`);
+        assert.equal(rows.test_ok, '✔');
+        assert.equal(rows.test_bad, '✖');
+    });
 });
 
 // last again: this selects a throwaway environment as the project's interpreter
