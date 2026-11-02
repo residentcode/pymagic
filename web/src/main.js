@@ -65,7 +65,7 @@ import { setupPullRequests } from './pullrequests';
 import { setupRunAnything } from './runanything';
 import { setupFileActions, fileTypes } from './fileactions';
 import { setupAutoSave } from './autosave';
-import { THEMES, defineTheme, defineLightTheme } from './theme';
+import { themeName, defineTheme, defineLightTheme } from './theme';
 import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings, withoutCallParens, onSettings, change as changeSetting } from './settings';
 import { requote } from './quotes-model';
 // each language service runs in its worker; the rest share the editor's
@@ -958,7 +958,7 @@ async function main() {
         ed.pushUndoStop();
     }));
     const createEditor = (el) => monaco.editor.create(el, {
-        theme: THEMES[themeNow()],
+        theme: themeName(settings().codeColors, themeNow()),
         automaticLayout: true,
         ...editorOptions(settings()),
         padding: { top: 10, bottom: 10 },
@@ -975,7 +975,7 @@ async function main() {
     });
     editor = createEditor($('editor'));
     editor.onDidChangeModel(() => updateWelcome());
-    applySettings(monaco, THEMES, editor);
+    applySettings(monaco, themeName, editor);
     $('build').textContent = buildLabel();
     notebook = setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, lsp, formatEngine: () => formatOptions().pymagicEngine, rootUri: () => rootUri, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     window.pymagic = { editor, monaco, openFile, notebook, changeSetting };

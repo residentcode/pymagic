@@ -15,18 +15,28 @@ const CONTROL = ['if', 'elif', 'else', 'for', 'while', 'break', 'continue', 'ret
 const CONSTANTS = ['True', 'False', 'None'];
 const SOFT = ['_', 'match', 'case', 'type', 'print', 'exec'];
 
-/** Monaco's Python grammar with control flow, constants and operators as tokens of their own. */
+/** Python's own keywords (Monaco's list also has the builtins, such as sum, str and __name__, which are names: the language server colours them). */
+const KEYWORDS = ['and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield'];
+
+/** The string states of Monaco's grammar, whose quotes it calls string.escape: here they are string.quote (VS Code draws them as the string). */
+const STRING_STATES = ['strings', 'fStringBody', 'stringBody', 'fDblStringBody', 'dblStringBody'];
+
+/** Monaco's Python grammar with control flow, constants and operators as tokens of their own, quotes as string.quote and a decorator's @ as annotation. */
 export function pythonGrammar() {
-    const keywords = pythonLanguage.keywords.filter((k) => !CONTROL.includes(k) && !CONSTANTS.includes(k) && !SOFT.includes(k));
+    const keywords = KEYWORDS.filter((k) => !CONTROL.includes(k) && !CONSTANTS.includes(k) && !SOFT.includes(k));
     const root = pythonLanguage.tokenizer.root.map((rule) => {
         if (Array.isArray(rule) && String(rule[0]) === String(/[a-zA-Z_]\w*/))
             return [/[a-zA-Z_]\w*/, { cases: { '@controlKeywords': 'keyword.control', '@constants': 'constant', '@keywords': 'keyword', '@default': 'identifier' } }];
+        if (Array.isArray(rule) && String(rule[0]) === String(/@[a-zA-Z_]\w*/)) return [rule[0], 'annotation'];
         return rule;
     });
     // operators between the decorator rule and the names: = + - * / % < > ! & | ^ ~ and the arrow
     const at = root.findIndex((r) => Array.isArray(r) && String(r[0]) === String(/@[a-zA-Z_]\w*/));
     root.splice(at + 1, 0, [/->|[=+\-*/%<>!&|^~]+/, 'operator']);
-    return { ...pythonLanguage, keywords, controlKeywords: CONTROL, constants: CONSTANTS, tokenizer: { ...pythonLanguage.tokenizer, root } };
+    const tokenizer = { ...pythonLanguage.tokenizer, root };
+    for (const state of STRING_STATES)
+        if (tokenizer[state]) tokenizer[state] = tokenizer[state].map((rule) => (Array.isArray(rule) && rule[1] === 'string.escape' ? [rule[0], 'string.quote', ...rule.slice(2)] : rule));
+    return { ...pythonLanguage, keywords, controlKeywords: CONTROL, constants: CONSTANTS, tokenizer };
 }
 
 export function setupSemantic(deps) {

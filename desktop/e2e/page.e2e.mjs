@@ -687,6 +687,33 @@ describe('the window\'s layout at different widths', () => {
     });
 });
 
+describe('code colours', () => {
+    // the colour a word of the editor is drawn in, as "r,g,b"
+    const colourOf = (word) => page.evaluate(`(() => {
+        // Monaco draws spaces as no-break spaces
+        const spans = [...document.querySelectorAll('#editor .view-line span span')].map((s) => [s, s.textContent.replace(/\\u00a0/g, ' ')]);
+        const span = (spans.find(([, t]) => t === ${JSON.stringify(word)}) ?? spans.find(([, t]) => t.includes(${JSON.stringify(word)})))?.[0];
+        return span ? getComputedStyle(span).color.replace(/[^0-9,]/g, '') : null;
+    })()`);
+    after(() => page.evaluate(`window.pymagic.changeSetting({ codeColors: 'vscode' })`));
+
+    test('the code is coloured as VS Code colours it, and PyMagic\'s own palette is a setting', async () => {
+        await open('calc.py');
+        await page.waitFor(`[...document.querySelectorAll('#editor .view-line span span')].some((s) => s.textContent === 'return')`, 15000, 'the tokens');
+        // Dark Modern: def blue, return and import purple, a string orange
+        assert.equal(await colourOf('def'), '86,156,214');
+        assert.equal(await colourOf('return'), '197,134,192');
+        assert.equal(await colourOf('import'), '197,134,192');
+        assert.equal(await colourOf('The sum of the prices'), '206,145,120');
+        // a string's quotes are the string's colour, as VS Code draws them (Monaco's grammar called them escapes)
+        assert.equal(await colourOf('"'), '206,145,120');
+        await page.evaluate(`window.pymagic.changeSetting({ codeColors: 'pymagic' })`);
+        await page.waitFor(`(() => { const s = [...document.querySelectorAll('#editor .view-line span span')].find((x) => x.textContent === 'def'); return s && getComputedStyle(s).color === 'rgb(142, 168, 255)'; })()`, 5000, "PyMagic's own colour of def");
+        await page.evaluate(`window.pymagic.changeSetting({ codeColors: 'vscode' })`);
+        await page.waitFor(`(() => { const s = [...document.querySelectorAll('#editor .view-line span span')].find((x) => x.textContent === 'def'); return s && getComputedStyle(s).color === 'rgb(86, 156, 214)'; })()`, 5000, "VS Code's colour of def again");
+    });
+});
+
 describe('tests', () => {
     test('the Tests panel finds the unittest tests and shows their outcomes', async () => {
         await page.evaluate(`(() => { const s = ${$('tests-fw')}; s.value = 'unittest'; s.dispatchEvent(new Event('change')); ${$('t-tests')}.click(); ${$('tests-all')}.click(); })()`);

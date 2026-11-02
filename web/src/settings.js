@@ -5,6 +5,7 @@ export const MONO = '"Cascadia Code", "Cascadia Mono", Consolas, "Courier New", 
 
 export const DEFAULTS = {
     theme: 'dark',            // dark | light | system
+    codeColors: 'vscode',     // vscode (VS Code's Dark Modern / Light Modern) | pymagic (PyMagic's own palette)
     fontFamily: MONO,
     fontSize: 14,
     lineHeight: 22,
@@ -16,7 +17,7 @@ export const DEFAULTS = {
     smoothScrolling: true,
     cursorStyle: 'line',      // line | block | underline
     cursorBlinking: 'blink',  // blink | smooth | phase | expand | solid
-    bracketColors: false,
+    bracketColors: true,      // as VS Code has it
     stickyScroll: false,
     ruler: 0,                 // the column of a vertical guide, 0 for none
     autoSave: 'off',          // off | blur (when the window is left) | delay (a second after the last change)
@@ -127,14 +128,14 @@ export function followSettings(editor) {
     editor.onDidDispose(() => fullEditors.delete(editor));
 }
 
-/** Makes the page and the editors follow the settings, now and whenever they change; `themes` maps 'dark' and 'light' to Monaco's theme names. */
-export function applySettings(monaco, themes, main) {
+/** Makes the page and the editors follow the settings, now and whenever they change; `themeOf(codeColors, 'dark' | 'light')` names Monaco's theme. */
+export function applySettings(monaco, themeOf, main) {
     fullEditors.add(main);
     const apply = (s) => {
         const theme = themeNow(s);
         document.documentElement.dataset.theme = theme;
         document.documentElement.classList.toggle('no-tab-close', !s.tabClose);
-        monaco.editor.setTheme(themes[theme]);
+        monaco.editor.setTheme(themeOf(s.codeColors, theme));
         const opts = editorOptions(s);
         // the cells of a notebook share the type, not the rest of the editor's choices
         const type = { fontFamily: opts.fontFamily, fontSize: opts.fontSize, fontLigatures: opts.fontLigatures };

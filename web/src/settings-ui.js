@@ -28,6 +28,7 @@ const FONTS = [
 const PAGES = [
     ['appearance', 'Appearance', [
         { key: 'theme', label: 'Theme', type: 'choice', options: [['dark', 'Dark'], ['light', 'Light'], ['system', 'Follow the system']], hint: 'The editor and every panel change with it.' },
+        { key: 'codeColors', label: 'Code colours', type: 'choice', options: [['vscode', 'VS Code (Dark Modern / Light Modern)'], ['pymagic', "PyMagic's own"]], hint: 'How keywords, strings, names and the rest of the code are coloured.' },
         { key: 'confirmGit', label: 'Ask before update and push', type: 'bool', hint: 'The Update and Push buttons of the command bar ask first.' },
     ]],
     ['editor', 'Editor', [

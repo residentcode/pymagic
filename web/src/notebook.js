@@ -416,7 +416,8 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         const host = el('div', 'nb-monaco');
         view.inputEl.append(host);
         const editor = monaco.editor.create(host, {
-            value: sourceOf(cell), language, theme: 'vs-dark', minimap: { enabled: false }, lineNumbers: 'off', folding: false, glyphMargin: cell.cell_type === 'code',
+            // no theme here: Monaco has one theme for every editor, the one the settings chose
+            value: sourceOf(cell), language, minimap: { enabled: false }, lineNumbers: 'off', folding: false, glyphMargin: cell.cell_type === 'code',
             scrollBeyondLastLine: false, scrollbar: { vertical: 'hidden', horizontal: 'auto', alwaysConsumeMouseWheel: false, handleMouseWheel: false },
             overviewRulerLanes: 0, renderLineHighlight: 'none', lineDecorationsWidth: 6, padding: { top: 4, bottom: 4 }, fontSize: 14,
             automaticLayout: true, wordWrap: 'off', contextmenu: true, quickSuggestions: { other: true, comments: false, strings: false },

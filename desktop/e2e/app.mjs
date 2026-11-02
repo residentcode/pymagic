@@ -83,7 +83,9 @@ export async function launch(root) {
         throw new Error(`${EXE} is not built: run node desktop/package.mjs --no-installer first`);
     const port = await freePort();
     const profile = mkdtempSync(join(tmpdir(), 'pymagic-e2e-profile-'));
-    const child = spawn(EXE, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, root], { stdio: 'ignore' });
+    // the person's settings are the test's own too (the engine keeps them in a file of its own, not in the user-data folder)
+    const env = { ...process.env, PYMAGIC_SETTINGS_FILE: join(profile, 'pymagic-settings.json') };
+    const child = spawn(EXE, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, root], { stdio: 'ignore', env });
     let target = null;
     for (let i = 0; i < 120 && !target; i++) {
         await sleep(500);
