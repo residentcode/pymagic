@@ -20,11 +20,18 @@ export function focusedEditor() {
  * A command of PyMagic with its keys (as text: "Ctrl+F5"); `run(editor)` gets the editor that has the focus. Defined once: a second definition of
  * the same id (the same keys for another editor) is ignored.
  */
-export function defineCommand({ id, label, group, keys = [], run, when, everywhere = false }) {
+export function defineCommand({ id, label, group, keys = [], run, when, everywhere = false, terminal = false, noRepeat = false }) {
     if (registry.has(id)) return;
-    const entry = { id, label, group, keys: keys.map(normaliseKey).filter(Boolean), run, when, everywhere, rules: [] };
+    // terminal: the key also works when the focus is in a terminal (the terminal leaves it alone); noRepeat: a held key runs it once
+    const entry = { id, label, group, keys: keys.map(normaliseKey).filter(Boolean), run, when, everywhere: everywhere || terminal, terminal, noRepeat, rules: [] };
     registry.set(id, entry);
-    monaco.editor.registerCommand(id, (_accessor, ...args) => run(focusedEditor(), ...args));
+    // in an editor Monaco runs a command for each repeat of a held key: one held a moment counts once
+    let last = 0;
+    monaco.editor.registerCommand(id, (_accessor, ...args) => {
+        if (noRepeat && Date.now() - last < 400) { last = Date.now(); return; }
+        last = Date.now();
+        return run(focusedEditor(), ...args);
+    });
     ownKeys(entry, true);
 }
 
@@ -40,7 +47,38 @@ function ownKeys(entry, on) {
 
 /** PyMagic's commands with keys, as defined (the keys they start with). */
 export function pymagicCommands() {
-    return [...registry.values()].map(({ id, label, group, keys, everywhere }) => ({ id, label, group, keys, everywhere }));
+    return [...registry.values()].map(({ id, label, group, keys, everywhere, terminal, noRepeat }) => ({ id, label, group, keys, everywhere, terminal, noRepeat }));
+}
+
+/** The keys of a command now, with the person's changes. */
+export function keysOf(id) {
+    return effectiveKeys(pymagicCommands().filter((c) => c.id === id), changesNow)[id] ?? [];
+}
+
+/**
+ * The key a menu shows for a command it names by the key it starts with ("Ctrl+D"): the person's key when that command was given another,
+ * "" when it was left without one, the same key otherwise (also when no command of the keymap starts with it).
+ */
+export function currentKeyLabel(key) {
+    const want = normaliseKey(key);
+    if (!want || !Object.keys(changesNow).length) return key;
+    // the changed commands by the keys they start with, made again when the changes change
+    if (!byStartKey) {
+        byStartKey = new Map();
+        for (const c of keymapCommands()) if (Object.hasOwn(changesNow, c.id)) for (const k of c.keys) if (!byStartKey.has(k)) byStartKey.set(k, c.id);
+    }
+    const owner = byStartKey.get(want);
+    if (!owner) return key;
+    return changesNow[owner] ? normaliseKey(changesNow[owner]) : '';
+}
+let byStartKey = null;
+
+/** Whether a key press in a terminal is one of the window's (Ctrl+` and the like): the terminal leaves those to the window. */
+export function isTerminalKey(e) {
+    const key = keyFromEvent(e);
+    if (!key) return false;
+    const now = effectiveKeys(pymagicCommands().filter((c) => c.terminal), changesNow);
+    return Object.values(now).some((keys) => keys.includes(key));
 }
 
 // ---------------------------------------------------------------- the person's changes
@@ -89,6 +127,7 @@ export function applyKeybindings(changes) {
     for (const d of applied) d.dispose();
     applied = [];
     stale = new Set();
+    byStartKey = null;
     changesNow = { ...(changes ?? {}) };
     const { KeyMod, KeyCode } = monaco;
     const rule = (key, command, when) => {
@@ -146,14 +185,17 @@ export function setupCommands(editor) {
     }, true);
     // outside the editors (a panel, the file tree, a field), the commands marked "everywhere" answer to their keys as they are now
     document.addEventListener('keydown', (e) => {
-        // the editors have the rules; a terminal's keys are the program's in it
-        if (e.defaultPrevented || (e.target instanceof Element && e.target.closest('.monaco-editor, .xterm'))) return;
+        // the editors have the rules; a terminal's keys are the program's in it, but for the window's own (Ctrl+`)
+        if (e.defaultPrevented || (e.target instanceof Element && e.target.closest('.monaco-editor'))) return;
+        const inTerminal = e.target instanceof Element && !!e.target.closest('.xterm');
         const key = keyFromEvent(e);
         if (!key) return;
-        const now = effectiveKeys(pymagicCommands().filter((c) => c.everywhere), changesNow);
+        const now = effectiveKeys(pymagicCommands().filter((c) => c.everywhere && (!inTerminal || c.terminal)), changesNow);
         const hit = Object.entries(now).find(([, keys]) => keys.includes(key));
         if (!hit) return;
         e.preventDefault();
-        void registry.get(hit[0]).run(focusedEditor());
+        const entry = registry.get(hit[0]);
+        if (e.repeat && entry.noRepeat) return;
+        void entry.run(focusedEditor());
     });
 }

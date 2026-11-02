@@ -4,6 +4,7 @@ import { openMenu } from './menu';
 import { change, settings } from './settings';
 import { openSettings } from './settings-ui';
 import { openNewProject } from './newproject';
+import { defineCommand } from './commands.js';
 
 const $ = (id) => document.getElementById(id);
 const press = (id) => () => $(id).click();
@@ -369,9 +370,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
         input.focus();
         refresh();
     }
-    document.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') { e.preventDefault(); findAction(); }
-    });
+    defineCommand({ id: 'pymagic.window.findAction', label: 'Find action (any command)', group: 'Window', keys: ['Ctrl+Shift+A'], everywhere: true, run: () => findAction() });
     findActionOpen = findAction;
     $('brand').querySelector('.mark').onclick = () => openMenu($('brand'), items());
     $('brand').querySelector('.mark').title = 'Main menu';

@@ -3,7 +3,7 @@
 // the interpreter, the Git switches), which the page mirrors and presses.
 import { change, resetAll, settings } from './settings';
 import { buildLabel, shortTime } from './build-info.js';
-import { keymapCommands } from './commands.js';
+import { keymapCommands, defineCommand } from './commands.js';
 import { keyFromEvent, effectiveKeys, clashes, withKey } from './keymap-model.js';
 import { readSnippets, writeSnippets, readFileTemplates } from './codegen-model.js';
 
@@ -407,7 +407,7 @@ const SPECIAL = {
         page.append(bar, list);
 
         const commands = keymapCommands();
-        const ORDER = ['Run', 'Edit', 'Navigate', 'Refactor', 'Tools', 'PyMagic', 'Editor'];
+        const ORDER = ['Run', 'Edit', 'Navigate', 'Refactor', 'Tools', 'Window', 'PyMagic', 'Editor'];
         let recording = null;      // the id whose new key is being pressed
         let offer = null;          // { id, key, others }: a key another command has, offered to this one
         const changes = () => settings().keybindings ?? {};
@@ -491,18 +491,6 @@ const SPECIAL = {
         changedOnly.onchange = paint;
         paint();
 
-        // keys of the window itself, not commands of the editor (fixed)
-        const fixed = document.createElement('details');
-        fixed.className = 'keymap-fixed';
-        fixed.append(Object.assign(document.createElement('summary'), { textContent: 'Keys of the window (fixed)' }));
-        const t = document.createElement('div');
-        t.className = 'keymap';
-        for (const [what, key] of [['Search everywhere (files and symbols)', 'Ctrl+P'], ['Find action (any command)', 'Ctrl+Shift+A'], ['Terminal', 'Ctrl+`'], ['New terminal', 'Ctrl+Shift+`'],
-            ['Split the terminal', 'Ctrl+Shift+5'], ['Switcher (files and tool windows)', 'Ctrl+Tab'], ['Settings', 'Ctrl+,']]) {
-            t.append(Object.assign(document.createElement('span'), { textContent: what }), Object.assign(document.createElement('kbd'), { textContent: key }));
-        }
-        fixed.append(t);
-        page.append(fixed);
     },
     about(page) {
         const p = document.createElement('div');
@@ -593,8 +581,6 @@ export function openSettings(start = 'appearance') {
 }
 
 export function setupSettingsKey() {
-    document.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === ',') { e.preventDefault(); openSettings(); }
-    });
+    defineCommand({ id: 'pymagic.window.settings', label: 'Settings', group: 'Window', keys: ['Ctrl+,'], everywhere: true, run: () => openSettings() });
 }
 

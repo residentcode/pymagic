@@ -6,6 +6,10 @@
 
 let closeOpen = null;
 
+/** The key shown for a row: the person's key when the command that starts with it was given another (Settings > Keymap); set by main.js. */
+let keyLabel = (key) => key;
+export function setKeyLabels(fn) { keyLabel = fn; }
+
 function icon(name) {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('class', 'i');
@@ -53,10 +57,11 @@ export function openMenu(anchor, items) {
             label.className = 'ctx-label';
             label.textContent = item.label;
             row.append(check, label);
-            if (item.key) {
+            const shown = item.key ? keyLabel(item.key) : '';
+            if (shown) {
                 const key = document.createElement('span');
                 key.className = 'ctx-key';
-                key.textContent = item.key;
+                key.textContent = shown;
                 row.append(key);
             }
             if (item.submenu) {

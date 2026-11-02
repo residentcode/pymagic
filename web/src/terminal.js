@@ -11,6 +11,7 @@ import { cleanName, nextName, afterClose, keptLines, restoredTabs, MAX_PANES, RE
 import { ansiReader, cssOf } from './ansi';
 import { settings } from './settings';
 import { openMenu } from './menu';
+import { defineCommand, isTerminalKey } from './commands.js';
 
 const $ = (id) => document.getElementById(id);
 const KEEP_KEY = 'pymagic.terminals';
@@ -150,9 +151,8 @@ export function setupTerminal() {
             if (e.type !== 'keydown') return true;
             if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'c' && xterm.hasSelection()) { void navigator.clipboard?.writeText(xterm.getSelection()); xterm.clearSelection(); return false; }
             if (e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c')) { void navigator.clipboard?.writeText(xterm.getSelection()); return false; }
-            // Ctrl+` and Ctrl+Shift+` belong to the panel, Ctrl+Shift+5 splits
-            if (e.ctrlKey && (e.key === '`' || e.key === '~' || e.code === 'Backquote')) return false;
-            if (e.ctrlKey && e.shiftKey && e.code === 'Digit5') return false;
+            // the window's keys (Ctrl+`, Ctrl+Shift+`, Ctrl+Shift+5, Ctrl+Tab, or what they were changed to) are the window's
+            if (isTerminalKey(e)) return false;
             return true;
         });
         xterm.onData((data) => {
@@ -340,13 +340,11 @@ export function setupTerminal() {
     $('term-split').onclick = () => split();
     $('term-split').oncontextmenu = (e) => { e.preventDefault(); pickShell(e.currentTarget, (id) => split(id)); };
     $('t-terminal').onclick = () => open(false);
-    // Ctrl+` opens the panel and Ctrl+Shift+` a new terminal, as in other editors (Shift+` is "~" on many keyboards); Ctrl+Shift+5 splits
-    window.addEventListener('keydown', (e) => {
-        if (!e.ctrlKey || e.altKey || e.repeat) return;   // a held key must not open a terminal per repeat
-        if (e.shiftKey && (e.code === 'Backquote' || e.key === '~' || e.key === '`')) { e.preventDefault(); open(true); }
-        else if (!e.shiftKey && e.key === '`') { e.preventDefault(); open(false); }
-        else if (e.shiftKey && e.code === 'Digit5' && e.target?.closest?.('#terminal-tab')) { e.preventDefault(); split(); }
-    });
+    // Ctrl+` opens the panel and Ctrl+Shift+` a new terminal, as in other editors; Ctrl+Shift+5 splits (in the terminal); a held key acts once
+    defineCommand({ id: 'pymagic.window.terminal', label: 'Terminal', group: 'Window', keys: ['Ctrl+`'], terminal: true, noRepeat: true, run: () => open(false) });
+    defineCommand({ id: 'pymagic.window.newTerminal', label: 'New terminal', group: 'Window', keys: ['Ctrl+Shift+`'], terminal: true, noRepeat: true, run: () => open(true) });
+    defineCommand({ id: 'pymagic.window.splitTerminal', label: 'Split the terminal', group: 'Window', keys: ['Ctrl+Shift+5'], terminal: true, noRepeat: true,
+        run: () => { if (document.activeElement?.closest?.('#terminal-tab')) split(); } });
     // the colours follow the theme
     new MutationObserver(() => { for (const g of groups) for (const p of g.panes) p.xterm.options.theme = themeOf(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 

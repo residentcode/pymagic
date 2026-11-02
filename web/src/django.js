@@ -3,6 +3,7 @@
 import { showTab } from './panel';
 import { toast } from './toast';
 import { COMMANDS, splitArguments, migrationLabel, parseCommands, parseOptions, completeManage, groupStructure, appOf, addModel, addView, registerModel } from './django-model';
+import { defineCommand } from './commands.js';
 const $ = (id) => document.getElementById(id);
 function el(tag, className, text) {
     const e = document.createElement(tag);
@@ -112,15 +113,12 @@ export function setupDjango(deps) {
         commandList ??= parseCommands(await manageHelp(null) ?? '');
         return commandList;
     }
-    document.addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.altKey && !e.shiftKey && (e.key === 'r' || e.key === 'R')) {
-            e.preventDefault();
-            // the tab fills itself when it is opened: its own button does that, then the console takes the keys
-            document.getElementById('t-django')?.click();
-            const focus = (tries) => { const box = document.getElementById('dj-manage'); if (box) box.focus(); else if (tries > 0) window.setTimeout(() => focus(tries - 1), 100); };
-            focus(30);
-        }
-    });
+    defineCommand({ id: 'pymagic.django.manage', label: 'manage.py console (Django tab)', group: 'Tools', keys: ['Ctrl+Alt+R'], everywhere: true, run: () => {
+        // the tab fills itself when it is opened: its own button does that, then the console takes the keys
+        document.getElementById('t-django')?.click();
+        const focus = (tries) => { const box = document.getElementById('dj-manage'); if (box) box.focus(); else if (tries > 0) window.setTimeout(() => focus(tries - 1), 100); };
+        focus(30);
+    } });
     // the settings module commands run with: manage.py's own, or another one of the project's (kept per project)
     const settingsKey = () => `pymagic.djangoSettings.${project?.manage ?? ''}`;
     function chosenSettings() {

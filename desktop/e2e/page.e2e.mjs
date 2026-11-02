@@ -1027,7 +1027,49 @@ describe('keyboard shortcuts in Settings > Keymap', () => {
         assert.equal(await keysOf('editor.action.addSelectionToNextFindMatch'), 'Ctrl+D');
         assert.equal(await keysOf('pymagic.nav.matchingBrace'), 'Ctrl+Shift+M');
         await page.waitFor(`fetch('/api/settings').then((r) => r.json()).then((s) => Object.keys(s.keybindings ?? {}).length === 0)`, 5000, 'no change kept');
+        // the keys of the window are listed too, and can be changed like the others
+        assert.equal(await keysOf('pymagic.window.settings'), 'Ctrl+,');
+        assert.equal(await keysOf('pymagic.window.terminal'), 'Ctrl+`');
+        assert.equal(await keysOf('pymagic.tabs.switcher'), 'Ctrl+Tab');
         await closeSettings();
+    });
+
+    test('the window\'s own keys change too: Settings on Ctrl+Alt+S, the Terminal on Alt+F12, and the menus show the new keys', async () => {
+        await page.evaluate(`window.pymagic.changeSetting({ keybindings: { 'pymagic.window.settings': 'Ctrl+Alt+S', 'pymagic.window.terminal': 'Alt+F12' } })`);
+        let panesBefore = Infinity;
+        try {
+            // the gear's menu names the new key of Settings…
+            await page.evaluate(`${$('b-gear')}.click()`);
+            const row = await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.includes('Settings…'))?.textContent`, 5000, 'the gear\'s menu');
+            assert.ok(row.includes('Ctrl+Alt+S') && !row.includes('Ctrl+,'), row);
+            await page.evaluate(`document.querySelectorAll('.ctx-menu').forEach((m) => m.remove())`);
+            // outside the editors: the old key does nothing, the new one opens Settings
+            await page.evaluate(`(document.activeElement?.blur?.(), document.body.focus(), true)`);
+            await press(188, ',', 'Comma', CTRL);
+            await sleep(300);
+            assert.equal(await page.evaluate(`!!document.querySelector('.settings-nav')`), false, 'Ctrl+, no longer opens Settings');
+            await press(83, 's', 'KeyS', CTRL | ALT);
+            await page.waitFor(`document.querySelector('.settings-nav')`, 5000, 'Settings on Ctrl+Alt+S');
+            await closeSettings();
+            // Alt+F12 opens the Terminal panel (a terminal it starts is closed again below: the Services window lists running terminals)
+            panesBefore = await page.evaluate(`document.querySelectorAll('.term-pane').length`);
+            await page.evaluate(`${$('t-output')}.click()`);
+            await page.evaluate(`(document.activeElement?.blur?.(), document.body.focus(), true)`);
+            await press(123, 'F12', 'F12', ALT);
+            await page.waitFor(`document.getElementById('t-terminal').classList.contains('active')`, 5000, 'the Terminal on Alt+F12');
+        }
+        finally {
+            await page.evaluate(`window.pymagic.changeSetting({ keybindings: {} })`);
+            await page.evaluate(`document.querySelectorAll('.ctx-menu, .settings-shade').forEach((m) => m.remove())`);
+            // the terminal Alt+F12 started is stopped where the Services window lists it (the ✕ of a tab's only pane keeps it)
+            if (panesBefore === 0) {
+                await page.evaluate(`${$('t-services')}.click()`);
+                await sleep(400);
+                await page.evaluate(`[...document.querySelectorAll('#services-list .svc-row')].filter((r) => r.textContent.startsWith('Terminal')).forEach((r) => [...r.querySelectorAll('button')].find((b) => b.textContent === 'Stop')?.click())`);
+                await page.waitFor(`![...document.querySelectorAll('#services-list .svc-row')].some((r) => r.textContent.startsWith('Terminal'))`, 5000, 'the terminal stopped').catch(() => { });
+            }
+            await page.evaluate(`${$('t-output')}.click()`);
+        }
     });
 });
 

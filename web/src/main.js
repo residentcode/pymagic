@@ -68,7 +68,8 @@ import { setupAutoSave } from './autosave';
 import { themeName, defineTheme, defineLightTheme } from './theme';
 import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings, withoutCallParens, onSettings, change as changeSetting } from './settings';
 import { requote } from './quotes-model';
-import { defineCommand, setupCommands, applyKeybindings } from './commands.js';
+import { defineCommand, setupCommands, applyKeybindings, currentKeyLabel } from './commands.js';
+import { setKeyLabels } from './menu';
 // each language service runs in its worker; the rest share the editor's
 self.MonacoEnvironment = {
     getWorker: (_id, label) => new Worker(
@@ -976,6 +977,7 @@ async function main() {
     });
     editor = createEditor($('editor'));
     setupCommands(editor);
+    setKeyLabels(currentKeyLabel);
     editor.onDidChangeModel(() => updateWelcome());
     applySettings(monaco, themeName, editor);
     $('build').textContent = buildLabel();

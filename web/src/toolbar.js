@@ -89,12 +89,7 @@ export function setupToolbar({ monaco, editor, save, openFile, currentFile, refa
     // ---------------------------------------------------------------- search
     $('b-find').onclick = () => search.open();
     $('b-anything').onclick = () => void search.anythingPicker();
-    document.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'p') {
-            e.preventDefault();
-            void search.anythingPicker();
-        }
-    });
+    defineCommand({ id: 'pymagic.window.searchEverywhere', label: 'Search everywhere (files and symbols)', group: 'Window', keys: ['Ctrl+P'], everywhere: true, run: () => void search.anythingPicker() });
 
     // ---------------------------------------------------------------- Git, one click from the editor (the work itself is the Git panel's)
     $('b-update').onclick = () => {

@@ -4,6 +4,7 @@
 import { ago } from './history-model.js';
 import { openMenu } from './menu';
 import { toast } from './toast';
+import { defineCommand } from './commands.js';
 
 const $ = (id) => document.getElementById(id);
 export const PREFIX = '.scratches/';
@@ -78,10 +79,7 @@ export function setupScratches({ openFile, askText, forget, currentFile }) {
     }
 
     $('scratch-new').onclick = () => void create();
-    // Ctrl+Alt+Shift+Insert, as in PyCharm
-    window.addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.altKey && e.shiftKey && e.key === 'Insert') { e.preventDefault(); e.stopPropagation(); void create(); }
-    }, true);
+    defineCommand({ id: 'pymagic.scratch.new', label: 'New scratch file', group: 'Window', keys: ['Ctrl+Shift+Alt+Insert'], everywhere: true, run: () => void create() });
     window.addEventListener('pymagic:saved', () => void load());
     void load();
     return { load, create, isScratch: (rel) => rel.startsWith(PREFIX) };

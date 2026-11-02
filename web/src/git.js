@@ -570,8 +570,9 @@ export function setupGit(deps) {
         const asked = baseGeneration;
         const res = await fetch('/api/git/file?path=' + encodeURIComponent(rel));
         const text = res.status === 200 ? await res.text() : null; // 204: the file is not in the last commit
-        // kept only when the repository has not been read again meanwhile, and has a last commit (a repository being made has none yet)
-        if (asked === baseGeneration && status.hasCommits !== false)
+        // kept only when the repository has not been read again meanwhile, and has a last commit (a repository being made has none yet);
+        // "not in the last commit" is asked again each time (it may have been read while the repository was being made)
+        if (asked === baseGeneration && status.hasCommits !== false && text !== null)
             baseText.set(rel, text);
         return text;
     }
@@ -599,10 +600,20 @@ export function setupGit(deps) {
     }
     // ------------------------------------------------------------------ the gutter
     let paintTimer;
+    // "no repository" can be an answer read while one was being made (git init, a clone, a branch switched outside): asked again, now and then,
+    // when a file is edited; once there is one, the Git tab reads it all and the bars are drawn
+    let recheckAt = 0;
+    function recheckStatus() {
+        if (Date.now() - recheckAt < 2000) return;
+        recheckAt = Date.now();
+        void api('/api/git/status').then((s) => { if (s?.available && !status.available) void refresh(); }).catch(() => { /* still none */ });
+    }
     /** The changes of an editor's file against the last commit, as hunks and the bars beside the line numbers; null when there is nothing to show. */
     async function barsOf(ed) {
         const model = ed.getModel();
         const rel = model && deps.relOf(model);
+        if (model && rel && !status.available)
+            recheckStatus();
         if (!model || !rel || !status.available)
             return null;
         const entry = fileStatus(rel);

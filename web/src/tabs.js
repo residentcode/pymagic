@@ -7,6 +7,7 @@ import { openMenu } from './menu';
 import { settings } from './settings';
 import { openSettings } from './settings-ui';
 import { tabLimitVictims } from './taborder';
+import { defineCommand, keysOf } from './commands.js';
 
 const $ = (id) => document.getElementById(id);
 export const TAB_TYPE = 'application/x-pymagic-tab';   // not text/plain, so a tab dropped on the editor inserts nothing
@@ -409,29 +410,26 @@ export function setupTabs(deps) {
         void deps.openFile(tabs[(Math.max(at, 0) + offset + tabs.length) % tabs.length]);
     }
 
-    window.addEventListener('keydown', (e) => {
-        if (!isActive()) return;
-        // in a terminal, Ctrl+W and the PageUp/PageDown keys belong to the shell (Ctrl+Tab still switches the editor's tabs)
-        if (e.target?.closest?.('.xterm') && !(e.ctrlKey && e.key === 'Tab')) return;
-        if (e.ctrlKey && e.key === 'Tab') {
-            e.preventDefault();
-            if (mru.length < 1) return;
-            if (cycling < 0) cycling = 0;
-            cycling = e.shiftKey ? (cycling - 1 + mru.length) % mru.length : (cycling + 1) % mru.length;
-            showSwitcher();
-        } else if (e.ctrlKey && !e.altKey && !e.shiftKey && (e.key === 'w' || e.key === 'W') && active) {
-            e.preventDefault();
-            void closeTab(active);
-        } else if (e.altKey && !e.ctrlKey && e.key === 'PageDown') { e.preventDefault(); step(1); }
-        else if (e.altKey && !e.ctrlKey && e.key === 'PageUp') { e.preventDefault(); step(-1); }
-        else if (e.ctrlKey && e.shiftKey && !e.altKey && (e.key === 'PageDown' || e.key === 'PageUp') && active) {
-            e.preventDefault();
-            reorder(moveBy(tabs, active, e.key === 'PageDown' ? 1 : -1));
-        }
-    }, true);
+    // the keys of the tabs; in a terminal, the shell keeps Ctrl+W and the PageUp/PageDown keys (the switcher still works there)
+    const cycle = (by) => {
+        if (!isActive() || mru.length < 1) return;
+        if (cycling < 0) cycling = 0;
+        cycling = (cycling + by + mru.length) % mru.length;
+        showSwitcher();
+    };
+    defineCommand({ id: 'pymagic.tabs.switcher', label: 'Switcher (files and tool windows), held', group: 'Window', keys: ['Ctrl+Tab'], terminal: true, run: () => cycle(1) });
+    defineCommand({ id: 'pymagic.tabs.switcherBack', label: 'Switcher, the other way', group: 'Window', keys: ['Ctrl+Shift+Tab'], terminal: true, run: () => cycle(-1) });
+    defineCommand({ id: 'pymagic.tabs.close', label: 'Close the tab', group: 'Window', keys: ['Ctrl+W'], everywhere: true, run: () => { if (isActive() && active) void closeTab(active); } });
+    defineCommand({ id: 'pymagic.tabs.next', label: 'Next tab', group: 'Window', keys: ['Alt+PageDown'], everywhere: true, run: () => { if (isActive()) step(1); } });
+    defineCommand({ id: 'pymagic.tabs.previous', label: 'Previous tab', group: 'Window', keys: ['Alt+PageUp'], everywhere: true, run: () => { if (isActive()) step(-1); } });
+    defineCommand({ id: 'pymagic.tabs.moveRight', label: 'Move the tab right', group: 'Window', keys: ['Ctrl+Shift+PageDown'], everywhere: true, run: () => { if (isActive() && active) reorder(moveBy(tabs, active, 1)); } });
+    defineCommand({ id: 'pymagic.tabs.moveLeft', label: 'Move the tab left', group: 'Window', keys: ['Ctrl+Shift+PageUp'], everywhere: true, run: () => { if (isActive() && active) reorder(moveBy(tabs, active, -1)); } });
     window.addEventListener('keyup', (e) => {
-        if (e.key === 'Control' && cycling >= 0) {
-            // Ctrl released: the file chosen in the switcher opens and becomes the most recently used
+        // the switcher's key let go: when none of its modifiers (Ctrl, or what it was changed to) is held any more
+        const mods = (keysOf('pymagic.tabs.switcher')[0] ?? 'Ctrl+Tab').split('+').slice(0, -1);
+        const held = mods.some((m) => (m === 'Ctrl' && e.ctrlKey) || (m === 'Alt' && e.altKey) || (m === 'Shift' && e.shiftKey) || (m === 'Win' && e.metaKey));
+        if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key) && !held && cycling >= 0) {
+            // let go: the file chosen in the switcher opens and becomes the most recently used
             const chosen = mru[cycling];
             cycling = -1;
             closeSwitcher();
