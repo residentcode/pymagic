@@ -1,0 +1,10 @@
+{
+  "version": "1.0",
+  "components": [
+    "Microsoft.VisualStudio.Workload.NetWeb",
+    "Microsoft.VisualStudio.Component.Git",
+    "Microsoft.NetCore.Component.SDK",
+    "Microsoft.NetCore.Component.Runtime.9.0",
+    "Microsoft.VisualStudio.Component.Node.Tools"
+  ]
+}

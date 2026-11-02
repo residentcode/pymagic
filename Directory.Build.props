@@ -1,0 +1,10 @@
+<Project>
+  <!--
+    Every project of PyMagic builds in Visual Studio 2022 (17.12 or later) and with `dotnet build`: .NET 9 (global.json picks a 9.0 SDK) and C# 13,
+    the newest C# Visual Studio 2022 compiles. Code that needs a later C# (14, which comes with .NET 10 and Visual Studio 2026) does not build here,
+    so it never reaches the repository.
+  -->
+  <PropertyGroup>
+    <LangVersion>13.0</LangVersion>
+  </PropertyGroup>
+</Project>

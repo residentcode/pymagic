@@ -1,8 +1,121 @@
 # PyMagic
 
-An independent Python IDE engine, modelled on the *behaviour* of PyCharm's Python front-end
-(documented from analysis of the shipped product). No JetBrains code is copied; the engine is
-written from scratch in C#.
+PyMagic is a Python IDE for Windows, in the spirit of PyCharm, with its own look. Its engine understands Python on its own, written from scratch in
+C#: parsing, scopes, control flow, types, inspections and refactorings. It was modelled on how PyCharm behaves, and no JetBrains code is copied.
+The editor is Monaco (the editor of VS Code), in an Electron window.
+
+What it does, in short:
+
+- **Editing**: completion, hover, go to definition, find usages, rename and the other refactorings, inspections with quick fixes (PyCharm's
+  Python inspections and PyMagic's own), code vision and inlay hints, formatting (black and ruff style), VS Code's colours for code, a keymap you can change.
+- **Frameworks**: Django (models, URLs, templates, settings, REST framework, New Project through Django's own `startproject`), Flask, FastAPI,
+  Jinja, pytest.
+- **Running**: run configurations, a debugger, tests with coverage, a profiler, a Python console, Jupyter notebooks, a terminal.
+- **Environments**: venv, uv projects (`uv add` / `uv remove`), conda, and interpreters in WSL, Docker and on SSH hosts.
+- **Tools**: Git (commit, log graph, rebase, three-way merge, changelists, shelf, pull requests), a database tool, an HTTP client, deployment
+  to servers, JSON Schema checks of config files, local history.
+- **Plugins**: the optional features can each be switched off in Settings > Plugins. See [Making a plugin](docs/plugins.md).
+
+Every setting is made in the app (Settings, Ctrl+,). Nothing has to be edited by hand in a `.json` file.
+
+## Install
+
+PyMagic runs on Windows 10 and 11 (x64). There are two ways to get it.
+
+**Run it from the sources** (for development):
+
+1. Install the [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) (9.0.100 or later), [Node.js](https://nodejs.org) 20 or later,
+   and Git.
+2. Clone the repository:
+   ```bash
+   git clone https://github.com/residentcode/pymagic.git
+   ```
+3. Double-click `PyMagic.cmd` in the cloned folder. The first start installs the app shell (`npm install` in `desktop`). Every start builds the
+   editor and the engine when they changed, then opens the project you used last (or `examples\demo`). `PyMagic.cmd C:\my\project` opens a
+   folder directly. *File > Open Folder…* (Ctrl+Shift+O) switches project.
+
+`PyMagic-web.cmd` (or `start.ps1`) runs the same editor in a browser tab instead of the app window.
+
+**Make a copy that needs nothing installed**: build it as in [Build the app](#build-the-app). Then run the installer
+`desktop\out\PyMagic-Setup-0.1.0.exe`, which installs PyMagic for the current user with a Start menu entry and a desktop shortcut. Or copy the
+folder `desktop\out\PyMagic-win32-x64` to any Windows PC and start `PyMagic.exe` in it.
+
+A Python interpreter is not part of PyMagic. Use one installed on the PC, or make one in the app (*Create a .venv…*, or New Project with uv).
+PyCharm's typeshed is used when PyCharm is installed; otherwise the bundled one is.
+
+## Build
+
+### The engine and the page
+
+```bash
+dotnet build PyMagic.sln -c Release
+```
+
+Building `PyMagic.Web` builds the page too: it runs `node build.mjs` in `web`, and `npm install` the first time. Without Node.js it only warns,
+and `-p:SkipPageBuild=true` skips it. To build the page alone:
+
+```bash
+cd web && npm install && node build.mjs
+```
+
+Run the engine with the page in a browser (it opens `http://127.0.0.1:5180/`):
+
+```bash
+dotnet run --project src/PyMagic.Web -- --root examples/demo
+```
+
+### Build the app
+
+```bash
+node desktop/package.mjs
+```
+
+It needs internet the first time, for Electron, the .NET runtime package and the installer tools. It builds
+`desktop\out\PyMagic-win32-x64\PyMagic.exe` (about 470 MB, with Electron and the .NET runtime inside) and the installer
+`desktop\out\PyMagic-Setup-0.1.0.exe` (about 150 MB). `--no-installer` builds the folder only. Close any PyMagic.exe started from
+`desktop\out` first: Windows keeps that folder locked while it runs.
+
+### Tests
+
+```bash
+dotnet run --project tests/PyMagic.Tests -c Release
+```
+
+The engine's tests run in a plain console runner. `PYMAGIC_TEST_ONLY=SchemaTests` runs one class.
+
+```bash
+cd web && node --test test/*.test.mjs
+```
+
+These are the page's tests of its modules without a browser.
+
+```bash
+cd desktop && node --test e2e/page.e2e.mjs
+```
+
+This is the page in the built PyMagic.exe, driven over the DevTools protocol. Build the app first.
+
+## Visual Studio 2022
+
+Open `PyMagic.sln` in Visual Studio 2022, version 17.12 or later (17.14 is what it is checked with).
+
+- **What to install**: Visual Studio offers what is missing from `.vsconfig` (*ASP.NET and web development*, the .NET 9 SDK and runtime,
+  Node.js tools). Node.js itself is needed for the page.
+- **SDK and C# version**: `global.json` picks a .NET 9 SDK (9.0.100 or a later 9.0 band). `Directory.Build.props` holds every project at
+  C# 13, the newest C# Visual Studio 2022 compiles, so no code that needs Visual Studio 2026 gets in.
+- **Running**: *PyMagic.Web* is the startup project. Its launch profile opens `http://127.0.0.1:5180/` on `examples\demo`, and F5 debugs the
+  engine with the page in the browser. The status bar of the page shows which build is running.
+- **Tests**: `PyMagic.Tests` is a console program. Set it as the startup project and press F5 or Ctrl+F5 to run the engine's tests. Set the
+  environment variable `PYMAGIC_TEST_ONLY` in its debug properties to run one class.
+- **Solution Items** holds this README, `work_done.md`, the plugin guide and the build settings.
+
+Visual Studio Code works too: open the folder, and use `dotnet build` and `node` from its terminal.
+
+## Plugins
+
+The optional parts of PyMagic are built-in plugins, switched on and off in **Settings > Plugins**: Django, Flask, FastAPI, Jupyter Notebooks,
+Docker, WSL, SSH, Git, JSON Schema, HTTP Client, Database Tools and SQL, Coverage, Diagrams, Profiler, Pull Requests, Deployment, Markdown and
+Macros. How to make one is in [docs/plugins.md](docs/plugins.md).
 
 ## Stack
 
@@ -11,15 +124,8 @@ written from scratch in C#.
 | Engine (lexer, parser, resolve, types) | C# / .NET 9 (`src/PyMagic.Core`) | Fast, strongly typed, good for compiler-style code (immutable trees, pattern matching) |
 | Server | C# LSP server (`src/PyMagic.Server`, stdio, no dependencies) | One protocol, any editor |
 | Host | ASP.NET Core minimal app (`src/PyMagic.Web`) | Serves the UI, a workspace file API and one in-process language server per browser tab over WebSocket |
-| UI | JavaScript + Monaco (`web/`, bundled with esbuild) | Mature editor component; Electron/Tauri shell later |
-
-## Try it on your PC
-
-PyMagic is a Windows app: an Electron window (`desktop/`, plain JavaScript) that starts the C# engine in the background. Double-click `PyMagic.cmd`. It needs the .NET 9 SDK and Node.js. The first run installs the packages; every start builds the editor and the engine when they changed, then opens the project you used last (or `examples\demo`). *File > Open Folder...* (Ctrl+Shift+O) switches project, `PyMagic.cmd C:\my\project` opens a folder directly. PyCharm's typeshed is used when PyCharm is installed.
-
-**From Visual Studio** (or `dotnet build` / `dotnet run --project src/PyMagic.Web`): building the engine now builds the page too (it runs `node build.mjs` in `web`, and `npm install` the first time; the build only warns when Node.js is missing, and `-p:SkipPageBuild=true` skips it), and the *PyMagic.Web* launch profile opens `http://127.0.0.1:5180/` on `examples\demo`. Before this the page came from `web/dist`, which git does not keep, so a build in Visual Studio could serve an old page or none. The status bar shows which build is running. To get a copy that needs nothing installed, run `node desktop/package.mjs` (needs internet once, for the .NET runtime package and the installer tools): it builds `desktop\out\PyMagic-win32-x64\PyMagic.exe` (about 470 MB, with Electron and the .NET runtime inside), which can be copied to any Windows PC, and an installer, `desktop\out\PyMagic-Setup-0.1.0.exe` (about 150 MB), that installs PyMagic for the current user with a Start menu entry and a desktop shortcut (`--no-installer` skips it).
-
-`PyMagic-web.cmd` (or `start.ps1`) runs the same editor in a browser tab instead.
+| UI | JavaScript + Monaco (`web/`, bundled with esbuild) | Mature editor component (the editor of VS Code) |
+| App | Electron (`desktop/`, plain JavaScript) | The Windows window that starts the engine; `node desktop/package.mjs` makes PyMagic.exe and its installer |
 
 ## Layout
 
@@ -43,58 +149,22 @@ The test project is a plain console runner because this machine's NuGet only has
 
 ## Open work
 
-Everything that is known to be left, in one place, gathered on 30 October 2026 from the "Not done" and "Still open" notes of items 2 to 154 (the item a line comes from is in brackets), and from PyCharm's own dialogs and menus (what PyMagic's notes never named). **How it is kept:** when an item does one of these, the line goes from here and the item says so; a new item's own "Not done" note is added here too. Code signing, auto-update and anything else for selling PyMagic are left out on purpose.
-
-**Frameworks**
-- ~~Django admin: `list_display` entries that are callables from other modules, and `get_queryset` / `formfield_for_*` overrides (37)~~ (done, item 201).
-- ~~Django forms: `clean_<field>` methods and `cleaned_data` keys (37)~~ (done, item 202).
-- ~~Django templates: the context `{% include ... with a=b %}` gives the included file, the project's context processors, `{% blocktrans %}` bodies, the tags of third-party libraries (`crispy`), and the HTML itself (35)~~ (done, item 203; elements left open at the end are not reported, since {% if %} branches and {% block %}s make that unclear).
-- ~~Django project: reading `INSTALLED_APPS` (an app is a folder that looks like one), choosing the settings module for commands that need a database (76); the custom managers of other installed apps (125); reverse relations in the project-wide Problems scan, which therefore skips some prefetch names (154)~~ (done, item 204).
-- ~~REST framework: `DEFAULT_ROUTER` extras (`.json` suffixes, the API root), the routes of other installed apps' urls (`allauth`, `rest_framework.authtoken`) (127); `to_representation` overrides, writable nested serializers without `create()`, the serializer per method in the detail of `@action` routes (130)~~ (done, item 205).
-- ~~FastAPI: `Security` scopes checked against the OAuth2 scheme, `Annotated[X, Depends(...)]` navigation from the annotation, request-body rules (a body on a `GET`), OpenAPI output, sending a request to a running server from the Endpoints detail (34, 126)~~ (done: OpenAPI output and sending a request in item 180, the rest in item 206).
-- ~~Flask: the `request.args` names a view reads, checked against its template (128)~~ (done, item 207: with `request.form` and `request.files`, against the forms that submit to the view).
-- ~~Jinja: `{% include %}` of a list or a variable, line statements (`# for x in y`), the expressions beyond brackets and strings (`{{ a b }}`) (129)~~ (done, item 208).
-- ~~pytest: `request.param` of `parametrize(..., indirect=True)` (151), fixtures registered by hooks at run time (134), a fixtures panel and a run icon in the gutter (29)~~ (done, item 209).
-
-**Plugins** (asked for by the user on 2 November 2026: optional features as built-in plugins, switched on and off in Settings > Plugins, as PyCharm's bundled ones)
-- ~~Settings > Plugins, and JSON Schema, HTTP Client, Database Tools and SQL, Profiler, Pull Requests, Deployment, Markdown and Macros as plugins~~ (done, item 289).
-- ~~The features that reach into the engine and the rest of the window, as plugins too: Django, Jupyter notebooks, Docker, Git~~ (done, item 290). ~~Flask and FastAPI, the WSL and SSH interpreters, coverage and the diagrams as plugins; with Django off, Django templates and the Endpoints panel's Django routes left alone; an interpreter chosen before in Docker, WSL or SSH not used while its plugin is off~~ (done, item 291).
+Everything that is known to be left, in one place, gathered on 30 October 2026 from the "Not done" and "Still open" notes of items 2 to 154 (the item a line comes from is in brackets), and from PyCharm's own dialogs and menus (what PyMagic's notes never named). **How it is kept:** when an item does one of these, the line goes from here to [work_done.md](work_done.md#done-from-the-open-work-list) and the item says so; a new item's own "Not done" note is added here too. Code signing, auto-update and anything else for selling PyMagic are left out on purpose.
 
 **Editor**
-- ~~Hover and signature help: a parameter's documentation in hover and in completion's `name=` items, the class docstring for a constructor call, `name=` after a `*`, documentation of methods of library base classes (119, 121); signature help inside decorators and class bases (118)~~ (done, item 210).
-- ~~Completion: dictionary keys and `Literal[...]` strings, a setting to leave out the call parentheses (31)~~ (done, item 211).
-- ~~Find in files: replacing in the selected results only, multi-line patterns, searching library files, a list of recent searches, filtering symbols by kind (20)~~ (done, item 212). Library files open read only in a window of their own; go to definition into a library (F12 on `json.dumps`) still opens nothing, and could use that window too.
-- ~~Notebooks: formatting a selection of a cell, formatting on save, cells with magics (120)~~ (done, item 213). A cell's selection is laid out by the built-in formatter whichever is chosen in the toolbar.
-- ~~Refactoring: choosing which files or hunks of a preview to apply, word-level highlighting in the diff (19); a module reached through `from pkg import *` and imports written over lines with backslashes are not followed by a move (143)~~ (done, item 214).
-- ~~Unresolved imports: asking PyPI whether a suggested package exists, an install command for other LSP clients, remembering "ignore this import" (15)~~ (done, item 215). The ignored modules are taken back out of `.pymagic/ignored-imports.json` by hand; there is no list of them in the page yet.
-- ~~Language server: semantic tokens (item 197); cancelling a request, UTF-8 position encoding (8)~~ (done, item 216). A request already being worked out is not stopped (its answer is dropped); positions the engine writes without its line map, if any are left, still count UTF-16 units.
-- ~~Formatter: the import settings of ruff and isort not read yet: `lines-after-imports`, `section-order`, `force-wrap-aliases`, `from-first`, `relative-imports-order`, `split-on-trailing-comma` (44)~~ (done, item 217). Left as it is: ruff writes `from m import B as b` before `from m import a` (by name), PyMagic writes the plain one first.
-- ~~Black's last corner cases: parentheses in `print((1))`, `with` and `await`, `# type:` comment placement, blank lines inside brackets (22, 43, 75)~~ (done, item 199, compared with black 26.10.1).
-- ~~Black 24-26's style elsewhere: parentheses around a conditional expression or a long annotation that is split, splitting before `%` after a string, implicitly joined strings one to a line, tuple targets, no trailing comma after `*args` / `**kwargs` unless the code is for 3.6 and later, an empty collection too long by its comment~~ (done, item 200: black's right-hand split ported; of 192 real files 177 come out as black writes them).
-- ~~Lines that hold a multi-line string (`"""..."""` as an argument, `"""...""".format(...)`, a docstring passed to a call) are left as written; black 24-26 splits them by its own rules (the call's closing bracket on a line of its own, a trailing comma after the string): the 15 of those 192 files that still differ, 274 lines, all of this kind~~ (done, item 218: all 192 files now come out as black 26.10.1 writes them).
+- Library files open read only in a window of their own; go to definition into a library (F12 on `json.dumps`) still opens nothing, and could use that window too.
+- A cell's selection is laid out by the built-in formatter whichever is chosen in the toolbar.
+- A request already being worked out is not stopped (its answer is dropped); positions the engine writes without its line map, if any are left, still count UTF-16 units.
 
 **Run, debug and tests**
-- Debugger: ~~pausing a running program, attaching to a running process, breakpoints added while a frame is already running (they only count in new calls) (10); the stacks of other threads (76)~~ (done, item 219; attaching was item 160); ~~setting attributes and items of objects, watches that expand, exception filters by type, function and data breakpoints (21)~~ (done, item 220; exception filters by type were item 158's exception breakpoints per class). A data breakpoint on a local of a generator ends at its first `yield`, as its frame returns there.
-- ~~Test runner: debugging a test, stopping a test run, `unittest` subtests as their own nodes, tests in classes whose bases live in other files (11)~~ (done, item 221). Under pytest the subtests of a test are not split (pytest reports the test once); a test inherited from another file is placed on its class's line.
-- ~~Coverage: branch coverage, combining runs, exporting a report, running one test with coverage (52)~~ (done, item 191).
-- ~~Automated tests of the page itself in a real browser; the checks in PyMagic.exe are scripted by hand for now, beside the page's Node tests of its pure modules (9)~~ (done, item 222: `node --test desktop/e2e/page.e2e.mjs` after building the exe). They are not part of the C# test run, which does not build the exe.
-
-**Git, packages and interpreters**
-- Git: ~~pushing tags (and deleting one on the remote); rebasing onto another branch with or without `--rebase-merges`; interactive rebase's *edit*; comparing two branches; binary-file conflicts (take a side)~~ (done, item 252). ~~Choosing lines from the editor's gutter and moving single lines between changelists (73)~~ (done, items 259, 268 and 278). ~~A merge result built from three editors and picking lines inside one side (116)~~ (done, item 277). ~~Reordering a rebase by dragging (117)~~ (done, item 276). ~~A button that amends and continues when a rebase stops at *edit*~~ (done, item 275).
-- Packages: ~~extra index URLs, trusted hosts and a proxy; installing from a path or a git URL after a confirmation; a version picker; dependency trees; lock files (uv, poetry, pip-tools) with a sync~~ (done, item 253). ~~Compiling `requirements.in`, showing that a lock file is out of date, masking credentials in index URLs~~ (done, item 270). ~~uv-managed environments (creating a uv venv, `uv pip`)~~ (done, item 271). ~~The version picker and sync for WSL, Docker and SSH interpreters~~ (done, item 272; the sync checked in a real WSL with stand-ins of pip-tools and uv, as that WSL has no pip; the version picker never tried against the pip of another system). ~~pipenv~~ (done, item 273; checked with pipenv 2026.10.5). ~~conda environments~~ (done, item 274; checked with Miniforge's conda 26.9.4).
-- Remote interpreters: ~~a terminal inside the interpreter's target, Linux paths in tracebacks, a Docker container that is already running~~ (done, item 254; the WSL and SSH terminals only checked as command lines). ~~The container's mount point found from `docker inspect`, and the debugger, test runner and notebooks in the exec forms (a container, a Compose `exec`)~~ (done, item 279).
+- Debugger: A data breakpoint on a local of a generator ends at its first `yield`, as its frame returns there.
+- Under pytest the subtests of a test are not split (pytest reports the test once); a test inherited from another file is placed on its class's line.
 
 **Installer**
-- ~~A checkbox for the desktop shortcut and a safe folder page~~ (done, item 260). Still open: PyMagic's own pictures in the wizard (66); the wizard's two new pages were not looked at on screen (only the silent installs were run).
+- Still open: PyMagic's own pictures in the wizard (66); the wizard's two new pages were not looked at on screen (only the silent installs were run)
 
 **Type engine** (ibnbolbna's area until 31 October 2026, ours from then on; what ibnbolbna did and left is in [docs/ibnbolbna-work.md](docs/ibnbolbna-work.md))
-- ~~`NoReturn` calls, `with` blocks that swallow exceptions, `break`/`return` through `finally` (4, 5); call-site parameter inference (5)~~ (done, item 186).
-- ~~Overrides: a rename that follows overriding methods, a change of signature passed on to them, a call hierarchy that includes them, marks and hierarchy for library classes (8, 17, 30)~~ (done, item 187).
-- ~~Narrowing: the types of the names that `match` patterns bind (`case int() as n`, captures, `*rest`; item 157 narrows the tuple items by their sub-patterns), the "at least n" tuple form for `len(t) >= n` (152); `Literal` through tuples (40)~~ (done, item 188).
-- ~~attrs and hooks: `attr.s` options such as `these=`, `__init_subclass__` hook parameter types (42)~~ (done, item 185).
-- ~~Small gaps: `pop` of a required TypedDict key (87), a constant index past the end of a tuple subclass (88)~~ (done, item 189).
-- The PyCharm inspections that need full types (47, 77; issue #48): ~~`assert_type`, invalid and unnecessary `cast`, `NewType`, `ClassVar`, the rest of the protocol checks, variance, `match` patterns, suspicious boolean conditions, `@deprecated`, a redeclared type alias, decorators and their nesting, `str()` of a class without `__str__`~~ (done, items 192 to 196). Still open: tuple assignment balance; pandas' two inspections. PyCharm Professional's own (Spark, BDD, mock, notebooks) are a choice still to make.
-- ~~Speed on large projects: find usages and rename on one thread, the Problems of unchanged files not remembered (78)~~ (done, item 190). Measured and left out: keeping the types of unchanged files across edits (the files they depend on are only about a fifth of an edit's time) and parsing only the edited region (10 ms of a 450 ms check); the peak while the problems are computed is still about 2.6 GB.
+- The PyCharm inspections that need full types (47, 77; issue #48): Still open: tuple assignment balance; pandas' two inspections. PyCharm Professional's own (Spark, BDD, mock, notebooks) are a choice still to make.
 - Left by item 186: `try: return 1` / `finally: return 2` followed by dead code still gets "Inconsistent return statements" (the syntactic `Terminates()` in `StyleInspections.cs`; `ScopeFlow.EndReachable` has the right answer); the Server's missing-return check has its own exit test, which `NoReturn` calls do not reach; a function that only raises, without the annotation, is not taken as `NoReturn`; names with no narrowing condition still take their types from reaching definitions computed without types.
 - Left by item 187: with multiple inheritance only one chain counts as the base method's; marks for library methods from the bundled stubs (no file) have no target.
 - Left by item 188: a subject of unknown type binds Unknown where pyright gives the pattern's class; an "at least n" tuple passed where a fixed-length tuple is wanted is not reported; a tuple put in a variable first is not checked by its literals.
@@ -105,76 +175,48 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - A cache of parsed stubs on disk (7): each start parses typeshed's builtins and the stubs a project uses again (the cache is in memory only).
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
-- New project: ~~a *New Project* dialog with a location and project types (pure Python, FastAPI, Flask, Django, Jupyter, each with its starting files), *Create Git repository*, *Create a welcome script*, and the interpreter made with it: a project venv, uv (with the path to uv), base conda or a custom environment, and a Python version~~ (done, item 169). Unlike PyCharm, the packages a kind needs are listed in requirements.txt, not installed while the project is made.
-- Run configurations: ~~kinds of configuration (Django server with host and port, pytest, a module with `-m`, FastAPI/uvicorn and Flask servers), `.env` files, running with `uv run`, the PYTHONPATH switches (content and source roots), *Store as project file*, *Open the Run panel when started*, and *Edit Configurations...* from the run selector~~ (done, item 170). Not tried yet: the three servers and uv with those packages installed.
-- Project tree menu: ~~*Debug* the tests of a folder (debugging a test is not done at all) and *Local History* of a folder; a sources root unmarked, or a folder marked, takes effect by starting the page again (it does so by itself)~~ (done, item 171). Debugged tests show their results in the test tree since item 221.
-- Tab menu: ~~*Override File Type* colours the file but the language server still reads it by its name; a second window (*Open in a new window*) does not share unsaved text with the first, so the file is saved before it opens~~ (done, item 171).
-- Editor menu: ~~*Generate…* has no getters for public attributes and no `__eq__` / `__repr__` from the fields, and its test calls the class without arguments; *Refactor…* and *Generate…* are on the first editor only~~ (done, item 171). Left as they are: *Paste as Plain Text* (every paste into the editor is plain already) and submenus in the editor's right-click menu (Monaco's menu has none; Refactor… and Generate… open PyMagic's own menus, which have them).
-- Python console: ~~an interactive interpreter beside the editor, with *Execute Line in Python Console* (Alt+Shift+E), *Run File in Python Console* and a view of its variables~~ (done, item 172).
-- Terminal: ~~the prompt does not show the virtual environment (`(.venv) PS ...`)~~ (done, item 172, for PowerShell and cmd; Git Bash and WSL keep their own prompt).
-- Diagrams: ~~of classes, modules and Django models~~ (done, item 172). Simpler than PyCharm's: no editing, notes or other layouts, and a model's relations come from its own fields.
+- Run configurations: Not tried yet: the three servers and uv with those packages installed.
 
 **Django compared with PyCharm** (from PyCharm's Django help pages and its 17 Django inspections, checked against the code on 30 October 2026)
-- Run configurations: ~~a *Django server* configuration (host, port, extra options, working folder, environment variables, `.env` files, open the browser, test server, no reload, debug only my code, log files in the console, tasks before launch); a *Django tests* configuration (a target: an app, a test case or one test; a custom settings file; options such as `--failfast`; variables; results in the test tree)~~ (done, items 170 and 173). The task before launch is another configuration; the Django tab's own `test` buttons still give plain text.
-- manage.py: ~~a console for it (Ctrl+Alt+R) with command history, completion of commands and their options, and quick documentation; a *Django console*, a Python console with Django set up~~ (done, item 174).
-- Settings: ~~a Django settings page (Django support on or off, project root, settings file, manage.py script, environment variables, not using Django's test runner); *Mark Directory As → Template folder* and resources, folders in `TEMPLATES['DIRS']` marked by themselves, template languages per file type~~ (done, item 175).
-- New Django project: ~~location, Git, environment, template language, templates folder, first app's name, admin on or off~~ (done, items 169 and 176).
-- Django Structure window: ~~models, admin classes and views, grouped by type or by app; create an app, a model or a view; makemigrations and migrate per app; register a model in the admin; from an admin class to its model~~ (done, item 177; a section of the Django tab).
-- Logical structure of a file: ~~models with fields and relations, serializers (nested too), views with their endpoints, admins, forms and signal hooks (`pre_save`, `post_delete`); create a missing ModelAdmin or serializer~~ (done, item 178).
-- Model dependency diagram: ~~of the project or one model, with notes, layout, zoom, going to the source, find usages and refactoring~~ (done, items 172 and 179).
-- Endpoints tab: ~~a generated HTTP request that can be sent while the server runs, the OpenAPI specification, the view's documentation, client code examples, filters, and endpoints from libraries and tests~~ (done, item 180).
-- Templates:
-  - ~~breakpoints in `.html` templates, with their variables in the debugger~~ (done, item 182);
-  - ~~a live preview beside the editor through the template's URL (URL parameters, back and forward, Refresh)~~ (done, item 182);
-  - ~~margin icons from a view to its template and from a template to every view that renders it~~ (done, item 181, as lenses);
-  - ~~creating a missing template from its name (Alt+Enter), in a chosen templates folder~~ (done, item 181);
-  - ~~live templates you can see and edit~~ (done, item 181);
-  - ~~completion and checks of the HTML, CSS and JavaScript inside a template~~ (done, item 182).
-- Inspections: ~~Django ORM error (an ORM method that cannot be called there); `{% endblock name %}` whose name is not its block's; a broken `#}` comment in Django templates (checked only in Jinja today); a comparison without spaces in `{% if %}`; unresolved Django 6 partial names (`{% partialdef %}`); django-constance keys unresolved or missing from the fieldsets~~ (done, item 183).
-- Code insight: ~~an intention that turns a function-based generic view into a class-based one; dotted paths in settings (`INSTALLED_APPS`, `MIDDLEWARE`, `AUTH_USER_MODEL`, `ROOT_URLCONF`) checked and followed~~ (done, item 184). Other uses of a converted function (`reverse(views.index)`, tests that call it) are left as they are.
+- Run configurations: The task before launch is another configuration; the Django tab's own `test` buttons still give plain text.
+- Code insight: Other uses of a converted function (`reverse(views.index)`, tests that call it) are left as they are.
 
 **Compared with PyCharm's help, area by area** (from its help contents of about 1,000 pages and its 103 Python inspections, checked against the code on 30 October 2026; areas not compared yet are at the end)
-- Debugger:
-  - inline values: ~~each variable's value shown at the end of its line while stopped, updated on each step~~ (done, item 158); ~~a click on them to view a value, see it as a table or add a watch~~ (done, item 159); ~~changing a value from there~~ (done, item 160);
-  - stepping: ~~Step Into My Code (library code is skipped unless asked), Smart Step Into, Run to Cursor, Force Run to Cursor, Jump to Cursor, Show Execution Point~~ (done, item 158); ~~Force Step Into / Over~~ (done, item 159);
-  - breakpoints: ~~mute all; exception breakpoints per exception class, on raise, on termination (uncaught), only in the project's files~~ (done, item 158); ~~disabled until another breakpoint is hit, a description, method (function) breakpoints on a `def` line, dragging a breakpoint to another line~~ (done, item 159); ~~suspend all threads or this thread only~~ (done, item 160);
-  - variables: ~~return values of the functions just left, set a value (double-click), Quick Evaluate (Ctrl+Alt+F8), hover values~~ (done, item 158); ~~F2 for set value, compare a value with the clipboard, a dialog for one value, Evaluate (Alt+F8) as a non-modal window for several lines~~ (done, item 159); ~~go to a variable's declaration or its type, hover values that open into their members, JSON shown as a tree~~ (done, item 160);
-  - ~~watches kept with the project, paused, duplicated, edited and reordered, added from the editor's menu, the Variables pane or by dropping text~~ (done, item 159);
-  - ~~Data View: lists, dicts, NumPy arrays, DataFrames and Series as tables~~ (done, item 159);
-  - ~~a debug console (statements, several lines, what they print, history); attach to a running process (Python 3.14 and later); the variables loading policy (on demand)~~ (done, item 160); ~~copying the call stack~~ (done, item 158); ~~IPython in the debug console (its magics, `!commands`, `name?` and its pretty display)~~ (done, item 164); left on purpose: attaching to programs of Python 3.13 and earlier, which have no `sys.remote_exec` (PyCharm injects native code into the process; antivirus programs such as Kaspersky quarantine programs that do, so PyMagic attaches to 3.14 and later only).
-  - ~~found while checking item 158: the Git blame at the end of the current line was not drawn (Monaco draws no `after` text of a decoration)~~ (fixed in item 162, with a CSS `::after` as item 158 does).
-- Code vision and inlay hints: ~~the number of usages above each function and class and the number of inheritors above each class (a click lists them); the author of most lines; parameter names in calls, the names of `pytest.mark.parametrize` arguments, return types, inferred types of variables, the attribute names of positional class patterns in `match`, and the type of each call in a method chain~~ (done, item 161). Found while checking it: `def total(shapes): return sum(s.area() for s in shapes)` is inferred as `-> int` when the items are unknown (`sum` of unknown values gives `int`, not an unknown); a type engine point, so the hint says what the engine says.
-- Editor: ~~breadcrumbs; method separators; the next / previous method; the matching brace (Ctrl+Shift+M) and the start / end of a block; the last edit location (Ctrl+Shift+Backspace) and recent locations (Ctrl+Shift+E); the switcher (Ctrl+Tab over files and tool windows); a preview tab; a tab taken out into its own window (Shift+F4); lens mode; context info (Alt+Q); expression type (Ctrl+Shift+P); external documentation in the browser (Shift+F1); a RegExp checker (Alt+Enter on a pattern); zoom with Ctrl+wheel~~ (done, item 162). PyMagic's keys differ where PyCharm's are already taken here: next / previous method is Ctrl+Shift+Down / Up (Alt+Down moves the line), the block's start / end is Alt+[ / Alt+] (Ctrl+[ indents). ~~Dragging a tab out of the window~~ (done, item 163).
-- Code generation: ~~create a class, function or method from its first use (Alt+Enter on an unresolved name); Surround With (`if`, `try`, `for`, `with`); Unwrap / Remove (Ctrl+Shift+Delete); postfix completion (`.if`, `.not`, `.for`, `.return`, `.par`); live templates you see and edit; file templates for new files; Emmet in HTML~~ (done, item 165).
-- Refactoring: ~~Introduce Parameter, Introduce Attribute (field), Extract Superclass, Pull Members Up, Push Members Down, Encapsulate Fields, Invert Boolean, Convert to Package / Module, Make Function Top-Level, Move Static Members, Extract Delegate~~ (done, item 166). Simpler than PyCharm's: Introduce Parameter gives the parameter a default instead of passing the value at each call, Invert Boolean works on variables (not on functions that return one), and moved members do not bring the imports they need.
-- Search: ~~Structural Search and Replace (find code by its shape, with templates and constraints); finding duplicated code; analysing a stack trace pasted from elsewhere (its lines become links)~~ (done, item 167). Simpler than PyCharm's: the conditions on a variable are a regular expression on its text (no type or count conditions), and duplicates are compared statement by statement.
-- Tests: ~~doctest, nose and Twisted Trial; test statistics and export of the results to a file; the history of earlier runs; rerunning automatically after each change; installing a missing test library from a quick fix~~ (done, item 168). Not tried yet: Trial with Twisted installed (it needs the download).
-- ~~Coverage: branch coverage in the line popup; going to the next / previous uncovered lines; coverage per file in the project tree; coverage suites and reports (Ctrl+Alt+F6)~~ (done, item 191).
-- Python console: ~~an interactive interpreter beside the editor that runs a line or a selection from the editor (Alt+Shift+E), with completion, a variables view, its history, a starting script~~ (done, item 172; the history is Up / Down, not a Ctrl+Alt+E list). ~~Several consoles, IPython in it (when installed; the plain console is used if not), a command queue~~ (done, item 254). Still missing: Attach Debugger from it and the Ctrl+Alt+E history list.
-- Notebooks: ~~merge and split cells, cell tags, a Variables window after each run, Run Section for a Markdown heading, Markdown headings in the Structure window~~ (done, item 255); ~~expanding objects in the Variables window, debugging a cell, a console per notebook, opening the notebook in a browser, a kernel selector with Jupyter servers~~ (done, item 256; the Jupyter server option only against two fake servers, never a real Jupyter). ~~Completion in the notebook console~~ (done, item 264); ~~syntax highlighting and LaTeX (as MathML) in the exported page~~ (done, item 263). ~~Variables, the members of a value and console completion on a Jupyter server~~ (done, item 265), ~~starting a Jupyter server on this computer~~ (done, item 266); both also checked against a real Jupyter server (item 269). ~~Debug Cell on a Jupyter server~~ (done, item 269; for a server on this computer). Still open: Debug Cell on a Jupyter server on another computer (the kernel there cannot reach the debugger of PyMagic; no way in is opened).
-- Git: ~~shelve, changelists, committing chosen lines from the editor gutter~~ (done, item 259); ~~the Log tab with its graph of commits, filters, copy hash, new branch here, checkout; a toolbar on a change marker (revert, diff, previous and next change)~~ (done, item 258); ~~pull requests and merge requests (GitHub, GitLab) listed, read, created, commented and merged inside the editor~~ (done, item 257; only against fake servers, never the real GitHub or GitLab). ~~Moving single changes between changelists, and shelving part of a file~~ (done, item 268; a change is a block of adjacent lines, not one line inside a block). Still open: ~~GitHub Enterprise (a server named in `PYMAGIC_GITHUB_HOSTS`), paging past 30 requests (a *Load more* button)~~ (done, item 262), ~~inline review comments and approvals~~ (done, item 267; against the fake forges only). ~~A Log filter by file or folder, and the graph of a filtered list~~ (done, item 261).
-- Python inspections that PyCharm has and PyMagic does not: ~~a class without `__init__`; a decorator meant for classes used outside one; a problematic nesting of decorators; suspicious relative imports; a missing or empty docstring and a single-quoted one; a missing type hint; a file without an encoding given to `open`~~ (done, item 192); ~~`ClassVar`, `NewType` and `Final` misused; a redeclared type alias; a cast between unrelated types and an unnecessary cast; `typing.assert_type`; a string conversion without a dunder method~~ (done, item 193); ~~a fixture not requested by any test; wrong arguments in `@pytest.mark.parametrize`; the parameter count of a function decorated with `@patch`~~ (done, item 194); ~~incorrect variance; inheritance from classes with disjoint bases; new-style type parameters misused; protocols defined or used wrongly; an invalid `match` pattern; a redundant boolean check; a suspicious boolean condition~~ (done, item 195); ~~code incompatible with chosen Python versions; deprecated functions, classes and modules; a type in a docstring that does not fit the inferred one; requirements not installed and outdated Poetry versions; stub packages that do not fit~~ (done, item 196). Left on purpose: advertising stub packages that could be installed, since PyMagic ships typeshed's third-party stubs and already has those types.
+- Code vision and inlay hints: Found while checking it: `def total(shapes): return sum(s.area() for s in shapes)` is inferred as `-> int` when the items are unknown (`sum` of unknown values gives `int`, not an unknown); a type engine point, so the hint says what the engine says.
+- Tests: Not tried yet: Trial with Twisted installed (it needs the download)
+- Python console: Still missing: Attach Debugger from it and the Ctrl+Alt+E history list.
+- Notebooks: Still open: Debug Cell on a Jupyter server on another computer (the kernel there cannot reach the debugger of PyMagic; no way in is opened)
 - Compared on 1 November 2026 (item 224; what was "Not compared yet"), PyMagic had none of these unless said:
-  - Database tools and SQL: ~~a Database window with data sources (SQLite first, through the project's Python and its `sqlite3`, no download), their tables, columns, keys and indexes; a data editor (rows shown page by page, sorted, filtered with a `WHERE`, cells edited, rows added and deleted, then submitted); an SQL console per source with completion of tables and columns and the results in a grid~~ (done, item 225). ~~A Django project's `DATABASES` offered as a source before its file exists; `.sql` files run against a source; results exported as JSON or SQL inserts and saved as files, CSV imported into a table~~ (done, item 226). Still missing: ~~PostgreSQL and MySQL (a driver each, and a server to check them against: downloads, which need a yes)~~ (done, item 232). Not built: SSH tunnels and TLS settings for a server, a server's other databases (one database per connection), stored procedures and triggers in the tree, and the project's own Django PostgreSQL/MySQL settings offered as sources.
-  - HTTP client: ~~`.http` and `.rest` files of requests (`###` between them, headers, a body, a body from a file), a run mark beside each, `{{variables}}` from `http-client.env.json` with environments and a private file for secrets, the response shown with its status, headers and time and kept in a history, a pasted cURL command made a request and a request copied as cURL~~ (done, item 227). Left: response handler scripts (`> {% ... %}`, JavaScript run on the response) and `>> file` are skipped; multipart bodies and files sent as bytes; requests kept to run again later as a run configuration.
-  - Profiler (has: a cProfile table of functions and their callers, item 68): ~~the functions each one calls, the call graph as a picture, a run saved as a snapshot and `.pstats` files opened, a run configuration profiled (a module, arguments, variables) and a test, yappi used when installed (threads and asyncio)~~ (done, item 228). The yappi path was checked in item 231; the graph shows one function's neighbours, not the whole program's graph at once.
-  - Inspections beyond Python and Django (has: requirements files, item 196; HTML, CSS and JavaScript in templates, item 182): ~~JSON files checked against their JSON Schema (pyproject.toml, package.json, GitHub workflows; the schemas come from SchemaStore, a download, which needs a yes)~~ (done, items 230 and 231: package.json, pyproject.toml and GitHub workflows), ~~TOML and YAML syntax, regular expressions (a redundant escape, a character twice in a class, an empty group, an unused alternative), Markdown (a link to a missing file or heading), Dockerfiles, `.env` files~~ (done, item 229). Then checked (item 233): regular expressions in f-strings, triple-quoted and escaped strings, and in a name set once at the top of the file; a link from one Markdown file to a heading of another; YAML against a schema for GitHub workflows (item 231). Not checked: a pattern joined at run time (`"a" + x`, `.format()`), YAML against other schemas than those of items 231, 234 and 235 (mkdocs, dependabot and codecov YAML and `tox.toml` are done too). ~~OpenAPI 3.0, Swagger 2.0, Kubernetes (a schema per kind, chosen by `apiVersion` and `kind`) and Renovate~~ (done, item 247). Not done: OpenAPI 3.1 (needs `$dynamicRef`), CRDs and Kustomization files, and the `if`/`then`/`not` rules of the Renovate schema. ~~The schemas built into PyMagic instead of downloaded after a question~~ (done, item 288).
-  - Intention actions (has: lambda to def, Invert boolean, implement abstract methods, create from use, Change Signature, the quote of a string by typing it, item 223): ~~`%`, `.format()` and `+` made an f-string; a comparison flipped or negated, De Morgan's law; an `if` inverted (its branches swapped), nested `if`s joined and an `and` split into nested ones; a conditional expression made an `if` statement and back; a dict literal made a `dict()` call and back; a comprehension made a `for` loop; `import a` made `from a import b` and back, a relative import made absolute and back; a type hint added to a parameter, a variable or a return from the inferred type; a docstring stub inserted (in the project's docstring format); a static method made a function; a number written in another base~~ (done, item 236; a static method made a function was there already as *Make function top-level*). Left: `import a` made `from a import b` only for a submodule written `a.b`, and a relative import converted only inside a package; an f-string conversion skips a string with a backslash.
-  - Local History (has: the versions of a file and of a folder, compared and restored, items 114 and 171): ~~the history of a selection (only the lines chosen), labels (put by hand, and by PyMagic before a refactoring, a test run and a Git update), Recent Changes of the whole project, a deleted file brought back, two old versions compared with each other~~ (done, item 237). Not built: a label that also keeps the unsaved text of open files, and the history of a selection across a rename of the file.
-  - Scratch files: ~~a scratch file of any language (Ctrl+Alt+Shift+Insert) kept outside the project, a Scratches list beside the project tree, a Python scratch run with the project's interpreter and its imports resolved~~ (done, item 238). Not built: a scratch debugged with breakpoints, and *Move to the project*.
-  - Language injections (has: HTML, CSS and JavaScript in templates): ~~SQL in Python strings, found by its keywords or a `# language=sql` comment, highlighted and completed; regular expressions in `re.compile`, `re.match` and the like highlighted and checked; JSON and HTML in strings marked by a comment; an injected piece edited in a window of its own~~ (done, item 239). Not built: injections in other languages' strings than Python, and `# language=` on a string built from parts.
-  - Spelling and grammar: ~~a typo inspection in names (split at capitals and underscores), comments and strings, with suggestions and *Save to the project's dictionary*; through Windows' own spell checker~~ (done, item 240; it was done with the checker of Windows called from the engine, as Electron has no call to ask it a word). ~~grammar in comments, docstrings, Markdown and commit messages (PyCharm's Grazie)~~ (done, item 246; LanguageTool, a Java program run on this machine only, is downloaded once, about 250 MB, when the setting *Grammar check* is turned on and the user says yes; it needs Java 11 or newer).
-  - Markdown and reStructuredText (has: Markdown highlighted): ~~a live preview beside the editor that scrolls with it, the headings in the Structure view, links to files and headings completed and checked, tables formatted, Mermaid diagrams in the preview, export to HTML; reStructuredText highlighted and previewed through docutils when the project's Python has it~~ (done, item 241). Not done: Mermaid kinds other than flowcharts and sequence diagrams (the Mermaid library is a download, which needs a yes).
-  - Macros: ~~the typing and commands of the editor recorded, played back, kept by name and given a key~~ (done, item 242). Not carried by a macro: mouse clicks, the clipboard keys, menus and function keys.
-  - Run Anything and the Services window: ~~a box (Ctrl twice) that runs a script, `python -m`, `pip install`, a `manage.py` command, a run configuration or opens a recent project, with completion; a Services window with every running program and server (run configurations, the Django server, the consoles) in one place, each stopped, restarted or shown there~~ (done, item 243). ~~Several programs run at once~~ (done, item 248: compound run configurations). Not built: the notebook kernels are not listed in it, a debugger or profiler for the members of a compound, and a Output tab per member.
-  - Deployment (lowest, with Docker and remote interpreters): ~~servers reached over SFTP, FTP or a folder, the mappings of local and remote paths, upload, download, compare and sync, upload on save, a remote host's files browsed~~ (done, item 244). ~~FTP over TLS (explicit), deleting on the server, login with a key file~~ (done, item 249; FTPS only against a test server of our own, the key-file login not tried against a real server). Not built: implicit FTPS (port 990) and trusting a self-signed FTPS certificate.
-  - Remote interpreters over SSH and Docker in depth (lowest; has: WSL, a Docker image and an SSH host as the interpreter; see *Git, packages and interpreters* above): ~~Docker Compose services as the interpreter~~ (done, item 251; checked with a real Docker engine: the `run` and `exec` forms and a script run through PyMagic's own target), ~~an interpreter chosen per run configuration~~ (done, item 245), ~~a debug server the program connects back to~~ (done, item 250). Not built: libraries of a Compose service's image shown in the editor, the debugger and test runner in the exec form, and a debug server that holds several programs at once.
+  - Database tools and SQL: Not built: SSH tunnels and TLS settings for a server, a server's other databases (one database per connection), stored procedures and triggers in the tree, and the project's own Django PostgreSQL/MySQL settings offered as sources.
+  - HTTP client: Left: response handler scripts (`> {% ... %}`, JavaScript run on the response) and `>> file` are skipped; multipart bodies and files sent as bytes; requests kept to run again later as a run configuration.
+  - Profiler (has: a cProfile table of functions and their callers, item 68): the graph shows one function's neighbours, not the whole program's graph at once.
+  - Inspections beyond Python and Django (has: requirements files, item 196; HTML, CSS and JavaScript in templates, item 182): Then checked (item 233): regular expressions in f-strings, triple-quoted and escaped strings, and in a name set once at the top of the file; a link from one Markdown file to a heading of another; YAML against a schema for GitHub workflows (item 231). Not checked: a pattern joined at run time (`"a" + x`, `.format()`), YAML against other schemas than those of items 231, 234 and 235 (mkdocs, dependabot and codecov YAML and `tox.toml` are done too). Not done: OpenAPI 3.1 (needs `$dynamicRef`), CRDs and Kustomization files, and the `if`/`then`/`not` rules of the Renovate schema.
+  - Intention actions (has: lambda to def, Invert boolean, implement abstract methods, create from use, Change Signature, the quote of a string by typing it, item 223): Left: `import a` made `from a import b` only for a submodule written `a.b`, and a relative import converted only inside a package; an f-string conversion skips a string with a backslash.
+  - Local History (has: the versions of a file and of a folder, compared and restored, items 114 and 171): Not built: a label that also keeps the unsaved text of open files, and the history of a selection across a rename of the file.
+  - Scratch files: Not built: a scratch debugged with breakpoints, and *Move to the project*.
+  - Language injections (has: HTML, CSS and JavaScript in templates): Not built: injections in other languages' strings than Python, and `# language=` on a string built from parts.
+  - Markdown and reStructuredText (has: Markdown highlighted): Not done: Mermaid kinds other than flowcharts and sequence diagrams (the Mermaid library is a download, which needs a yes)
+  - Macros: Not carried by a macro: mouse clicks, the clipboard keys, menus and function keys.
+  - Run Anything and the Services window: Not built: the notebook kernels are not listed in it, a debugger or profiler for the members of a compound, and a Output tab per member.
+  - Deployment (lowest, with Docker and remote interpreters): Not built: implicit FTPS (port 990) and trusting a self-signed FTPS certificate.
+  - Remote interpreters over SSH and Docker in depth (lowest; has: WSL, a Docker image and an SSH host as the interpreter; see *Git, packages and interpreters* above): Not built: libraries of a Compose service's image shown in the editor, the debugger and test runner in the exec form, and a debug server that holds several programs at once.
 
-**Checked** (the old notes of a To check list, looked at again on 31 October 2026; what is still open is in the lists above)
-- Parser: ~~store-context validation and finer error messages (2)~~ (done, item 198: targets Python refuses, brackets never closed or mismatched, in Python's words). Scopes: ~~`__all__`, `try/except ImportError` fallbacks, definitions under conditions (3)~~ (done, item 198: star imports follow `__all__`, a name `__all__` lists must exist, a failed import beside its fallback takes the fallback's type, a class defined two ways under a condition only misses what neither has; functions under conditions were already right).
-- Typeshed: ~~`__init__.pyi` re-exports of `import a as a`, `__all__ +=`, overloads with an explicit `self`~~ (done, item 198); a cache of parsed stubs on disk (7) is in *Type engine* above.
-- ~~Black's last corner cases (22, 43, 75)~~ (done, item 199); ~~automated tests of the page in a real browser (9)~~ (done, item 222).
+
+### Different from PyCharm on purpose
+
+Not work left: choices made and kept, noted where they were made.
+
+- Left as it is: ruff writes `from m import B as b` before `from m import a` (by name), PyMagic writes the plain one first.
+- Measured and left out: keeping the types of unchanged files across edits (the files they depend on are only about a fifth of an edit's time) and parsing only the edited region (10 ms of a 450 ms check); the peak while the problems are computed is still about 2.6 GB.
+- New project: unlike PyCharm, a project made with a venv lists the packages of its kind (FastAPI, Flask, Jupyter) in requirements.txt without installing them; Django is installed, so that its own startproject writes the project, and with uv every kind's packages are added with uv add (items 285 and 287).
+- Editor menu: Left as they are: *Paste as Plain Text* (every paste into the editor is plain already) and submenus in the editor's right-click menu (Monaco's menu has none; Refactor… and Generate… open PyMagic's own menus, which have them)
+- Diagrams: Simpler than PyCharm's: no editing, notes or other layouts, and a model's relations come from its own fields.
+- Debugger: left on purpose: attaching to programs of Python 3.13 and earlier, which have no `sys.remote_exec` (PyCharm injects native code into the process; antivirus programs such as Kaspersky quarantine programs that do, so PyMagic attaches to 3.14 and later only)
+- Editor: PyMagic's keys differ where PyCharm's are already taken here: next / previous method is Ctrl+Shift+Down / Up (Alt+Down moves the line), the block's start / end is Alt+[ / Alt+] (Ctrl+[ indents)
+- Refactoring: Simpler than PyCharm's: Introduce Parameter gives the parameter a default instead of passing the value at each call, Invert Boolean works on variables (not on functions that return one), and moved members do not bring the imports they need.
+- Search: Simpler than PyCharm's: the conditions on a variable are a regular expression on its text (no type or count conditions), and duplicates are compared statement by statement.
+- Python inspections that PyCharm has and PyMagic does not: Left on purpose: advertising stub packages that could be installed, since PyMagic ships typeshed's third-party stubs and already has those types.
 
 ## Work done
 
-The 291 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 292 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
