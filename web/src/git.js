@@ -9,6 +9,7 @@ import { Lanes, graphFits, logQuery, parseRefs, rowShapes } from './git-graph';
 import { changedLines, counts, hunkState, numbering, payload, selectAll, selectNone, stateOf, toggleHunk, toggleLine } from './hunks';
 import { commitList, commitPaths, groupFiles, linesOfChange, partialPaths } from './changelist-model';
 import { openChanges } from './git-parts';
+import { defineCommand } from './commands.js';
 const $ = (id) => document.getElementById(id);
 async function api(url, init) {
     const res = await fetch(url, init);
@@ -1321,7 +1322,7 @@ export function setupGit(deps) {
     };
     // ------------------------------------------------------------------ wiring
     $('t-git').onclick = () => { showTab('git'); void refresh(); };
-    editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.Digit9, () => { showTab('git'); void refresh(); $('git-message').focus(); });
+    defineCommand({ id: 'pymagic.git.commitMessage', label: 'Git: commit message', group: 'Tools', keys: ['Alt+9'], everywhere: true, run: () => { showTab('git'); void refresh(); $('git-message').focus(); } });
     window.addEventListener('pymagic:saved', () => void refresh());
     window.addEventListener('focus', () => void refresh());
     document.addEventListener('visibilitychange', () => { if (!document.hidden)

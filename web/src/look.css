@@ -414,6 +414,23 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 .set-ignored code { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .keymap { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 24px; align-items: center; }
 .keymap kbd { justify-self: end; }
+/* Settings > Keymap: one row a command, its keys and what can be done */
+.keymap-bar { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+.keymap-bar input[type=search] { flex: 1; height: 28px; }
+.keymap-changed { display: flex; align-items: center; gap: 6px; color: var(--dim); white-space: nowrap; }
+#keymap-list h3 { margin: 14px 0 4px; font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+.keymap-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 3px 6px; border-radius: 6px; }
+.keymap-row:hover { background: var(--hover); }
+.keymap-row.changed .keymap-name::after { content: ' •'; color: var(--accent); }
+.keymap-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.keymap-keys { display: flex; gap: 4px; justify-content: flex-end; min-width: 110px; }
+.keymap-keys em { color: var(--accent-text, var(--accent)); font-style: normal; }
+.keymap-none { color: var(--faint); font-size: 12px; }
+.keymap-acts { display: flex; gap: 4px; min-width: 190px; justify-content: flex-end; }
+.keymap-acts button { height: 24px; padding: 0 8px; font-size: 12px; }
+.keymap-clash { margin: 2px 6px 6px; padding: 6px 10px; border-radius: 6px; background: rgba(255, 176, 64, .12); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.keymap-fixed { margin-top: 18px; }
+.keymap-fixed summary { cursor: pointer; color: var(--dim); margin-bottom: 6px; }
 .about { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
 .about .mark { width: 72px; height: 72px; }
 .about-name { font-size: 22px; font-weight: 600; }

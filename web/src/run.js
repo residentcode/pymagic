@@ -10,6 +10,7 @@ import { inlineLines, inlineText, callsOn, expressionAt, stackText, functionBrea
 import { openMenu } from './menu';
 import { toast } from './toast';
 import { linkPieces } from './tracelink-model.js';
+import { defineCommand } from './commands.js';
 const $ = (id) => document.getElementById(id);
 const STORAGE_KEY = 'pymagic.breakpoints';
 const norm = (p) => p.replace(/\\/g, '/').toLowerCase();
@@ -165,16 +166,10 @@ export function setupRun(deps) {
         });
     }
     glyphMouse(editor);
-    editor.addCommand(monaco.KeyCode.F9, () => {
-        const model = editor.getModel(), pos = editor.getPosition();
-        if (model && pos)
-            toggleBreakpoint(model, pos.lineNumber);
-    });
-    editor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.F9, () => {
-        const model = editor.getModel(), pos = editor.getPosition();
-        if (model && pos)
-            void editBreakpointAt(model, pos.lineNumber);
-    });
+    // the line of the editor that has the focus (the main one, a side of a split, a cell of a notebook)
+    const atLine = (fn) => (ed) => { const model = ed?.getModel(), pos = ed?.getPosition(); if (model && pos) fn(model, pos.lineNumber); };
+    defineCommand({ id: 'pymagic.run.toggleBreakpoint', label: 'Toggle a breakpoint', group: 'Run', keys: ['F9'], run: atLine(toggleBreakpoint) });
+    defineCommand({ id: 'pymagic.run.editBreakpoint', label: 'Breakpoint with a condition', group: 'Run', keys: ['Shift+F9'], run: atLine((m, l) => void editBreakpointAt(m, l)) });
     /** Called for every model the app creates, so saved breakpoints come back. */
     function onModelCreated(rel, model) {
         for (const saved of stored()[rel] ?? []) {
@@ -1575,23 +1570,23 @@ export function setupRun(deps) {
     $('b-into').onclick = () => resume('stepIn');
     $('b-out').onclick = () => resume('stepOut');
     const K = monaco.KeyCode, M = monaco.KeyMod;
-    editor.addCommand(K.F5, () => (paused ? resume('continue') : void start(true)));
-    editor.addCommand(M.CtrlCmd | K.F5, () => void start(false));
-    editor.addCommand(M.Shift | K.F5, () => run?.send({ type: 'stop' }));
-    editor.addCommand(K.F10, () => resume('next'));
-    editor.addCommand(K.F11, () => resume('stepIn'));
-    editor.addCommand(M.Shift | K.F11, () => resume('stepOut'));
-    /** The keys of stepping to a place and of looking at values, in the main editor and the sides of a split. */
+    defineCommand({ id: 'pymagic.run.debug', label: 'Debug (or resume)', group: 'Run', keys: ['F5'], everywhere: true, run: () => (paused ? resume('continue') : void start(true)) });
+    defineCommand({ id: 'pymagic.run.run', label: 'Run the file', group: 'Run', keys: ['Ctrl+F5'], everywhere: true, run: () => void start(false) });
+    defineCommand({ id: 'pymagic.run.stop', label: 'Stop', group: 'Run', keys: ['Shift+F5'], everywhere: true, run: () => run?.send({ type: 'stop' }) });
+    defineCommand({ id: 'pymagic.run.stepOver', label: 'Step over', group: 'Run', keys: ['F10'], everywhere: true, run: () => resume('next') });
+    defineCommand({ id: 'pymagic.run.stepInto', label: 'Step into', group: 'Run', keys: ['F11'], everywhere: true, run: () => resume('stepIn') });
+    defineCommand({ id: 'pymagic.run.stepOut', label: 'Step out', group: 'Run', keys: ['Shift+F11'], everywhere: true, run: () => resume('stepOut') });
+    defineCommand({ id: 'pymagic.run.toCursor', label: 'Run to cursor', group: 'Run', keys: ['Alt+F9'], run: (ed) => { focused = ed; runToCursor(false); } });
+    defineCommand({ id: 'pymagic.run.forceToCursor', label: 'Force run to cursor', group: 'Run', keys: ['Ctrl+Alt+F9'], run: (ed) => { focused = ed; runToCursor(true); } });
+    defineCommand({ id: 'pymagic.run.smartStepInto', label: 'Smart step into', group: 'Run', keys: ['Shift+F7'], run: () => void smartStepInto() });
+    defineCommand({ id: 'pymagic.run.showExecutionPoint', label: 'Show execution point', group: 'Run', keys: ['Alt+F10'], run: () => showExecutionPoint() });
+    defineCommand({ id: 'pymagic.run.quickEvaluate', label: 'Quick evaluate', group: 'Run', keys: ['Ctrl+Alt+F8'], run: (ed) => { focused = ed; quickEvaluate(ed); } });
+    defineCommand({ id: 'pymagic.run.evaluate', label: 'Evaluate expression (a window)', group: 'Run', keys: ['Alt+F8'], run: (ed) => { focused = ed; evaluateWindow(expressionOf(ed)); } });
+    defineCommand({ id: 'pymagic.run.forceStepInto', label: 'Force step into', group: 'Run', keys: ['Alt+Shift+F7'], run: () => forceStep('stepIn') });
+    defineCommand({ id: 'pymagic.run.forceStepOver', label: 'Force step over', group: 'Run', keys: ['Alt+Shift+F8'], run: () => forceStep('next') });
+    /** The editors whose place counts for stepping to the cursor and looking at values: the main one and the sides of a split. */
     function placeKeys(ed) {
         ed.onDidFocusEditorText(() => { focused = ed; });
-        ed.addCommand(M.Alt | K.F9, () => { focused = ed; runToCursor(false); });
-        ed.addCommand(M.CtrlCmd | M.Alt | K.F9, () => { focused = ed; runToCursor(true); });
-        ed.addCommand(M.Shift | K.F7, () => void smartStepInto());
-        ed.addCommand(M.Alt | K.F10, showExecutionPoint);
-        ed.addCommand(M.CtrlCmd | M.Alt | K.F8, () => { focused = ed; quickEvaluate(ed); });
-        ed.addCommand(M.Alt | K.F8, () => { focused = ed; evaluateWindow(expressionOf(ed)); });
-        ed.addCommand(M.Alt | M.Shift | K.F7, () => forceStep('stepIn'));
-        ed.addCommand(M.Alt | M.Shift | K.F8, () => forceStep('next'));
         ed.addAction({
             id: 'pymagic.addWatch', label: 'Add to Watches', contextMenuGroupId: 'z_debug', contextMenuOrder: 1,
             precondition: undefined, run: () => addWatch(expressionOf(ed)),
@@ -1690,16 +1685,7 @@ export function setupRun(deps) {
     /** Another editor (the right side of a split) takes breakpoints with a click in its margin, F9 and Shift+F9, and the run and debug keys. */
     function attach(other) {
         glyphMouse(other);
-        const at = (fn) => () => { const model = other.getModel(), pos = other.getPosition(); if (model && pos)
-            fn(model, pos.lineNumber); };
-        other.addCommand(monaco.KeyCode.F9, at(toggleBreakpoint));
-        other.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.F9, at((m, l) => void editBreakpointAt(m, l)));
-        other.addCommand(K.F5, () => (paused ? resume('continue') : void start(true)));
-        other.addCommand(M.CtrlCmd | K.F5, () => void start(false));
-        other.addCommand(M.Shift | K.F5, () => run?.send({ type: 'stop' }));
-        other.addCommand(K.F10, () => resume('next'));
-        other.addCommand(K.F11, () => resume('stepIn'));
-        other.addCommand(M.Shift | K.F11, () => resume('stepOut'));
+        // F9, Shift+F9 and the run and debug keys are commands of every editor (commands.js): they act on this one when it has the focus
         placeKeys(other);
     }
     // Debug tests (the Tests panel, the menus of the tree): pytest, or unittest for the unittest framework, run as a module under the debugger
@@ -1750,12 +1736,7 @@ export function setupRun(deps) {
          */
         notebook: {
             attachEditor(ed) {
-                glyphMouse(ed);
-                ed.addCommand(monaco.KeyCode.F9, () => {
-                    const model = ed.getModel(), pos = ed.getPosition();
-                    if (model && pos)
-                        toggleBreakpoint(model, pos.lineNumber);
-                });
+                glyphMouse(ed);   // F9 is the command of every editor: it toggles in the cell when the cell has the focus
             },
             async cellSession() {
                 if (run)

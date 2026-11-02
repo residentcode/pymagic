@@ -5,6 +5,7 @@ import { showTab } from './panel';
 import { openMenu } from './menu';
 import { change, settings } from './settings';
 import { openSettings, setupSettingsKey } from './settings-ui';
+import { defineCommand } from './commands.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -47,8 +48,8 @@ export function setupToolbar({ monaco, editor, save, openFile, currentFile, refa
     }
     $('b-back').onclick = () => step(back, forward);
     $('b-forward').onclick = () => step(forward, back);
-    editor.addCommand(M.CtrlCmd | M.Alt | K.LeftArrow, () => step(back, forward));
-    editor.addCommand(M.CtrlCmd | M.Alt | K.RightArrow, () => step(forward, back));
+    defineCommand({ id: 'pymagic.nav.back', label: 'Back', group: 'Navigate', keys: ['Ctrl+Alt+Left'], everywhere: true, run: () => step(back, forward) });
+    defineCommand({ id: 'pymagic.nav.forward', label: 'Forward', group: 'Navigate', keys: ['Ctrl+Alt+Right'], everywhere: true, run: () => step(forward, back) });
 
     // ---------------------------------------------------------------- what Run starts: the chosen run configuration, or the file in the editor
     const target = () => {

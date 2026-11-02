@@ -6,6 +6,7 @@ import { editSignature, fetchSignature } from './signature';
 import { pickTarget } from './movepicker';
 import { previewAlways, previewChanges } from './preview';
 import { askChoice } from './ask';
+import { defineCommand } from './commands.js';
 const toRange = (r) => ({
     startLineNumber: r.start.line + 1, startColumn: r.start.character + 1,
     endLineNumber: r.end.line + 1, endColumn: r.end.character + 1,
@@ -330,13 +331,8 @@ export function setupRefactor(deps) {
         const [k, u, r, name, all, members, chosen] = match.command.arguments;
         await run(k, u, r, name, all, members ?? [], chosen ?? []);
     }
-    const M = monaco.KeyMod, K = monaco.KeyCode;
-    editor.addCommand(M.CtrlCmd | M.Alt | K.KeyV, () => void trigger('extractVariable'));
-    editor.addCommand(M.CtrlCmd | M.Alt | K.KeyC, () => void trigger('extractConstant'));
-    editor.addCommand(M.CtrlCmd | M.Alt | K.KeyM, () => void trigger('extractMethod'));
-    editor.addCommand(M.CtrlCmd | M.Alt | K.KeyN, () => void trigger('inlineVariable'));
-    editor.addCommand(M.CtrlCmd | K.F6, () => void trigger('changeSignature'));
-    editor.addCommand(M.CtrlCmd | M.Alt | K.KeyP, () => void trigger('inlineMethod'));
-    editor.addCommand(K.F6, () => void trigger('moveSymbol'));
+    for (const [kind, label, key] of [['extractVariable', 'Extract variable', 'Ctrl+Alt+V'], ['extractConstant', 'Extract constant', 'Ctrl+Alt+C'], ['extractMethod', 'Extract method', 'Ctrl+Alt+M'],
+        ['inlineVariable', 'Inline variable', 'Ctrl+Alt+N'], ['changeSignature', 'Change signature', 'Ctrl+F6'], ['inlineMethod', 'Inline method', 'Ctrl+Alt+P'], ['moveSymbol', 'Move to another file', 'F6']])
+        defineCommand({ id: 'pymagic.refactor.' + kind, label, group: 'Refactor', keys: [key], run: () => void trigger(kind) });
     return { trigger, applyEdits };
 }

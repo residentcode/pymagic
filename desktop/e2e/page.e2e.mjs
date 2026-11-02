@@ -942,6 +942,95 @@ describe('HTTP client', () => {
     });
 });
 
+describe('keyboard shortcuts in Settings > Keymap', () => {
+    // a real key press in the focused page element (Chrome's own event, as a person's)
+    const press = async (vk, key, code, modifiers) => {
+        await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', windowsVirtualKeyCode: vk, key, code, modifiers });
+        await page.send('Input.dispatchKeyEvent', { type: 'keyUp', windowsVirtualKeyCode: vk, key, code, modifiers });
+    };
+    const CTRL = 2, ALT = 1, SHIFT = 8;
+    const openKeymap = async () => {
+        await page.evaluate(`${$('b-gear')}.click()`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim().startsWith('Settings…'))`, 5000, 'the gear\'s menu');
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim().startsWith('Settings…')).click()`);
+        await page.waitFor(`document.querySelector('.settings-nav')`, 5000, 'the Settings window');
+        await page.evaluate(`[...document.querySelectorAll('.settings-nav button')].find((b) => b.textContent === 'Keymap').click()`);
+        await page.waitFor(`document.querySelectorAll('#keymap-list .keymap-row').length > 50`, 5000, 'the commands');
+    };
+    const rowOf = (id) => `document.querySelector('#keymap-list .keymap-row[data-id="${id}"]')`;
+    const keysOf = (id) => page.evaluate(`[...${rowOf(id)}.querySelectorAll('.keymap-keys kbd')].map((k) => k.textContent).join(' ') || ${rowOf(id)}.querySelector('.keymap-keys').textContent`);
+    const clickIn = (id, label) => page.evaluate(`[...${rowOf(id)}.querySelectorAll('button')].find((b) => b.textContent === ${JSON.stringify(label)}).click()`);
+    const closeSettings = () => page.evaluate(`[...document.querySelectorAll('.settings-foot button')].find((b) => b.textContent === 'Done').click()`);
+    after(() => page.evaluate(`window.pymagic.changeSetting({ keybindings: {} })`));
+
+    test('every command is listed with its key; Ctrl+D is given to another command, and works there', async () => {
+        await openKeymap();
+        // Monaco's own Ctrl+D, found by a search
+        await page.evaluate(`(() => { const s = document.getElementById('keymap-search'); s.value = 'next find match'; s.dispatchEvent(new Event('input')); })()`);
+        await page.waitFor(rowOf('editor.action.addSelectionToNextFindMatch'), 5000, 'Ctrl+D\'s command');
+        assert.equal(await keysOf('editor.action.addSelectionToNextFindMatch'), 'Ctrl+D');
+        // PyMagic's own commands are there with their keys
+        await page.evaluate(`(() => { const s = document.getElementById('keymap-search'); s.value = ''; s.dispatchEvent(new Event('input')); })()`);
+        assert.equal(await keysOf('pymagic.run.debug'), 'F5');
+        assert.equal(await keysOf('pymagic.run.toggleBreakpoint'), 'F9');
+        // Copy line down gets Ctrl+D: the clash is said, and the key given to it
+        await clickIn('editor.action.copyLinesDownAction', 'Change');
+        await page.waitFor(`${rowOf('editor.action.copyLinesDownAction')}.textContent.includes('Press the new keys')`, 5000, 'waiting for the keys');
+        await press(68, 'd', 'KeyD', CTRL);
+        await page.waitFor(`document.querySelector('.keymap-clash')?.textContent.includes('Ctrl+D is the key of')`, 5000, 'the clash');
+        await page.evaluate(`[...document.querySelectorAll('.keymap-clash button')].find((b) => b.textContent === 'Give it to this one').click()`);
+        await page.waitFor(`${rowOf('editor.action.copyLinesDownAction')}?.textContent.includes('Ctrl+D')`, 5000, 'the new key shown');
+        assert.equal(await keysOf('editor.action.addSelectionToNextFindMatch'), 'none');
+        // kept in the settings (written a moment after the change)
+        const kept = await page.waitFor(`fetch('/api/settings').then((r) => r.json()).then((s) => Object.keys(s.keybindings ?? {}).length === 2 && s.keybindings)`, 5000, 'the keys kept');
+        assert.deepEqual(kept, { 'editor.action.copyLinesDownAction': 'Ctrl+D', 'editor.action.addSelectionToNextFindMatch': '' });
+        // PyMagic's Matching brace from Ctrl+Shift+M to Alt+M
+        await clickIn('pymagic.nav.matchingBrace', 'Change');
+        await press(77, 'm', 'KeyM', ALT);
+        await page.waitFor(`${rowOf('pymagic.nav.matchingBrace')}.querySelector('kbd')?.textContent === 'Alt+M'`, 5000, 'Alt+M shown');
+        await closeSettings();
+
+        // in the editor: Ctrl+D copies the line now
+        await open('calc.py');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 1, column: 1 }); ed.focus(); return true; })()`);
+        const lines = () => page.evaluate(`window.pymagic.editor.getModel().getLineCount()`);
+        const before = await lines();
+        await press(68, 'd', 'KeyD', CTRL);
+        await page.waitFor(`window.pymagic.editor.getModel().getLineCount() === ${before + 1}`, 5000, 'the line copied by Ctrl+D');
+        assert.equal(await page.evaluate(`window.pymagic.editor.getModel().getLineContent(2)`), 'import json');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.trigger('e2e', 'undo', {}); return true; })()`);
+        // Alt+M goes to the matching bracket; Ctrl+Shift+M no longer does
+        const line = await page.evaluate(`window.pymagic.editor.getModel().getLinesContent().findIndex((l) => l.startsWith('def total(')) + 1`);
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: ${line}, column: 10 }); ed.focus(); return true; })()`);
+        await press(77, 'm', 'KeyM', CTRL | SHIFT);
+        await sleep(300);
+        assert.equal(await page.evaluate(`window.pymagic.editor.getPosition().column`), 10, 'the old key does nothing now');
+        await press(77, 'm', 'KeyM', ALT);
+        await page.waitFor(`window.pymagic.editor.getPosition().column !== 10`, 5000, 'Alt+M at the matching bracket');
+
+        // an action PyMagic gave the editor (Surround With…, Ctrl+Alt+T) moved to Ctrl+Alt+Y: the old key does nothing, the new one opens it
+        const keys = await page.evaluate(`fetch('/api/settings').then((r) => r.json()).then((s) => s.keybindings)`);
+        await page.evaluate(`window.pymagic.changeSetting({ keybindings: { ...${JSON.stringify(keys)}, 'pymagic.surroundWith': 'Ctrl+Alt+Y' } })`);
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 1, column: 1 }); ed.focus(); return true; })()`);
+        await press(84, 't', 'KeyT', CTRL | ALT);
+        await sleep(400);
+        assert.equal(await page.evaluate(`!!document.querySelector('.ctx-menu')`), false, 'Ctrl+Alt+T no longer opens Surround With');
+        await press(89, 'y', 'KeyY', CTRL | ALT);
+        await page.waitFor(`document.querySelector('.ctx-menu')`, 5000, 'Surround With on Ctrl+Alt+Y');
+        await page.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+        await page.evaluate(`document.querySelectorAll('.ctx-menu').forEach((m) => m.remove())`);
+
+        // Reset: back to the keys they start with
+        await openKeymap();
+        for (const id of ['editor.action.copyLinesDownAction', 'editor.action.addSelectionToNextFindMatch', 'pymagic.nav.matchingBrace', 'pymagic.surroundWith']) await clickIn(id, 'Reset');
+        assert.equal(await keysOf('pymagic.surroundWith'), 'Ctrl+Alt+T');
+        assert.equal(await keysOf('editor.action.addSelectionToNextFindMatch'), 'Ctrl+D');
+        assert.equal(await keysOf('pymagic.nav.matchingBrace'), 'Ctrl+Shift+M');
+        await page.waitFor(`fetch('/api/settings').then((r) => r.json()).then((s) => Object.keys(s.keybindings ?? {}).length === 0)`, 5000, 'no change kept');
+        await closeSettings();
+    });
+});
+
 describe('settings that live in the app', () => {
     test('an ignored import is listed in Settings > Inspections and reported again from there', async () => {
         const file = join(app.root, '.pymagic', 'ignored-imports.json');

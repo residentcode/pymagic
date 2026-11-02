@@ -29,6 +29,7 @@ export const DEFAULTS = {
     methodSeparators: false,  // a line above each function and method
     lensMode: true,           // hovering the scroll bar shows that part of the file
     previewTab: false,        // a file opened with one click replaces the last one opened so, until it is edited
+    keybindings: {},          // Settings > Keymap: command id -> key ("Ctrl+Shift+D"), "" for none; what is not here keeps its own key
     codeVision: true,         // usages and inheritors above functions and classes
     codeVisionAuthor: true,   // and who wrote most of each (Git blame)
     hintParams: true,         // the names of parameters before arguments
@@ -64,6 +65,8 @@ export function merged(stored) {
     out.lineHeight = Math.min(80, Math.max(12, Math.round(out.lineHeight)));
     out.ruler = Math.min(400, Math.max(0, Math.round(out.ruler)));
     out.tabLimit = Math.min(100, Math.max(0, Math.round(out.tabLimit)));
+    // only text keys of command ids (a broken file changes no key)
+    out.keybindings = out.keybindings && !Array.isArray(out.keybindings) ? Object.fromEntries(Object.entries(out.keybindings).filter(([k, v]) => k && typeof v === 'string')) : {};
     return out;
 }
 

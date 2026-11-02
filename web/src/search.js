@@ -5,6 +5,7 @@ import { fileScore } from './filescore';
 import { openMenu } from './menu';
 import { readTrace } from './stacktrace-model.js';
 import { rememberSearch, multilinePattern, SYMBOL_FILTERS, filterSymbols } from './search-model.js';
+import { defineCommand } from './commands.js';
 const $ = (id) => document.getElementById(id);
 const KINDS = { 2: 'module', 5: 'class', 6: 'method', 7: 'property', 8: 'field', 9: 'constructor', 12: 'function', 13: 'variable', 14: 'constant' };
 export function setupSearch(deps) {
@@ -451,18 +452,9 @@ export function setupSearch(deps) {
         query.focus();
         query.select();
     }
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => open());
-    document.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
-            e.preventDefault();
-            open();
-        }
-        else if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey && e.key.toLowerCase() === 'o') {
-            e.preventDefault();
-            void symbolPicker();
-        }
-    });
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyO, () => void symbolPicker());
+    // in the editors and outside them (commands.js answers there too)
+    defineCommand({ id: 'pymagic.search.inFiles', label: 'Find in files', group: 'Navigate', keys: ['Ctrl+Shift+F'], everywhere: true, run: () => open() });
+    defineCommand({ id: 'pymagic.search.symbol', label: 'Go to symbol', group: 'Navigate', keys: ['Ctrl+Alt+O'], everywhere: true, run: () => void symbolPicker() });
     // ---------------------------------------------------------------- go to symbol in the workspace
     function symbolPicker() {
         return new Promise((resolve) => {

@@ -6,6 +6,7 @@ import { settings, onSettings } from './settings';
 import { openMenu } from './menu';
 import { toast } from './toast';
 import { definitions, nextDefinition, pathTo, separatorLines, blockOf, addPlace, regexAt } from './editornav-model.js';
+import { defineCommand } from './commands.js';
 const $ = (id) => document.getElementById(id);
 export function setupEditorNav(deps) {
     const { editor, lsp } = deps;
@@ -377,18 +378,21 @@ export function setupEditorNav(deps) {
         void deps.closeTab(rel);
     }
     // ---------------------------------------------------------------- the keys, in the main editor and the sides of a split
+    for (const [id, label, key, run] of [
+        ['nextMethod', 'Next method', 'Ctrl+Shift+Down', (ed) => void stepDefinition(ed, 1)],
+        ['previousMethod', 'Previous method', 'Ctrl+Shift+Up', (ed) => void stepDefinition(ed, -1)],
+        ['matchingBrace', 'Matching brace', 'Ctrl+Shift+M', (ed) => ed.trigger('nav', 'editor.action.jumpToBracket', {})],
+        ['blockStart', 'Start of the block', 'Alt+[', (ed) => blockEdge(ed, false)],
+        ['blockEnd', 'End of the block', 'Alt+]', (ed) => blockEdge(ed, true)],
+        ['lastEdit', 'Last edit location', 'Ctrl+Shift+Backspace', () => void lastEdit()],
+        ['recentLocations', 'Recent locations', 'Ctrl+Shift+E', () => void recentLocations()],
+        ['contextInfo', 'Context info', 'Alt+Q', (ed) => void contextInfo(ed)],
+        ['expressionType', 'Type of the expression', 'Ctrl+Shift+P', (ed) => void expressionType(ed)],
+        ['externalDoc', 'Documentation on the web', 'Shift+F1', (ed) => void externalDoc(ed)],
+        ['detach', 'Move the tab to a new window', 'Shift+F4', () => void detach()],
+    ])
+        defineCommand({ id: 'pymagic.nav.' + id, label, group: 'Navigate', keys: [key], run: (ed) => ed && run(ed) });
     function attach(ed) {
-        ed.addCommand(M.CtrlCmd | M.Shift | K.DownArrow, () => void stepDefinition(ed, 1));
-        ed.addCommand(M.CtrlCmd | M.Shift | K.UpArrow, () => void stepDefinition(ed, -1));
-        ed.addCommand(M.CtrlCmd | M.Shift | K.KeyM, () => ed.trigger('nav', 'editor.action.jumpToBracket', {}));
-        ed.addCommand(M.Alt | K.BracketLeft, () => blockEdge(ed, false));
-        ed.addCommand(M.Alt | K.BracketRight, () => blockEdge(ed, true));
-        ed.addCommand(M.CtrlCmd | M.Shift | K.Backspace, () => void lastEdit());
-        ed.addCommand(M.CtrlCmd | M.Shift | K.KeyE, () => void recentLocations());
-        ed.addCommand(M.Alt | K.KeyQ, () => void contextInfo(ed));
-        ed.addCommand(M.CtrlCmd | M.Shift | K.KeyP, () => void expressionType(ed));
-        ed.addCommand(M.Shift | K.F1, () => void externalDoc(ed));
-        ed.addCommand(M.Shift | K.F4, () => void detach());
         ed.onDidChangeModelContent((e) => noteEdit(ed, e));
         ed.onDidChangeCursorPosition(() => { noteVisit(ed); if (ed === editor)
             scheduleCrumbs(); });

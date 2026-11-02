@@ -1,5 +1,6 @@
 // Bookmarks: a line marked to come back to (Ctrl+F2 marks or unmarks the cursor's line, Alt+F2 and Shift+Alt+F2 go to the next and the previous), a mark
 // in the glyph margin, and a list in the sidebar. They are kept in the project, in .pymagic/bookmarks.json, and follow their line while the file is edited.
+import { defineCommand } from './commands.js';
 const $ = (id) => document.getElementById(id);
 const FILE = '.pymagic/bookmarks.json';
 
@@ -141,9 +142,9 @@ export function setupBookmarks({ monaco, editor, openFile, relOf, revealInTree }
 
     editor.onDidChangeModel(paintModel);
     editor.onDidChangeModelContent(() => { window.clearTimeout(follow.timer); follow.timer = window.setTimeout(follow, 400); });
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.F2, toggle);
-    editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.F2, () => step(1));
-    editor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.F2, () => step(-1));
+    defineCommand({ id: 'pymagic.bookmarks.toggle', label: 'Toggle a bookmark', group: 'Navigate', keys: ['Ctrl+F2'], run: () => toggle() });
+    defineCommand({ id: 'pymagic.bookmarks.next', label: 'Next bookmark', group: 'Navigate', keys: ['Alt+F2'], run: () => step(1) });
+    defineCommand({ id: 'pymagic.bookmarks.previous', label: 'Previous bookmark', group: 'Navigate', keys: ['Shift+Alt+F2'], run: () => step(-1) });
     $('bm-clear').onclick = () => { for (const b of [...list]) remove(b); };
 
     fetch('/api/file?path=' + encodeURIComponent(FILE)).then((r) => (r.ok ? r.json() : [])).then((stored) => {

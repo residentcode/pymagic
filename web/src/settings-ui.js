@@ -3,7 +3,8 @@
 // the interpreter, the Git switches), which the page mirrors and presses.
 import { change, resetAll, settings } from './settings';
 import { buildLabel, shortTime } from './build-info.js';
-import { KEYMAP } from './keymap';
+import { keymapCommands } from './commands.js';
+import { keyFromEvent, effectiveKeys, clashes, withKey } from './keymap-model.js';
 import { readSnippets, writeSnippets, readFileTemplates } from './codegen-model.js';
 
 const SNIPPETS = '.pymagic/snippets.json', FILE_TEMPLATES = '.pymagic/fileTemplates.json';
@@ -388,20 +389,120 @@ const SPECIAL = {
             () => ({ name: '', pattern: '*.py', body: '' }), [['name', 'name'], ['pattern', 'pattern such as test_*.py'], ['body', 'text', 'body']], 'None: new files start empty.');
     },
     keymap(page) {
-        for (const [group, keys] of KEYMAP) {
-            const h = document.createElement('h3');
-            h.textContent = group;
-            const t = document.createElement('div');
-            t.className = 'keymap';
-            for (const [what, key] of keys) {
-                const a = document.createElement('span');
-                a.textContent = what;
-                const k = document.createElement('kbd');
-                k.textContent = key;
-                t.append(a, k);
+        page.append(note('Change: press the new keys (Esc leaves it as it was). Remove leaves the command without a key; Reset gives it back the one it starts with. A key another command has is offered to this one instead.'));
+        const search = document.createElement('input');
+        search.type = 'search';
+        search.id = 'keymap-search';
+        search.placeholder = 'Find a command or a key (Ctrl+D)';
+        const changedOnly = document.createElement('input');
+        changedOnly.type = 'checkbox';
+        const changedLabel = document.createElement('label');
+        changedLabel.className = 'keymap-changed';
+        changedLabel.append(changedOnly, ' Only the changed ones');
+        const bar = document.createElement('div');
+        bar.className = 'keymap-bar';
+        bar.append(search, changedLabel);
+        const list = document.createElement('div');
+        list.id = 'keymap-list';
+        page.append(bar, list);
+
+        const commands = keymapCommands();
+        const ORDER = ['Run', 'Edit', 'Navigate', 'Refactor', 'Tools', 'PyMagic', 'Editor'];
+        let recording = null;      // the id whose new key is being pressed
+        let offer = null;          // { id, key, others }: a key another command has, offered to this one
+        const changes = () => settings().keybindings ?? {};
+        const labelOf = (id) => commands.find((c) => c.id === id)?.label ?? id;
+        const button = (text, title, onclick) => { const b = document.createElement('button'); b.textContent = text; b.title = title; b.onclick = onclick; return b; };
+        const setKey = (id, key) => { change({ keybindings: withKey(changes(), commands, id, key) }); paint(); };
+
+        function paint() {
+            const now = effectiveKeys(commands, changes());
+            const q = search.value.trim().toLowerCase();
+            list.replaceChildren();
+            const groups = [...new Set([...ORDER, ...commands.map((c) => c.group)])];
+            let shown = 0;
+            for (const group of groups) {
+                const rows = commands.filter((c) => c.group === group
+                    && (!changedOnly.checked || Object.hasOwn(changes(), c.id))
+                    && (!q || c.label.toLowerCase().includes(q) || now[c.id].some((k) => k.toLowerCase().includes(q)) || c.id.toLowerCase().includes(q)))
+                    .sort((x, y) => (group === 'Editor' || group === 'PyMagic' ? x.label.localeCompare(y.label) : 0));
+                if (!rows.length) continue;
+                const h = document.createElement('h3');
+                h.textContent = group === 'Editor' ? 'Editor (Monaco\'s own)' : group === 'PyMagic' ? 'Editor (PyMagic\'s)' : group;
+                list.append(h);
+                for (const c of rows) {
+                    shown++;
+                    const row = document.createElement('div');
+                    row.className = 'keymap-row' + (Object.hasOwn(changes(), c.id) ? ' changed' : '');
+                    row.dataset.id = c.id;
+                    const name = document.createElement('span');
+                    name.className = 'keymap-name';
+                    name.textContent = c.label;
+                    name.title = c.id;
+                    const keys = document.createElement('span');
+                    keys.className = 'keymap-keys';
+                    if (recording === c.id) keys.append(Object.assign(document.createElement('em'), { textContent: 'Press the new keys…' }));
+                    else if (now[c.id].length) for (const k of now[c.id]) keys.append(Object.assign(document.createElement('kbd'), { textContent: k }));
+                    else keys.append(Object.assign(document.createElement('span'), { className: 'keymap-none', textContent: 'none' }));
+                    const acts = document.createElement('span');
+                    acts.className = 'keymap-acts';
+                    acts.append(button('Change', 'Press the new keys for it', () => { recording = c.id; offer = null; paint(); }));
+                    if (now[c.id].length) acts.append(button('Remove', 'No key for it', () => setKey(c.id, '')));
+                    if (Object.hasOwn(changes(), c.id)) acts.append(button('Reset', `Back to ${c.keys.join(', ') || 'no key'}`, () => { const next = { ...changes() }; delete next[c.id]; change({ keybindings: next }); paint(); }));
+                    row.append(name, keys, acts);
+                    list.append(row);
+                    if (offer?.id === c.id) {
+                        const ask = document.createElement('div');
+                        ask.className = 'keymap-clash';
+                        ask.append(`${offer.key} is the key of ${offer.others.map(labelOf).join(', ')}. `,
+                            button('Give it to this one', 'The other command is left without it', () => {
+                                let next = changes();
+                                for (const o of offer.others) next = withKey(next, commands, o, effectiveKeys(commands, next)[o].filter((k) => k !== offer.key)[0] ?? '');
+                                next = withKey(next, commands, c.id, offer.key);
+                                offer = null;
+                                change({ keybindings: next });
+                                paint();
+                            }),
+                            button('Cancel', 'Leave both as they are', () => { offer = null; paint(); }));
+                        list.append(ask);
+                    }
+                }
             }
-            page.append(h, t);
+            if (!shown) list.append(Object.assign(document.createElement('p'), { className: 'set-note', textContent: 'No command matches.' }));
         }
+
+        // the keys pressed while a command waits for its new one
+        const onKey = (e) => {
+            if (!recording) return;
+            if (!list.isConnected) { document.removeEventListener('keydown', onKey, true); return; }
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.key === 'Escape' && !e.ctrlKey && !e.altKey && !e.shiftKey) { recording = null; paint(); return; }
+            const key = keyFromEvent(e);
+            if (!key) return;          // only a modifier so far
+            const id = recording;
+            recording = null;
+            const others = clashes(commands, changes(), id, key);
+            if (others.length) { offer = { id, key, others }; paint(); return; }
+            setKey(id, key);
+        };
+        document.addEventListener('keydown', onKey, true);
+        search.oninput = paint;
+        changedOnly.onchange = paint;
+        paint();
+
+        // keys of the window itself, not commands of the editor (fixed)
+        const fixed = document.createElement('details');
+        fixed.className = 'keymap-fixed';
+        fixed.append(Object.assign(document.createElement('summary'), { textContent: 'Keys of the window (fixed)' }));
+        const t = document.createElement('div');
+        t.className = 'keymap';
+        for (const [what, key] of [['Search everywhere (files and symbols)', 'Ctrl+P'], ['Find action (any command)', 'Ctrl+Shift+A'], ['Terminal', 'Ctrl+`'], ['New terminal', 'Ctrl+Shift+`'],
+            ['Split the terminal', 'Ctrl+Shift+5'], ['Switcher (files and tool windows)', 'Ctrl+Tab'], ['Settings', 'Ctrl+,']]) {
+            t.append(Object.assign(document.createElement('span'), { textContent: what }), Object.assign(document.createElement('kbd'), { textContent: key }));
+        }
+        fixed.append(t);
+        page.append(fixed);
     },
     about(page) {
         const p = document.createElement('div');

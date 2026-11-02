@@ -6,6 +6,7 @@ import { showTab } from './panel';
 import { openMenu } from './menu';
 import { toast } from './toast';
 import { summarizeRun, statistics, junitXml, htmlReport, addRun, missingRunner } from './tests-model.js';
+import { defineCommand } from './commands.js';
 
 const HISTORY = '.pymagic/test-history.json';
 const $ = (id) => document.getElementById(id);
@@ -584,7 +585,7 @@ export function setupTests(deps) {
         const id = selected?.id ?? idAtCursor();
         debugTests(id ? [id] : []);
     };
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.F9, () => {
+    defineCommand({ id: 'pymagic.tests.debugAtCursor', label: 'Debug the test at the cursor', group: 'Run', keys: ['Ctrl+Shift+F9'], run: () => {
         const id = idAtCursor();
         if (id)
             debugTests([id]);
@@ -592,7 +593,7 @@ export function setupTests(deps) {
             showTab('tests');
             appendConsole('The cursor is not inside a test.\n', 'info');
         }
-    });
+    } });
     $('tests-rerun').onclick = () => {
         const failed = [...byId.values()].filter((n) => n.children.length === 0 && (n.status === 'failed' || n.status === 'error')).map((n) => n.id);
         if (failed.length)
@@ -714,7 +715,7 @@ export function setupTests(deps) {
     $('t-tests').onclick = () => { showTab('tests'); if (roots.length === 0)
         void load(); };
     $('b-tests').onclick = () => { showTab('tests'); void load(); };
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.F10, runAtCursor);
+    defineCommand({ id: 'pymagic.tests.runAtCursor', label: 'Run the test at the cursor', group: 'Run', keys: ['Ctrl+Shift+F10'], run: () => runAtCursor() });
     void load().catch(() => { });
     setButtons();
     /** Runs the tests of a file, or of every test file under a folder (the menus of the project tree and the tabs). */

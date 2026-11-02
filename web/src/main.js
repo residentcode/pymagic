@@ -68,6 +68,7 @@ import { setupAutoSave } from './autosave';
 import { themeName, defineTheme, defineLightTheme } from './theme';
 import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings, withoutCallParens, onSettings, change as changeSetting } from './settings';
 import { requote } from './quotes-model';
+import { defineCommand, setupCommands, applyKeybindings } from './commands.js';
 // each language service runs in its worker; the rest share the editor's
 self.MonacoEnvironment = {
     getWorker: (_id, label) => new Worker(
@@ -974,6 +975,7 @@ async function main() {
         'semanticHighlighting.enabled': true,
     });
     editor = createEditor($('editor'));
+    setupCommands(editor);
     editor.onDidChangeModel(() => updateWelcome());
     applySettings(monaco, themeName, editor);
     $('build').textContent = buildLabel();
@@ -1185,9 +1187,9 @@ async function main() {
         }
         done?.();
     });
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void save());
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyL, () => void formatCurrent());
-    editor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyO, () => void organizeImports());
+    defineCommand({ id: 'pymagic.file.save', label: 'Save', group: 'Edit', keys: ['Ctrl+S'], everywhere: true, run: () => void save() });
+    defineCommand({ id: 'pymagic.edit.format', label: 'Format the file or the selection', group: 'Edit', keys: ['Ctrl+Alt+L'], run: () => void formatCurrent() });
+    defineCommand({ id: 'pymagic.edit.organizeImports', label: 'Remove unused imports and sort', group: 'Edit', keys: ['Shift+Alt+O'], run: () => void organizeImports() });
     $('b-format').onclick = () => void formatCurrent();
     const engineSelect = $('fmt-engine');
     try {
@@ -1366,5 +1368,10 @@ async function main() {
     });
     window.pymagic.split = split;
     window.pymagic.tabs = tabs;
+    // the person's keys (Settings > Keymap), now that every command and action is defined, and again whenever they change
+    let keysNow = '';
+    const keysFollow = (s) => { const k = JSON.stringify(s.keybindings ?? {}); if (k !== keysNow) { keysNow = k; applyKeybindings(s.keybindings); } };
+    keysFollow(settings());
+    onSettings(keysFollow);
 }
 main().catch((e) => { $('conn').textContent = String(e.message ?? e); $('conn').className = 'bad'; });
