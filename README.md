@@ -7,7 +7,7 @@ The editor is Monaco (the editor of VS Code), in an Electron window.
 What it does, in short:
 
 - **Editing**: completion, hover, go to definition, find usages, rename and the other refactorings, inspections with quick fixes (PyCharm's
-  Python inspections and PyMagic's own), Emmet in HTML, templates and stylesheets, code vision and inlay hints, formatting (black and ruff style), VS Code's colours for code, a keymap you can change.
+  Python inspections and PyMagic's own), Emmet in HTML, templates, stylesheets and JSX, code vision and inlay hints, formatting (black and ruff style), VS Code's colours for code, a keymap you can change.
 - **Frameworks**: Django (models, URLs, templates, settings, REST framework, New Project through Django's own `startproject`), Flask, FastAPI,
   Jinja, pytest. New Project also makes the other kinds PyCharm has: HTML5 Boilerplate, Bootstrap, Vite, React Native, Next.js, Node.js and
   Express, each by its own generator (Node.js needed).
@@ -220,4 +220,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 296 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 297 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

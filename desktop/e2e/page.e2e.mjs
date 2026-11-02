@@ -48,6 +48,10 @@ const FILES = {
     // Emmet: an abbreviation on the first line; the second is a tag with the abbreviation inside it, where nothing is offered
     'emmet/page.html': 'ul>li*2\n<div div.x class="a"></div>\n',
     'emmet/site.css': 'a {\n  m10\n}\n',
+    'emmet/page.hjs': 'ul>li*2\n',
+    'emmet/App.vue': 'ul>li*2\n',
+    'emmet/App.jsx': 'export const App = () => (\n  div.card>h2\n);\n',
+    'emmet/server.js': "var express = require('express');\ndiv.card\n",
     // checked against the schemas built into PyMagic (no stand-in kept for these)
     '.github/dependabot.yml': 'version: 3\nupdates: []\n',
     'infra/deploy.yaml': 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: two\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n        - name: web\n          image: nginx\n',
@@ -2998,6 +3002,17 @@ describe('New Project: the other kinds', () => {
         const html = await expand('emmet/page.html', 'ul>li*2');
         assert.match(html, /<ul>\s*<li><\/li>\s*<li><\/li>\s*<\/ul>/, html);
         assert.match(await expand('emmet/site.css', 'margin: 10px', 2), /a \{\s*margin: 10px;\s*\}/);
+        // Hogan.js (shown as Handlebars) and a Vue component (shown as HTML)
+        assert.match(await expand('emmet/page.hjs', 'ul>li*2'), /<ul>\s*<li><\/li>\s*<li><\/li>\s*<\/ul>/);
+        assert.match(await expand('emmet/App.vue', 'ul>li*2'), /<ul>\s*<li><\/li>/);
+        // JSX: className, in a .jsx file
+        assert.match(await expand('emmet/App.jsx', 'div.card>h2', 2), /<div className="card">\s*<h2><\/h2>\s*<\/div>/);
+        // a JavaScript file that is not JSX (Express's own code) is offered nothing
+        await open('emmet/server.js');
+        await page.evaluate(`(() => { const e = window.pymagic.editor; e.setPosition({ lineNumber: 2, column: 9 }); e.focus(); e.trigger('test', 'editor.action.triggerSuggest', {}); })()`);
+        await sleep(1500);
+        assert.equal(await page.evaluate(`[...document.querySelectorAll('.suggest-widget .monaco-list-row')].some((r) => r.textContent.includes('div.card'))`), false);
+        await page.key(27, 'Escape');
         // inside a tag nothing is offered: the place is told from the tokens
         await open('emmet/page.html');
         await page.evaluate(`(() => { const e = window.pymagic.editor; e.setPosition({ lineNumber: 2, column: 11 }); e.focus(); e.trigger('test', 'editor.action.triggerSuggest', {}); })()`);
