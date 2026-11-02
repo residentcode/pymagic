@@ -1131,14 +1131,14 @@ app.MapGet("/api/pypi", async (string name) =>
 });
 // the package index settings of the project (.pymagic/packages.json): another index, extra indexes, trusted hosts, a proxy
 var camelCase = new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
-app.MapGet("/api/packages/settings", () => Results.Json(PackageSettings.Load(root), camelCase));
+app.MapGet("/api/packages/settings", () => Results.Json(PackageSettings.Load(root).Masked(), camelCase));   // the page never sees a password
 app.MapPut("/api/packages/settings", async (HttpRequest req) =>
 {
     try
     {
         var settings = await System.Text.Json.JsonSerializer.DeserializeAsync<PackageSettings>(req.Body, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new PackageSettings();
         PackageSettings.Save(root, settings);
-        return Results.Json(PackageSettings.Load(root), camelCase);
+        return Results.Json(PackageSettings.Load(root).Masked(), camelCase);
     }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
     catch (System.Text.Json.JsonException) { return Results.BadRequest(new { error = "not a settings object" }); }
@@ -1159,7 +1159,7 @@ app.MapGet("/api/packages/versions", async (string name) =>
         }
         if (interpreters.Current is not { } c) return Results.BadRequest(new { error = "no interpreter selected" });
         var (code, output, error) = await Task.Run(() => PackageManager.Exec(c.Python, PipCommands.WithIndex(new[] { "-m", "pip", "index", "versions", "--pre", "--disable-pip-version-check", name }, settings), 60000, c.Target));
-        if (code != 0) return Results.Json(new { error = error.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.Length > 0) ?? "pip could not list the versions" }, statusCode: 502);
+        if (code != 0) return Results.Json(new { error = PackageSettings.MaskText(error.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.Length > 0) ?? "pip could not list the versions") }, statusCode: 502);
         return Results.Json(new { name, source = "pip", versions = PackageVersions.FromPipIndex(output) });
     }
     catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { return Results.Json(new { error = "the package index is not reachable" }, statusCode: 502); }
@@ -1194,7 +1194,9 @@ app.MapGet("/api/packages/tree", async (string? name, bool? reverse) =>
 app.MapGet("/api/packages/locks", async () =>
 {
     bool pipTools = interpreters.Current is { } c && (await Task.Run(() => PackageManager.List(c.Python, target: c.Target))).Packages.Any(p => PackageManager.Normalize(p.Name) == "pip-tools");
-    return Results.Json(LockFiles.Detect(root, LockFiles.Find, pipTools), camelCase);
+    var found = LockFiles.Detect(root, LockFiles.Find, pipTools);
+    // and whether each still matches what it was made from (uv and poetry are asked, a compiled requirements.txt is compared with its .in)
+    return Results.Json(await Task.Run(() => LockFiles.CheckStale(root, found, LockFiles.Find, LockFiles.RunTool)), camelCase);
 });
 // SchemaStore's schemas (package.json, pyproject.toml, GitHub workflows): kept ones, one kept one, and the download (the page asks the user first)
 app.MapGet("/api/schemas", () => Results.Json(Schemas.List(root)));
@@ -1812,6 +1814,20 @@ app.Map("/run", async (HttpContext ctx) =>
                             var installedNow = PackageManager.List(target.Python, target: target.Target).Packages;
                             bool pipTools = installedNow.Any(p => PackageManager.Normalize(p.Name) == "pip-tools");
                             var plan = LockFiles.MakePlan(root, msg["file"]?.GetValue<string>() ?? "", target.Python, target.Prefix, target.IsVenv, target.Target.IsLocal, LockFiles.Find, pipTools);
+                            packageOperation = true;
+                            session.StartProgram(root, plan.Program, plan.Args, plan.Env);
+                            startedProgram = true;
+                        }
+                        catch (ServiceException e) { refusal = e.Message; }
+                        break;
+                    }
+                    case "lockCompile":
+                    {
+                        // requirements.txt made again from requirements.in (the page asked for a second click: the file is rewritten)
+                        try
+                        {
+                            bool pipTools = PackageManager.List(target.Python, target: target.Target).Packages.Any(p => PackageManager.Normalize(p.Name) == "pip-tools");
+                            var plan = LockFiles.CompilePlan(root, target.Python, target.Target.IsLocal, LockFiles.Find, pipTools, PackageSettings.Load(root));
                             packageOperation = true;
                             session.StartProgram(root, plan.Program, plan.Args, plan.Env);
                             startedProgram = true;

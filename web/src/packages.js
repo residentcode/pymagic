@@ -1,7 +1,7 @@
 // Packages tab: what is installed in the project's interpreter, install / upgrade / uninstall with pip, requirements files.
 import { RunClient } from './runclient';
 import { showTab } from './panel';
-import { countNodes, looksLikeSource, pinned, settingsFromForm, settingsSummary, toggled, treeLabel, treeRows, versionOptions } from './packages-model';
+import { countNodes, looksLikeSource, pinned, settingsFromForm, settingsSummary, staleText, toggled, treeLabel, treeRows, versionOptions } from './packages-model';
 const $ = (id) => document.getElementById(id);
 const norm = (n) => n.trim().replace(/[-_.]+/g, '-').toLowerCase();
 const PROTECTED = new Set(['pip', 'setuptools', 'wheel']);
@@ -380,6 +380,35 @@ export function setupPackages() {
                 void loadLocks();
             };
             row.appendChild(b);
+            if (lock.compile) {
+                // requirements.txt made again from requirements.in: the file is rewritten, so a second click
+                const c = document.createElement('button');
+                c.className = 'lockcompile';
+                const armedKey = 'compile:' + lock.file;
+                c.textContent = lockArmed === armedKey ? 'Really? requirements.txt is written again' : 'Compile';
+                c.classList.toggle('armed', lockArmed === armedKey);
+                c.disabled = client !== null;
+                c.title = lock.compile;
+                c.onclick = () => {
+                    if (lockArmed === armedKey) {
+                        lockArmed = null;
+                        void run('lockCompile', [], { file: lock.file });
+                        return;
+                    }
+                    lockArmed = armedKey;
+                    clearTimeout(armTimer);
+                    armTimer = window.setTimeout(() => { lockArmed = null; void loadLocks(); }, 4000);
+                    void loadLocks();
+                };
+                row.appendChild(c);
+            }
+            const fresh = staleText(lock);
+            if (fresh) {
+                const s = document.createElement('span');
+                s.className = 'lockstate ' + fresh.kind;
+                s.textContent = '  ' + fresh.text;
+                row.appendChild(s);
+            }
             if (!lock.available && lock.note) {
                 const note = document.createElement('span');
                 note.className = 'note';

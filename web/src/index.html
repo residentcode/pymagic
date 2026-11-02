@@ -601,7 +601,7 @@
             <label>Trusted hosts (one per line; no https check) <textarea id="pk-trusted" rows="2" spellcheck="false"></textarea></label>
             <label>Proxy <input id="pk-proxy" placeholder="http://proxy.example:8080" autocomplete="off" spellcheck="false"></label>
             <div class="row"><button id="pk-config-save">Save</button><button id="pk-config-close">Close</button><span id="pk-config-msg"></span></div>
-            <div class="dim">Kept in .pymagic/packages.json. Used by installing, checking for updates and listing versions.</div>
+            <div class="dim">Kept in .pymagic/packages.json. Used by installing, checking for updates and listing versions. A user name and password in an address are shown as *** and kept apart, in .pymagic/packages.private.json (left out of Git); an address saved with *** keeps its password.</div>
           </div>
           <div id="pk-source" hidden>
             <div class="row"><input id="pk-source-text" placeholder="C:\path\to\project   ./lib   dist/pkg-1.0-py3-none-any.whl   git+https://host/user/repo.git@v1.0" autocomplete="off" spellcheck="false">

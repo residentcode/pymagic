@@ -19,10 +19,10 @@ export function settingsFromForm(form) {
 /** One line telling which settings are in use ('' when none). */
 export function settingsSummary(s) {
     const parts = [];
-    if (s?.indexUrl) parts.push('index ' + s.indexUrl);
+    if (s?.indexUrl) parts.push('index ' + maskAddress(s.indexUrl));
     if (s?.extraIndexUrls?.length) parts.push(s.extraIndexUrls.length + ' extra index' + (s.extraIndexUrls.length > 1 ? 'es' : ''));
     if (s?.trustedHosts?.length) parts.push('trusting ' + s.trustedHosts.join(', '));
-    if (s?.proxy) parts.push('proxy ' + s.proxy);
+    if (s?.proxy) parts.push('proxy ' + maskAddress(s.proxy));
     return parts.join('; ');
 }
 
@@ -100,4 +100,20 @@ export function countNodes(roots) {
 /** The line of a lock file: what it is, which tool, whether it can be synced. */
 export function lockLabel(lock) {
     return `${lock.file} (${lock.tool})`;
+}
+
+/** What the page says about whether a lock file still matches what it was made from: { text, kind } with kind 'stale', 'fresh' or 'unknown' (null: nothing to say). */
+export function staleText(lock) {
+    if (lock?.stale === true) return { text: 'out of date' + (lock.staleNote ? ': ' + lock.staleNote : ''), kind: 'stale' };
+    if (lock?.stale === false) return { text: 'up to date', kind: 'fresh' };
+    if (lock?.staleNote) return { text: lock.staleNote, kind: 'unknown' };
+    return null;
+}
+
+/** An address with its user name and password masked the way the host shows them (`https://user:***@host`, a lone name as `***`). */
+export function maskAddress(url) {
+    return String(url ?? '').replace(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#@]+)@/i, (all, scheme, info) => {
+        const colon = info.indexOf(':');
+        return scheme + (colon >= 0 ? info.slice(0, colon) + ':***' : '***') + '@';
+    });
 }

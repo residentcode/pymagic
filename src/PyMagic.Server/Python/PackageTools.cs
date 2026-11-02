@@ -9,6 +9,9 @@ namespace PyMagic.Server;
 /// <summary>
 /// The package index settings of a project (<c>.pymagic/packages.json</c>): another index, extra indexes, hosts to trust without
 /// https, and a proxy. They become options of every pip call that reaches an index (install, outdated, versions).
+/// The user name and password of an address (<c>https://user:secret@host/simple</c>) are kept apart, like the passwords of Deployment:
+/// packages.json has <c>https://user:***@host/simple</c> and the secret is in <c>.pymagic/packages.private.json</c>, out of version control.
+/// The page only ever sees the masked address (<see cref="Masked"/>); <see cref="Load"/> gives the whole one, for pip.
 /// </summary>
 public sealed class PackageSettings
 {
@@ -18,29 +21,100 @@ public sealed class PackageSettings
     public string Proxy { get; set; } = "";
 
     static string PathOf(string root) => Path.Combine(root, ".pymagic", "packages.json");
+    static string PrivatePathOf(string root) => Path.Combine(root, ".pymagic", "packages.private.json");
+
+    /// <summary>What stands for a password (or a token given as the user name) in an address that is shown or saved.</summary>
+    public const string Mask = "***";
 
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true, WriteIndented = true };
 
     public bool IsEmpty => IndexUrl.Length == 0 && ExtraIndexUrls.Count == 0 && TrustedHosts.Count == 0 && Proxy.Length == 0;
 
+    /// <summary>The settings with the passwords put back (what pip is given). A packages.json written by hand with a password in it is rewritten with the password moved out.</summary>
     public static PackageSettings Load(string root)
     {
+        PackageSettings s;
         try
         {
-            var s = JsonSerializer.Deserialize<PackageSettings>(File.ReadAllText(PathOf(root)), Json) ?? new PackageSettings();
+            s = JsonSerializer.Deserialize<PackageSettings>(File.ReadAllText(PathOf(root)), Json) ?? new PackageSettings();
             s.Clean();
-            return Validate(s) == null ? s : new PackageSettings();   // a hand-edited file with a bad value is not used
+            if (Validate(s) != null) return new PackageSettings();   // a hand-edited file with a bad value is not used
         }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { return new PackageSettings(); }
+        bool plain = s.Addresses().Any(u => SplitCredentials(u).Secret != null);
+        s.Restore(LoadSecrets(root));
+        if (plain) { try { Save(root, s); } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ServiceException) { } }
+        return s;
     }
 
+    /// <summary>Keeps the settings. An address that comes back from the page masked gets its kept password again; a new password goes to packages.private.json.</summary>
     public static void Save(string root, PackageSettings settings)
     {
         settings.Clean();
+        settings.Restore(LoadSecrets(root));
         if (Validate(settings) is { } problem) throw new ServiceException(problem);
         Directory.CreateDirectory(Path.Combine(root, ".pymagic"));
+        var secrets = new Dictionary<string, string>();
+        foreach (var u in settings.Addresses())
+            if (SplitCredentials(u) is { Secret: { } secret } split) secrets[split.Masked] = secret;
+        if (secrets.Count > 0)
+        {
+            // the ignore entry first: the password is never in a file git could pick up
+            PymagicFolder.IgnoreInGit(Path.Combine(root, ".pymagic"), "packages.private.json");
+            File.WriteAllText(PrivatePathOf(root), JsonSerializer.Serialize(secrets));
+        }
+        else { try { File.Delete(PrivatePathOf(root)); } catch (IOException) { } }
         if (settings.IsEmpty) { try { File.Delete(PathOf(root)); } catch (IOException) { } return; }
-        File.WriteAllText(PathOf(root), JsonSerializer.Serialize(settings, Json));
+        File.WriteAllText(PathOf(root), JsonSerializer.Serialize(settings.Masked(), Json));
+    }
+
+    /// <summary>A copy with every user name and password replaced by <see cref="Mask"/> (a user name next to a password stays).</summary>
+    public PackageSettings Masked() => new()
+    {
+        IndexUrl = SplitCredentials(IndexUrl).Masked,
+        ExtraIndexUrls = ExtraIndexUrls.Select(u => SplitCredentials(u).Masked).ToList(),
+        TrustedHosts = TrustedHosts.ToList(),
+        Proxy = SplitCredentials(Proxy).Masked,
+    };
+
+    /// <summary>
+    /// The credentials of an address: <c>https://user:secret@host/x</c> is shown as <c>https://user:***@host/x</c>, and a lone
+    /// name (often a token) as <c>https://***@host/x</c>. An address without credentials, or one masked already, has no secret.
+    /// </summary>
+    public static (string Masked, string? Secret) SplitCredentials(string url)
+    {
+        var m = Regex.Match(url ?? "", @"^([A-Za-z][A-Za-z0-9+.\-]*://)([^/?#@]+)@(.*)$", RegexOptions.Singleline);
+        if (!m.Success) return (url ?? "", null);
+        string info = m.Groups[2].Value;
+        int colon = info.IndexOf(':');
+        string shown = colon >= 0 ? info[..colon] + ":" + Mask : Mask;
+        return info == shown ? (url!, null) : (m.Groups[1].Value + shown + "@" + m.Groups[3].Value, info);
+    }
+
+    /// <summary>Text with the passwords of any addresses in it masked (an error line of pip or uv, a command line).</summary>
+    public static string MaskText(string text) =>
+        Regex.Replace(text ?? "", @"[A-Za-z][A-Za-z0-9+.\-]*://[^\s/?#@]+@[^\s]*", m => SplitCredentials(m.Value).Masked);
+
+    IEnumerable<string> Addresses() => new[] { IndexUrl, Proxy }.Concat(ExtraIndexUrls).Where(u => u.Length > 0);
+
+    static Dictionary<string, string> LoadSecrets(string root)
+    {
+        try { return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(PrivatePathOf(root))) ?? new(); }
+        catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { return new(); }
+    }
+
+    /// <summary>Puts the kept credentials back into masked addresses (one with no kept password stays masked, and pip is refused by the index).</summary>
+    void Restore(IReadOnlyDictionary<string, string> secrets)
+    {
+        string Back(string u)
+        {
+            if (!secrets.TryGetValue(u, out var secret)) return u;
+            var m = Regex.Match(u, @"^([A-Za-z][A-Za-z0-9+.\-]*://)[^/?#@]+@(.*)$", RegexOptions.Singleline);
+            return m.Success ? m.Groups[1].Value + secret + "@" + m.Groups[2].Value : u;
+        }
+        IndexUrl = Back(IndexUrl);
+        Proxy = Back(Proxy);
+        ExtraIndexUrls = ExtraIndexUrls.Select(Back).ToList();
     }
 
     void Clean()
@@ -439,7 +513,13 @@ print(json.dumps(out))
 /// <summary>Lock files of the project and what keeps an environment equal to them: uv, poetry, pip-tools. The tools are only run when they are already there.</summary>
 public static class LockFiles
 {
-    public sealed record Found(string File, string Kind, string Tool, bool Available, string Command, string? Note);
+    /// <param name="Stale">Whether the lock file no longer matches what it was made from (null: it could not be told).</param>
+    /// <param name="Compile">The command that makes the lock file again from its source (requirements.in), when there is one and a tool for it.</param>
+    public sealed record Found(string File, string Kind, string Tool, bool Available, string Command, string? Note,
+        bool? Stale = null, string? StaleNote = null, string? Compile = null);
+
+    /// <summary>Runs a program in a folder: (exit code, output, error output).</summary>
+    public delegate (int Code, string Output, string Error) Runner(string program, IReadOnlyList<string> args, string folder);
 
     /// <summary>What to run: the program, its arguments and the environment variables that point it at the project's virtual environment.</summary>
     public sealed record Plan(string Program, IReadOnlyList<string> Args, IReadOnlyDictionary<string, string> Env);
@@ -463,10 +543,205 @@ public static class LockFiles
         string req = Path.Combine(root, "requirements.txt");
         bool compiled = File.Exists(req) && (File.ReadLines(req).Take(8).Any(l => l.Contains("pip-compile", StringComparison.OrdinalIgnoreCase)) || File.Exists(Path.Combine(root, "requirements.in")));
         if (compiled)
-            list.Add(new Found("requirements.txt", "pip-tools", "pip-tools", hasPipTools, "python -m piptools sync requirements.txt", hasPipTools ? null : "pip-tools is not installed in this interpreter"));
+        {
+            string? compile = File.Exists(Path.Combine(root, "requirements.in")) ? CompilerOf(root, which, hasPipTools) switch
+            {
+                "uv" => "uv pip compile requirements.in -o requirements.txt",
+                "pip-tools" => "python -m piptools compile requirements.in -o requirements.txt",
+                _ => null,
+            } : null;
+            list.Add(new Found("requirements.txt", "pip-tools", "pip-tools", hasPipTools, "python -m piptools sync requirements.txt", hasPipTools ? null : "pip-tools is not installed in this interpreter", Compile: compile));
+        }
         if (File.Exists(Path.Combine(root, "Pipfile.lock")))
             list.Add(new Found("Pipfile.lock", "pipenv", "pipenv", false, "pipenv sync", "pipenv is not supported here"));
         return list;
+    }
+
+    /// <summary>
+    /// Whether each lock file still matches what it was made from. uv and poetry are asked themselves (<c>uv lock --check</c>, offline and
+    /// without downloading a Python; <c>poetry check --lock</c>), only when they are installed. A requirements.txt compiled from requirements.in is
+    /// compared with it here: a requirement missing, one whose pinned version no longer fits, or one taken out of the .in file.
+    /// </summary>
+    public static List<Found> CheckStale(string root, IReadOnlyList<Found> found, Func<string, string?> which, Runner run)
+    {
+        var list = new List<Found>();
+        foreach (var f in found)
+        {
+            (bool? stale, string? note) = (null, null);
+            try
+            {
+                switch (f.Kind)
+                {
+                    case "uv" when f.Available && which("uv") is { } uv:
+                    {
+                        var (code, output, error) = run(uv, new[] { "lock", "--check", "--offline", "--no-python-downloads" }, root);
+                        string text = output + "\n" + error;
+                        if (code == 0) stale = false;
+                        else if (text.Contains("needs to be updated", StringComparison.OrdinalIgnoreCase)) (stale, note) = (true, "pyproject.toml changed since uv.lock was made: run uv lock");
+                        else note = "uv could not tell: " + PackageSettings.MaskText(LastLine(text));
+                        break;
+                    }
+                    case "poetry" when f.Available && which("poetry") is { } poetry:
+                    {
+                        var (code, output, error) = run(poetry, new[] { "check", "--lock", "--no-interaction" }, root);
+                        string text = output + "\n" + error;
+                        if (code == 0) stale = false;
+                        else if (Regex.IsMatch(text, @"poetry\.lock|lock file", RegexOptions.IgnoreCase)) (stale, note) = (true, "pyproject.toml changed since poetry.lock was made: run poetry lock");
+                        else note = "poetry could not tell: " + PackageSettings.MaskText(LastLine(text));
+                        break;
+                    }
+                    case "pip-tools" when File.Exists(Path.Combine(root, "requirements.in")):
+                        note = CompiledDifference(File.ReadAllText(Path.Combine(root, "requirements.in")), File.ReadAllText(Path.Combine(root, f.File)));
+                        stale = note != null;
+                        break;
+                }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { note = "could not be checked: " + e.Message; }
+            list.Add(f with { Stale = stale, StaleNote = note });
+        }
+        return list;
+    }
+
+    static string LastLine(string text) => text.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.Length > 0 && !l.StartsWith("hint:", StringComparison.OrdinalIgnoreCase)) ?? "no answer";
+
+    static readonly Regex Requirement = new(@"^([A-Za-z0-9][A-Za-z0-9._\-]*)\s*(\[[^\]]*\])?\s*(.*)$");
+
+    /// <summary>
+    /// What makes a compiled requirements.txt out of date with its requirements.in (null when nothing does): a requirement of the .in that the .txt
+    /// does not have, a pinned version that does not fit the .in's specifier, or a package that was there only for the .in (<c># via -r requirements.in</c>) and is no longer in it.
+    /// Lines the check cannot read (options, includes, links) are passed over.
+    /// </summary>
+    public static string? CompiledDifference(string inText, string txtText)
+    {
+        var wanted = new List<(string Name, string Spec)>();
+        foreach (var raw in inText.Split('\n'))
+        {
+            string line = Regex.Replace(raw, @"(^|\s)#.*$", "").Trim();
+            if (line.Length == 0 || line.StartsWith('-') || line.Contains("://")) continue;
+            var m = Requirement.Match(line.Split(';')[0].Trim());
+            if (!m.Success) continue;
+            string rest = m.Groups[3].Value.Trim();
+            if (rest.StartsWith('@')) rest = "";
+            wanted.Add((m.Groups[1].Value, rest));
+        }
+        // the pinned packages of the .txt, and what each is there for (its "# via" lines)
+        var pins = new Dictionary<string, string?>();
+        var via = new Dictionary<string, List<string>>();
+        string? current = null;
+        foreach (var raw in txtText.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+            if (line.Length > 0 && !char.IsWhiteSpace(line[0]) && !line.StartsWith('#') && !line.StartsWith('-'))
+            {
+                var m = Regex.Match(line, @"^([A-Za-z0-9][A-Za-z0-9._\-]*)(\[[^\]]*\])?\s*(==\s*([^\s;\\]+)|@)?");
+                if (!m.Success) { current = null; continue; }
+                current = PackageManager.Normalize(m.Groups[1].Value);
+                pins[current] = m.Groups[4].Success ? m.Groups[4].Value : null;
+                via[current] = new List<string>();
+                continue;
+            }
+            if (line.StartsWith('-') && !line.StartsWith("-e") && !line.StartsWith("--editable")) { current = null; continue; }
+            var c = Regex.Match(line, @"^\s+#\s*(via\b)?\s*(.*)$");
+            if (current != null && c.Success && c.Groups[2].Value.Length > 0) via[current].Add(c.Groups[2].Value.Trim());
+            else if (!c.Success && line.Length > 0 && !char.IsWhiteSpace(line[0])) current = null;
+        }
+        foreach (var (name, spec) in wanted)
+        {
+            string key = PackageManager.Normalize(name);
+            if (!pins.TryGetValue(key, out var version)) return $"{name} is in requirements.in but not in requirements.txt";
+            if (version != null && spec.Length > 0 && !Satisfies(version, spec)) return $"requirements.in asks for {name}{spec}, requirements.txt has {version}";
+        }
+        var asked = wanted.Select(w => PackageManager.Normalize(w.Name)).ToHashSet();
+        foreach (var (name, reasons) in via)
+            if (!asked.Contains(name) && reasons.Count > 0 && reasons.All(r => Regex.IsMatch(r, @"^-r\s+\S*requirements\.in$")))
+                return $"{name} was taken out of requirements.in but is still in requirements.txt";
+        return null;
+    }
+
+    /// <summary>Whether a version fits a specifier such as <c>&gt;=2,&lt;3</c>, <c>~=1.4</c> or <c>==1.*</c> (a part it cannot read counts as fitting).</summary>
+    public static bool Satisfies(string version, string spec)
+    {
+        foreach (var part in spec.Split(','))
+        {
+            var m = Regex.Match(part.Trim(), @"^(===|==|!=|~=|>=|<=|>|<)\s*(\S+)$");
+            if (!m.Success) continue;
+            string op = m.Groups[1].Value, want = m.Groups[2].Value;
+            if (want.EndsWith(".*"))
+            {
+                string prefix = want[..^2];
+                bool match = version == prefix || version.StartsWith(prefix + ".");
+                if (op == "==" ? !match : op == "!=" && match) return false;
+                continue;
+            }
+            int cmp = PackageVersions.Compare(version, want);
+            bool ok = op switch
+            {
+                "===" => version == want,
+                "==" => cmp == 0,
+                "!=" => cmp != 0,
+                ">=" => cmp >= 0,
+                "<=" => cmp <= 0,
+                ">" => cmp > 0,
+                "<" => cmp < 0,
+                // ~=1.4.2 means >=1.4.2 and ==1.4.*
+                _ => cmp >= 0 && want.Split('.') is { Length: > 1 } r && (version + ".").StartsWith(string.Join(".", r[..^1]) + "."),
+            };
+            if (!ok) return false;
+        }
+        return true;
+    }
+
+    /// <summary>Which tool compiles requirements.in: the one whose name is in the header of requirements.txt, else pip-tools when the interpreter has it, else uv (null: neither).</summary>
+    static string? CompilerOf(string root, Func<string, string?> which, bool hasPipTools)
+    {
+        string head = "";
+        try { head = string.Join("\n", File.ReadLines(Path.Combine(root, "requirements.txt")).Take(8)); } catch (IOException) { }
+        bool uv = which("uv") != null;
+        if (head.Contains("uv pip compile") && uv) return "uv";
+        if (hasPipTools) return "pip-tools";
+        return uv ? "uv" : null;
+    }
+
+    /// <summary>
+    /// The command that makes requirements.txt again from requirements.in, with the project's index settings. They are given as environment
+    /// variables, never as options, so neither the command written at the top of the file nor its <c>--index-url</c> lines carry a password.
+    /// </summary>
+    public static Plan CompilePlan(string root, string python, bool isLocal, Func<string, string?> which, bool hasPipTools, PackageSettings settings)
+    {
+        if (!isLocal) throw new ServiceException("requirements.in is compiled on this computer only");
+        if (!File.Exists(Path.Combine(root, "requirements.in"))) throw new ServiceException("this project has no requirements.in");
+        var env = new Dictionary<string, string>();
+        switch (CompilerOf(root, which, hasPipTools))
+        {
+            case "uv":
+                env["UV_PYTHON"] = python;
+                if (settings.IndexUrl.Length > 0) env["UV_INDEX_URL"] = settings.IndexUrl;
+                if (settings.ExtraIndexUrls.Count > 0) env["UV_EXTRA_INDEX_URL"] = string.Join(" ", settings.ExtraIndexUrls);
+                if (settings.TrustedHosts.Count > 0) env["UV_INSECURE_HOST"] = string.Join(" ", settings.TrustedHosts);
+                if (settings.Proxy.Length > 0) { env["HTTPS_PROXY"] = settings.Proxy; env["HTTP_PROXY"] = settings.Proxy; }
+                return new Plan(which("uv")!, new[] { "pip", "compile", "requirements.in", "-o", "requirements.txt", "--no-progress" }, env);
+            case "pip-tools":
+                if (settings.IndexUrl.Length > 0) env["PIP_INDEX_URL"] = settings.IndexUrl;
+                if (settings.ExtraIndexUrls.Count > 0) env["PIP_EXTRA_INDEX_URL"] = string.Join(" ", settings.ExtraIndexUrls);
+                if (settings.TrustedHosts.Count > 0) env["PIP_TRUSTED_HOST"] = string.Join(" ", settings.TrustedHosts);
+                if (settings.Proxy.Length > 0) env["PIP_PROXY"] = settings.Proxy;
+                return new Plan(python, new[] { "-m", "piptools", "compile", "requirements.in", "-o", "requirements.txt", "--no-emit-index-url", "--no-emit-trusted-host" }, env);
+            default:
+                throw new ServiceException("neither pip-tools (in this interpreter) nor uv is installed to compile requirements.in");
+        }
+    }
+
+    /// <summary>Runs a tool in the project and waits for it (a check that only reads, such as <c>uv lock --check</c>).</summary>
+    public static (int Code, string Output, string Error) RunTool(string program, IReadOnlyList<string> args, string folder)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo(program) { WorkingDirectory = folder, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        psi.Environment["NO_COLOR"] = "1";
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        var output = p.StandardOutput.ReadToEndAsync();
+        var error = p.StandardError.ReadToEndAsync();
+        if (!p.WaitForExit(30000)) { try { p.Kill(true); } catch (InvalidOperationException) { } return (-1, "", "it did not answer in 30 seconds"); }
+        return (p.ExitCode, output.Result, error.Result);
     }
 
     /// <summary>The command that syncs the interpreter's virtual environment to a detected lock file; only for a virtual environment of this computer.</summary>
