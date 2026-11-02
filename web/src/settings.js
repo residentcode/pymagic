@@ -125,6 +125,7 @@ export function editorOptions(s = current) {
         mouseWheelZoom: true,
         codeLens: s.codeVision || s.codeVisionAuthor,
         inlayHints: { enabled: s.hintParams || s.hintTypes ? 'on' : 'off' },
+        linkedEditing: true,   // a tag's two names renamed together (the HTML tag pairs plugin gives the pairs; without it there are none)
     };
 }
 

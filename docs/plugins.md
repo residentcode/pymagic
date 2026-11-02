@@ -11,8 +11,8 @@ Every plugin is on until the person switches it off. The setting keeps only the 
 person's settings), and Settings > Plugins is the only place that writes it. A change takes effect when the window reloads: the page says so and
 offers **Reload PyMagic**. The engine follows the setting as soon as it is saved.
 
-The plugins that exist are listed in [`web/src/plugin-model.js`](../web/src/plugin-model.js): Django, Flask, FastAPI, JavaScript projects, Emmet,
-Jupyter Notebooks, Docker, WSL, SSH, Git, JSON Schema, HTTP Client, Database Tools and SQL, Coverage, Diagrams, Profiler, Pull Requests, Deployment, Markdown and Macros.
+The plugins that exist are listed in [`web/src/plugin-model.js`](../web/src/plugin-model.js): Django, Flask, FastAPI, JavaScript projects, Emmet, HTML
+tag pairs, Jupyter Notebooks, Docker, WSL, SSH, Git, JSON Schema, HTTP Client, Database Tools and SQL, Coverage, Diagrams, Profiler, Pull Requests, Deployment, Markdown and Macros.
 Any of them is a working example.
 
 ## 1. Register the plugin

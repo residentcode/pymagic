@@ -49,6 +49,8 @@ const FILES = {
     'emmet/page.html': 'ul>li*2\n<div div.x class="a"></div>\n',
     'emmet/site.css': 'a {\n  m10\n}\n',
     'emmet/page.hjs': 'ul>li*2\n',
+    'tags/page.html': '<h1>{{ title }}</h1>\n<p>Welcome to {{ title }}</p>\n',
+    'tags/App.jsx': 'export const App = () => (\n  <section className="a"><Item key={1} /></section>\n);\n',
     'emmet/App.vue': 'ul>li*2\n',
     'emmet/App.jsx': 'export const App = () => (\n  div.card>h2\n);\n',
     'emmet/server.js': "var express = require('express');\ndiv.card\n",
@@ -2982,6 +2984,27 @@ describe('New Project: the other kinds', () => {
         const tokens = await page.evaluate(`window.pymagic.monaco.editor.tokenize(window.pymagic.editor.getModel().getValue(), 'ejs').flat().map((t) => t.type)`);
         for (const want of ['tag.html', 'attribute.name.html', 'delimiter.html', 'identifier.js', 'comment.html'])
             assert.ok(tokens.includes(want), want + ' in ' + tokens.join(' '));
+    });
+
+    test('HTML tag pairs: renaming an opening tag renames its closing tag, and back, in a template and in JSX', async () => {
+        // the name selected, the new one typed: the other name follows (the editor's linked editing, which needs a moment to find the pair)
+        const rename = async (rel, line, from, to, typed) => {
+            await open(rel);
+            const before = await page.evaluate('window.pymagic.editor.getModel().getValue()');
+            await page.evaluate(`(() => { const e = window.pymagic.editor; e.focus(); e.setSelection({ startLineNumber: ${line}, startColumn: ${from}, endLineNumber: ${line}, endColumn: ${to} }); })()`);
+            await sleep(800);
+            await page.evaluate(`window.pymagic.editor.trigger('keyboard', 'type', { text: ${JSON.stringify(typed)} })`);
+            await sleep(400);
+            const after = await page.evaluate('window.pymagic.editor.getModel().getValue()');
+            await page.evaluate(`window.pymagic.editor.getModel().setValue(${JSON.stringify(before)})`);
+            return after;
+        };
+        // <p> becomes <h2>: its </p> too
+        assert.equal((await rename('tags/page.html', 2, 2, 3, 'h2')).split('\n')[1], '<h2>Welcome to {{ title }}</h2>');
+        // from the closing tag: </h1> becomes </h3>, its <h1> too
+        assert.equal((await rename('tags/page.html', 1, 18, 20, 'h3')).split('\n')[0], '<h3>{{ title }}</h3>');
+        // JSX: <section> becomes <article>, the self-closing Item left alone
+        assert.equal((await rename('tags/App.jsx', 2, 4, 11, 'article')).split('\n')[1], '  <article className="a"><Item key={1} /></article>');
     });
 
     test('Emmet: an abbreviation is expanded by completion in a template and in a stylesheet, not inside a tag', async () => {
