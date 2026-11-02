@@ -141,7 +141,7 @@
         <option value="builtin">built-in</option><option value="black">black</option><option value="ruff">ruff</option>
       </select>
       <button id="b-imports" class="optional" title="Remove unused imports and sort the rest (Shift+Alt+O)"><svg class="i"><use href="#i-imports"/></svg><span class="lbl lbl-opt">Imports</span></button>
-      <label class="fmtsave" title="Format the file whenever it is saved"><input type="checkbox" id="fmt-save"><span class="lbl-opt">on save</span></label>
+      <label class="fmtsave" id="fmt-save-label" title="Format the file whenever it is saved"><input type="checkbox" id="fmt-save"><span class="lbl-opt">on save</span></label>
       <button id="b-refactor" class="optional" title="Refactor: rename, extract, inline, change signature, move"><svg class="i"><use href="#i-refactor"/></svg><span class="lbl lbl-opt">Refactor</span></button>
       <span class="sep"></span>
       <span class="grp grp-vcs">
@@ -154,6 +154,7 @@
       <button id="b-over" title="Step over (F10)" disabled>Step over</button>
       <button id="b-into" title="Step into (F11)" disabled>Step into</button>
       <button id="b-out" title="Step out (Shift+F11)" disabled>Step out</button>
+      <button id="b-more" class="iconbtn tb-off" title="The commands that do not fit in the bar">⋯</button>
       <span class="spacer"></span>
       <button id="b-find" class="iconbtn" title="Find in files (Ctrl+Shift+F)"><svg class="i"><use href="#i-find"/></svg></button>
       <button id="b-anything" class="optional" title="Search everywhere: files and symbols (Ctrl+P)"><svg class="i"><use href="#i-search"/></svg><span class="lbl lbl-opt">Search</span></button>
@@ -626,7 +627,7 @@
       <span class="spacer"></span>
       <span id="build" title="Which build of the page this is (the commit it was made from, + when it has changes that were not committed)"></span>
       <span id="cursor"></span>
-      <span>F5 debug · Ctrl+F5 run · F9 breakpoint · F10/F11 step · Ctrl+S save · F12 definition · F2 rename · Ctrl+. fixes and refactorings</span>
+      <span class="hints" title="F5 debug · Ctrl+F5 run · F9 breakpoint · F10/F11 step · Ctrl+S save · F12 definition · F2 rename · Ctrl+. fixes and refactorings">F5 debug · Ctrl+F5 run · F9 breakpoint · F10/F11 step · Ctrl+S save · F12 definition · F2 rename · Ctrl+. fixes and refactorings</span>
     </footer>
   </div>
   <script src="main.js"></script>

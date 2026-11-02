@@ -38,6 +38,7 @@ import { setupExplorer } from './explorer';
 import { setupTabs } from './tabs';
 import { setupSplit } from './split';
 import { relUnderRoot } from './uripath';
+import { setupToolbarFit } from './toolbar-fit';
 import { setupDiskWatch } from './diskwatch';
 import { setupInspections } from './inspections';
 import { setupGit } from './git';
@@ -1021,6 +1022,7 @@ async function main() {
         },
     });
     setupToolbar({ monaco, editor, save, openFile, currentFile: () => currentRel, refactor, search, runConfigs });
+    setupToolbarFit();
     setupAutoSave({ editor, saveAll: common.saveAll });
     // the Django view's "+ admin" and "+ serializer": in admin.py / serializers.py beside the model's file, in the editor to look at and save
     const besideModel = async (model, file, edit) => {

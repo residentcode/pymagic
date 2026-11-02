@@ -652,6 +652,41 @@ describe('run and debug', () => {
     });
 });
 
+describe('the window\'s layout at different widths', () => {
+    const resize = (width, height) => page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+    const visible = (id) => page.evaluate(`(() => { const e = document.getElementById(${JSON.stringify(id)}); const r = e.getBoundingClientRect(); return !!e.offsetParent && r.right <= innerWidth && r.width > 0; })()`);
+    after(() => page.send('Emulation.clearDeviceMetricsOverride'));
+
+    test('the command bar fits any width: what does not fit goes into ⋯, the interpreter and the settings stay', async () => {
+        for (const [width, height] of [[1920, 900], [1400, 860], [1000, 640], [900, 600]]) {
+            await resize(width, height);
+            await page.waitFor(`(() => { const t = document.getElementById('toolbar'); return t.scrollWidth <= t.clientWidth + 1; })()`, 5000, `the bar fitting at ${width}`);
+            for (const id of ['b-run', 'b-debug', 'interp', 'b-gear']) assert.equal(await visible(id), true, `${id} at ${width}`);
+            const status = await page.evaluate(`(() => { const s = document.getElementById('status'); return s.scrollWidth <= s.clientWidth + 1; })()`);
+            assert.equal(status, true, `the status bar at ${width}`);
+        }
+        // at 900 some commands are hidden, and ⋯ offers them
+        assert.equal(await visible('b-more'), true, '⋯ at 900');
+        await page.evaluate(`${$('b-more')}.click()`);
+        const offered = await page.waitFor(`(() => { const r = [...document.querySelectorAll('.ctx-menu .ctx-item')].map((d) => d.textContent.trim()); return r.length && r; })()`, 5000, 'the ⋯ menu');
+        assert.ok(offered.some((t) => t.startsWith('Remove unused imports')), offered.join(' | '));
+        await page.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+        // wide again: nothing hidden, no ⋯
+        await resize(2400, 900);
+        await page.waitFor(`!document.getElementById('b-more').offsetParent`, 5000, '⋯ gone when everything fits');
+    });
+
+    test('the tool-window tabs keep the open one and the close button in view when they do not fit', async () => {
+        await resize(900, 600);
+        await page.evaluate(`${$('t-packages')}.click()`);
+        await page.waitFor(`(() => { const t = document.getElementById('tabs'), a = document.getElementById('t-packages'), c = document.getElementById('t-close');
+            const tr = t.getBoundingClientRect(), ar = a.getBoundingClientRect(), cr = c.getBoundingClientRect();
+            return t.scrollWidth > t.clientWidth && ar.left >= tr.left && ar.right <= cr.left + 1 && cr.right <= tr.right + 1; })()`, 5000, 'the open tab and the close button in view');
+        await page.evaluate(`${$('t-output')}.click()`);
+        await page.send('Emulation.clearDeviceMetricsOverride');
+    });
+});
+
 describe('tests', () => {
     test('the Tests panel finds the unittest tests and shows their outcomes', async () => {
         await page.evaluate(`(() => { const s = ${$('tests-fw')}; s.value = 'unittest'; s.dispatchEvent(new Event('change')); ${$('t-tests')}.click(); ${$('tests-all')}.click(); })()`);
@@ -1524,7 +1559,9 @@ describe('a notebook: merge and split, tags, Run Section, the Variables window a
         await nbState(`(s.views[1].el.querySelector('.nb-merge').click(), 1)`);
         await page.waitFor(`window.pymagic.notebook.stateOf('nb_demo.ipynb').nb.cells.length === 5`, 10000, 'the merge');
         assert.equal((await cellsText())[1], 'x = 5\ny = [1, 2]\n\nz = x * 2');
-        // put the cell back the way it was for the run below
+        // put the cell back the way it was for the run below (the merge drew the cells again: the cell's editor is made again first)
+        await nbState(`(s.views[1].el.__create?.(), 1)`);
+        await page.waitFor(`!!window.pymagic.notebook.stateOf('nb_demo.ipynb').views[1].editor`, 10000, 'the cell editor after the merge');
         await nbState(`(s.views[1].editor.executeEdits('t', [{ range: s.views[1].editor.getModel().getFullModelRange(), text: 'x = 5\\ny = [1, 2]\\nz = x * 2' }]), 1)`);
         assert.equal((await cellsText())[1], 'x = 5\ny = [1, 2]\nz = x * 2');
     });

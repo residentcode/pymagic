@@ -124,6 +124,11 @@ kbd { font: 11px var(--mono); background: var(--raised); border: 1px solid var(-
 #branch-chip:hover { background: var(--hover2); color: var(--fg); }
 #toolbar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 6px; flex: none; }
 #toolbar .spacer { flex: 1; min-width: 8px; }
+/* the bar keeps every item at its own width (toolbar-fit.js hides whole items when it is too narrow); only the interpreter's name gives room */
+#toolbar > * { flex-shrink: 0; }
+#toolbar .tb-off { display: none !important; }
+#toolbar #b-more { font-size: 16px; letter-spacing: 1px; color: var(--dim); }
+#toolbar #b-pause:disabled { display: none; }
 #toolbar button { background: transparent; border-color: transparent; padding: 0 10px; height: 30px; color: var(--fg); }
 #toolbar button:hover:not(:disabled) { background: var(--hover2); border-color: transparent; }
 #toolbar button .i { color: var(--dim); }
@@ -244,6 +249,10 @@ li.in-excluded { opacity: .55; }
 #tabs .gsep { width: 1px; height: 18px; margin: 0 6px; background: var(--line); flex: none; }
 #tabs .spacer { flex: 1; }
 #tabs .close { padding: 0; width: 28px; color: var(--dim); }
+/* the tabs scroll sideways when they do not fit; closing the panel stays at hand */
+#tabs button { flex: none; }
+#tabs .close { position: sticky; right: 0; background: var(--panel); box-shadow: -8px 0 8px var(--panel); }
+#tabs { scroll-padding-inline: 8px 48px; }
 .tab { display: none; flex: 1; min-height: 0; }
 .tab.active { display: flex; }
 @media (min-width: 1720px) { #tabs button:not(.active) .lbl { display: inline; } }
@@ -251,6 +260,10 @@ li.in-excluded { opacity: .55; }
 /* ------------------------------------------------------------------ status bar */
 #status { display: flex; align-items: center; gap: 14px; padding: 0 14px; background: var(--panel); border-top: 1px solid var(--line); color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; }
 #status .spacer { flex: 1; }
+#status > * { flex: none; }
+#status .spacer { flex: 1 1 0; min-width: 0; }
+/* the keys are the first to give way when the window is narrow */
+#status .hints { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #conn { display: inline-flex; align-items: center; gap: 7px; }
 #conn::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
 #conn.ok { color: var(--good); } #conn.bad { color: var(--bad); }
@@ -284,10 +297,8 @@ li.in-excluded { opacity: .55; }
 #stdin { padding: 7px 14px; background: var(--panel); font-family: var(--mono); }
 .pkrow.head, .prof-head { background: var(--panel); }
 
-@media (max-width: 1500px) {
-  #toolbar .lbl-opt { display: none; }
-  #toolbar button.optional { padding: 0; width: 30px; }
-}
+#toolbar.compact .lbl-opt { display: none; }
+#toolbar.compact button.optional { padding: 0; width: 30px; }
 @media (max-width: 900px) { #app { grid-template-columns: 48px 0 minmax(0, 1fr); } #sidebar { display: none; } #project, #branch-chip { display: none; } }
 #t-todo[data-count]::after { background: var(--line-strong) !important; }
 
@@ -313,12 +324,11 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 #sigdialog .pick .pick-detail { color: var(--dim); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #sigdialog .pick.sel .pick-detail { color: var(--on-accent-dim); }
 #toolbar .grp { display: inline-flex; align-items: center; gap: 2px; }
-@media (max-width: 1380px) { #toolbar .grp-vcs, #toolbar .grp-file { display: none; } }
-@media (max-width: 1120px) { #toolbar .grp-nav, #b-refactor, #b-anything, #b-cov { display: none; } }
 #interp { flex: 0 1 auto; min-width: 150px; }
 
 #fmt-engine { flex: none; width: 92px; }
-#interp { flex: 0 1 230px; }
+/* the interpreter's name is shown whole (up to 260px); the bar gives up other commands for it */
+#toolbar #interp { flex: 0 0 auto; max-width: 260px; }
 
 /* ------------------------------------------------------------------ the light theme: the same tokens on white surfaces */
 :root[data-theme="light"] {
@@ -556,7 +566,7 @@ li.mark-resources .fname, li.mark-resources .folder { color: var(--teal, #6cc4c4
 .hist-row button.mini { padding: 1px 8px; }
 #hist-deleted-box { display: flex; align-items: center; gap: 4px; color: var(--dim); font-size: 12px; }
 
-#scratch-box { display: none; flex-direction: column; flex: none; max-height: 34%; border-top: 1px solid var(--line); background: var(--panel); }
+#scratch-box { display: none; flex-direction: column; flex: none; max-height: 34%; border-top: 1px solid var(--line); background: var(--panel); grid-column: 1 / -1; }
 #sidebar[data-view="files"] #scratch-box { display: flex; }
 .scratch-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px 4px; color: var(--dim); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
 #scratch-list { overflow: auto; padding-bottom: 6px; }
