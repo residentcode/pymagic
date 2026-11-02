@@ -11,6 +11,9 @@ public sealed record GitTag(string Name, string Hash, string Subject);
 /// <summary>What a merge, pull, cherry-pick, revert or stash apply did: its output, whether it stopped on conflicts, and the operation still waiting for you.</summary>
 public sealed record GitResult(string Output, bool Conflicts, string? Operation);
 
+/// <summary>The commit an interactive rebase stopped at for *edit*: its hash and its whole message.</summary>
+public sealed record GitEditStop(string Hash, string Message);
+
 public sealed record GitConflictStages(string? Base, string? Ours, string? Theirs)
 {
     /// <summary>The file is binary: the texts above are empty and the only way to settle it is to take a side.</summary>
@@ -179,6 +182,38 @@ public sealed partial class GitRepository
         string op = Operation() ?? throw new GitException("nothing is in progress");
         if (Status().Files.Any(f => f.IsConflict)) throw new GitException("some files still have conflicts");
         return Outcome(op == "merge" ? Run("commit", "--no-edit") : Run(op, "--continue"));
+    }
+
+    /// <summary>The commit an interactive rebase stopped at to be edited (git keeps it in rebase-merge/amend), while the branch still stands on it; null otherwise.</summary>
+    public GitEditStop? EditStop()
+    {
+        if (Operation() != "rebase") return null;
+        string amend = Path.Combine(RunOrThrow("rev-parse", "--absolute-git-dir").Trim(), "rebase-merge", "amend");
+        if (!File.Exists(amend)) return null;
+        string hash = File.ReadAllText(amend).Trim();
+        // a commit made since the stop: amending now would change that one, not the commit being edited
+        if (hash != RunOrThrow("rev-parse", "HEAD").Trim()) return null;
+        return new GitEditStop(hash, RunOrThrow("log", "-1", "--format=%B", "HEAD").TrimEnd());
+    }
+
+    /// <summary>
+    /// At an *edit* stop: puts every change of the working tree into the commit being edited (with a new message when one is given) and goes on
+    /// with the rebase. Nothing changed and the same message: the commit is kept as it is.
+    /// </summary>
+    public GitResult AmendAndContinue(string? message)
+    {
+        var stop = EditStop() ?? throw new GitException("the rebase is not stopped at a commit to edit");
+        if (Status().Files.Any(f => f.IsConflict)) throw new GitException("some files still have conflicts");
+        bool newMessage = !string.IsNullOrWhiteSpace(message) && message.Trim() != stop.Message.Trim();
+        if (Status().Files.Count > 0 || newMessage)
+        {
+            RunOrThrow("add", "-A");
+            var commit = new List<string> { "commit", "--amend" };
+            if (newMessage) { commit.Add("-m"); commit.Add(message!.Trim()); }
+            else commit.Add("--no-edit");
+            RunOrThrow(commit.ToArray());
+        }
+        return Outcome(Run("rebase", "--continue"));
     }
 
     /// <summary>Turns the result of a command into an answer: conflicts are a state to resolve, not a failure; anything else that went wrong is thrown.</summary>

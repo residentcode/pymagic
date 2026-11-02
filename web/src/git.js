@@ -1153,7 +1153,7 @@ export function setupGit(deps) {
             await deps.saveAll();
             const r = await post('/api/git/action', body);
             await deps.reloadAll();
-            toast(r.conflicts ? `${done}: stopped on conflicts, resolve them above` : r.operation === 'rebase' ? 'Rebase stopped at the commit to edit: change it and commit with Amend, then Continue' : done);
+            toast(r.conflicts ? `${done}: stopped on conflicts, resolve them above` : r.operation === 'rebase' ? 'Rebase stopped at the commit to edit: change it, then Amend and continue' : done);
         }
         catch (e) {
             toast(String(e.message ?? e), true);

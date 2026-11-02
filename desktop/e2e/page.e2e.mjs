@@ -1599,6 +1599,25 @@ describe('branches: comparing, rebasing onto another, and pushing tags', () => {
         for (let i = 0; i < 40 && !git('log', '--format=%s').includes('only on other'); i++) await sleep(300);
         assert.equal(git('log', '--format=%s').trim().split('\n').join(' | '), 'only on main | only on other | start');
     });
+
+    test('a rebase stopped at edit: Amend and continue puts the change and the new message into that commit', async () => {
+        // the last commit marked edit, as the interactive rebase window would (git's own sed, through the sequence editor)
+        const stop = spawnSync('git', ['rebase', '-i', 'HEAD~1'], { cwd: projectRoot, encoding: 'utf8', env: { ...process.env, GIT_SEQUENCE_EDITOR: 'sed -i 1s/^pick/edit/' } });
+        assert.equal(stop.status, 0, stop.stderr);
+        assert.ok(existsSync(join(projectRoot, '.git', 'rebase-merge', 'amend')), 'stopped at edit');
+        await page.evaluate(`document.querySelectorAll('.ask-shade').forEach((s) => s.remove())`);
+        await page.evaluate(`${$('t-git')}.click()`);
+        await page.evaluate(`${$('git-refresh')}.click()`);
+        await page.waitFor(`${$('git-op-amend')}.style.display === '' && ${$('git-op-text')}.textContent.includes('only on main')`, 15000, 'the edit stop and its button');
+        writeFileSync(join(projectRoot, 'main_only.txt'), 'main, edited\n');
+        await page.evaluate(`(() => { const e = ${$('git-message')}; e.value = 'only on main, edited'; e.dispatchEvent(new Event('input')); })()`);
+        await page.evaluate(`${$('git-op-amend')}.click()`);
+        for (let i = 0; i < 40 && existsSync(join(projectRoot, '.git', 'rebase-merge')); i++) await sleep(300);
+        assert.ok(!existsSync(join(projectRoot, '.git', 'rebase-merge')), 'the rebase finished');
+        assert.equal(git('log', '--format=%s').trim().split('\n').join(' | '), 'only on main, edited | only on other | start');
+        assert.equal(git('show', 'HEAD:main_only.txt'), 'main, edited\n');
+        await page.waitFor(`${$('git-op')}.style.display === 'none'`, 15000, 'the bar gone');
+    });
 });
 
 // A GitHub of the test's own: the few calls the Pull Requests window makes, answered from memory, and everything it was sent written down.

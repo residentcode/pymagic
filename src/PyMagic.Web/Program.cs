@@ -2123,7 +2123,7 @@ app.MapGet("/api/git/stashes", () => GitCall(r => r.Stashes()));
 app.MapGet("/api/git/tags", () => GitCall(r => r.Tags()));
 app.MapGet("/api/git/stash/files", (int index) => GitCall(r => r.StashFiles(index)));
 // what is waiting for you: a merge, rebase, cherry-pick or revert that stopped, and the files that have conflicts
-app.MapGet("/api/git/operation", () => GitCall(r => new { operation = r.Operation(), conflicts = r.Conflicts() }));
+app.MapGet("/api/git/operation", () => GitCall(r => new { operation = r.Operation(), conflicts = r.Conflicts(), editing = r.EditStop() }));
 app.MapGet("/api/git/conflict", (string path) => GitCall(r => r.ConflictStages(path)));
 
 app.MapPost("/api/git/action", async (HttpRequest req) =>
@@ -2155,6 +2155,7 @@ app.MapPost("/api/git/action", async (HttpRequest req) =>
             case "merge": return r.Merge(Str("branch"), Flag("noFf"));
             case "abort": r.Abort(); return Ok();
             case "continue": return r.Continue();
+            case "amendContinue": return r.AmendAndContinue(body?["message"]?.GetValue<string>());
             case "resolve": r.Resolve(Str("path"), Str("side")); return Ok();
             case "markResolved": r.MarkResolved(Str("path")); return Ok();
             case "stash": return new { ok = true, output = r.Stash(Str("message"), Flag("untracked")) };

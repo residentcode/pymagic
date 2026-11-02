@@ -53,6 +53,7 @@ export function setupGitSync({ git, deps }) {
     const out = $('git-sync-out');
     let operation = null;
     let conflicts = [];
+    let editing = null;     // the commit a rebase stopped at for *edit*: { hash, message }
 
     const say = (text, bad = false) => { out.textContent = (text ?? '').split('\n').filter(Boolean).pop() ?? ''; out.title = text ?? ''; out.className = bad ? 'bad' : ''; };
 
@@ -92,10 +93,13 @@ export function setupGitSync({ git, deps }) {
         if (!operation) return;
         $('git-op-text').textContent = conflicts.length
             ? `${names[operation]} in progress: ${conflicts.length} file${conflicts.length === 1 ? '' : 's'} with conflicts`
+            : editing
+                ? `Rebase stopped to edit ${editing.hash.slice(0, 7)} "${editing.message.split('\n')[0]}": change the files, then Amend and continue`
             : operation === 'rebase'
-                ? 'Rebase in progress: stopped to edit a commit (or every conflict is resolved): change it, commit with Amend, then Continue'
+                ? 'Rebase in progress: every conflict is resolved, continue to go on'
                 : `${names[operation]} in progress: every conflict is resolved, continue to finish it`;
         $('git-op-continue').disabled = conflicts.length > 0;
+        $('git-op-amend').style.display = editing && !conflicts.length ? '' : 'none';
         const box = $('git-conflicts');
         box.replaceChildren();
         for (const path of conflicts) {
@@ -175,6 +179,19 @@ export function setupGitSync({ git, deps }) {
             const r = await act({ op: 'continue' });
             await deps.reloadAll();
             toast(r.conflicts ? 'More conflicts to resolve' : `${names[operation] ?? 'Operation'} finished`);
+        } catch (e) { toast(String(e.message ?? e), true); }
+        await git.refresh();
+    };
+
+    // at an *edit* stop: the changes go into that commit (the message box, when filled, is its new message) and the rebase goes on
+    $('git-op-amend').onclick = async () => {
+        try {
+            await deps.saveAll();
+            const message = $('git-message').value.trim();
+            const r = await act({ op: 'amendContinue', ...(message ? { message } : {}) });
+            $('git-message').value = '';
+            await deps.reloadAll();
+            toast(r.conflicts ? 'Amended; the next commit stopped on conflicts' : r.operation ? 'Amended; the rebase stopped again' : 'Amended; rebase finished');
         } catch (e) { toast(String(e.message ?? e), true); }
         await git.refresh();
     };
@@ -407,10 +424,11 @@ export function setupGitSync({ git, deps }) {
         if (reading) return;
         reading = true;
         try {
-            if (!git.status().available) { operation = null; conflicts = []; paintOperation(); paintStashes([]); return; }
+            if (!git.status().available) { operation = null; conflicts = []; editing = null; paintOperation(); paintStashes([]); return; }
             const [op, stashes] = await Promise.all([api('/api/git/operation'), api('/api/git/stashes')]);
             operation = op.operation;
             conflicts = op.conflicts ?? [];
+            editing = op.editing ?? null;
             paintOperation();
             paintStashes(stashes);
         } catch { /* the Git tab says why it is empty */ }

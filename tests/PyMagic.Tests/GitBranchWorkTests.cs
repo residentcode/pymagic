@@ -180,6 +180,66 @@ public class GitBranchWorkTests
     }
 
     [Fact]
+    public void AtAnEditStopTheChangesAreAmendedAndTheRebaseGoesOn()
+    {
+        if (!HasGit) return;
+        using var b = new Box();
+        b.Commit("base.txt", "base\n", "base");
+        string baseHash = b.G("rev-parse", "HEAD").Trim();
+        b.Commit("a.txt", "a\n", "add a");
+        b.Commit("b.txt", "b\n", "add b");
+        b.Commit("c.txt", "c\n", "add c");
+        var git = b.Git();
+        A.Null(git.EditStop());
+        var plan = git.RebasePlan(baseHash);
+        git.RebaseInteractive(baseHash, new[]
+        {
+            new GitRebaseStep(plan[0].Hash, "edit", null), new GitRebaseStep(plan[1].Hash, "edit", null), new GitRebaseStep(plan[2].Hash, "pick", null),
+        });
+        var first = git.EditStop()!;
+        Assert.Equal(b.G("rev-parse", "HEAD").Trim(), first.Hash);
+        Assert.Equal("add a", first.Message);
+
+        // nothing changed and no new message: the commit is kept as it is, and the rebase stops at the next edit
+        string before = first.Hash;
+        var r = git.AmendAndContinue(null);
+        Assert.Equal("rebase", r.Operation);
+        Assert.Equal(before, b.G("rev-parse", "HEAD~1").Trim());
+        Assert.Equal("add b", git.EditStop()!.Message);
+
+        // a changed file, a new one and a new message all go into the edited commit
+        File.WriteAllText(Path.Combine(b.Dir, "b.txt"), "b changed\n");
+        File.WriteAllText(Path.Combine(b.Dir, "new.txt"), "new\n");
+        var done = git.AmendAndContinue("add b, changed");
+        Assert.True(!done.Conflicts);
+        A.Null(git.Operation());
+        A.Null(git.EditStop());
+        Assert.Equal("add c|add b, changed|add a|base", string.Join("|", b.G("log", "--format=%s").Split('\n', StringSplitOptions.RemoveEmptyEntries)));
+        Assert.Equal("b.txt|new.txt", string.Join("|", b.G("show", "--name-only", "--format=", "HEAD~1").Trim().Split('\n').Select(x => x.Trim()).OrderBy(x => x)));
+        Assert.Equal("", b.G("status", "--porcelain").Trim());
+    }
+
+    [Fact]
+    public void AmendAndContinueIsRefusedWhenTheRebaseIsNotAtAnEditStop()
+    {
+        if (!HasGit) return;
+        using var b = new Box();
+        b.Commit("base.txt", "base\n", "base");
+        string baseHash = b.G("rev-parse", "HEAD").Trim();
+        b.Commit("a.txt", "a\n", "add a");
+        b.Commit("b.txt", "b\n", "add b");
+        var git = b.Git();
+        Assert.Throws<GitException>(() => git.AmendAndContinue(null));
+        var plan = git.RebasePlan(baseHash);
+        git.RebaseInteractive(baseHash, new[] { new GitRebaseStep(plan[0].Hash, "edit", null), new GitRebaseStep(plan[1].Hash, "pick", null) });
+        // a commit made after the stop: amending would change that one, so the stop is no longer offered
+        b.Commit("other.txt", "o\n", "made at the stop");
+        A.Null(git.EditStop());
+        Assert.Throws<GitException>(() => git.AmendAndContinue(null));
+        git.Abort();
+    }
+
+    [Fact]
     public void TwoBranchesAreCompared()
     {
         if (!HasGit) return;
