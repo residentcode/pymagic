@@ -209,6 +209,52 @@ public class ContainerTargetTests
     }
 
     /// <summary>
+    /// With PYMAGIC_TEST_COMPOSE=1 and a running Docker engine (python:3.12-slim present): the notebook kernel (pm_kernel.py, copied in) runs in a
+    /// container that has the project at /src/proj, connects back to this computer, and runs cells in the project's folder there.
+    /// </summary>
+    [Fact]
+    public void ANotebookKernelRunsInARunningContainer()
+    {
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_COMPOSE") != "1") return;
+        string root = Path.Combine(Path.GetTempPath(), "pm_ctr_" + Guid.NewGuid().ToString("N"));
+        string name = "pm_ctr_" + Guid.NewGuid().ToString("N")[..8];
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "data.txt"), "from the project\n");
+            Assert.True(Docker("run", "-d", "--name", name, "-u", "1000", "-v", $"{root}:/src/proj", "python:3.12-slim", "sleep", "600") != null);
+            var target = new ContainerTarget(name) { Project = root };
+            var events = new System.Collections.Concurrent.BlockingCollection<System.Text.Json.Nodes.JsonNode>();
+            using var kernel = new NotebookKernel(events.Add) { Python = "python", Target = target };
+            kernel.Start(root);
+            var log = new System.Text.StringBuilder();
+            System.Text.Json.Nodes.JsonNode Wait(string type)
+            {
+                while (true)
+                {
+                    if (!events.TryTake(out var e, TimeSpan.FromSeconds(120))) throw new AssertionException("timed out waiting for " + type + "; the kernel said: " + log);
+                    string t = e["type"]!.GetValue<string>();
+                    if (t == "kernelLog") log.Append(e["text"]?.GetValue<string>());
+                    if (t is "kernelError" or "kernelExited") throw new AssertionException(t + ": " + e.ToJsonString() + " " + log);
+                    if (t == "error") throw new AssertionException("the cell failed: " + e.ToJsonString());
+                    if (t == type) return e;
+                }
+            }
+            Wait("ready");
+            kernel.Execute("1", "import os, sys\nx = 6 * 7\n(os.getcwd(), sys.platform, open('data.txt').read().strip())");
+            Assert.Equal("('/src/proj', 'linux', 'from the project')", Wait("result")["data"]!["text/plain"]!.GetValue<string>());
+            Wait("done");
+            kernel.Execute("2", "x");
+            Assert.Equal("42", Wait("result")["data"]!["text/plain"]!.GetValue<string>());
+        }
+        finally
+        {
+            Docker("rm", "-f", name);
+            try { Directory.Delete(root, true); } catch { }
+        }
+    }
+
+    /// <summary>
     /// With PYMAGIC_TEST_COMPOSE=1 and a running Docker engine (python:3.12-slim present): a container started with the project mounted at
     /// /src/proj, used without saying where; the place is read from docker inspect, and a helper script is copied in and runs there.
     /// </summary>
