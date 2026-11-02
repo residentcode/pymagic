@@ -1,7 +1,8 @@
 // The settings dialog (the gear, Ctrl+,): pages for how PyMagic looks, the editor, files, the formatter, the interpreter, Git, the keys and PyMagic itself.
 // What a page edits is either a setting of the person (settings.js; changes show at once) or a control PyMagic already has (the formatter's engine,
 // the interpreter, the Git switches), which the page mirrors and presses.
-import { change, resetAll, settings } from './settings';
+import { change, resetAll, settings, pluginsAtStart } from './settings';
+import { PLUGINS, pluginOn, switchPlugin, findPlugins } from './plugin-model.js';
 import { buildLabel, shortTime } from './build-info.js';
 import { keymapCommands, defineCommand } from './commands.js';
 import { keyFromEvent, effectiveKeys, clashes, withKey } from './keymap-model.js';
@@ -492,6 +493,51 @@ const SPECIAL = {
         paint();
 
     },
+    plugins(page) {
+        page.append(note('The features that come with PyMagic and can be switched off. Nothing is downloaded: a plugin that is off is not loaded, and its panel, buttons, menu entries and keys are gone. A change takes effect when PyMagic reloads.'));
+        const search = document.createElement('input');
+        search.type = 'search';
+        search.id = 'plugins-search';
+        search.placeholder = 'Find a plugin';
+        const reload = document.createElement('div');
+        reload.id = 'plugins-reload';
+        reload.className = 'plugins-reload';
+        const reloadButton = document.createElement('button');
+        reloadButton.className = 'primary';
+        reloadButton.textContent = 'Reload PyMagic';
+        reloadButton.onclick = () => location.reload();
+        reload.append('Reload PyMagic to apply the change. ', reloadButton);
+        const list = document.createElement('div');
+        list.id = 'plugins-list';
+        page.append(search, reload, list);
+        const now = () => settings().plugins ?? {};
+        function paint() {
+            reload.hidden = PLUGINS.every((p) => pluginOn(now(), p.id) === pluginOn(pluginsAtStart(), p.id));
+            list.replaceChildren();
+            for (const p of findPlugins(search.value)) {
+                const row = document.createElement('label');
+                row.className = 'plugin-row';
+                row.dataset.plugin = p.id;
+                const box = document.createElement('input');
+                box.type = 'checkbox';
+                box.checked = pluginOn(now(), p.id);
+                box.onchange = () => { change({ plugins: switchPlugin(now(), p.id, box.checked) }); paint(); };
+                const text = document.createElement('div');
+                const name = document.createElement('div');
+                name.className = 'plugin-name';
+                name.textContent = p.name;
+                const about = document.createElement('div');
+                about.className = 'plugin-about';
+                about.textContent = p.about;
+                text.append(name, about);
+                row.append(box, text);
+                list.append(row);
+            }
+            if (!list.childElementCount) list.append(note('No plugin has those words.'));
+        }
+        search.oninput = paint;
+        paint();
+    },
     about(page) {
         const p = document.createElement('div');
         p.className = 'about';
@@ -515,7 +561,7 @@ const SPECIAL = {
     },
 };
 
-const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections', 'Inspections'], ['terminal', 'Terminal'], ['git', 'Git'], ['django', 'Django'], ['templates', 'Templates'], ['keymap', 'Keymap'], ['about', 'About']];
+const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections', 'Inspections'], ['terminal', 'Terminal'], ['git', 'Git'], ['django', 'Django'], ['templates', 'Templates'], ['keymap', 'Keymap'], ['plugins', 'Plugins'], ['about', 'About']];
 
 let isOpen = false;
 

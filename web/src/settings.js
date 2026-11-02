@@ -29,6 +29,7 @@ export const DEFAULTS = {
     methodSeparators: false,  // a line above each function and method
     lensMode: true,           // hovering the scroll bar shows that part of the file
     previewTab: false,        // a file opened with one click replaces the last one opened so, until it is edited
+    plugins: {},              // Settings > Plugins: plugin id -> false for one switched off; every plugin is on unless it is here
     keybindings: {},          // Settings > Keymap: command id -> key ("Ctrl+Shift+D"), "" for none; what is not here keeps its own key
     codeVision: true,         // usages and inheritors above functions and classes
     codeVisionAuthor: true,   // and who wrote most of each (Git blame)
@@ -66,9 +67,14 @@ export function merged(stored) {
     out.ruler = Math.min(400, Math.max(0, Math.round(out.ruler)));
     out.tabLimit = Math.min(100, Math.max(0, Math.round(out.tabLimit)));
     // only text keys of command ids (a broken file changes no key)
+    out.plugins = out.plugins && !Array.isArray(out.plugins) ? Object.fromEntries(Object.entries(out.plugins).filter(([k, v]) => k && v === false)) : {};
     out.keybindings = out.keybindings && !Array.isArray(out.keybindings) ? Object.fromEntries(Object.entries(out.keybindings).filter(([k, v]) => k && typeof v === 'string')) : {};
     return out;
 }
+
+let startPlugins = {};
+/** The plugins as they were when the window opened: those are the ones set up (a change takes effect at the next reload). */
+export const pluginsAtStart = () => startPlugins;
 
 export async function loadSettings() {
     try {
@@ -76,6 +82,7 @@ export async function loadSettings() {
         current = merged(res.ok ? await res.json() : {});
     }
     catch { current = { ...DEFAULTS }; }
+    startPlugins = current.plugins;
     return current;
 }
 
@@ -90,7 +97,7 @@ export function change(patch) {
     }, 300);
 }
 
-export function resetAll() { change({ ...DEFAULTS }); }
+export function resetAll() { change({ ...DEFAULTS, plugins: current.plugins }); }   // the plugins are not the editor's look: Settings > Plugins switches them
 
 /** The theme in force: the setting, or what the system says when it is "system". */
 export function themeNow(s = current) {

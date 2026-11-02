@@ -461,7 +461,7 @@ export function setupTabs(deps) {
         tools.className = 'switcher-col tools';
         tools.innerHTML = '<div class="switcher-head">Tool windows</div>';
         for (const button of document.querySelectorAll('#tabs > button[id^="t-"]')) {
-            if (button.id === 't-close') continue;
+            if (button.id === 't-close' || button.classList.contains('plugin-off')) continue;
             const row = document.createElement('div');
             row.className = 'switcher-row';
             row.textContent = button.title || button.textContent;

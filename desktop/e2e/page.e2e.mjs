@@ -2960,3 +2960,65 @@ describe('a notebook on a real Jupyter server: Variables and Debug Cell', { skip
         await page.evaluate(`document.getElementById('nb-server-use').click()`);
     });
 });
+
+describe('Settings > Plugins', () => {
+    const openPlugins = async () => {
+        await page.evaluate(`${$('b-gear')}.click()`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim().startsWith('Settings…'))`, 5000, 'the gear\'s menu');
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim().startsWith('Settings…')).click()`);
+        await page.waitFor(`document.querySelector('.settings-nav')`, 5000, 'the Settings window');
+        await page.evaluate(`[...document.querySelectorAll('.settings-nav button')].find((b) => b.textContent === 'Plugins').click()`);
+        await page.waitFor(`document.querySelectorAll('#plugins-list .plugin-row').length >= 8`, 5000, 'the plugins');
+    };
+    const box = (id) => `document.querySelector('#plugins-list .plugin-row[data-plugin="${id}"] input')`;
+    const closeSettings = () => page.evaluate(`[...document.querySelectorAll('.settings-foot button')].find((b) => b.textContent === 'Done').click()`);
+    // the setting written (it is saved a moment after a change), then the window reloaded
+    const reload = async (plugins) => {
+        await page.waitFor(`fetch('/api/settings').then((r) => r.json()).then((s) => JSON.stringify(s.plugins ?? {}) === ${JSON.stringify(JSON.stringify(plugins))})`, 10000, 'the plugins saved');
+        await page.evaluate('location.reload()');
+        await sleep(1000);
+        await page.waitFor('!!(window.pymagic && window.pymagic.openFile && window.pymagic.editor.getModel())', 60000, 'the editor after the reload');
+    };
+    after(async () => {
+        await page.evaluate(`window.pymagic.changeSetting({ plugins: {} })`);
+        await reload({});
+    });
+
+    test('a plugin switched off is gone after the reload: its tab, button and menu entries; switched on, it is back', async () => {
+        await openPlugins();
+        assert.equal(await page.evaluate(`[...document.querySelectorAll('#plugins-list .plugin-row input')].every((b) => b.checked)`), true, 'every plugin starts on');
+        assert.equal(await page.evaluate(`document.getElementById('plugins-reload').hidden`), true);
+        // found by a word of its description
+        await page.evaluate(`(() => { const s = document.getElementById('plugins-search'); s.value = 'call graph'; s.dispatchEvent(new Event('input')); })()`);
+        assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#plugins-list .plugin-row')].map((r) => r.dataset.plugin)`), ['profiler']);
+        await page.evaluate(`${box('profiler')}.click()`);
+        assert.equal(await page.evaluate(`document.getElementById('plugins-reload').hidden`), false, 'the reload is asked for');
+        await closeSettings();
+        // still there until the reload
+        assert.equal(await page.evaluate(`${$('t-profiler')}.classList.contains('plugin-off')`), false);
+        await reload({ profiler: false });
+        for (const id of ['t-profiler', 'profiler-tab', 'b-profile'])
+            assert.equal(await page.evaluate(`getComputedStyle(${$(id)}).display`), 'none', id + ' hidden');
+        assert.equal(await page.evaluate(`getComputedStyle(${$('t-database')}).display === 'none'`), false, 'the other plugins stay');
+        // not in the Tools menu (the others still are), nor in the Run menu
+        await page.evaluate(`document.querySelector('#brand .mark').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+        const subOf = async (label) => {
+            await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim() === ${JSON.stringify(label)})`, 5000, 'the main menu');
+            await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim() === ${JSON.stringify(label)}).click()`);
+            await sleep(200);
+            return page.evaluate(`[...document.querySelectorAll('.ctx-menu')].pop().textContent`);
+        };
+        const tools = await subOf('Tools');
+        assert.ok(!tools.includes('Profiler') && tools.includes('Database'), tools);
+        assert.ok(!(await subOf('Run')).includes('Profile'));
+        await page.key(27, 'Escape');
+        await page.waitFor(`!document.querySelector('.ctx-menu')`, 5000, 'the menu closed');
+        await openPlugins();
+        assert.equal(await page.evaluate(`${box('profiler')}.checked`), false);
+        assert.equal(await page.evaluate(`document.getElementById('plugins-reload').hidden`), true, 'what is set up is what the setting says');
+        await page.evaluate(`${box('profiler')}.click()`);
+        await closeSettings();
+        await reload({});
+        assert.notEqual(await page.evaluate(`getComputedStyle(${$('t-profiler')}).display`), 'none', 'back after the reload');
+    });
+});

@@ -56,6 +56,10 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - ~~Jinja: `{% include %}` of a list or a variable, line statements (`# for x in y`), the expressions beyond brackets and strings (`{{ a b }}`) (129)~~ (done, item 208).
 - ~~pytest: `request.param` of `parametrize(..., indirect=True)` (151), fixtures registered by hooks at run time (134), a fixtures panel and a run icon in the gutter (29)~~ (done, item 209).
 
+**Plugins** (asked for by the user on 2 November 2026: optional features as built-in plugins, switched on and off in Settings > Plugins, as PyCharm's bundled ones)
+- ~~Settings > Plugins, and JSON Schema, HTTP Client, Database Tools and SQL, Profiler, Pull Requests, Deployment, Markdown and Macros as plugins~~ (done, item 289).
+- The features that reach into the engine and the rest of the window, as plugins too: Django (the panel, its templates, its inspections and New Project), Flask and FastAPI, Jupyter notebooks, Docker, WSL and SSH interpreters, coverage, the diagrams, Git and its pull of GitHub. Each needs its parts in the engine switched off as well, not only its setup in the page.
+
 **Editor**
 - ~~Hover and signature help: a parameter's documentation in hover and in completion's `name=` items, the class docstring for a constructor call, `name=` after a `*`, documentation of methods of library base classes (119, 121); signature help inside decorators and class bases (118)~~ (done, item 210).
 - ~~Completion: dictionary keys and `Literal[...]` strings, a setting to leave out the call parentheses (31)~~ (done, item 211).
@@ -173,4 +177,4 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 ## Work done
 
-The 288 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 289 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

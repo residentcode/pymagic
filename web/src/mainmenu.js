@@ -1,7 +1,8 @@
 // The main menu: the mark at the left of the command bar opens it. Every command PyMagic has is in it, with its key, grouped as File, Edit, View,
 // Navigate, Code, Run, Tools, Git and Help. A command is the editor's own action, a button the tool already has, or a function of its script.
 import { openMenu } from './menu';
-import { change, settings } from './settings';
+import { change, settings, pluginsAtStart } from './settings';
+import { toolOff } from './plugin-model';
 import { openSettings } from './settings-ui';
 import { openNewProject } from './newproject';
 import { defineCommand } from './commands.js';
@@ -49,6 +50,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
         const sidebarShown = !$('app').classList.contains('no-side');
         const windows = [['output', 'Output'], ['debug', 'Debugger'], ['terminal', 'Terminal'], ['tests', 'Tests'], ['coverage', 'Coverage'], ['profiler', 'Profiler'], '-',
             ['problems', 'Problems'], ['todo', 'TODO'], ['insp', 'Inspections'], ['hier', 'Hierarchy'], '-', ['search', 'Search'], ['git', 'Git'], ['prs', 'Pull requests'], ['history', 'History'], ['packages', 'Packages'], ['database', 'Database'], ['httpclient', 'HTTP client'], ['routes', 'Endpoints'], ['django', 'Django']]
+            .filter((w) => w === '-' || !toolOff(pluginsAtStart(), w[0]))
             .map((w) => (w === '-' ? w : { label: w[1], checked: $('panel').classList.contains('open') && $(`t-${w[0]}`).classList.contains('active'), run: dock(w[0]) }));
         const files = recent(currentFile());
         return [
@@ -203,7 +205,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 { label: 'Run', key: 'Ctrl+F5', run: press('b-run'), disabled: $('b-run').disabled },
                 { label: 'Debug', key: 'F5', run: press('b-debug'), disabled: $('b-debug').disabled },
                 { label: 'Run with coverage', run: press('b-cov') },
-                { label: 'Profile', run: press('b-profile'), disabled: $('b-profile').disabled },
+                ...(toolOff(pluginsAtStart(), 'profiler') ? [] : [{ label: 'Profile', run: press('b-profile'), disabled: $('b-profile').disabled }]),
                 { label: 'Stop', key: 'Shift+F5', run: press('b-stop'), disabled: $('b-stop').disabled },
                 { label: 'Attach to process…', run: () => debug.attach(), disabled: debug.running() },
                 { label: 'Debug server…', run: () => debug.debugServer(), disabled: debug.running() },
@@ -244,9 +246,8 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 { label: 'Terminal', key: 'Ctrl+`', run: dock('terminal') },
                 { label: 'Django', run: dock('django') },
                 { label: 'Endpoints', run: dock('routes') },
-                { label: 'Profiler', run: dock('profiler') },
-                { label: 'Database', run: dock('database') },
-                { label: 'HTTP client', run: dock('httpclient') },
+                ...[['profiler', 'Profiler'], ['database', 'Database'], ['httpclient', 'HTTP client']]
+                    .filter(([id]) => !toolOff(pluginsAtStart(), id)).map(([id, label]) => ({ label, run: dock(id) })),
             ] },
             { label: 'Git', submenu: [
                 { label: 'Update (pull)', run: press('b-update') },

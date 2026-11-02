@@ -90,7 +90,7 @@ export function setupInjections({ database }) {
             const offset = model.getOffsetAt(position);
             const inj = injectionAt(model, offset);
             if (!inj || inj.language !== 'sql') return { suggestions: [] };
-            const objects = await database.objects();
+            const objects = database ? await database.objects() : [];
             const body = model.getValue().slice(inj.start, inj.end);
             const at = offset - inj.start;
             const statement = statementAt(maskHoles(body, inj.fstring).text, at);

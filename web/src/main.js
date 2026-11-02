@@ -26,6 +26,7 @@ import { setupCoverage } from './coverage';
 import { setupRequirementsCheck } from './requirements-check';
 import { setupFileChecks } from './filecheck';
 import { setupSchemaCheck } from './schemacheck';
+import { pluginOn, hiddenElements } from './plugin-model';
 import { setupSemantic } from './semantic';
 import { setupProfiler } from './profiler';
 import { setupDatabase } from './database';
@@ -66,7 +67,7 @@ import { setupRunAnything } from './runanything';
 import { setupFileActions, fileTypes } from './fileactions';
 import { setupAutoSave } from './autosave';
 import { themeName, defineTheme, defineLightTheme } from './theme';
-import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings, withoutCallParens, onSettings, change as changeSetting } from './settings';
+import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings, withoutCallParens, onSettings, change as changeSetting, pluginsAtStart } from './settings';
 import { requote } from './quotes-model';
 import { defineCommand, setupCommands, applyKeybindings, currentKeyLabel } from './commands.js';
 import { setKeyLabels } from './menu';
@@ -939,6 +940,10 @@ async function main() {
     defineTheme(monaco);
     defineLightTheme(monaco);
     await loadSettings();
+    // Settings > Plugins: a plugin switched off is not set up, and what it owns is hidden (a change takes effect at the next reload)
+    const plugin = (id) => pluginOn(pluginsAtStart(), id);
+    for (const id of hiddenElements(pluginsAtStart()))
+        document.getElementById(id)?.classList.add('plugin-off');
     // the main editor and the right side of a split are made alike
     // a quote typed over a selected string changes its quotes ("pen" with ' gives 'pen') instead of wrapping it ('"pen"'), in every editor
     monaco.editor.onDidCreateEditor((ed) => ed.onKeyDown((e) => {
@@ -1149,18 +1154,26 @@ async function main() {
     const coverage = setupCoverage(common);
     setupRequirementsCheck(common);
     setupFileChecks(common);
-    setupSchemaCheck(common);
-    setupProfiler({ ...common, askText: (...a) => explorer.askText(...a) });
-    setupHttpClient({ ...common, root: info.root, askText: (...a) => explorer.askText(...a) });
-    const database = setupDatabase({ ...common, askText: (...a) => explorer.askText(...a), runScript: (rel, args) => runHooks.runScript(rel, args) });
+    if (plugin('schemas'))
+        setupSchemaCheck(common);
+    if (plugin('profiler'))
+        setupProfiler({ ...common, askText: (...a) => explorer.askText(...a) });
+    if (plugin('httpclient'))
+        setupHttpClient({ ...common, root: info.root, askText: (...a) => explorer.askText(...a) });
+    const database = plugin('database') ? setupDatabase({ ...common, askText: (...a) => explorer.askText(...a), runScript: (rel, args) => runHooks.runScript(rel, args) }) : null;
     setupInjections({ database });
-    setupMarkdownPreview({ editor, currentFile: () => currentRel, openFile, askText: (...a) => explorer.askText(...a) });
-    setupMarkdownTools({ editor, currentFile: () => currentRel, relOfModel: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
-    setupPullRequests();
-    setupDeployment({ editor, currentFile: () => currentRel, askText: (...a) => explorer.askText(...a), reloadFromDisk, saveAll: common.saveAll });
+    if (plugin('markdown')) {
+        setupMarkdownPreview({ editor, currentFile: () => currentRel, openFile, askText: (...a) => explorer.askText(...a) });
+        setupMarkdownTools({ editor, currentFile: () => currentRel, relOfModel: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+    }
+    if (plugin('prs'))
+        setupPullRequests();
+    if (plugin('deployment'))
+        setupDeployment({ editor, currentFile: () => currentRel, askText: (...a) => explorer.askText(...a), reloadFromDisk, saveAll: common.saveAll });
     setupServices({ providers: [() => runHooks.services(), () => pyConsole.services(), () => terminal.services()] });
     setupRunAnything({ runConfigs, runHooks, editor });
-    setupMacros({ editor, askText: (...a) => explorer.askText(...a) });
+    if (plugin('macros'))
+        setupMacros({ editor, askText: (...a) => explorer.askText(...a) });
     setupGrammar({ relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     setupSpelling({ relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     // code actions that need the page (not just a text edit) arrive as commands
