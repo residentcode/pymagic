@@ -1618,6 +1618,37 @@ describe('branches: comparing, rebasing onto another, and pushing tags', () => {
         assert.equal(git('show', 'HEAD:main_only.txt'), 'main, edited\n');
         await page.waitFor(`${$('git-op')}.style.display === 'none'`, 15000, 'the bar gone');
     });
+
+    test('in the interactive rebase window a commit is dragged to another place, and the rebase replays them in that order', async () => {
+        await page.evaluate(`${$('t-git')}.click()`);
+        await page.evaluate(`${$('git-refresh')}.click()`);
+        const subjectRow = (subject) => `[...document.querySelectorAll('#git-log .gl')].find((r) => r.querySelector('.subject')?.textContent === ${JSON.stringify(subject)})`;
+        await page.waitFor(subjectRow('only on other'), 20000, 'the commit in the log');
+        await page.evaluate(`${subjectRow('only on other')}.click()`);
+        await page.waitFor(`[...document.querySelectorAll('#git-detail .git-acts button')].some((b) => b.textContent === 'Rebase from here…')`, 10000, 'the actions');
+        await page.evaluate(`[...document.querySelectorAll('#git-detail .git-acts button')].find((b) => b.textContent === 'Rebase from here…').click()`);
+        const rowsNow = `[...document.querySelectorAll('.rebase-box .rebase-row .rebase-subject')].map((s) => s.textContent).join(' | ')`;
+        await page.waitFor(`${rowsNow} === 'only on other | only on main, edited'`, 10000, 'the rebase window');
+        // the second row's grip dragged over the top half of the first: the line shows above it, and the drop puts it there
+        const drag = (type, rowIndex, part) => page.evaluate(`(() => {
+            const rows = document.querySelectorAll('.rebase-box .rebase-row');
+            const target = ${JSON.stringify(type)} === 'dragstart' ? rows[${rowIndex}].querySelector('.rebase-grip') : rows[${rowIndex}];
+            const r = rows[${rowIndex}].getBoundingClientRect();
+            const e = new DragEvent(${JSON.stringify(type)}, { bubbles: true, cancelable: true, clientY: r.top + r.height * ${part}, dataTransfer: new DataTransfer() });
+            target.dispatchEvent(e);
+            return rows[${rowIndex}].className;
+        })()`);
+        await drag('dragstart', 1, 0.5);
+        assert.match(await drag('dragover', 0, 0.2), /drop-before/);
+        assert.match(await drag('dragover', 0, 0.8), /drop-after/);
+        await drag('dragover', 0, 0.2);
+        await drag('drop', 0, 0.2);
+        assert.equal(await page.evaluate(rowsNow), 'only on main, edited | only on other');
+        assert.equal(await page.evaluate(`document.querySelector('.rebase-foot').textContent`), '2 moved');
+        await page.evaluate(`[...document.querySelectorAll('.rebase-box button')].find((b) => b.textContent === 'Start rebasing').click()`);
+        for (let i = 0; i < 40 && !git('log', '--format=%s').startsWith('only on other'); i++) await sleep(300);
+        assert.equal(git('log', '--format=%s').trim().split('\n').join(' | '), 'only on other | only on main, edited | start');
+    });
 });
 
 // A GitHub of the test's own: the few calls the Pull Requests window makes, answered from memory, and everything it was sent written down.
@@ -2240,7 +2271,7 @@ describe('git: the Log graph, its filters and actions, and the toolbar on a chan
         await open('hist.py');
         await page.evaluate(`(() => { const ed = window.pymagic.editor; const m = ed.getModel(); const n = m.getLineCount(); const R = window.pymagic.monaco.Range;
             ed.executeEdits('t', [{ range: new R(2, 1, 2, 1), text: '    x = 1' + String.fromCharCode(10) }, { range: new R(n, 1, n, 1), text: '# tail' + String.fromCharCode(10) }]); return true; })()`);
-        await page.waitFor(`document.querySelectorAll('.git-bar-added, .git-bar-modified').length >= 2 && window.pymagic.editor.getModel().getLineDecorations(4).some((d) => d.options.linesDecorationsClassName?.startsWith('git-bar'))`, 15000, 'two change markers');
+        await page.waitFor(`document.querySelectorAll('.git-bar-added, .git-bar-modified').length >= 2 && window.pymagic.editor.getModel().getLineDecorations(4).some((d) => d.options.linesDecorationsClassName?.startsWith('git-bar'))`, 15000, 'two change markers').catch(async (e) => { throw new Error(e.message + ' ' + (await page.evaluate(`(async () => JSON.stringify([window.pymagic.editor.getModel()?.uri.toString(), window.pymagic.editor.getModel()?.getValue().slice(0, 200), document.querySelectorAll('.git-bar-added, .git-bar-modified, .git-bar-deleted').length, await (await fetch('/api/git/status')).text(), document.querySelector('.settings-shade, .ask-shade') ? 'a window is open' : '']))()`))); });
         const clickBar = async (nth) => {
             const at = await page.evaluate(`(() => { const r = [...document.querySelectorAll('.git-bar-added, .git-bar-modified')].map((b) => b.getBoundingClientRect()).sort((a, b) => a.top - b.top)[${nth}]; return { x: r.left + 1, y: r.top + r.height / 2 }; })()`);
             await page.click(at.x, at.y);

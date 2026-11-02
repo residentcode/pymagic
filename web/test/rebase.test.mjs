@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startingPlan, move, setAction, setMessage, problem, changed, steps, summary } from '../src/rebase-model.js';
+import { startingPlan, move, moveTo, setAction, setMessage, problem, changed, steps, summary } from '../src/rebase-model.js';
 
 const commits = [
     { hash: 'a1', shortHash: 'a1', author: 'T', subject: 'add a' },
@@ -24,6 +24,17 @@ test('moving a row, and not past the ends', () => {
     assert.equal(move(rows, 0, -1), rows);
     assert.equal(move(rows, 2, 1), rows);
     assert.equal(changed(move(rows, 2, -1), commits), true);
+});
+
+test('a row dragged to another place: before the row it is dropped on, or at the end', () => {
+    const rows = startingPlan(commits);
+    assert.equal(names(moveTo(rows, 2, 0)), 'c3,a1,b2');      // the last one to the top
+    assert.equal(names(moveTo(rows, 0, 3)), 'b2,c3,a1');      // the first one to the end
+    assert.equal(names(moveTo(rows, 0, 2)), 'b2,a1,c3');      // before the third: one place down
+    assert.equal(names(moveTo(rows, 2, 1)), 'a1,c3,b2');
+    // dropped where it is (before itself, or before the next one), or outside the list: the same plan
+    for (const [from, before] of [[1, 1], [1, 2], [0, 0], [2, 3], [3, 0], [0, 4], [-1, 0]]) assert.equal(moveTo(rows, from, before), rows, `${from} → ${before}`);
+    assert.equal(summary(moveTo(rows, 2, 0), commits), '3 moved');
 });
 
 test('actions, and the message of a reword', () => {

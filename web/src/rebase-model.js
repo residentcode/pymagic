@@ -24,6 +24,18 @@ export function move(rows, index, delta) {
     return out;
 }
 
+/**
+ * The plan with row `from` taken out and put back before the row that was at `before` (0..length; length puts it last), as a drag drops it;
+ * the same plan when it would land where it is.
+ */
+export function moveTo(rows, from, before) {
+    if (from < 0 || from >= rows.length || before < 0 || before > rows.length || before === from || before === from + 1) return rows;
+    const out = rows.slice();
+    const [row] = out.splice(from, 1);
+    out.splice(before > from ? before - 1 : before, 0, row);
+    return out;
+}
+
 /** The plan with row `index` given another action; a reword keeps the message already typed, others do not carry one. */
 export function setAction(rows, index, action) {
     return rows.map((r, i) => (i === index ? { ...r, action, message: action === 'reword' ? r.message : null } : r));

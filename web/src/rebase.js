@@ -1,6 +1,6 @@
 // The window of an interactive rebase: the commits from a chosen one to the current one, oldest first, each with what to do to it (pick, reword,
-// squash, fixup, drop) and ↑ ↓ to reorder. Start sends the plan to the engine (rebase-model.js keeps the rules).
-import { ACTIONS, startingPlan, move, setAction, setMessage, problem, steps, summary } from './rebase-model.js';
+// squash, fixup, drop), reordered by dragging a row's grip or with ↑ ↓. Start sends the plan to the engine (rebase-model.js keeps the rules).
+import { ACTIONS, startingPlan, move, moveTo, setAction, setMessage, problem, steps, summary } from './rebase-model.js';
 import { toast } from './toast';
 
 const el = (tag, cls, text) => {
@@ -52,10 +52,44 @@ export async function openRebase({ base, label, start }) {
         return text;
     }
 
+    // dragging a row by its grip: where it is dropped (above or below the half of the row under the pointer) is shown by a line
+    let dragging = -1;
+    const clearMarks = () => list.querySelectorAll('.drop-before, .drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after'));
+    const dropPlace = (line, i, e) => {
+        const r = line.getBoundingClientRect();
+        return e.clientY < r.top + r.height / 2 ? i : i + 1;
+    };
+
     function draw() {
         list.replaceChildren();
         rows.forEach((row, i) => {
             const line = el('div', 'rebase-row' + (row.action === 'drop' ? ' dropped' : ''));
+            const grip = el('span', 'rebase-grip', '⠿');
+            grip.title = 'Drag to another place in the list';
+            grip.draggable = true;
+            grip.ondragstart = (e) => {
+                dragging = i;
+                line.classList.add('dragging');
+                if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', row.shortHash); e.dataTransfer.setDragImage?.(line, 10, 10); }
+            };
+            grip.ondragend = () => { dragging = -1; line.classList.remove('dragging'); clearMarks(); };
+            line.ondragover = (e) => {
+                if (dragging < 0) return;
+                e.preventDefault();
+                if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+                const before = dropPlace(line, i, e) === i;
+                clearMarks();
+                line.classList.add(before ? 'drop-before' : 'drop-after');
+            };
+            line.ondragleave = () => line.classList.remove('drop-before', 'drop-after');
+            line.ondrop = (e) => {
+                if (dragging < 0) return;
+                e.preventDefault();
+                const from = dragging;
+                dragging = -1;
+                rows = moveTo(rows, from, dropPlace(line, i, e));
+                draw();
+            };
             const up = el('button', 'rebase-move', '↑');
             up.title = 'Replay it earlier';
             up.disabled = i === 0;
@@ -79,7 +113,7 @@ export async function openRebase({ base, label, start }) {
                 if (action === 'reword') rows = setMessage(rows, index, rows[index].message ?? await messageOf(row.hash));
                 draw();
             };
-            line.append(up, down, pick, el('span', 'rebase-hash', row.shortHash), el('span', 'rebase-subject', row.subject), el('span', 'rebase-author', row.author));
+            line.append(grip, up, down, pick, el('span', 'rebase-hash', row.shortHash), el('span', 'rebase-subject', row.subject), el('span', 'rebase-author', row.author));
             list.append(line);
             if (row.action === 'reword') {
                 const text = el('textarea', 'rebase-message');
