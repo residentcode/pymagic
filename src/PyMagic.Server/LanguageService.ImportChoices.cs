@@ -53,6 +53,21 @@ public sealed partial class LanguageService
         _ignoredImports = null;
     }
 
+    /// <summary>Reports the imports of a module again (the Settings window's list): taken off the list, which is written; the file goes when the list is empty.</summary>
+    /// <exception cref="ServiceException">There is no project folder, or the file cannot be written.</exception>
+    public void UnignoreImport(string module)
+    {
+        string path = IgnoredImportsPath() ?? throw new ServiceException("there is no project folder to keep the list in");
+        var modules = IgnoredImports().Where(m => m != module).ToList();
+        try
+        {
+            if (modules.Count == 0) { if (File.Exists(path)) File.Delete(path); }
+            else File.WriteAllText(path, JsonSerializer.Serialize(modules, new JsonSerializerOptions { WriteIndented = true }) + "\n");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw new ServiceException("the list cannot be written: " + e.Message); }
+        _ignoredImports = null;
+    }
+
     // ------------------------------------------------------------ PyPI
 
     /// <summary>
@@ -100,7 +115,10 @@ public sealed partial class LanguageService
         {
             case "pymagic.ignoreImport" when args.Count > 0:
                 IgnoreImport(args[0]);
-                return $"Imports of '{args[0]}' are no longer reported in this project (.pymagic/ignored-imports.json).";
+                return $"Imports of '{args[0]}' are no longer reported in this project (Settings > Inspections lists them).";
+            case "pymagic.unignoreImport" when args.Count > 0:
+                UnignoreImport(args[0]);
+                return $"Imports of '{args[0]}' are reported again.";
             case "pymagic.installPackage" when args.Count > 0:
             {
                 if (Interpreter == null) throw new ServiceException("no interpreter is selected");

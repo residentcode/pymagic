@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/http-model.js', import.meta.url), 'utf8');
-const { parseRequests, requestAt, fileVariables, environment, substitute, resolve, parseCurl, formatRequest, toCurl, prettyBody } =
+const { parseRequests, requestAt, fileVariables, environment, substitute, resolve, parseCurl, formatRequest, toCurl, prettyBody, environmentRows, environmentFiles } =
     await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const FILE = [
@@ -91,4 +91,25 @@ test('prettyBody: JSON indented, other text as it is', () => {
     assert.equal(prettyBody('{"a":[1,2]}', 'application/json'), '{\n  "a": [\n    1,\n    2\n  ]\n}');
     assert.equal(prettyBody('<p>hi</p>', 'text/html'), '<p>hi</p>');
     assert.equal(prettyBody('{bad', 'application/json'), '{bad');
+});
+
+test('the environment files as rows of the editor in the HTTP tab, and back', () => {
+    const pub = { $shared: { version: 'v1' }, dev: { host: 'http://localhost:8000', port: 8000, token: 'public-old' }, prod: { host: 'https://example.com' }, empty: {} };
+    const priv = { dev: { token: 'secret-dev' }, prod: { token: 'secret-prod' } };
+    const { envs, rows } = environmentRows(pub, priv);
+    assert.deepEqual(envs, ['$shared', 'dev', 'prod', 'empty']);
+    const show = (r) => `${r.env}.${r.name}=${r.value}${r.secret ? ' (private)' : ''}`;
+    // a number is shown as text; the private value of token is the one used, so it is the one shown
+    assert.deepEqual(rows.map(show), ['$shared.version=v1', 'dev.host=http://localhost:8000', 'dev.port=8000', 'dev.token=secret-dev (private)', 'prod.host=https://example.com', 'prod.token=secret-prod (private)']);
+    // back: the secret stays private and the public file no longer holds the old value; the empty environment stays choosable
+    const files = environmentFiles(envs, rows);
+    assert.deepEqual(files.public, { $shared: { version: 'v1' }, dev: { host: 'http://localhost:8000', port: '8000' }, prod: { host: 'https://example.com' }, empty: {} });
+    assert.deepEqual(files.private, { dev: { token: 'secret-dev' }, prod: { token: 'secret-prod' } });
+    // a variable made public again, an unnamed row left out, nothing private any more
+    const edited = rows.map((r) => ({ ...r, secret: false })).concat([{ env: 'dev', name: '  ', value: 'x', secret: true }]);
+    assert.deepEqual(environmentFiles(['dev', 'prod'], edited).private, null);
+    assert.equal(environmentFiles(['dev', 'prod'], edited).public.dev.token, 'secret-dev');
+    // nothing at all
+    assert.deepEqual(environmentFiles([], []), { public: null, private: null });
+    assert.deepEqual(environmentRows(null, null), { envs: [], rows: [] });
 });

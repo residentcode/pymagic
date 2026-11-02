@@ -416,7 +416,7 @@ public sealed class Server
                 referencesProvider = true,
                 renameProvider = new { prepareProvider = true },
                 // the commands of the import quick fixes, for clients that send them back (the PyMagic page runs the install itself)
-                executeCommandProvider = new { commands = new[] { "pymagic.ignoreImport", "pymagic.installPackage" } },
+                executeCommandProvider = new { commands = new[] { "pymagic.ignoreImport", "pymagic.unignoreImport", "pymagic.installPackage" } },
             },
             serverInfo = new { name = "PyMagic", version = "0.1" },
         };

@@ -347,6 +347,15 @@ public class ImportTests
         Assert.True(left.All(m => !m.Contains("vendored_tool")), "the module and its submodules");
         Assert.True(left.Any(m => m.Contains("other_missing")));
         Assert.Equal("[\n  \"vendored_tool\"\n]\n", File.ReadAllText(Path.Combine(p.Root, ".pymagic", "ignored-imports.json")).Replace("\r\n", "\n"));
+
+        // taken off the list again (the Settings window's Remove): reported again, and the file goes with the last one
+        p.Service.ExecuteCommand("pymagic.ignoreImport", new[] { "other_missing" });
+        p.Service.ExecuteCommand("pymagic.unignoreImport", new[] { "vendored_tool" });
+        Assert.Equal("other_missing", string.Join(",", p.Service.IgnoredImports()));
+        Assert.Equal(2, p.Check("import vendored_tool\nimport vendored_tool.part\nimport other_missing\n").Count(m => m.Contains("vendored_tool")));
+        p.Service.ExecuteCommand("pymagic.unignoreImport", new[] { "other_missing" });
+        Assert.True(!File.Exists(Path.Combine(p.Root, ".pymagic", "ignored-imports.json")));
+        p.Service.ExecuteCommand("pymagic.unignoreImport", new[] { "never_ignored" });   // nothing to take off: no harm
     }
 
     [Fact]
@@ -358,7 +367,7 @@ public class ImportTests
         var server = new PyMagic.Server.Server(p.Service, sent.Add);
         server.Handle(System.Text.Json.Nodes.JsonNode.Parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}")!);
         var commands = sent.Last(m => m["id"]?.GetValue<int>() == 1)["result"]!["capabilities"]!["executeCommandProvider"]!["commands"]!.AsArray().Select(c => c!.GetValue<string>());
-        Assert.True(commands.SequenceEqual(new[] { "pymagic.ignoreImport", "pymagic.installPackage" }));
+        Assert.True(commands.SequenceEqual(new[] { "pymagic.ignoreImport", "pymagic.unignoreImport", "pymagic.installPackage" }));
         string uri = LanguageService.UriOfPath(Path.Combine(p.Root, "main.py"));
         server.Handle(System.Text.Json.Nodes.JsonNode.Parse("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":" + System.Text.Json.Nodes.JsonValue.Create(uri)!.ToJsonString() +
             ",\"languageId\":\"python\",\"version\":1,\"text\":\"import not_here_at_all\\n\"}}}")!);

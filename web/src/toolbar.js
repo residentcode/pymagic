@@ -118,6 +118,10 @@ export function setupToolbar({ monaco, editor, save, openFile, currentFile, refa
             { label: 'Settings…', key: 'Ctrl+,', run: () => openSettings() },
             '-',
             { label: 'Theme', submenu: [theme('dark', 'Dark'), theme('light', 'Light'), theme('system', 'Follow the system')] },
+            { label: 'Code colours', submenu: [
+                { label: 'VS Code', checked: (s.codeColors ?? 'vscode') === 'vscode', run: () => change({ codeColors: 'vscode' }) },
+                { label: 'PyMagic\'s own', checked: s.codeColors === 'pymagic', run: () => change({ codeColors: 'pymagic' }) },
+            ] },
             { label: 'Editor', submenu: [
                 { label: 'Wrap long lines', checked: s.wordWrap === 'on', run: flip('wordWrap', 'on', 'off') },
                 { label: 'Minimap', checked: s.minimap, run: flip('minimap', true, false) },

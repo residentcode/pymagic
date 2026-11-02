@@ -177,11 +177,39 @@ const SPECIAL = {
         page.append(buttons);
     },
     inspections(page, close) {
-        page.append(note('Which findings the editor shows, and how serious each is, is set in the Inspections panel (one list of every inspection with its level; the file is .pymagic/inspections.json). A line can also say # noqa or # noqa: code.'));
+        page.append(note('Which findings the editor shows, and how serious each is, is set in the Inspections panel (one list of every inspection with its level). A line can also say # noqa or # noqa: code.'));
         const buttons = document.createElement('div');
         buttons.className = 'set-buttons';
         buttons.append(pressButton('Open the Inspections panel', $('t-insp'), close));
         page.append(buttons);
+        // the imports the quick fix "Ignore unresolved imports of …" took off the reports, each with a way back
+        const list = document.createElement('div');
+        list.id = 'set-ignored-imports';
+        page.append(row('Imports not reported in this project', list, 'The quick fix on an import that cannot be found adds its module here (and its submodules with it).'));
+        const paint = async () => {
+            let modules = [];
+            try {
+                const res = await fetch('/api/file?path=' + encodeURIComponent('.pymagic/ignored-imports.json'));
+                if (res.ok) { const data = JSON.parse(await res.text()); if (Array.isArray(data)) modules = data.filter((m) => typeof m === 'string'); }
+            } catch { /* none, or not readable: shown as none */ }
+            list.replaceChildren();
+            if (!modules.length) { const none = document.createElement('span'); none.className = 'set-unit'; none.textContent = 'None'; list.append(none); return; }
+            for (const m of modules) {
+                const line = document.createElement('div');
+                line.className = 'set-ignored';
+                const name = document.createElement('code');
+                name.textContent = m;
+                const remove = document.createElement('button');
+                remove.textContent = 'Report again';
+                remove.onclick = () => {
+                    remove.disabled = true;
+                    window.dispatchEvent(new CustomEvent('pymagic:unignore-import', { detail: { module: m, done: () => void paint() } }));
+                };
+                line.append(name, remove);
+                list.append(line);
+            }
+        };
+        void paint();
     },
     terminal(page) {
         const sel = document.createElement('select');

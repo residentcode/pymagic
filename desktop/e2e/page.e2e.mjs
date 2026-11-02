@@ -902,6 +902,63 @@ describe('HTTP client', () => {
         assert.match(text, /###\nPOST http:\/\/127\.0\.0\.1\/missing\nAccept: text\/plain\nContent-Type: application\/x-www-form-urlencoded\n\na=1\n$/);
         await page.evaluate(`(() => { const ed = window.pymagic.editor; while (ed.getValue().includes('/missing')) ed.trigger('e2e', 'undo', {}); })()`);
     });
+
+    test('the environments are edited in the HTTP tab: a private variable is added and a value changed, and both files are written', async () => {
+        const pubFile = join(app.root, 'http-client.env.json'), privFile = join(app.root, 'http-client.private.env.json');
+        const before = [readFileSync(pubFile, 'utf8'), readFileSync(privFile, 'utf8')];
+        try {
+            await open('api.http');
+            await page.evaluate(`${$('t-httpclient')}.click()`);
+            await page.evaluate(`${$('http-env-edit')}.click()`);
+            await page.waitFor(`document.querySelectorAll('.http-envs .http-env-row:not(.head)').length === 3`, 10000, 'the variables');
+            const rows = () => page.evaluate(`[...document.querySelectorAll('.http-envs .http-env-row:not(.head)')].map((r) => { const [env, name, value, secret] = r.querySelectorAll('select, input'); return env.value + '.' + name.value + '=' + value.value + (secret.checked ? ' private ' + value.type : ''); })`);
+            const shown = await rows();
+            assert.ok(shown.includes('dev.token=secret private password'), shown.join(' | '));   // a secret is kept apart and not shown
+            assert.ok(shown.some((r) => r.startsWith('prod.host=https://example.invalid')), shown.join(' | '));
+            // the value of prod's host changed, and a private variable added to dev
+            const set = (row, index, value) => page.evaluate(`(() => { const r = [...document.querySelectorAll('.http-envs .http-env-row:not(.head)')][${row}]; const e = r.querySelectorAll('select, input')[${index}];
+                if (e.type === 'checkbox') { e.checked = ${JSON.stringify(value)}; e.dispatchEvent(new Event('change')); } else { e.value = ${JSON.stringify(value)}; e.dispatchEvent(new Event(e.tagName === 'SELECT' ? 'change' : 'input')); } return true; })()`);
+            const prodRow = shown.findIndex((r) => r.startsWith('prod.host'));
+            await set(prodRow, 2, 'https://prod.example.invalid');
+            await page.evaluate(`[...document.querySelectorAll('.http-envs button')].find((b) => b.textContent === 'Add variable').click()`);
+            await set(3, 0, 'dev');
+            await set(3, 1, 'apiKey');
+            await set(3, 2, 'k-1');
+            await set(3, 3, true);
+            await page.evaluate(`${$('http-env-save')}.click()`);
+            await page.waitFor(`!document.querySelector('.http-envs')`, 5000, 'the dialog closed');
+            const pub = JSON.parse(readFileSync(pubFile, 'utf8')), priv = JSON.parse(readFileSync(privFile, 'utf8'));
+            assert.equal(pub.prod.host, 'https://prod.example.invalid');
+            assert.ok(pub.dev.host.startsWith('http://127.0.0.1:'));
+            assert.deepEqual(priv, { dev: { token: 'secret', apiKey: 'k-1' } });
+            assert.ok(!('apiKey' in pub.dev) && !('token' in pub.dev), 'secrets only in the private file');
+            assert.deepEqual(await page.evaluate(`[...document.getElementById('http-env').options].map((o) => o.value)`), ['', 'dev', 'prod']);
+        }
+        finally {
+            writeFileSync(pubFile, before[0]);
+            writeFileSync(privFile, before[1]);
+            await page.evaluate(`document.querySelectorAll('.ask-shade').forEach((s) => s.remove())`);
+        }
+    });
+});
+
+describe('settings that live in the app', () => {
+    test('an ignored import is listed in Settings > Inspections and reported again from there', async () => {
+        const file = join(app.root, '.pymagic', 'ignored-imports.json');
+        mkdirSync(join(app.root, '.pymagic'), { recursive: true });
+        writeFileSync(file, JSON.stringify(['vendored_e2e_tool']));
+        // the gear's menu, then Settings… in it
+        await page.evaluate(`${$('b-gear')}.click()`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim().startsWith('Settings…'))`, 5000, 'the gear\'s menu');
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim().startsWith('Settings…')).click()`);
+        await page.waitFor(`document.querySelector('.settings-nav')`, 5000, 'the Settings window');
+        await page.evaluate(`[...document.querySelectorAll('.settings-nav button')].find((b) => b.textContent === 'Inspections').click()`);
+        await page.waitFor(`document.querySelector('#set-ignored-imports code')?.textContent === 'vendored_e2e_tool'`, 10000, 'the ignored import listed');
+        await page.evaluate(`[...document.querySelectorAll('#set-ignored-imports button')].find((b) => b.textContent === 'Report again').click()`);
+        await page.waitFor(`document.getElementById('set-ignored-imports').textContent === 'None'`, 10000, 'the list empty');
+        assert.equal(existsSync(file), false, 'the file is gone with the last one');
+        await page.evaluate(`[...document.querySelectorAll('.settings-foot button')].find((b) => b.textContent === 'Done').click()`);
+    });
 });
 
 describe('intention actions', () => {

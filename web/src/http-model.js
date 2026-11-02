@@ -94,6 +94,56 @@ export function environment(publicEnv, privateEnv, name) {
     return { names, vars: { ...pick(publicEnv), ...pick(privateEnv) } };
 }
 
+/** The name the editor of environments gives `$shared` (the variables of every environment). */
+export const SHARED_LABEL = 'Every environment';
+
+/**
+ * The two environment files as rows for the editor in the HTTP tab: `{ env, name, value, secret }`, env being an environment's name or '$shared';
+ * a variable of the private file is `secret` (when both files have it, the private value is the one used, so it is the one shown). Also the names of
+ * the environments, '$shared' first when it has variables.
+ */
+export function environmentRows(publicEnv, privateEnv) {
+    const rows = [];
+    const at = new Map();
+    const add = (file, secret) => {
+        for (const [env, vars] of Object.entries(file ?? {})) {
+            if (!vars || typeof vars !== 'object' || Array.isArray(vars)) continue;
+            for (const [name, value] of Object.entries(vars)) {
+                const row = { env, name, value: value === null || value === undefined ? '' : String(value), secret };
+                const key = env + '\u0000' + name;
+                if (at.has(key)) rows[at.get(key)] = row;
+                else { at.set(key, rows.length); rows.push(row); }
+            }
+        }
+    };
+    add(publicEnv, false);
+    add(privateEnv, true);
+    const envs = [...new Set([...Object.keys(publicEnv ?? {}), ...Object.keys(privateEnv ?? {}), ...rows.map((r) => r.env)])];
+    envs.sort((a, b) => (a === '$shared' ? -1 : b === '$shared' ? 1 : 0));
+    return { envs, rows };
+}
+
+/**
+ * The rows back as the two files: `{ public, private }`, each an object of environments (an environment with no variables is kept in the public file,
+ * so it can be chosen), or null when that file has nothing. Rows without a name are left out; a name used twice in one environment keeps the last value.
+ */
+export function environmentFiles(envs, rows) {
+    const pub = {}, priv = {};
+    for (const env of envs) if (env !== '$shared') pub[env] = {};
+    for (const r of rows) {
+        const name = String(r.name ?? '').trim();
+        const env = String(r.env ?? '').trim();
+        if (!name || !env) continue;
+        const into = r.secret ? priv : pub;
+        (into[env] ??= {})[name] = String(r.value ?? '');
+        // the other file must not keep an older value of it
+        delete (r.secret ? pub : priv)[env]?.[name];
+    }
+    for (const file of [pub, priv]) for (const env of Object.keys(file)) if (file === priv && !Object.keys(file[env]).length) delete file[env];
+    if (pub.$shared && !Object.keys(pub.$shared).length) delete pub.$shared;
+    return { public: Object.keys(pub).length ? pub : null, private: Object.keys(priv).length ? priv : null };
+}
+
 let counter = 0;
 /** JetBrains' dynamic variables: a new value each time a request is sent. */
 function dynamic(name) {

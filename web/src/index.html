@@ -369,7 +369,8 @@
         <div class="col" id="http-history-col"><h2>History <span class="db-tools"><button id="http-new" class="mini" title="A new .http file of requests">+</button><button id="http-clear" class="mini" title="Forget the history">✕</button></span></h2><div class="body" id="http-history"></div></div>
         <div class="col" id="http-main">
           <div class="listbar" id="http-bar">
-            <label title="The variables {{name}} take their values from this environment of http-client.env.json (and http-client.private.env.json)">Environment <select id="http-env"><option value="">No environment</option></select></label>
+            <label title="The variables {{name}} take their values from this environment (Environments… edits them)">Environment <select id="http-env"><option value="">No environment</option></select></label>
+            <button id="http-env-edit" title="Add, change or remove the environments and their variables">Environments…</button>
             <span id="http-parts"><button data-part="body" class="db-mode">Body</button><button data-part="headers" class="db-mode">Headers</button><button data-part="request" class="db-mode">Request</button></span>
             <span class="spacer"></span>
             <button id="http-copy" title="Copy the body of the response">Copy body</button>

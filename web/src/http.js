@@ -1,10 +1,10 @@
 // The HTTP client: requests written in .http and .rest files (JetBrains' format), each with ▶ Run above it (or Ctrl+Enter),
-// {{variables}} from http-client.env.json / http-client.private.env.json, the response in the HTTP tab with a history,
+// {{variables}} from the environments (edited with Environments… in the HTTP tab, kept in http-client.env.json / http-client.private.env.json), the response in the HTTP tab with a history,
 // a pasted cURL command turned into a request, and a request copied as cURL. The engine sends them (/api/http).
 import * as monaco from 'monaco-editor';
 import { showTab } from './panel';
 import { toast } from './toast';
-import { parseRequests, requestAt, fileVariables, environment, resolve, parseCurl, formatRequest, toCurl, prettyBody } from './http-model';
+import { parseRequests, requestAt, fileVariables, environment, resolve, parseCurl, formatRequest, toCurl, prettyBody, environmentRows, environmentFiles, SHARED_LABEL } from './http-model';
 
 const $ = (id) => document.getElementById(id);
 const HISTORY = '.pymagic/http-history.json';
@@ -44,17 +44,19 @@ export function setupHttpClient(deps) {
     const readJson = async (rel) => { const t = await readText(rel); try { return t ? JSON.parse(t) : null; } catch { toast(`${rel} is not valid JSON`); return null; } };
     const folderOf = (rel) => (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/') + 1) : '');
 
-    /** The environment files beside the .http file, else at the project's root (the first folder that has one). */
+    /** The environment files beside the .http file, else at the project's root (the first folder that has one); `dir` is that folder, or the file's own when there is none. */
     async function environmentsFor(rel) {
         for (const dir of [...new Set([folderOf(rel), ''])]) {
             const pub = await readJson(dir + 'http-client.env.json');
             const priv = await readJson(dir + 'http-client.private.env.json');
             if (pub || priv)
-                return { pub, priv };
+                return { pub, priv, dir, found: true };
         }
-        return { pub: null, priv: null };
+        return { pub: null, priv: null, dir: folderOf(rel), found: false };
     }
+    let lastRel = '';      // the .http file the environments were last read for
     async function refreshEnvironments(rel) {
+        lastRel = rel;
         const { pub, priv } = await environmentsFor(rel);
         const { names } = environment(pub, priv, null);
         let saved = '';
@@ -64,6 +66,104 @@ export function setupHttpClient(deps) {
         return { pub, priv };
     }
     envBox.onchange = () => { try { localStorage.setItem(ENV_KEY, envBox.value); } catch { /* storage unavailable */ } };
+
+    // ------------------------------------------------------------ the environments, edited here (the two files are written for the person)
+
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+
+    async function editEnvironments() {
+        const model = deps.editor?.getModel();
+        const open = model && deps.relOf(model);
+        const rel = open && /\.(http|rest)$/i.test(open) ? open : lastRel;
+        const { pub, priv, dir } = await environmentsFor(rel || '');
+        let { envs, rows } = environmentRows(pub, priv);
+        if (!envs.length) envs = ['dev'];
+
+        const shade = el('div', 'ask-shade');
+        const box = el('div', 'ask-box http-envs');
+        const where = dir ? `${dir}http-client.env.json` : 'http-client.env.json at the root of the project';
+        box.append(el('div', 'ask-title', 'HTTP environments'),
+            el('div', 'ask-hint', `{{name}} in a request takes the value of the chosen environment; "${SHARED_LABEL}" is used by all of them. Private values (tokens, passwords) are kept apart, in http-client.private.env.json, which is not meant to be committed. Kept in ${where}.`));
+        const table = el('div', 'http-env-table');
+        const error = el('div', 'db-form-error');
+        const addVar = el('button', '', 'Add variable');
+        const addEnv = el('button', '', 'Add environment…');
+        const save = el('button', 'primary', 'Save');
+        save.id = 'http-env-save';
+        const cancel = el('button', '', 'Cancel');
+        const buttons = el('div', 'ask-buttons');
+        buttons.append(addVar, addEnv, el('span', 'spacer'), save, cancel);
+        box.append(table, error, buttons);
+        shade.append(box);
+        document.body.append(shade);
+        const done = () => shade.remove();
+        cancel.onclick = done;
+        box.onkeydown = (e) => { if (e.key === 'Escape') done(); e.stopPropagation(); };
+
+        const label = (env) => (env === '$shared' ? SHARED_LABEL : env);
+        function paint() {
+            table.replaceChildren();
+            const head = el('div', 'http-env-row head');
+            head.append(el('span', '', 'Environment'), el('span', '', 'Variable'), el('span', '', 'Value'), el('span', '', 'Private'), el('span', ''));
+            table.append(head);
+            if (!rows.length) table.append(el('div', 'http-env-none', 'No variables yet: Add variable makes one.'));
+            rows.forEach((r, i) => {
+                const line = el('div', 'http-env-row');
+                const env = el('select');
+                for (const e of [...new Set(['$shared', ...envs])]) env.add(new Option(label(e), e));
+                env.value = r.env;
+                env.onchange = () => { r.env = env.value; };
+                const name = el('input');
+                name.value = r.name;
+                name.placeholder = 'host';
+                name.oninput = () => { r.name = name.value; };
+                const value = el('input');
+                value.value = r.value;
+                value.type = r.secret ? 'password' : 'text';
+                value.oninput = () => { r.value = value.value; };
+                const secret = el('input');
+                secret.type = 'checkbox';
+                secret.checked = r.secret;
+                secret.title = 'Kept in http-client.private.env.json';
+                secret.onchange = () => { r.secret = secret.checked; value.type = r.secret ? 'password' : 'text'; };
+                const remove = el('button', 'mini', '✕');
+                remove.title = 'Remove the variable';
+                remove.onclick = () => { rows.splice(i, 1); paint(); };
+                line.append(env, name, value, secret, remove);
+                table.append(line);
+            });
+        }
+        addVar.onclick = () => {
+            rows.push({ env: envBox.value && envs.includes(envBox.value) ? envBox.value : envs.find((e) => e !== '$shared') ?? '$shared', name: '', value: '', secret: false });
+            paint();
+            table.querySelector('.http-env-row:last-child input')?.focus();
+        };
+        addEnv.onclick = async () => {
+            const name = (await deps.askText('New environment', 'staging', 'A name such as dev, staging or prod'))?.trim();
+            if (!name) return;
+            if (name.startsWith('$')) { error.textContent = 'A name of an environment cannot start with $.'; return; }
+            if (!envs.includes(name)) envs.push(name);
+            rows.push({ env: name, name: '', value: '', secret: false });
+            paint();
+        };
+        save.onclick = async () => {
+            error.textContent = '';
+            const files = environmentFiles(envs, rows);
+            const write = async (file, data, existed) => {
+                // a file that had something and has nothing now is emptied rather than left with old values
+                if (!data && !existed) return true;
+                const res = await fetch('/api/file?path=' + encodeURIComponent(dir + file), { method: 'PUT', body: JSON.stringify(data ?? {}, null, 2) + '\n' });
+                return res.ok;
+            };
+            const ok = await write('http-client.env.json', files.public, !!pub) && await write('http-client.private.env.json', files.private, !!priv);
+            if (!ok) { error.textContent = 'The environments could not be written.'; return; }
+            done();
+            await refreshEnvironments(rel || '');
+            toast('HTTP environments saved');
+        };
+        paint();
+    }
+    $('http-env-edit').onclick = () => void editEnvironments();
 
     // ------------------------------------------------------------ sending
     async function send(model, line) {
@@ -80,7 +180,7 @@ export function setupHttpClient(deps) {
         const vars = { ...environment(pub, priv, envBox.value || null).vars, ...fileVariables(text) };
         const { request: r, missing } = resolve(request, vars);
         if (missing.length) {
-            toast(`No value for ${missing.map((m) => `{{${m}}}`).join(', ')}` + (envBox.value ? ` in the environment ${envBox.value}` : ': choose an environment in the HTTP tab, or add it to http-client.env.json'));
+            toast(`No value for ${missing.map((m) => `{{${m}}}`).join(', ')}` + (envBox.value ? ` in the environment ${envBox.value}: Environments… in the HTTP tab adds it` : ': choose an environment in the HTTP tab, or add it with Environments…'));
             showTab('httpclient');
             return;
         }

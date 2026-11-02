@@ -1167,11 +1167,23 @@ async function main() {
     monaco.editor.registerCommand('pymagic.ignoreImport', async (_accessor, module) => {
         try {
             await lsp.request('workspace/executeCommand', { command: 'pymagic.ignoreImport', arguments: [module] });
-            toast(`Imports of '${module}' are no longer reported in this project (.pymagic/ignored-imports.json)`);
+            toast(`Imports of '${module}' are no longer reported in this project: Settings > Inspections lists them`);
         }
         catch (e) {
             toast(e.message ?? 'The import cannot be ignored.', true);
         }
+    });
+    // and back, from the list in Settings > Inspections
+    window.addEventListener('pymagic:unignore-import', async (e) => {
+        const { module, done } = e.detail ?? {};
+        try {
+            await lsp.request('workspace/executeCommand', { command: 'pymagic.unignoreImport', arguments: [module] });
+            toast(`Imports of '${module}' are reported again`);
+        }
+        catch (err) {
+            toast(err.message ?? 'The import cannot be reported again.', true);
+        }
+        done?.();
     });
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void save());
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyL, () => void formatCurrent());
