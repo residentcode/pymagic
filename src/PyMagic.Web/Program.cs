@@ -420,10 +420,21 @@ app.MapGet("/api/files", () =>
     return list;
 });
 
+// a Python environment in the project (.venv, venv, .conda, or a folder with pyvenv.cfg or conda-meta): shown in the tree as an excluded folder,
+// read one level at a time when it is opened (its thousands of files would fill the tree's budget)
+static bool IsEnvironmentFolder(string dir)
+{
+    string name = Path.GetFileName(dir);
+    if (name is ".venv" or "venv" or ".conda") return true;
+    try { return File.Exists(Path.Combine(dir, "pyvenv.cfg")) || Directory.Exists(Path.Combine(dir, "conda-meta")); }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+}
+
 // everything the explorer shows: folders and files (what the language server needs is /api/files)
 app.MapGet("/api/tree", () =>
 {
-    var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", "node_modules", ".venv", "venv", ".conda", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".pymagic", ".idea", ".vs", ".tox", ".eggs" };
+    var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", "node_modules", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".pymagic", ".idea", ".vs", ".tox", ".eggs" };
+    var lazy = new List<string>();
     var dirs = new List<string>();
     var files = new List<(string Path, long Size)>();
     int budget = 20000;
@@ -443,13 +454,36 @@ app.MapGet("/api/tree", () =>
         {
             string name = Path.GetFileName(d);
             if (skip.Contains(name) || name.EndsWith(".egg-info", StringComparison.OrdinalIgnoreCase)) continue;
-            dirs.Add(Path.GetRelativePath(root, d).Replace('\\', '/'));
+            string rel = Path.GetRelativePath(root, d).Replace('\\', '/');
+            dirs.Add(rel);
+            if (IsEnvironmentFolder(d)) { lazy.Add(rel); continue; }
             Walk(d);
         }
     }
     Walk(root);
     var marks = ProjectFolders.Marks;
-    return Results.Json(new { marks = new { sources = marks.Sources, tests = marks.Tests, excluded = marks.Excluded, templates = marks.Templates ?? new(), resources = marks.Resources ?? new(), autoTemplates = ProjectFolders.AutoTemplates }, dirs = dirs.OrderBy(x => x, StringComparer.Ordinal), files = files.OrderBy(f => f.Path, StringComparer.Ordinal).Select(f => new { path = f.Path, size = f.Size }) });
+    return Results.Json(new { marks = new { sources = marks.Sources, tests = marks.Tests, excluded = marks.Excluded, templates = marks.Templates ?? new(), resources = marks.Resources ?? new(), autoTemplates = ProjectFolders.AutoTemplates, environments = lazy }, dirs = dirs.OrderBy(x => x, StringComparer.Ordinal), files = files.OrderBy(f => f.Path, StringComparer.Ordinal).Select(f => new { path = f.Path, size = f.Size }), lazy });
+});
+
+// one folder's own folders and files (the tree reads an environment folder this way when it is opened); every folder in it is read the same way
+app.MapGet("/api/tree/dir", (string path) =>
+{
+    string full;
+    try { full = ResolveInRoot(path); }
+    catch (Exception e) when (e is ServiceException or ArgumentException or IOException or UnauthorizedAccessException) { return Results.BadRequest(new { error = "not a folder of the project" }); }
+    if (!Directory.Exists(full)) return Results.NotFound(new { error = "no such folder" });
+    try
+    {
+        var subdirs = Directory.EnumerateDirectories(full).Select(d => Path.GetRelativePath(root, d).Replace('\\', '/')).OrderBy(x => x, StringComparer.Ordinal).ToList();
+        var names = Directory.EnumerateFiles(full).Take(5000).Select(f =>
+        {
+            long size = 0;
+            try { size = new FileInfo(f).Length; } catch (IOException) { }
+            return new { path = Path.GetRelativePath(root, f).Replace('\\', '/'), size };
+        }).OrderBy(f => f.path, StringComparer.Ordinal).ToList();
+        return Results.Json(new { dirs = subdirs, files = names });
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.Json(new { error = e.Message }, statusCode: 500); }
 });
 
 app.MapGet("/api/file", (string path) =>

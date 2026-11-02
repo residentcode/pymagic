@@ -687,6 +687,35 @@ describe('the window\'s layout at different widths', () => {
     });
 });
 
+describe('the project\'s Python environment in the file tree', () => {
+    test('an environment folder is shown, excluded, and read a level at a time when it is opened', async () => {
+        // a stand-in environment: pyvenv.cfg makes it one, whatever its name
+        const env = join(projectRoot, 'tool_env');
+        mkdirSync(join(env, 'Lib', 'site-packages', 'pkg'), { recursive: true });
+        writeFileSync(join(env, 'pyvenv.cfg'), 'home = C:\\\\Python313\n');
+        writeFileSync(join(env, 'Lib', 'site-packages', 'pkg', '__init__.py'), 'X = 1\n');
+        const rowOf = (path) => `document.querySelector('#files li[data-path="${path}"]')`;
+        try {
+            await page.evaluate(`document.getElementById('r-explorer').classList.contains('active') || document.getElementById('r-explorer').click(), true`);
+            await page.evaluate(`${$('ex-refresh')}.click()`);
+            await page.waitFor(rowOf('tool_env'), 10000, 'the environment in the tree');
+            assert.ok(await page.evaluate(`${rowOf('tool_env')}.classList.contains('mark-excluded')`), 'shown as excluded');
+            assert.match(await page.evaluate(`${rowOf('tool_env')}.title`), /Python environment/);
+            // nothing of it is read before it is opened
+            assert.equal(await page.evaluate(`!!${rowOf('tool_env/pyvenv.cfg')}`), false);
+            await page.evaluate(`${rowOf('tool_env')}.click()`);
+            await page.waitFor(`${rowOf('tool_env/pyvenv.cfg')} && ${rowOf('tool_env/Lib')}`, 10000, 'its first level');
+            assert.ok(await page.evaluate(`${rowOf('tool_env/pyvenv.cfg')}.classList.contains('in-excluded')`), 'its files dim');
+            assert.equal(await page.evaluate(`!!${rowOf('tool_env/Lib/site-packages')}`), false, 'the next level waits until Lib is opened');
+            await page.evaluate(`${rowOf('tool_env/Lib')}.click()`);
+            await page.waitFor(rowOf('tool_env/Lib/site-packages'), 10000, 'the next level');
+            // closed again for the tests after this one
+            await page.evaluate(`${rowOf('tool_env')}.click()`);
+        }
+        finally { removeTree(env); await page.evaluate(`${$('ex-refresh')}.click()`); }
+    });
+});
+
 describe('code colours', () => {
     // the colour a word of the editor is drawn in, as "r,g,b"
     const colourOf = (word) => page.evaluate(`(() => {

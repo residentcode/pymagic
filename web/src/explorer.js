@@ -120,7 +120,9 @@ export function setupExplorer(deps) {
     let selected = '';
     let clip = null;          // { path, cut }: what Ctrl+X / Ctrl+C took, for Ctrl+V
     let dragging = null;      // the row being dragged onto a folder
-    let marks = { sources: [], tests: [], excluded: [], templates: [], resources: [], autoTemplates: [] };   // Mark Directory As (.pymagic/folders.json), and TEMPLATES['DIRS']
+    let marks = { sources: [], tests: [], excluded: [], templates: [], resources: [], autoTemplates: [], environments: [] };
+    // folders whose content is read when they are opened (a Python environment: .venv, .conda, and every folder in one)
+    let lazy = new Set();   // Mark Directory As (.pymagic/folders.json), and TEMPLATES['DIRS']
     let coverage = window.pymagicCoverageTree ?? null;   // {path: {lines, hit, branches, taken, percent}} from the Coverage panel, or null
     try { open = new Set(JSON.parse(localStorage.getItem('pymagic.explorer.open') ?? '[]')); } catch { /* storage unavailable */ }
     window.addEventListener('pymagic:coverageTree', (e) => { coverage = e.detail; paint(); });
@@ -134,7 +136,9 @@ export function setupExplorer(deps) {
         return { subdirs, names };
     }
 
-    const markOf = (path) => (marks.sources.includes(path) ? 'sources' : marks.tests.includes(path) ? 'tests' : marks.excluded.includes(path) ? 'excluded'
+    // an environment of the project (.venv, .conda) is excluded as PyCharm shows it: it is the interpreter's, not the project's code
+    const isEnvironment = (path) => (marks.environments ?? []).includes(path);
+    const markOf = (path) => (marks.sources.includes(path) ? 'sources' : marks.tests.includes(path) ? 'tests' : marks.excluded.includes(path) || isEnvironment(path) ? 'excluded'
         : (marks.templates ?? []).includes(path) || (marks.autoTemplates ?? []).includes(path) ? 'templates' : (marks.resources ?? []).includes(path) ? 'resources' : null);
 
     /** Mark Directory As: the folder becomes a sources root, test sources or excluded (or loses its mark); the page starts again so the analysis follows. */
@@ -176,8 +180,8 @@ export function setupExplorer(deps) {
         if (path === selected) li.classList.add('sel');
         // a marked folder has its colour: sources blue, test sources green, excluded orange (and what is inside an excluded folder is dim)
         const mark = isDir ? markOf(path) : null;
-        if (mark) { li.classList.add(`mark-${mark}`); li.title = `${path} (${MARK_LABELS[mark]}${mark === 'templates' && !(marks.templates ?? []).includes(path) ? ", from TEMPLATES['DIRS'] of the settings" : ''})`; }
-        if (marks.excluded.some((e) => path.startsWith(e + '/'))) li.classList.add('in-excluded');
+        if (mark) { li.classList.add(`mark-${mark}`); li.title = `${path} (${isEnvironment(path) ? "the project's Python environment, excluded from the analysis" : MARK_LABELS[mark]}${mark === 'templates' && !(marks.templates ?? []).includes(path) ? ", from TEMPLATES['DIRS'] of the settings" : ''})`; }
+        if ([...marks.excluded, ...(marks.environments ?? [])].some((e) => path.startsWith(e + '/'))) li.classList.add('in-excluded');
         if (clip?.cut && clip.path === path) li.classList.add('cut');
         li.draggable = true;
         li.ondragstart = (e) => {
@@ -191,7 +195,8 @@ export function setupExplorer(deps) {
             if (isDir) {
                 if (open.has(path)) open.delete(path); else open.add(path);
                 remember();
-                paint();
+                if (open.has(path) && lazy.has(path)) void loadDir(path);
+                else paint();
             } else {
                 paint();
                 deps.openFile(path, undefined, { preview: true });
@@ -220,6 +225,21 @@ export function setupExplorer(deps) {
         deps.refreshDirty();
     }
 
+    /** Reads a lazy folder's own folders and files (each folder in it is lazy too), then shows them. */
+    async function loadDir(path, quiet = false) {
+        try {
+            const res = await fetch('/api/tree/dir?path=' + encodeURIComponent(path));
+            if (!res.ok) { paint(); return; }
+            const got = await res.json();
+            lazy.delete(path);
+            const known = new Set(dirs);
+            for (const d of got.dirs ?? []) if (!known.has(d)) { dirs.push(d); lazy.add(d); }
+            const have = new Set(files.map((f) => f.path));
+            for (const f of got.files ?? []) if (!have.has(f.path)) files.push(f);
+        } catch (e) { toast(String(e.message ?? e), true); }
+        if (!quiet) paint();
+    }
+
     async function refresh() {
         try {
             const res = await fetch('/api/tree');
@@ -228,10 +248,17 @@ export function setupExplorer(deps) {
             dirs = tree.dirs;
             files = tree.files;
             marks = tree.marks ?? marks;
-            // folders that hold files the user works with are open the first time
+            lazy = new Set(tree.lazy ?? []);
+            // folders that hold files the user works with are open the first time (an environment stays closed)
             if (!localStorage.getItem('pymagic.explorer.open')) {
-                for (const d of dirs) if (!d.includes('/')) open.add(d);
+                for (const d of dirs) if (!d.includes('/') && !lazy.has(d)) open.add(d);
                 remember();
+            }
+            // what was open in an environment is read again (a level at a time, as it was opened)
+            for (let round = 0; round < 20; round++) {
+                const pending = [...lazy].filter((d) => open.has(d));
+                if (!pending.length) break;
+                for (const d of pending) await loadDir(d, true);
             }
             paint();
         } catch (e) { toast(String(e.message ?? e), true); }
