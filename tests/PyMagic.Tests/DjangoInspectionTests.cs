@@ -37,6 +37,24 @@ public class DjangoInspectionTests
     }
 
     [Fact]
+    public void WithTheDjangoPluginOffNothingOfDjangoIsReported()
+    {
+        try
+        {
+            Plugins.Load("{\"plugins\": {\"django\": false}}");
+            Assert.True(!Plugins.On("django") && Plugins.On("git"));
+            Assert.Equal(0, Found(Project(Head + "    book.objects.all()\n"), Views, "django-orm").Count);
+        }
+        finally { Plugins.Load("{}"); }
+        Assert.Equal(1, Found(Project(Head + "    book.objects.all()\n"), Views, "django-orm").Count);
+        // a broken settings text, or true, leaves the plugin on
+        Plugins.Load("{\"plugins\": {\"django\": true}}");
+        Assert.True(Plugins.On("django"));
+        Plugins.Load("not json");
+        Assert.True(Plugins.On("django"));
+    }
+
+    [Fact]
     public void AManagerIsNotReachedThroughAnInstance()
     {
         var d = Found(Project(Head + "    book.objects.all()\n    Book.objects.all()\n"), Views, "django-orm");

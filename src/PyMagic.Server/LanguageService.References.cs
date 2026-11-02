@@ -26,7 +26,7 @@ public sealed partial class LanguageService
     public IReadOnlyList<Location> References(string uri, Position pos, bool includeDeclaration)
     {
         using var searching = Searching(uri, pos);
-        if (DjangoReferences(uri, pos, includeDeclaration) is { Count: > 0 } djangoSites) return djangoSites;
+        if (Plugins.On("django") && DjangoReferences(uri, pos, includeDeclaration) is { Count: > 0 } djangoSites) return djangoSites;
         var snap = Full();
         if (snap.ByUri.TryGetValue(uri, out var fm))
         {
@@ -77,7 +77,7 @@ public sealed partial class LanguageService
     public WorkspaceEdit Rename(string uri, Position pos, string newName, bool renameBase = false)
     {
         using var searching = Searching(uri, pos);
-        if (DjangoRename(uri, pos, newName) is { } urlRename) return urlRename;
+        if (Plugins.On("django") && DjangoRename(uri, pos, newName) is { } urlRename) return urlRename;
         var snap = Full();
         if (snap.ByUri.TryGetValue(uri, out var fm) && FixtureTargetAt(snap, fm, Lines(fm).OffsetOf(pos)) is { } fixture)
             return RenameFixture(snap, fixture, newName);

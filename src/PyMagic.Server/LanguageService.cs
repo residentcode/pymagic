@@ -476,7 +476,7 @@ public sealed partial class LanguageService
         var ev = Current().Workspace.Evaluator;
 
         if (FixtureHover(Current(), m, offset) is { } fixtureHover) return fixtureHover;
-        if (DjangoHover(Current(), m, offset) is { } djangoHover) return djangoHover;
+        if (Plugins.On("django") && DjangoHover(Current(), m, offset) is { } djangoHover) return djangoHover;
 
         // definition names: `def f`, `class C`
         foreach (var n in AstChildren.Descendants(m.Ast))
@@ -653,7 +653,7 @@ public sealed partial class LanguageService
         var found = new List<Location>();
 
         if (FixtureDefinition(uri, pos) is { Count: > 0 } fixtureLocations) return fixtureLocations;
-        if (DjangoDefinition(uri, pos) is { Count: > 0 } djangoLocations) return djangoLocations;
+        if (Plugins.On("django") && DjangoDefinition(uri, pos) is { Count: > 0 } djangoLocations) return djangoLocations;
         if (FastApiDependencyDefinition(m, ev, offset) is { Count: > 0 } dependencyLocations) return dependencyLocations;
 
         void AddNode(ModuleInfo? module, Node node)

@@ -2,7 +2,8 @@
 // of a class its inheritors, and who wrote most of it; in the code the names of parameters before arguments and the
 // inferred types (pymagic/inlayHints on the server).
 import * as monaco from 'monaco-editor';
-import { settings } from './settings';
+import { settings, pluginsAtStart } from './settings';
+import { pluginOn } from './plugin-model.js';
 import { lensSymbols, usagesText, inheritorsText, mainAuthor } from './codevision-model.js';
 export function setupCodeVision(deps) {
     const { lsp } = deps;
@@ -13,6 +14,8 @@ export function setupCodeVision(deps) {
     // the blame of a file, for the authors (asked once per saved version)
     const blames = new Map();
     async function blameOf(rel) {
+        if (!pluginOn(pluginsAtStart(), 'git'))
+            return [];   // Settings > Plugins: Git off, no authors
         const key = rel + '#' + (deps.savedText(rel)?.length ?? 0);
         if (!blames.has(key)) {
             blames.set(key, fetch('/api/git/blame?path=' + encodeURIComponent(rel)).then((r) => (r.ok ? r.json() : [])).catch(() => []));

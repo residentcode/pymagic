@@ -30,3 +30,15 @@ test('plugins are found by the words of their name and description', () => {
     assert.deepEqual(findPlugins('KUBERNETES schema').map((p) => p.id), ['schemas']);
     assert.deepEqual(findPlugins('nothing like this'), []);
 });
+
+test('Pull Requests is off with Git, and the New Project kinds of plugins that are off are left out', async () => {
+    const { requiredName, kindsOff } = await import('../src/plugin-model.js');
+    assert.ok(!pluginOn({ git: false }, 'prs') && pluginOn({ git: false }, 'django'));
+    assert.deepEqual([...pluginsOff({ git: false })].sort(), ['git', 'prs']);
+    assert.equal(requiredName('prs'), 'Git');
+    assert.equal(requiredName('git'), null);
+    assert.deepEqual(kindsOff({}), []);
+    assert.deepEqual(kindsOff({ django: false, notebooks: false }), ['django', 'jupyter']);
+    assert.deepEqual(hiddenElements({ git: false }), ['t-git', 'git-tab', 'r-git', 'branch-chip', 'b-update', 'b-commit', 'b-push', 't-prs', 'prs-tab']);
+    assert.deepEqual(hiddenElements({ django: false }), ['t-django', 'django-tab', 'st-django']);
+});

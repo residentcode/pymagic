@@ -436,6 +436,7 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 .plugins-reload[hidden] { display: none; }
 .plugin-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 10px; padding: 6px; border-radius: 6px; cursor: pointer; }
 .plugin-row:hover { background: var(--hover); }
+.plugin-row.needs { opacity: .6; cursor: default; }
 .plugin-row input { margin-top: 3px; }
 .plugin-name { font-weight: 600; }
 .plugin-about { color: var(--dim); font-size: 12px; }

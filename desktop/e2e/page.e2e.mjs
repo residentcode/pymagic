@@ -3021,4 +3021,40 @@ describe('Settings > Plugins', () => {
         await reload({});
         assert.notEqual(await page.evaluate(`getComputedStyle(${$('t-profiler')}).display`), 'none', 'back after the reload');
     });
+
+    test('Django, Jupyter Notebooks, Docker and Git switched off: their parts gone, Pull Requests off with Git, a notebook opened as its text', async () => {
+        const off = { django: false, notebooks: false, docker: false, git: false };
+        await page.evaluate(`window.pymagic.changeSetting({ plugins: ${JSON.stringify(off)} })`);
+        await reload(off);
+        for (const id of ['t-git', 'git-tab', 'r-git', 'branch-chip', 'b-update', 'b-commit', 'b-push', 't-prs', 't-django', 'st-django'])
+            assert.equal(await page.evaluate(`getComputedStyle(${$(id)}).display`), 'none', id + ' hidden');
+        // the diff viewer stays (tests and comparisons use it); the Git status is not asked for
+        assert.ok(await page.evaluate(`!!${$('git-diff')}`));
+        // a notebook opens as its JSON text
+        assert.equal(await page.evaluate('window.pymagic.notebook'), null);
+        await open('nb_demo.ipynb');
+        assert.match(await page.evaluate('window.pymagic.editor.getModel().getValue()'), /"cells"/);
+        // Pull Requests is off with Git, and says so
+        await openPlugins();
+        assert.deepEqual(await page.evaluate(`[${box('prs')}.checked, ${box('prs')}.disabled]`), [false, true]);
+        assert.match(await page.evaluate(`document.querySelector('#plugins-list .plugin-row[data-plugin="prs"]').textContent`), /Needs Git, which is off/);
+        await closeSettings();
+        // no Docker kinds among the remote interpreters
+        await page.evaluate(`${$('b-remote')}.click()`);
+        await page.waitFor(`document.querySelector('.ask-box select')`, 5000, 'the remote interpreter window');
+        assert.deepEqual(await page.evaluate(`[...document.querySelector('.ask-box select').options].map((o) => o.value)`), ['wsl', 'ssh']);
+        await page.evaluate(`[...document.querySelectorAll('.ask-box button')].find((b) => b.textContent === 'Cancel').click()`);
+        // New Project offers neither Django nor Jupyter, nor a Git repository
+        await page.evaluate(`document.querySelector('#brand .mark').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim() === 'File')`, 5000, 'the main menu');
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim() === 'File').click()`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim().startsWith('New project'))`, 5000, 'the File menu');
+        const menus = await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].map((d) => d.textContent.trim()).join('|')`);
+        assert.ok(!/(^|\|)Git(\||$)/.test(menus), 'no Git menu: ' + menus);
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim().startsWith('New project')).click()`);
+        await page.waitFor(`document.querySelector('#np-kinds button')`, 10000, 'New Project');
+        assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#np-kinds button')].map((b) => b.textContent)`), ['Pure Python', 'FastAPI', 'Flask']);
+        assert.equal(await page.evaluate(`getComputedStyle(document.getElementById('np-git').closest('label')).display`), 'none');
+        await page.evaluate(`document.getElementById('np-cancel').click()`);
+    });
 });

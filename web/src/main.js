@@ -986,7 +986,7 @@ async function main() {
     editor.onDidChangeModel(() => updateWelcome());
     applySettings(monaco, themeName, editor);
     $('build').textContent = buildLabel();
-    notebook = setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, lsp, formatEngine: () => formatOptions().pymagicEngine, rootUri: () => rootUri, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+    notebook = !plugin('notebooks') ? null : setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, lsp, formatEngine: () => formatOptions().pymagicEngine, rootUri: () => rootUri, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     window.pymagic = { editor, monaco, openFile, notebook, changeSetting };
     const common = {
         editor,
@@ -1010,8 +1010,8 @@ async function main() {
     runConfigs = setupRunConfigurations({ currentFile: () => currentRel });
     runHooks = setupRun({ ...common, root: info.root, runConfig: () => runConfigs.current(), runConfigByName: (name) => runConfigs.byName(name), showDiff: (...a) => git.showDiff(...a), askText: (...a) => explorer.askText(...a),
         // a notebook's cells are debugged as files of their own: their breakpoints and the stops in them
-        cellFileOf: (model) => notebook.cellFileOf(model), cellAtFile: (file, line) => notebook.cellAtFile(file, line), editorOfModel: (model) => notebook.editorOf(model) });
-    notebook.connectDebugger(runHooks.notebook);
+        cellFileOf: (model) => notebook?.cellFileOf(model), cellAtFile: (file, line) => notebook?.cellAtFile(file, line), editorOfModel: (model) => notebook?.editorOf(model) });
+    notebook?.connectDebugger(runHooks.notebook);
     const tests = setupTests({ ...common, lsp, relOfUri });
     setupInterpreters();
     setupPackages();
@@ -1075,9 +1075,12 @@ async function main() {
         saveAll: common.saveAll,
         reload: reloadFromDisk,
         reloadAll: reloadAllFromDisk,
+        enabled: plugin('git'),   // off: the project is treated as one without Git (the diff viewer stays, for tests and comparisons)
     });
-    setupGitSync({ git, deps: { saveAll: common.saveAll, reloadAll: reloadAllFromDisk, openFile, monaco } });
-    setupGitShelf({ git, deps: { saveAll: common.saveAll, reloadAll: reloadAllFromDisk } });
+    if (plugin('git')) {
+        setupGitSync({ git, deps: { saveAll: common.saveAll, reloadAll: reloadAllFromDisk, openFile, monaco } });
+        setupGitShelf({ git, deps: { saveAll: common.saveAll, reloadAll: reloadAllFromDisk } });
+    }
     const hierarchy = setupHierarchy({
         editor, lsp, openFile, modelForUri,
         uriOf: (model) => serverUri.get(model),
@@ -1125,10 +1128,11 @@ async function main() {
     setupSemantic({ lsp, uriOf: (model) => model && serverUri.get(model) });
     const codeVision = setupCodeVision({ editor, lsp, uriOf: (model) => model && serverUri.get(model), relOf: (model) => model && relPathOf.get(normalise(serverUri.get(model) ?? '')), savedText: (rel) => savedText.get(rel) });
     setupRoutes({ editor, lsp, openFile, relOfUri });
-    setupDjango({
-        run: runHooks, lsp, relOfUri, modelFor: ensureModel, askText: (...a) => explorer.askText(...a),
-        openFile: (rel, line) => openFile(rel, line ? new monaco.Range(line, 1, line, 1) : undefined),
-    });
+    if (plugin('django'))
+        setupDjango({
+            run: runHooks, lsp, relOfUri, modelFor: ensureModel, askText: (...a) => explorer.askText(...a),
+            openFile: (rel, line) => openFile(rel, line ? new monaco.Range(line, 1, line, 1) : undefined),
+        });
     const problems = setupProblems({ editor, lsp, openFile, relOfUri });
     setupTodo({ editor, lsp, openFile, relOfUri });
     const terminal = setupTerminal();

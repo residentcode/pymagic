@@ -2,6 +2,8 @@
 // environment (a project venv, uv, an existing interpreter such as conda's base, or none). The engine makes it (/api/newproject)
 // and the desktop app opens it; in a browser the page says where it is.
 import { toast } from './toast';
+import { pluginsAtStart } from './settings';
+import { kindsOff, pluginOn } from './plugin-model.js';
 
 const KINDS = [
     ['python', 'Pure Python', 'A folder with a welcome script, if you want one.'],
@@ -54,7 +56,13 @@ export async function openNewProject() {
     const location = $('np-location');
     location.value = info.root ? suggestedLocation(info.root) : '';
     let kind = 'python';
-    for (const [id, label, note] of KINDS) {
+    // Settings > Plugins: the kinds of the plugins that are off (Django, Jupyter) are not offered, nor Git when its plugin is off
+    const offKinds = kindsOff(pluginsAtStart());
+    if (!pluginOn(pluginsAtStart(), 'git')) {
+        $('np-git').checked = false;
+        $('np-git').closest('label').style.display = 'none';
+    }
+    for (const [id, label, note] of KINDS.filter(([k]) => !offKinds.includes(k))) {
         const b = document.createElement('button');
         b.type = 'button';
         b.textContent = label;

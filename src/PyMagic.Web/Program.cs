@@ -396,12 +396,13 @@ app.MapGet("/api/info", () => new
 
 // the settings of the person (theme, editor font, ...): the same in every project, kept in their own folder
 var userSettings = new UserSettings();
+Plugins.Load(userSettings.Read());   // Settings > Plugins: what the engine leaves out for a plugin that is off, followed as the settings change
 var history = new LocalHistory(root);
 app.MapGet("/api/settings", () => Results.Text(userSettings.Read(), "application/json"));
 app.MapPut("/api/settings", async (HttpRequest req) =>
 {
     using var reader = new StreamReader(req.Body, Encoding.UTF8);
-    try { userSettings.Write(await reader.ReadToEndAsync()); return Results.NoContent(); }
+    try { string text = await reader.ReadToEndAsync(); userSettings.Write(text); Plugins.Load(text); return Results.NoContent(); }
     catch (ServiceException e) { return Results.BadRequest(e.Message); }
 });
 
@@ -1016,14 +1017,15 @@ app.MapGet("/api/interpreter/targets", async (string? composeFile) => await Task
 {
     wsl = WslTarget.Distros(),
     ssh = new { installed = SshTarget.Installed(), hosts = SshConfigHosts() },
-    docker = new { available = DockerTarget.Available() },
-    dockerImages = DockerTarget.Available() ? DockerTarget.Images() : Array.Empty<string>(),
-    dockerContainers = DockerTarget.Available() ? ContainerTarget.Running() : Array.Empty<string>(),
+    // the Docker plugin switched off: docker is not run at all
+    docker = new { available = Plugins.On("docker") && DockerTarget.Available() },
+    dockerImages = Plugins.On("docker") && DockerTarget.Available() ? DockerTarget.Images() : Array.Empty<string>(),
+    dockerContainers = Plugins.On("docker") && DockerTarget.Available() ? ContainerTarget.Running() : Array.Empty<string>(),
     // the services of the project's compose file (or the one named): listing them needs no running engine
     compose = new
     {
         file = string.IsNullOrWhiteSpace(composeFile) ? (ComposeTarget.FindFile(root) is { } cf ? Path.GetRelativePath(root, cf) : null) : composeFile,
-        services = ComposeTarget.Services(root, string.IsNullOrWhiteSpace(composeFile) ? null : composeFile),
+        services = Plugins.On("docker") ? ComposeTarget.Services(root, string.IsNullOrWhiteSpace(composeFile) ? null : composeFile) : Array.Empty<string>(),
     },
 }));
 

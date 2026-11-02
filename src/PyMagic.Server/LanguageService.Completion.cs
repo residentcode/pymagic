@@ -29,7 +29,7 @@ public sealed partial class LanguageService
         switch (SiteAt(text, offset))
         {
             case CursorSite.Nothing:
-                return FixtureCompletion(doc, start, offset, prefix) ?? DjangoStringCompletion(doc, start, offset) ?? WebStringCompletion(doc, start, offset) ?? MetaStringCompletion(doc, start, offset) ?? TypedDictKeyCompletion(doc, start, offset) ?? FlaskFormFieldCompletion(doc, start, offset) ?? StringValueCompletion(doc, start, offset) ?? Array.Empty<CompletionItem>();   // a few strings name things: a fixture, a URL, a template, a field, a key
+                return FixtureCompletion(doc, start, offset, prefix) ?? (Plugins.On("django") ? DjangoStringCompletion(doc, start, offset) : null) ?? WebStringCompletion(doc, start, offset) ?? MetaStringCompletion(doc, start, offset) ?? TypedDictKeyCompletion(doc, start, offset) ?? FlaskFormFieldCompletion(doc, start, offset) ?? StringValueCompletion(doc, start, offset) ?? Array.Empty<CompletionItem>();   // a few strings name things: a fixture, a URL, a template, a field, a key
             case CursorSite.FStringField:
                 break;
         }
@@ -329,7 +329,7 @@ public sealed partial class LanguageService
 
         // the keywords of a query: filter(ti| offers title=, author__name=
         if (placeholder != null)
-            foreach (var item in DjangoKeywordItems(m, ev, placeholder, prefix)) items.TryAdd("" + item.Label, item);
+            if (Plugins.On("django")) foreach (var item in DjangoKeywordItems(m, ev, placeholder, prefix)) items.TryAdd("" + item.Label, item);
 
         // keywords: those that start statements only where one can start
         if (!decorator)

@@ -53,6 +53,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
             .filter((w) => w === '-' || !toolOff(pluginsAtStart(), w[0]))
             .map((w) => (w === '-' ? w : { label: w[1], checked: $('panel').classList.contains('open') && $(`t-${w[0]}`).classList.contains('active'), run: dock(w[0]) }));
         const files = recent(currentFile());
+        // Settings > Plugins: the Git menu only with Git
         return [
             { label: 'File', submenu: [
                 { label: 'New project…', run: () => void openNewProject() },
@@ -244,7 +245,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 { label: 'Packages', run: dock('packages') },
                 '-',
                 { label: 'Terminal', key: 'Ctrl+`', run: dock('terminal') },
-                { label: 'Django', run: dock('django') },
+                ...(toolOff(pluginsAtStart(), 'django') ? [] : [{ label: 'Django', run: dock('django') }]),
                 { label: 'Endpoints', run: dock('routes') },
                 ...[['profiler', 'Profiler'], ['database', 'Database'], ['httpclient', 'HTTP client']]
                     .filter(([id]) => !toolOff(pluginsAtStart(), id)).map(([id, label]) => ({ label, run: dock(id) })),
@@ -267,7 +268,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 { label: 'Keyboard shortcuts', run: () => openSettings('keymap') },
                 { label: 'About PyMagic', run: () => openSettings('about') },
             ] },
-        ];
+        ].filter((m) => m === '-' || m.label !== 'Git' || !toolOff(pluginsAtStart(), 'git'));
     }
 
     if (desktop) {

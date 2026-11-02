@@ -1,4 +1,6 @@
 // Interpreter picker: lists what the host found, switches the project's interpreter, creates a .venv.
+import { pluginsAtStart } from './settings';
+import { pluginOn } from './plugin-model.js';
 const $ = (id) => document.getElementById(id);
 export function setupInterpreters() {
     const select = $('interp');
@@ -138,7 +140,8 @@ export function setupInterpreters() {
         const shade = el('div', 'ask-shade');
         const box = el('div', 'ask-box');
         const kind = el('select');
-        for (const [value, label] of [['wsl', 'WSL distribution'], ['docker', 'Docker image'], ['container', 'Docker container that is running'], ['compose', 'Docker Compose service'], ['ssh', 'SSH host']]) { const o = el('option', '', label); o.value = value; kind.append(o); }
+        const dockerOn = pluginOn(pluginsAtStart(), 'docker');   // Settings > Plugins: Docker off, its three kinds are not offered
+        for (const [value, label] of [['wsl', 'WSL distribution'], ['docker', 'Docker image'], ['container', 'Docker container that is running'], ['compose', 'Docker Compose service'], ['ssh', 'SSH host']].filter(([v]) => dockerOn || !['docker', 'container', 'compose'].includes(v))) { const o = el('option', '', label); o.value = value; kind.append(o); }
         const nameLabel = el('div', 'ask-hint');
         const nameSelect = el('select');
         const nameInput = el('input');

@@ -12,6 +12,7 @@ public sealed partial class LanguageService
 
     IEnumerable<Diag> InspectionDiagnostics(ModuleInfo m, TypeEvaluator ev)
     {
+        bool django = Plugins.On("django");   // Settings > Plugins: Django (and REST framework) inspections only with the plugin
         foreach (var f in CodeInspections.Run(m))
             if (!Suppressed(m.Source, f) && !(f.Code == "shadowing-names" && AsksForFixture(m, f.Start))) yield return AsDiag(f);
         foreach (var d in ClassDiagnostics(m, ev)) yield return d;
@@ -20,11 +21,11 @@ public sealed partial class LanguageService
         foreach (var d in TypeCheckDiagnostics(m, ev)) yield return d;
         foreach (var d in FixtureDiagnostics(m, ev)) yield return d;
         foreach (var d in FixtureScopeDiagnostics(m, ev)) yield return d;
-        foreach (var d in DjangoDiagnostics(m, ev)) yield return d;
-        foreach (var d in DjangoOrmDiagnostics(m, ev)) yield return d;
-        foreach (var d in InstalledAppsDiagnostics(m, ev)) yield return d;
-        foreach (var d in ConstanceDiagnostics(m, ev)) yield return d;
-        foreach (var d in SettingsPathDiagnostics(m)) yield return d;
+        if (django) foreach (var d in DjangoDiagnostics(m, ev)) yield return d;
+        if (django) foreach (var d in DjangoOrmDiagnostics(m, ev)) yield return d;
+        if (django) foreach (var d in InstalledAppsDiagnostics(m, ev)) yield return d;
+        if (django) foreach (var d in ConstanceDiagnostics(m, ev)) yield return d;
+        if (django) foreach (var d in SettingsPathDiagnostics(m)) yield return d;
         foreach (var d in PyCharmShapeDiagnostics(m, ev)) yield return d;
         foreach (var d in PyCharmTypeDiagnostics(m, ev)) yield return d;
         foreach (var d in PytestDiagnostics(m, ev)) yield return d;
@@ -34,12 +35,12 @@ public sealed partial class LanguageService
         foreach (var d in WebRouteDiagnostics(m, ev)) yield return d;
         foreach (var d in FastApiDiagnostics(m, ev)) yield return d;
         foreach (var d in FastApiRequestDiagnostics(m, ev)) yield return d;
-        foreach (var d in MetaDiagnostics(m, ev, Current())) yield return d;
-        foreach (var d in ViewDiagnostics(m, ev)) yield return d;
-        foreach (var d in SerializerDiagnostics(m, ev)) yield return d;
-        foreach (var d in SerializerClassDiagnostics(m, ev)) yield return d;
-        foreach (var d in ViewSerializerDiagnostics(m, ev)) yield return d;
-        foreach (var d in MigrationDiagnostics(m, ev)) yield return d;
+        if (django) foreach (var d in MetaDiagnostics(m, ev, Current())) yield return d;
+        if (django) foreach (var d in ViewDiagnostics(m, ev)) yield return d;
+        if (django) foreach (var d in SerializerDiagnostics(m, ev)) yield return d;
+        if (django) foreach (var d in SerializerClassDiagnostics(m, ev)) yield return d;
+        if (django) foreach (var d in ViewSerializerDiagnostics(m, ev)) yield return d;
+        if (django) foreach (var d in MigrationDiagnostics(m, ev)) yield return d;
     }
 
     /// <summary>

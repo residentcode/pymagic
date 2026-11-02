@@ -4,21 +4,37 @@
 
 /** The plugins: id, name, what it does, the panel tab it owns (t-<tab>) and the other elements it owns (ids), hidden while it is off. */
 export const PLUGINS = [
+    { id: 'django', name: 'Django', about: "Django's inspections, completion, navigation and rename (URL names, models, settings, templates' views, REST framework), the Django panel and Structure's Django view, and Django in New Project.", tab: 'django', owns: ['st-django'], kind: 'django' },
+    { id: 'notebooks', name: 'Jupyter Notebooks', about: '.ipynb files opened as notebooks: cells run and debugged in a kernel, their outputs, the Variables window and Jupyter servers, and Jupyter in New Project. Off, a notebook opens as its JSON text.', kind: 'jupyter' },
+    { id: 'docker', name: 'Docker', about: 'Interpreters in a Docker image, a running container or a Docker Compose service (the WSL and SSH ones stay); off, docker is not run to list them.' },
+    { id: 'git', name: 'Git', about: 'The Git panel, the commit, update and push buttons, the branch, change bars in the gutter, the log, changelists and the shelf, who wrote each function, and Git in New Project. Off, the project is treated as one without Git.', tab: 'git', owns: ['r-git', 'branch-chip', 'b-update', 'b-commit', 'b-push'] },
     { id: 'schemas', name: 'JSON Schema', about: 'package.json, pyproject.toml, GitHub workflows, docker-compose, GitLab CI, pre-commit, mkdocs, dependabot, codecov, tox, Renovate, OpenAPI / Swagger and Kubernetes files checked against their JSON Schema (built in).' },
     { id: 'httpclient', name: 'HTTP Client', about: '.http files: requests sent from the editor, their responses, environments and history.', tab: 'httpclient' },
     { id: 'database', name: 'Database Tools and SQL', about: "The Database panel (the project's SQLite files, their tables and an SQL console) and SQL completed from its tables in Python strings.", tab: 'database' },
     { id: 'profiler', name: 'Profiler', about: 'Profile a file: where the time went, the call graph, kept snapshots.', tab: 'profiler', owns: ['b-profile'] },
-    { id: 'prs', name: 'Pull Requests', about: "The pull requests (GitHub) or merge requests (GitLab) of the project's remote, reviewed and merged here.", tab: 'prs' },
+    { id: 'prs', name: 'Pull Requests', about: "The pull requests (GitHub) or merge requests (GitLab) of the project's remote, reviewed and merged here.", tab: 'prs', requires: 'git' },
     { id: 'deployment', name: 'Deployment', about: 'The servers the project goes to (a folder, FTP, SFTP): upload, download, compare and sync.', tab: 'deployment' },
     { id: 'markdown', name: 'Markdown', about: 'The preview of Markdown and reStructuredText files beside the editor (Ctrl+Shift+V), its HTML export, and the Markdown editing tools.' },
     { id: 'macros', name: 'Macros', about: 'Record the keys typed in the editor and play them back.' },
 ];
 
-/** The ids of the plugins that are off, from the setting (id -> false); an unknown id or a value that is not false counts for nothing. */
+/** The ids of the plugins that are off, from the setting (id -> false), and those that need one that is off (Pull Requests needs Git); an unknown id or a value that is not false counts for nothing. */
 export function pluginsOff(setting) {
     const off = new Set();
     for (const p of PLUGINS) if (setting && setting[p.id] === false) off.add(p.id);
+    for (const p of PLUGINS) if (p.requires && off.has(p.requires)) off.add(p.id);
     return off;
+}
+
+/** The plugin a plugin needs, by its name (Pull Requests needs Git), or null. */
+export function requiredName(id) {
+    const needs = PLUGINS.find((p) => p.id === id)?.requires;
+    return needs ? PLUGINS.find((p) => p.id === needs)?.name ?? null : null;
+}
+
+/** The New Project kinds of the plugins that are off ('django', 'jupyter'). */
+export function kindsOff(setting) {
+    return PLUGINS.filter((p) => p.kind && pluginsOff(setting).has(p.id)).map((p) => p.kind);
 }
 
 /** Whether a plugin is on (every plugin is, unless the setting says false). */

@@ -93,7 +93,10 @@ export function setupGit(deps) {
     } }, true);
     const fileStatus = (rel) => status.files?.find((f) => f.path === rel);
     // ------------------------------------------------------------------ status
+    const enabled = deps.enabled !== false;   // Settings > Plugins: Git off, the project is treated as one without Git
     async function refresh() {
+        if (!enabled)
+            return;
         try {
             status = await api('/api/git/status');
         }
@@ -604,7 +607,7 @@ export function setupGit(deps) {
     // when a file is edited; once there is one, the Git tab reads it all and the bars are drawn
     let recheckAt = 0;
     function recheckStatus() {
-        if (Date.now() - recheckAt < 2000) return;
+        if (!enabled || Date.now() - recheckAt < 2000) return;
         recheckAt = Date.now();
         void api('/api/git/status').then((s) => { if (s?.available && !status.available) void refresh(); }).catch(() => { /* still none */ });
     }
@@ -669,6 +672,8 @@ export function setupGit(deps) {
         }
     }
     function attach(ed) {
+        if (!enabled)
+            return;
         const x = { ed, decorations: ed.createDecorationsCollection(), timer: 0, hunks: [] };
         others.push(x);
         hunkPopups(ed, () => x.hunks);
@@ -1332,6 +1337,8 @@ export function setupGit(deps) {
         await refresh();
     };
     // ------------------------------------------------------------------ wiring
+    if (!enabled)
+        return { refresh, showDiff, attach, status: () => status, changelists: () => lists, unchecked: () => unchecked, partial: () => partial, commitList: () => commitList(lists, commitChoice) };
     $('t-git').onclick = () => { showTab('git'); void refresh(); };
     defineCommand({ id: 'pymagic.git.commitMessage', label: 'Git: commit message', group: 'Tools', keys: ['Alt+9'], everywhere: true, run: () => { showTab('git'); void refresh(); $('git-message').focus(); } });
     window.addEventListener('pymagic:saved', () => void refresh());

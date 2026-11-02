@@ -2,7 +2,7 @@
 // What a page edits is either a setting of the person (settings.js; changes show at once) or a control PyMagic already has (the formatter's engine,
 // the interpreter, the Git switches), which the page mirrors and presses.
 import { change, resetAll, settings, pluginsAtStart } from './settings';
-import { PLUGINS, pluginOn, switchPlugin, findPlugins } from './plugin-model.js';
+import { PLUGINS, pluginOn, switchPlugin, findPlugins, requiredName } from './plugin-model.js';
 import { buildLabel, shortTime } from './build-info.js';
 import { keymapCommands, defineCommand } from './commands.js';
 import { keyFromEvent, effectiveKeys, clashes, withKey } from './keymap-model.js';
@@ -521,6 +521,10 @@ const SPECIAL = {
                 const box = document.createElement('input');
                 box.type = 'checkbox';
                 box.checked = pluginOn(now(), p.id);
+                // one that needs a plugin that is off (Pull Requests and Git) is off with it, and says so
+                const needs = p.requires && !pluginOn(now(), p.requires) ? requiredName(p.id) : null;
+                box.disabled = !!needs;
+                row.classList.toggle('needs', !!needs);
                 box.onchange = () => { change({ plugins: switchPlugin(now(), p.id, box.checked) }); paint(); };
                 const text = document.createElement('div');
                 const name = document.createElement('div');
@@ -528,7 +532,7 @@ const SPECIAL = {
                 name.textContent = p.name;
                 const about = document.createElement('div');
                 about.className = 'plugin-about';
-                about.textContent = p.about;
+                about.textContent = p.about + (needs ? ` Needs ${needs}, which is off.` : '');
                 text.append(name, about);
                 row.append(box, text);
                 list.append(row);
