@@ -429,10 +429,12 @@ export function setupPackages() {
     // ------------------------------------------------------------ index settings
     async function openConfig() {
         const box = $('pk-config');
-        box.hidden = !box.hidden;
-        if (box.hidden)
+        if (!box.hidden) {
+            box.hidden = true;
             return;
+        }
         $('pk-config-msg').textContent = '';
+        // the fields are filled before the form shows, so what is typed into it is never overwritten by the answer
         try {
             const s = await (await fetch('/api/packages/settings')).json();
             $('pk-index-url').value = s.indexUrl ?? '';
@@ -441,6 +443,7 @@ export function setupPackages() {
             $('pk-proxy').value = s.proxy ?? '';
         }
         catch { /* the host is not reachable */ }
+        box.hidden = false;
     }
     async function saveConfig() {
         const msg = $('pk-config-msg');

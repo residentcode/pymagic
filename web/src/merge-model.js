@@ -86,6 +86,48 @@ export function settleAll(text, how) {
     return out;
 }
 
+/** The lines of one side of a conflict, each with its line ending (the last may have none). */
+export function sideLines(content) {
+    return linesOf(content).map((l) => content.slice(l.start, l.end));
+}
+
+/**
+ * One side of the whole file, for the editor beside the result: `text` with every conflict that is left settled to `how` ('ours' or
+ * 'theirs'), and where each conflict's side lies in it: `{ index, line, count }` (its first line from 1, and how many lines it has; 0 for an
+ * empty side, which then sits before `line`). The parts outside the conflicts are the result's, so the three editors line up conflict by conflict.
+ */
+export function sideView(text, how) {
+    let out = '', at = 0, line = 1;
+    const ranges = [];
+    const countLines = (s) => { let n = 0; for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) n++; return n; };
+    findConflicts(text).forEach((c, index) => {
+        const before = text.slice(at, c.start);
+        out += before;
+        line += countLines(before);
+        const side = chosen(c, how) ?? '';
+        ranges.push({ index, line, count: sideLines(side).length });
+        out += side;
+        line += countLines(side);
+        at = c.end;
+    });
+    return { text: out + text.slice(at), ranges };
+}
+
+/**
+ * `text` with conflict number `index` settled to the lines picked from each side (indexes into `sideLines` of ours and of theirs): ours first,
+ * in their order, then theirs. A picked last line without an ending gets one when more follows. Nothing picked: the text as it is.
+ */
+export function settlePicked(text, index, oursPicked, theirsPicked) {
+    const c = findConflicts(text)[index];
+    if (!c || (oursPicked.length === 0 && theirsPicked.length === 0)) return text;
+    const eol = text.includes('\r\n') ? '\r\n' : '\n';
+    const take = (content, picked) => { const ls = sideLines(content); return [...new Set(picked)].sort((a, b) => a - b).filter((i) => i >= 0 && i < ls.length).map((i) => ls[i]); };
+    const parts = [...take(c.ours, oursPicked), ...take(c.theirs, theirsPicked)];
+    const rest = text.slice(c.end);
+    const joined = parts.map((p, i) => (/\n$/.test(p) || (i === parts.length - 1 && rest === '') ? p : p + eol)).join('');
+    return text.slice(0, c.start) + joined + rest;
+}
+
 /** The first line (from 1) of each conflict of `text`, for moving between them. */
 export function conflictLines(text) {
     const starts = findConflicts(text).map((c) => c.start);

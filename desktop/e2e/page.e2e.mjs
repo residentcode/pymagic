@@ -1649,6 +1649,68 @@ describe('branches: comparing, rebasing onto another, and pushing tags', () => {
         for (let i = 0; i < 40 && !git('log', '--format=%s').startsWith('only on other'); i++) await sleep(300);
         assert.equal(git('log', '--format=%s').trim().split('\n').join(' | '), 'only on other | only on main, edited | start');
     });
+
+    test('a merge conflict settled in three editors: single lines picked from both sides, and a side taken with its arrow', async () => {
+        const nl = String.fromCharCode(10);
+        const file = (lines) => writeFileSync(join(projectRoot, 'merge_demo.txt'), lines.join(nl) + nl);
+        const commitAll = (message) => { git('add', '-A'); git('commit', '-q', '-m', message); };
+        file(['top', 'one', 'keep 1', 'keep 2', 'keep 3', 'keep 4', 'two', 'end']);
+        commitAll('merge demo');
+        git('switch', '-q', '-c', 'merge-side');
+        file(['top', 't1', 't2', 'keep 1', 'keep 2', 'keep 3', 'keep 4', 'q', 'end']);
+        commitAll('theirs');
+        git('switch', '-q', 'main');
+        file(['top', 'o1', 'o2', 'o3', 'keep 1', 'keep 2', 'keep 3', 'keep 4', 'p', 'end']);
+        commitAll('ours');
+        assert.notEqual(spawnSync('git', ['merge', 'merge-side'], { cwd: projectRoot, encoding: 'utf8' }).status, 0, 'the merge stops on conflicts');
+        try {
+            await page.evaluate(`${$('t-git')}.click()`);
+            await page.evaluate(`${$('git-refresh')}.click()`);
+            await page.waitFor(`[...document.querySelectorAll('#git-conflicts .gs-row')].some((r) => r.textContent.includes('merge_demo.txt'))`, 15000, 'the conflicted file');
+            await page.evaluate(`[...[...document.querySelectorAll('#git-conflicts .gs-row')].find((r) => r.textContent.includes('merge_demo.txt')).querySelectorAll('button')].find((b) => b.textContent === 'Resolve…').click()`);
+            await page.waitFor(`document.querySelectorAll('.merge-box .merge-card').length === 2 && document.querySelectorAll('.merge-ours .merge-pick').length === 4`, 15000, 'the three editors');
+            const modelIn = (cls) => `window.pymagic.monaco.editor.getEditors().find((e) => e.getContainerDomNode().closest(${JSON.stringify('.' + cls)})).getModel().getValue()`;
+            // each side is the file with the conflicts taken its way; the result keeps the markers
+            assert.equal(await page.evaluate(modelIn('merge-ours')), ['top', 'o1', 'o2', 'o3', 'keep 1', 'keep 2', 'keep 3', 'keep 4', 'p', 'end', ''].join(nl));
+            assert.equal(await page.evaluate(modelIn('merge-theirs')), ['top', 't1', 't2', 'keep 1', 'keep 2', 'keep 3', 'keep 4', 'q', 'end', ''].join(nl));
+            assert.match(await page.evaluate(modelIn('merge-result')), /^<{7} HEAD$/m);
+
+            // a real click on a box picks a line: o3 and o1 from ours, t2 from theirs (the boxes are in the order of the lines)
+            const clickIn = async (selector, nth) => {
+                const at = await page.evaluate(`(() => { const r = [...document.querySelectorAll(${JSON.stringify(selector)})].map((e) => e.getBoundingClientRect()).sort((a, b) => a.top - b.top)[${nth}]; return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+                await page.click(at.x, at.y);
+            };
+            await clickIn('.merge-ours .merge-pick', 2);
+            await page.waitFor(`document.querySelectorAll('.merge-ours .merge-pick.on').length === 1`, 5000, 'the first pick');
+            await clickIn('.merge-ours .merge-pick', 0);
+            await clickIn('.merge-theirs .merge-pick', 1);
+            await page.waitFor(`document.querySelector('.merge-card .merge-take-picked')?.textContent === 'Take chosen lines (3)'`, 5000, 'three lines picked');
+            await page.evaluate(`document.querySelector('.merge-card .merge-take-picked').click()`);
+            await page.waitFor(`document.querySelectorAll('.merge-box .merge-card').length === 1`, 5000, 'the first conflict settled');
+            // the second, with the arrow on theirs (Monaco draws the margin again on its next frame: the click is tried until the arrow is where it is drawn)
+            const settled = `document.querySelector('.merge-box .hist-diff-title')?.textContent.includes('every conflict is settled')`;
+            for (let i = 0; i < 5 && !(await page.evaluate(settled)); i++) {
+                await sleep(300);
+                await clickIn('.merge-theirs .merge-take-theirs', 0);
+                await page.waitFor(settled, 1500, 'nothing left').catch(() => { });
+            }
+            await page.waitFor(settled, 2000, 'nothing left');
+            const merged = ['top', 'o1', 'o3', 't2', 'keep 1', 'keep 2', 'keep 3', 'keep 4', 'q', 'end', ''].join(nl);
+            assert.equal(await page.evaluate(modelIn('merge-result')), merged);
+            // with nothing left, the sides are the result
+            assert.equal(await page.evaluate(modelIn('merge-ours')), merged);
+            await page.evaluate(`[...document.querySelectorAll('.merge-box button')].find((b) => b.textContent === 'Apply').click()`);
+            for (let i = 0; i < 30 && git('diff', '--name-only', '--diff-filter=U').trim(); i++) await sleep(300);
+            assert.equal(git('diff', '--name-only', '--diff-filter=U').trim(), '', 'marked resolved');
+            assert.equal(readFileSync(join(projectRoot, 'merge_demo.txt'), 'utf8'), merged);
+            git('commit', '-q', '--no-edit');
+        } catch (e) {
+            // the tests after this one need the window closed and no merge going on
+            await page.evaluate(`document.querySelectorAll('.settings-shade').forEach((s) => s.remove())`);
+            spawnSync('git', ['merge', '--abort'], { cwd: projectRoot });
+            throw e;
+        }
+    });
 });
 
 // A GitHub of the test's own: the few calls the Pull Requests window makes, answered from memory, and everything it was sent written down.

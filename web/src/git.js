@@ -72,6 +72,7 @@ export function setupGit(deps) {
     let lists = null; // { active, lists: [{ name, files }] } from /api/git/changelists
     let commitChoice = ''; // the changelist the Commit button commits from ('' follows the active one)
     const baseText = new Map(); // rel -> text at HEAD (null: the file is not there)
+    let baseGeneration = 0;     // goes up each time the cache is emptied: an answer asked for before that is not kept
     let hunks = [];
     let hunksFor = '';
     const decorations = editor.createDecorationsCollection();
@@ -106,6 +107,7 @@ export function setupGit(deps) {
             catch { /* the lists are an addition: without them every file is in the one default list */ }
         }
         baseText.clear();
+        baseGeneration++;
         for (const rel of Array.from(partial.keys()))
             if (!status.files?.some((f) => f.path === rel))
                 partial.delete(rel);
@@ -564,9 +566,12 @@ export function setupGit(deps) {
     async function headText(rel) {
         if (baseText.has(rel))
             return baseText.get(rel);
+        const asked = baseGeneration;
         const res = await fetch('/api/git/file?path=' + encodeURIComponent(rel));
         const text = res.status === 200 ? await res.text() : null; // 204: the file is not in the last commit
-        baseText.set(rel, text);
+        // kept only when the repository has not been read again meanwhile, and has a last commit (a repository being made has none yet)
+        if (asked === baseGeneration && status.hasCommits !== false)
+            baseText.set(rel, text);
         return text;
     }
     async function workingText(rel) {
