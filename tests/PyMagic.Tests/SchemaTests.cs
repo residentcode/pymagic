@@ -3,7 +3,7 @@ using PyMagic.Server;
 
 namespace PyMagic.Tests;
 
-/// <summary>The kept SchemaStore schemas and the TOML-to-JSON helper used to check pyproject.toml against its schema.</summary>
+/// <summary>The schemas built into PyMagic (a project's own copy first) and the TOML-to-JSON helper used to check pyproject.toml against its schema.</summary>
 public class SchemaTests
 {
     static string PythonExe => Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python";
@@ -19,66 +19,48 @@ public class SchemaTests
     }
 
     [Fact]
-    public void AKeptSchemaIsReadWithoutDownloading()
+    public void EverySchemaIsBuiltIn()
+    {
+        Assert.Equal(13, Schemas.Names.Count);
+        foreach (var name in new[] { "package", "pyproject", "workflow", "compose", "gitlab", "precommit", "mkdocs", "dependabot", "codecov", "tox", "renovate", "openapi", "swagger" })
+        {
+            string text = Schemas.Builtin(name) ?? throw new AssertionException(name + " is not built in");
+            Assert.True(System.Text.Json.Nodes.JsonNode.Parse(text) is System.Text.Json.Nodes.JsonObject, name);
+        }
+        Assert.True(Schemas.Builtin("pyproject")!.Contains("\"project\""));
+    }
+
+    [Fact]
+    public void AKubernetesKindIsARefIntoTheBuiltInDefinitionsAndNothingElseIsMadeUp()
+    {
+        static string RefOf(string name) => System.Text.Json.Nodes.JsonNode.Parse(Schemas.Builtin(name) ?? throw new AssertionException(name + " has no schema"))!["$ref"]!.GetValue<string>();
+        Assert.Equal("#/definitions/io.k8s.api.apps.v1.Deployment", RefOf("k8s-deployment-apps-v1"));
+        Assert.Equal("#/definitions/io.k8s.api.core.v1.Service", RefOf("k8s-service-v1"));
+        Assert.Equal("#/definitions/io.k8s.api.networking.v1.Ingress", RefOf("k8s-ingress-networking-v1"));
+        Assert.Equal("#/definitions/io.k8s.api.batch.v1.CronJob", RefOf("k8s-cronjob-batch-v1"));
+        Assert.True(System.Text.Json.Nodes.JsonNode.Parse(Schemas.Builtin("k8s-pod-v1")!)!["definitions"]!["io.k8s.api.core.v1.Pod"] != null);
+        Assert.True(Schemas.Builtin("k8s-nosuchkind-v1") == null);
+        foreach (var bad in new[] { "k8s-", "k8s-../x", "k8s-a-b-c-d", "K8S-pod-v1", "../evil", "k8s-pod/v1", "k8s-definitions", "definitions" })
+            Assert.True(Schemas.Builtin(bad) == null && Schemas.Of(Path.GetTempPath(), bad) == null, bad);
+    }
+
+    [Fact]
+    public void AProjectsOwnCopyIsUsedInsteadOfTheBuiltInOne()
     {
         string root = Path.Combine(Path.GetTempPath(), "pm_schema_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
-            Assert.True(Schemas.Kept(root, "package") == null);
-            Assert.Equal(0, Schemas.List(root).Count);
+            Assert.Equal(Schemas.Builtin("package"), Schemas.Of(root, "package"));
             Directory.CreateDirectory(Schemas.FolderOf(root));
             File.WriteAllText(Schemas.PathOf(root, "package"), "{\"type\":\"object\"}");
-            Assert.Equal("{\"type\":\"object\"}", Schemas.Kept(root, "package"));
-            Assert.Equal(1, Schemas.List(root).Count);
-            Assert.True(Schemas.Kept(root, "../package") == null, "only the known names are read");
+            File.WriteAllText(Schemas.PathOf(root, "k8s-service-v1"), "{}");
+            Assert.Equal("{\"type\":\"object\"}", Schemas.Of(root, "package"));
+            Assert.Equal("{}", Schemas.Of(root, "k8s-service-v1"));
+            Assert.Equal(Schemas.Builtin("pyproject"), Schemas.Of(root, "pyproject"));
+            Assert.True(Schemas.Of(root, "../package") == null, "only the known names are read");
         }
         finally { Directory.Delete(root, true); }
-    }
-
-    [Fact]
-    public void EverySchemaHasAnHttpsAddressAndOnlyTheKnownOnesAreKept()
-    {
-        Assert.Equal(13, Schemas.Urls.Count);
-        foreach (var name in new[] { "package", "pyproject", "workflow", "compose", "gitlab", "precommit", "mkdocs", "dependabot", "codecov", "tox", "renovate", "openapi", "swagger" })
-            Assert.True(Schemas.Urls.TryGetValue(name, out var url) && url.StartsWith("https://"), name);
-    }
-
-    [Fact]
-    public void AKubernetesKindHasItsOwnSchemaAddressAndNothingElseIsMadeUp()
-    {
-        Assert.Equal("https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/master-standalone/deployment-apps-v1.json", Schemas.UrlOf("k8s-deployment-apps-v1"));
-        Assert.True(Schemas.UrlOf("k8s-service-v1")!.EndsWith("/service-v1.json"));
-        Assert.Equal("https://docs.renovatebot.com/renovate-schema.json", Schemas.UrlOf("renovate"));
-        foreach (var bad in new[] { "k8s-", "k8s-../x", "k8s-a-b-c-d", "K8S-pod-v1", "../evil", "k8s-pod/v1" })
-            Assert.True(Schemas.UrlOf(bad) == null && !Schemas.IsKnown(bad), bad);
-    }
-
-    [Fact]
-    public void KeptKubernetesSchemasAreListedAndRead()
-    {
-        string root = Path.Combine(Path.GetTempPath(), "pm_schema_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Schemas.FolderOf(root));
-        try
-        {
-            File.WriteAllText(Schemas.PathOf(root, "k8s-pod-v1"), "{}");
-            File.WriteAllText(Path.Combine(Schemas.FolderOf(root), "k8s-not a name.json"), "{}");
-            File.WriteAllText(Schemas.PathOf(root, "renovate"), "{}");
-            Assert.Equal("k8s-pod-v1,renovate", string.Join(",", Schemas.List(root).Keys.OrderBy(k => k)));
-            Assert.Equal("{}", Schemas.Kept(root, "k8s-pod-v1"));
-            Assert.True(Schemas.Kept(root, "k8s-service-v1") == null);
-        }
-        finally { Directory.Delete(root, true); }
-    }
-
-    [Fact]
-    public void OnlyKnownSchemasAreDownloaded()
-    {
-        using var http = new HttpClient();
-        bool refused = false;
-        try { Schemas.Download(Path.GetTempPath(), "../evil", http).Wait(); }
-        catch (AggregateException e) { refused = e.InnerException is ServiceException; }
-        Assert.True(refused);
     }
 
     [Fact]

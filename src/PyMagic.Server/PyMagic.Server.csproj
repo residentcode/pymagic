@@ -23,6 +23,7 @@
     <EmbeddedResource Include="Run\pm_kernel.py" LogicalName="pm_kernel.py" />
     <EmbeddedResource Include="Run\pm_jdebug.py" LogicalName="pm_jdebug.py" />
     <EmbeddedResource Include="Run\shells.json" LogicalName="shells.json" />
+    <EmbeddedResource Include="Schemas\*.json" LogicalName="schema-%(Filename).json" />
   </ItemGroup>
 
   <ItemGroup>

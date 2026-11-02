@@ -279,18 +279,22 @@ export function setupEditorNav(deps) {
     crumbs.id = 'breadcrumbs';
     const area = $('editor-area');
     area.insertBefore(crumbs, $('editor'));
-    let crumbTimer = 0;
+    let crumbTimer = 0, crumbGeneration = 0;
     function scheduleCrumbs() {
         clearTimeout(crumbTimer);
         crumbTimer = window.setTimeout(() => void paintCrumbs(), 150);
     }
     async function paintCrumbs() {
+        const generation = ++crumbGeneration;
         const model = editor.getModel(), pos = editor.getPosition();
         crumbs.hidden = !settings().breadcrumbs || !model;
         if (crumbs.hidden)
             return;
         const rel = deps.relOf(model) ?? '';
         const path = rel.endsWith('.py') && pos ? pathTo(await defsOf(model), pos.lineNumber) : [];
+        // another tab was opened (or the cursor moved) while the definitions were read: that paint is the one in force
+        if (generation !== crumbGeneration || editor.getModel() !== model)
+            return;
         crumbs.textContent = '';
         const parts = rel.split('/');
         parts.forEach((p, i) => {

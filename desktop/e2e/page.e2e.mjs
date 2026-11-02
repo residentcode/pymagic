@@ -41,6 +41,9 @@ const FILES = {
     'openapi.yaml': 'openapi: 3.0.3\ninfo:\n  title: t\n',
     'openapi31.yaml': 'openapi: 3.1.0\ninfo:\n  title: t\n',
     '.pymagic/schemas/k8s-service-v1.json': '{"type":"object","properties":{"spec":{"type":["object","null"],"properties":{"ports":{"type":"array","items":{"type":"object","properties":{"port":{"type":"integer"}}}}}}}}',
+    // checked against the schemas built into PyMagic (no stand-in kept for these)
+    '.github/dependabot.yml': 'version: 3\nupdates: []\n',
+    'infra/deploy.yaml': 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: two\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n        - name: web\n          image: nginx\n',
     'k8s.yaml': 'apiVersion: v1\nkind: Service\nspec:\n  ports:\n    - port: 80\n---\napiVersion: v1\nkind: Service\nspec:\n  ports:\n    - port: http\n',
     'package.json': '{\n  "name": "Bad Name",\n  "scripts": {\n    "t": 1\n  }\n}\n',
     'pyproject.toml': '[project]\nname = 5\n',
@@ -1159,7 +1162,7 @@ describe('file checks', () => {
         assert.deepEqual(await problems('broken.yml'), ['yaml-duplicate-key@3:1']);
     });
 
-    test('package.json, pyproject.toml and a GitHub workflow are checked against the kept schemas', async () => {
+    test('package.json, pyproject.toml and a GitHub workflow are checked against the project copies of their schemas', async () => {
         const schema = (file) => open(file).then(() => page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); const found = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.code === 'schema'); return found.length ? found.map((x) => x.startLineNumber + ':' + x.startColumn + ' ' + x.message) : null; })()`, 20000, 'the schema problems of ' + file));
         assert.deepEqual(await schema('package.json'), ['2:3 Should match ^[a-z][a-z0-9-]*$', '4:5 Should be string, not integer']);
         assert.deepEqual(await schema('pyproject.toml'), ['2:1 Should be string, not integer']);
@@ -1171,7 +1174,7 @@ describe('file checks', () => {
         assert.deepEqual(await schema('tox.toml'), ['1:1 Should be array, not string']);
     });
 
-    test('Renovate, OpenAPI and a Kubernetes manifest (the second document of a file) are checked against the kept schemas', async () => {
+    test('Renovate, OpenAPI and a Kubernetes manifest (the second document of a file) are checked against the project copies of their schemas', async () => {
         const schema = (file) => open(file).then(() => page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); const found = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.code === 'schema'); return found.length ? found.map((x) => x.startLineNumber + ':' + x.startColumn + ' ' + x.message) : null; })()`, 20000, 'the schema problems of ' + file));
         assert.deepEqual(await schema('renovate.json'), ['2:3 Should be array, not integer']);
         assert.deepEqual(await schema('openapi.yaml'), ['2:1 The property version is required']);
@@ -1180,6 +1183,18 @@ describe('file checks', () => {
         await open('openapi31.yaml');
         await new Promise((r) => setTimeout(r, 2500));
         assert.deepEqual(await page.evaluate(`window.pymagic.monaco.editor.getModelMarkers({ resource: window.pymagic.editor.getModel().uri }).filter((x) => x.code === 'schema').length`), 0);
+    });
+
+    test('without a kept copy, a file is checked against the schema built into PyMagic, and nothing is asked or downloaded', async () => {
+        await page.evaluate(`window.__confirms = 0; window.confirm = () => { window.__confirms++; return false; }`);
+        const schema = (file) => open(file).then(() => page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); const found = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).filter((x) => x.code === 'schema'); return found.length ? found.map((x) => x.startLineNumber + ' ' + x.message) : null; })()`, 20000, 'the schema problems of ' + file));
+        const dependabot = await schema('.github/dependabot.yml');
+        assert.equal(dependabot.length, 1);
+        assert.match(dependabot[0], /^1 /);
+        // a Kubernetes kind with no schema of its own in the project: its definition from the built-in ones
+        assert.deepEqual(await schema('infra/deploy.yaml'), ['6 Should be integer, not string']);
+        assert.equal(await page.evaluate('window.__confirms'), 0);
+        assert.ok(!existsSync(join(projectRoot, '.pymagic', 'schemas', 'dependabot.json')) && !existsSync(join(projectRoot, '.pymagic', 'schemas', 'k8s-deployment-apps-v1.json')), 'nothing downloaded into the project');
     });
 
     test('a Markdown link to a missing file is marked, an anchor that exists is not', async () => {

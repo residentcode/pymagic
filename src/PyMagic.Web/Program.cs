@@ -1253,14 +1253,8 @@ app.MapGet("/api/packages/locks", async () =>
     // and whether each still matches what it was made from (uv and poetry are asked, a compiled requirements.txt is compared with its .in)
     return Results.Json(await Task.Run(() => LockFiles.CheckStale(root, found, LockFiles.Find, LockFiles.RunTool)), camelCase);
 });
-// SchemaStore's schemas (package.json, pyproject.toml, GitHub workflows): kept ones, one kept one, and the download (the page asks the user first)
-app.MapGet("/api/schemas", () => Results.Json(Schemas.List(root)));
-app.MapGet("/api/schemas/get", (string name) => Schemas.Kept(root, name) is { } kept ? Results.Text(kept, "application/json") : Results.NotFound());
-app.MapPost("/api/schemas/download", async (string name) =>
-{
-    try { return Results.Text(await Schemas.Download(root, name, pypi), "application/json"); }
-    catch (ServiceException e) { return Results.Json(new { error = e.Message }, statusCode: 502); }
-});
+// the schema a config file is checked against (built into PyMagic; a project's own copy in .pymagic/schemas first): nothing is downloaded
+app.MapGet("/api/schemas/get", (string name) => Schemas.Of(root, name) is { } schema ? Results.Text(schema, "application/json") : Results.NotFound());
 // a TOML text as JSON, for checking pyproject.toml against its schema
 app.MapPost("/api/toml", async (HttpRequest req) =>
 {

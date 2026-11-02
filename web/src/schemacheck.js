@@ -1,5 +1,5 @@
-// package.json, pyproject.toml, GitHub workflows, docker-compose, GitLab CI, pre-commit, mkdocs, dependabot, codecov, tox, Renovate, OpenAPI 3.0 / Swagger 2.0 and Kubernetes manifests checked against their JSON Schema from SchemaStore
-// or the project that owns it. The schema is downloaded once, after the user says yes, and kept in the project's .pymagic/schemas; without it nothing is checked and nothing is fetched (schema-model.js validates).
+// package.json, pyproject.toml, GitHub workflows, docker-compose, GitLab CI, pre-commit, mkdocs, dependabot, codecov, tox, Renovate, OpenAPI 3.0 / Swagger 2.0 and Kubernetes manifests checked against their JSON Schema.
+// The schemas are built into PyMagic (a project's own copy in .pymagic/schemas is used instead): nothing is downloaded and nothing is asked (schema-model.js validates).
 // A Kubernetes manifest is any YAML file with an apiVersion and a kind (several documents in one file are each checked); its schema is the one of that kind.
 import * as monaco from 'monaco-editor';
 import { parse as parseYaml, parseAllDocuments } from 'yaml';
@@ -8,31 +8,16 @@ import { validate, locate, schemaOf, openapiSchemaOf, looksKubernetes, kubernete
 export { schemaOf };
 
 const OWNER = 'pymagic-schema';
-const ASKED = 'pymagic.schemaAsked4';   // the question grew (more schemas, more hosts): an earlier answer does not count
 
 export function setupSchemaCheck(deps) {
-    const kept = new Map();               // name -> parsed schema, or null when it is not kept
-    const failed = new Set();             // names whose download failed this session (a kind with no schema, no network): not tried again at every edit
+    const kept = new Map();               // name -> parsed schema, or null when PyMagic has none of that name (a kind Kubernetes does not have)
     const timers = new Map();
-    let answer = null;                    // the user's answer to the download question this session: true / false
-
-    const remembered = () => { try { return localStorage.getItem(ASKED); } catch { return null; } };
-    const remember = (v) => { try { localStorage.setItem(ASKED, v); } catch { /* no storage: asked again next session */ } };
 
     async function schemaFor(name) {
-        if (kept.has(name) && kept.get(name)) return kept.get(name);
-        if (failed.has(name)) return null;
-        let res = await fetch('/api/schemas/get?name=' + name).catch(() => null);
-        if (res?.ok) { kept.set(name, await res.json()); return kept.get(name); }
-        if (answer === null && remembered() === 'no') answer = false;
-        if (answer === null) {
-            answer = window.confirm('Check package.json, pyproject.toml, GitHub workflows, docker-compose, GitLab CI, pre-commit, mkdocs, dependabot, codecov, tox, Renovate, OpenAPI / Swagger and Kubernetes files against their JSON Schema?\n\nPyMagic downloads each schema once, when such a file is opened, from SchemaStore (json.schemastore.org, www.schemastore.org) or the project that owns it (raw.githubusercontent.com, gitlab.com, docs.renovatebot.com), and keeps it in .pymagic/schemas of this project. For a Kubernetes file that is the schema of each kind it uses (Deployment, Service, ...). Nothing else is sent.');
-            remember(answer ? 'yes' : 'no');
-        }
-        if (!answer) return null;
-        res = await fetch('/api/schemas/download?name=' + name, { method: 'POST' }).catch(() => null);
-        if (!res?.ok) { failed.add(name); return null; }
-        kept.set(name, await res.json());
+        if (kept.has(name)) return kept.get(name);
+        const res = await fetch('/api/schemas/get?name=' + encodeURIComponent(name)).catch(() => null);
+        if (!res) return null;                                    // the engine is not answering: asked again at the next check
+        kept.set(name, res.ok ? await res.json().catch(() => null) : null);
         return kept.get(name);
     }
 
