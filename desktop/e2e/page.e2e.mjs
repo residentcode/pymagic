@@ -2524,6 +2524,45 @@ describe('changelists, the shelf, and choosing lines from the editor gutter', ()
         assert.equal(shelf[0].name, 'the first of two');
         assert.deepEqual(shelf[0].files.map((f) => f.path), ['cp_parts.py']);
     });
+
+    test('single lines of one change move to another list, and a commit of that list takes just those lines', async () => {
+        const nl = String.fromCharCode(10);
+        writeFileSync(join(projectRoot, 'cp_lines.py'), numbered(20));
+        git('add', '-A');
+        git('commit', '-q', '-m', 'lines base');
+        const added = numbered(20).split(nl);
+        added.splice(5, 0, 'new a', 'new b', 'new c');
+        writeFileSync(join(projectRoot, 'cp_lines.py'), added.join(nl));
+        await refresh();
+        await waitRows(`rows.some((r) => r.startsWith('cp_lines.py'))`, 'the file');
+
+        // one change of three lines: ▸ shows them, and the middle one goes to Fixes
+        await clickRowButton('cp_lines.py', 'changes');
+        await page.waitFor(`document.querySelectorAll('.git-parts-row').length === 1`, 15000, 'the change');
+        await page.evaluate(`document.querySelector('.git-parts-row .git-parts-open').click()`);
+        await page.waitFor(`document.querySelectorAll('.git-parts-line').length === 3`, 5000, 'its lines');
+        assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('.git-parts-line .git-parts-text')].map((e) => e.textContent)`), ['+ new a', '+ new b', '+ new c']);
+        assert.equal(await page.evaluate(`document.querySelector('.git-parts-row input').checked`), false, 'the ▸ does not tick the change');
+        // the file is in the list that was active when it appeared; the line goes to another one
+        const owner = await page.evaluate(`document.querySelector('.git-parts-row .git-parts-list-name').textContent`);
+        const other = owner === 'Fixes' ? 'Feature' : 'Fixes';
+        await page.evaluate(`document.querySelectorAll('.git-parts-line input')[1].click()`);
+        await page.evaluate(`(() => { const t = document.getElementById('git-parts-target'); t.value = ${JSON.stringify(other)}; t.dispatchEvent(new Event('change')); document.getElementById('git-parts-move').click(); })()`);
+        const lineLists = `[...document.querySelectorAll('.git-parts-line .git-parts-list-name')].map((e) => e.textContent).join()`;
+        await page.waitFor(`${lineLists} === ${JSON.stringify([owner, other, owner].join())}`, 15000, 'the lines in their lists')
+            .catch(async (e) => { throw new Error(e.message + ' ' + (await page.evaluate(`JSON.stringify([${lineLists}, document.querySelector('.git-parts .db-form-error')?.textContent, [...document.getElementById('git-parts-target').options].map((o) => o.value)])`))); });
+        assert.equal(await page.evaluate(`document.querySelector('.git-parts-row .git-parts-list-name').textContent`), `${owner} + ${other}`);
+        await page.evaluate(`[...document.querySelectorAll('.git-parts .ask-buttons button')].find((b) => b.textContent === 'Close').click()`);
+        await page.waitFor(`[...document.querySelectorAll('#git-changes .gc .part')].map((p) => p.textContent).join().includes('1 of 1 change')`, 15000, 'the file in part in two lists');
+
+        // a commit of that list writes "new b" and nothing else
+        await page.evaluate(`(() => { const s = ${$('git-cl-commit')}; s.value = ${JSON.stringify(other)}; s.dispatchEvent(new Event('change')); ${$('git-message')}.value = 'just new b'; ${$('git-commit')}.click(); })()`);
+        for (let i = 0; i < 40 && git('log', '-1', '--format=%s').trim() !== 'just new b'; i++) await sleep(300);
+        const committed = numbered(20).split(nl);
+        committed.splice(5, 0, 'new b');
+        assert.equal(git('show', 'HEAD:cp_lines.py'), committed.join(nl));
+        assert.equal(readFileSync(join(projectRoot, 'cp_lines.py'), 'utf8'), added.join(nl), 'the other two are still in the working tree');
+    });
 });
 
 // last, and only when asked for: a notebook on a REAL Jupyter server. PYMAGIC_TEST_JUPYTER names the Python of an environment that has jupyter_server and ipykernel

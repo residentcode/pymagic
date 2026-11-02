@@ -647,3 +647,9 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 .git-parts-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, Consolas, monospace); font-size: 12.5px; }
 .git-parts-list-name { color: var(--accent, #4aa3ff); flex: none; font-size: 12px; }
 .git-parts-none { color: var(--dim); padding: 8px 4px; }
+.git-parts-open { background: transparent; border: 0; color: var(--dim); cursor: pointer; padding: 0 2px; font: inherit; }
+.git-parts-line { display: flex; gap: 8px; align-items: baseline; padding: 1px 4px 1px 30px; cursor: pointer; }
+.git-parts-line:hover { background: var(--hover); }
+.git-parts-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; font-family: var(--mono, Consolas, monospace); font-size: 12.5px; }
+.git-parts-line.add .git-parts-text { color: #6cc070; }
+.git-parts-line.del .git-parts-text { color: #e06c6c; }

@@ -2065,6 +2065,7 @@ app.MapPost("/api/git/changelist", async (HttpRequest req) =>
             case "active": r.SetActiveChangelist(Str("name")); break;
             case "move": r.MoveToChangelist(StringsOf(body?["paths"]), Str("name")); break;
             case "moveChanges": r.MoveChanges(Str("path"), StringsOf(body?["keys"]), Str("name")); break;
+            case "moveLines": r.MoveLines(Str("path"), Str("key"), (body?["lines"] as JsonArray ?? new JsonArray()).Select(x => x?.GetValue<int>() ?? -1).ToList(), Str("name")); break;
             default: throw new GitException($"'{op}' is not something to do");
         }
         return (object?)r.Changelists();      // the lists as they are now, with the files that are in part in a list

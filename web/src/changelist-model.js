@@ -7,7 +7,7 @@ export const DEFAULT_LIST = 'Changes';
 /**
  * The changed files grouped by list, in the order of the lists. A file no list holds (a new one the server has not
  * placed yet, or one of PyMagic's own such as .pymagic/changelists.json) is shown in the default list. A file that is in
- * part in several lists (`state.partCounts`) is in each of them as a copy with `part: { here, total }`.
+ * part in several lists (`state.partCounts`) is in each of them as a copy with `part: { here, total }` (`total`: `state.partTotals`, else the sum).
  */
 export function groupFiles(files, state) {
     const lists = state?.lists?.length ? state.lists : [{ name: DEFAULT_LIST, files: [] }];
@@ -20,7 +20,8 @@ export function groupFiles(files, state) {
     for (const f of files) {
         const per = counts[f.path];
         if (!per) { (byName.get(owner.get(f.path)) ?? byName.get(def)).push(f); continue; }
-        const total = Object.values(per).reduce((a, b) => a + b, 0);
+        // a change whose lines are split counts in each list it has lines in, so the total is the file's own number of changes when the engine sends it
+        const total = state?.partTotals?.[f.path] ?? Object.values(per).reduce((a, b) => a + b, 0);
         for (const [name, here] of Object.entries(per)) (byName.get(name) ?? byName.get(def)).push({ ...f, part: { here, total } });
     }
     const active = lists.some((l) => l.name === state?.active) ? state.active : def;

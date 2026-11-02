@@ -103,6 +103,97 @@ public class GitChangelistTests
         Assert.True(!File.ReadAllText(Path.Combine(r.Dir, ".pymagic", "changelists.json")).Contains("\"parts\""));
     }
 
+    /// <summary>A file of 20 lines with two changes: three lines added after line 5, and line 15 edited.</summary>
+    static GitRepository AddedBlock(Repo r)
+    {
+        r.Write("a.txt", Numbered(20));
+        r.Commit("base");
+        var lines = Numbered(20, (15, "fifteen")).Split('\n').ToList();
+        lines.InsertRange(5, new[] { "new a", "new b", "new c" });
+        r.Write("a.txt", string.Join("\n", lines));
+        return r.Open();
+    }
+
+    [Fact]
+    public void SingleLinesOfAChangeGoToAnotherListAndACommitOfThatListTakesJustThem()
+    {
+        if (!HasGit) return;
+        using var r = new Repo();
+        var repo = AddedBlock(r);
+        repo.CreateChangelist("Fix", false);
+        var parts = repo.ChangeParts("a.txt");
+        Assert.Equal("+new a|+new b|+new c", string.Join("|", parts[0].Lines.Select(l => l.Kind + l.Text)));
+        Assert.Equal("-line 15|+fifteen", string.Join("|", parts[1].Lines.Select(l => l.Kind + l.Text)));
+
+        // the middle added line, and the removed half of the edit
+        repo.MoveLines("a.txt", parts[0].Key, new[] { 1 }, "Fix");
+        var state = repo.MoveLines("a.txt", parts[1].Key, new[] { 0 }, "Fix");
+        var now = repo.ChangeParts("a.txt");
+        Assert.Equal("Changes,Fix,Changes", string.Join(",", now[0].Lines.Select(l => l.List)));
+        Assert.Equal("Fix,Changes", string.Join(",", now[1].Lines.Select(l => l.List)));
+        Assert.Equal("Changes,Changes", string.Join(",", now.Select(c => c.List)));   // the changes themselves stay with their file
+        Assert.Equal(2, state.PartCounts!["a.txt"]["Changes"]);
+        Assert.Equal(2, state.PartCounts["a.txt"]["Fix"]);
+        Assert.Equal(2, state.PartTotals!["a.txt"]);   // two changes, each split between the lists
+        Assert.Contains(parts[0].Key + "@1", File.ReadAllText(Path.Combine(r.Dir, ".pymagic", "changelists.json")));
+        repo.RequireInChangelist("Fix", new[] { "a.txt" });
+
+        // committing Fix writes "new b" and takes line 15 out, and nothing else
+        var (whole, partial) = repo.ResolveForList("Fix", new[] { "a.txt" }, new Dictionary<string, LineSelection>());
+        Assert.Equal(0, whole.Count);
+        repo.CommitSelection(whole, partial, "only some lines", false);
+        var committed = Numbered(20).Split('\n').ToList();
+        committed.RemoveAt(14);
+        committed.Insert(5, "new b");
+        Assert.Equal(string.Join("\n", committed), r.G("show", "HEAD:a.txt"));
+        // the rest are still changes in Changes ("new b" is no longer one, so "new a" and "new c" are apart now), and nothing is marked any more
+        Assert.Equal("+new a / +new c / +fifteen", string.Join(" / ", repo.ChangeParts("a.txt").Select(c => string.Join("|", c.Lines.Select(l => l.Kind + l.Text)))));
+        Assert.True(repo.Changelists().PartCounts == null);
+    }
+
+    [Fact]
+    public void LinesMovedOneByOneTidyThemselves()
+    {
+        if (!HasGit) return;
+        using var r = new Repo();
+        var repo = AddedBlock(r);
+        repo.CreateChangelist("Fix", false);
+        var parts = repo.ChangeParts("a.txt");
+        string key = parts[0].Key;
+
+        // all three lines, one by one: the change is Fix's as a whole, with no line marks
+        foreach (var i in new[] { 0, 2, 1 }) repo.MoveLines("a.txt", key, new[] { i }, "Fix");
+        string json = File.ReadAllText(Path.Combine(r.Dir, ".pymagic", "changelists.json"));
+        Assert.True(json.Contains(key) && !json.Contains(key + "@"), json);
+        Assert.Equal("Fix,Changes", string.Join(",", repo.ChangeParts("a.txt").Select(c => c.List)));
+        // one line back: the change is Fix's, that line is Changes'
+        repo.MoveLines("a.txt", key, new[] { 2 }, "Changes");
+        Assert.Equal("Fix,Fix,Changes", string.Join(",", repo.ChangeParts("a.txt")[0].Lines.Select(l => l.List)));
+        // the whole change moved: its lines go with it
+        repo.MoveChanges("a.txt", new[] { key }, "Changes");
+        Assert.True(repo.Changelists().PartCounts == null);
+        Assert.True(!File.ReadAllText(Path.Combine(r.Dir, ".pymagic", "changelists.json")).Contains("\"parts\""));
+
+        // every line of the file in Fix: the file is Fix's
+        repo.MoveLines("a.txt", key, new[] { 0, 1, 2 }, "Fix");
+        var all = repo.MoveLines("a.txt", parts[1].Key, new[] { 0, 1 }, "Fix");
+        Assert.Equal("Fix", string.Join(",", all.Lists.Where(l => l.Files.Contains("a.txt")).Select(l => l.Name)));
+        Assert.True(all.PartCounts == null);
+
+        // a line moved, then the change edited by hand: the mark goes
+        repo.MoveToChangelist(new[] { "a.txt" }, "Changes");
+        repo.MoveLines("a.txt", key, new[] { 1 }, "Fix");
+        r.Write("a.txt", r.Read("a.txt").Replace("new b", "new B"));
+        Assert.True(repo.Changelists().PartCounts == null);
+
+        // what cannot be done
+        string key2 = repo.ChangeParts("a.txt")[0].Key;
+        Assert.True(Throws(() => repo.MoveLines("a.txt", key2, new[] { 3 }, "Fix")));
+        Assert.True(Throws(() => repo.MoveLines("a.txt", key2, Array.Empty<int>(), "Fix")));
+        Assert.True(Throws(() => repo.MoveLines("a.txt", "no-such-change", new[] { 0 }, "Fix")));
+        Assert.True(Throws(() => repo.MoveLines("a.txt", key2, new[] { 0 }, "No such list")));
+    }
+
     [Fact]
     public void WhenEveryChangeOfAFileHasGoneToOneListTheFileIsThatListsAndAChangeThatIsGoneForgetsItsList()
     {

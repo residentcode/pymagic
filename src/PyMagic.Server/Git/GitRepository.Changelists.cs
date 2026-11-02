@@ -9,7 +9,7 @@ public sealed record Changelist(string Name, List<string> Files);
 
 /// <param name="Active">The list that new changes go into.</param>
 /// <param name="PartCounts">For a file of which some changes were moved to another list: how many of its changes each list holds (path, then list).</param>
-public sealed record ChangelistState(string Active, List<Changelist> Lists, Dictionary<string, Dictionary<string, int>>? PartCounts = null);
+public sealed record ChangelistState(string Active, List<Changelist> Lists, Dictionary<string, Dictionary<string, int>>? PartCounts = null, Dictionary<string, int>? PartTotals = null);
 
 public sealed record ShelfFile(string Path, string Status);
 
@@ -124,31 +124,36 @@ public sealed partial class GitRepository
             var target = state.Lists.First(l => l.Name == state.Active);
             foreach (var p in changed) if (owned.Add(p)) target.Files.Add(p);
             Dictionary<string, Dictionary<string, int>>? counts = null;
+            Dictionary<string, int>? totals = null;
             foreach (var path in _parts.Keys.ToList())
             {
                 if (!changedSet.Contains(path)) { _parts.Remove(path); continue; }
                 var raw = RawChanges(DiffOf(path));
                 var moved = _parts[path];
-                var keys = raw.Select(c => c.Key).ToHashSet(StringComparer.Ordinal);
                 string owner = OwnerOf(state, path);
-                foreach (var key in moved.Where(m => !keys.Contains(m.Key) || m.Value == owner).Select(m => m.Key).ToList()) moved.Remove(key);
-                // every change of the file went to one list: the file is that list's now
-                if (moved.Count > 0 && moved.Count == raw.Count && moved.Values.Distinct().Count() == 1)
+                Tidy(moved, raw, owner);
+                // every line of the file's changes went to one list: the file is that list's now
+                var where = raw.SelectMany(c => Enumerable.Range(0, c.Count).Select(i => ListOfLine(moved, owner, c.Key, i))).Distinct().ToList();
+                if (moved.Count > 0 && where.Count == 1 && where[0] != owner)
                 {
-                    string to = moved.Values.First();
+                    string to = where[0];
                     foreach (var l in state.Lists) l.Files.Remove(path);
                     state.Lists.First(l => l.Name == to).Files.Add(path);
                     moved.Clear();
                 }
                 if (moved.Count == 0) { _parts.Remove(path); continue; }
                 var per = new Dictionary<string, int>();
-                foreach (var c in raw) { string at = moved.TryGetValue(c.Key, out var l) ? l : owner; per[at] = per.GetValueOrDefault(at) + 1; }
+                // a change counts in every list that has some of its lines
+                foreach (var c in raw)
+                    foreach (var at in Enumerable.Range(0, c.Count).Select(i => ListOfLine(moved, owner, c.Key, i)).Distinct())
+                        per[at] = per.GetValueOrDefault(at) + 1;
                 (counts ??= new Dictionary<string, Dictionary<string, int>>())[path] = per;
+                (totals ??= new Dictionary<string, int>())[path] = raw.Count;
             }
             // nothing to remember until someone makes a list of their own: no file for a project that never used the feature
             bool plain = state.Active == DefaultChangelist && state.Lists.Count == 1 && _parts.Count == 0;
             if (Serialise(state) != before && (existed || !plain)) SaveLists(state);
-            return counts == null ? state : state with { PartCounts = counts };
+            return counts == null ? state : state with { PartCounts = counts, PartTotals = totals };
         }
     }
 

@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { groupFiles } from '../src/changelist-model.js';
-import { checkedKeys, placeText } from '../src/git-parts.js';
+import { checkedKeys, placeText, listsText, movePlan } from '../src/git-parts.js';
 
 const files = [{ path: 'a.py' }, { path: 'b.py' }, { path: 'c.py' }];
 
@@ -37,4 +37,26 @@ test('a change is described by where it is and how long it is, and the ticked ke
     const rows = [{ key: 'a' }, { key: 'b' }, { key: 'c' }];
     assert.deepEqual(checkedKeys(rows, new Set(['c', 'a', 'x'])), ['a', 'c']);
     assert.deepEqual(checkedKeys(rows, new Set()), []);
+});
+
+test('the lists of a change whose lines are split, and what a move of ticked changes and lines sends', () => {
+    const lines = (...lists) => lists.map((list, i) => ({ kind: '+', text: 'l' + i, list }));
+    const rows = [
+        { key: 'k1', list: 'Changes', lines: lines('Changes', 'Fix', 'Changes') },
+        { key: 'k2', list: 'Fix', lines: lines('Fix', 'Fix') },
+        { key: 'k3', list: 'Changes', lines: lines('Changes') },
+    ];
+    assert.equal(listsText(rows[0]), 'Changes + Fix');
+    assert.equal(listsText(rows[1]), 'Fix');
+    assert.equal(listsText({ key: 'old', list: 'Changes' }), 'Changes');   // an answer without lines
+    // k2 ticked whole (its ticked line goes with it), two lines of k1, nothing of k3
+    const plan = movePlan(rows, new Set(['k2']), new Set(['k1@2', 'k1@0', 'k2@1']));
+    assert.deepEqual(plan, { keys: ['k2'], lines: [{ key: 'k1', lines: [0, 2] }] });
+    assert.deepEqual(movePlan(rows, new Set(), new Set()), { keys: [], lines: [] });
+});
+
+test('a file whose one change is split between two lists is "1 of 1" in each, with the total the engine sends', () => {
+    const state = { active: 'Changes', lists: [{ name: 'Changes', files: ['a.py'] }, { name: 'Fix', files: [] }], partCounts: { 'a.py': { Changes: 1, Fix: 1 } }, partTotals: { 'a.py': 1 } };
+    const grouped = groupFiles([{ path: 'a.py' }], state);
+    assert.deepEqual(grouped.map((g) => g.files.map((f) => `${f.part.here}/${f.part.total}`).join()), ['1/1', '1/1']);
 });
