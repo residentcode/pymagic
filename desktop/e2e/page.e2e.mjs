@@ -1410,6 +1410,39 @@ describe('packages: index settings, versions, installing from a path, the depend
             removeTree(venv);
         }
     });
+
+    test('pipenv: Pipfile.lock made with Lock, synced into the selected environment, and told out of date when the Pipfile changes', { skip: !spawnSync('pipenv', ['--version'], { shell: true }).stdout?.length && 'pipenv is not installed' }, async () => {
+        const wheel = join(wheels, 'e2elib-1.0-py3-none-any.whl').replace(/\\/g, '/');
+        writeFileSync(join(projectRoot, 'Pipfile'), `[packages]\ne2elib = {file = "${wheel}"}\n\n[dev-packages]\n`);
+        writeFileSync(join(projectRoot, 'Pipfile.lock'), '{"_meta": {"hash": {"sha256": "0"}}, "default": {}, "develop": {}}');
+        const row = `document.querySelector('#pk-locks .lockrow[data-file="Pipfile.lock"]')`;
+        const twice = async (button, what) => {
+            await page.evaluate(`${row}.querySelector('${button}').click()`);
+            await page.waitFor(`${row}.querySelector('${button}').classList.contains('armed')`, 5000, 'the second-click warning of ' + what);
+            await page.evaluate(`${row}.querySelector('${button}').click()`);
+            await logDone(what);
+        };
+        try {
+            await page.evaluate(`${$('pk-refresh')}.click()`);
+            assert.match(await page.waitFor(`${row}?.querySelector('.lockstate.stale')?.textContent`, 60000, 'the made-up lock out of date'), /Pipfile changed/);
+            assert.equal(await page.evaluate(`${row}.querySelector('.lockcompile').textContent`), 'Lock');
+            await twice('.lockcompile', 'pipenv lock');
+            assert.match(readFileSync(join(projectRoot, 'Pipfile.lock'), 'utf8'), /"e2elib"/);
+            await page.evaluate(`${$('pk-refresh')}.click()`);
+            await page.waitFor(`${row}?.querySelector('.lockstate.fresh')`, 60000, 'up to date after Lock');
+            await twice('.locksync', 'pipenv sync');
+            await page.evaluate(`${$('pk-refresh')}.click()`);
+            await page.waitFor(`[...document.querySelectorAll('#pk-table .pkrow')].some((r) => r.children[0].textContent === 'e2elib' && r.children[1].textContent === '1.0')`, 30000, 'e2elib 1.0 synced');
+            writeFileSync(join(projectRoot, 'Pipfile'), readFileSync(join(projectRoot, 'Pipfile'), 'utf8') + '\n[requires]\npython_version = "3.99"\n');
+            await page.evaluate(`${$('pk-refresh')}.click()`);
+            assert.equal(await page.waitFor(`${row}?.querySelector('.lockstate.stale')?.textContent.trim()`, 60000, 'out of date again'),
+                'out of date: the Pipfile changed since Pipfile.lock was made: run pipenv lock');
+        }
+        finally {
+            rmSync(join(projectRoot, 'Pipfile'), { force: true });
+            rmSync(join(projectRoot, 'Pipfile.lock'), { force: true });
+        }
+    });
 });
 
 // last: the notebook edits cells of the file and leaves it changed

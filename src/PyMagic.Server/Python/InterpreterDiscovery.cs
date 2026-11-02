@@ -73,6 +73,11 @@ public static class InterpreterDiscovery
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
 
+        // pipenv keeps a project's environment under ~/.virtualenvs (or WORKON_HOME), named after the project folder and a hash of its path
+        string workon = Environment.GetEnvironmentVariable("WORKON_HOME") is { Length: > 0 } w ? w : Path.Combine(env.Home, ".virtualenvs");
+        if (File.Exists(Path.Combine(env.Root, "Pipfile")))
+            foreach (var dir in PipenvEnvironments(workon, env.Root)) Add(Exe(dir, true), "pipenv", "pipenv");
+
         // 2. the activated environment
         if (!string.IsNullOrEmpty(env.VirtualEnv)) Add(Exe(env.VirtualEnv, true), "venv", "VIRTUAL_ENV");
         if (!string.IsNullOrEmpty(env.CondaPrefix)) Add(env.IsWindows ? Path.Combine(env.CondaPrefix, "python.exe") : Exe(env.CondaPrefix, false), "conda", "CONDA_PREFIX");
@@ -93,6 +98,18 @@ public static class InterpreterDiscovery
         foreach (var (path, kind) in KnownLocations(env)) Add(path, kind, "installed");
 
         return result;
+    }
+
+    /// <summary>The environments pipenv made for a project folder: <c>name-XXXXXXXX</c>, the folder's name (as pipenv cleans it) and eight characters of a hash.</summary>
+    public static IEnumerable<string> PipenvEnvironments(string workon, string root)
+    {
+        string name = System.Text.RegularExpressions.Regex.Replace(Path.GetFileName(Path.TrimEndingDirectorySeparator(root)), @"[ &$`!*@""()\[\]\\\r\n\t]", "_");
+        if (name.Length > 42) name = name[..42];
+        IEnumerable<string> dirs;
+        try { dirs = Directory.Exists(workon) ? Directory.EnumerateDirectories(workon, name + "-*").ToList() : Enumerable.Empty<string>(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { yield break; }
+        foreach (var d in dirs.OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+            if (Path.GetFileName(d).Length == name.Length + 9 && File.Exists(Path.Combine(d, "pyvenv.cfg"))) yield return d;
     }
 
     static string Classify(string path, DiscoveryEnvironment env)

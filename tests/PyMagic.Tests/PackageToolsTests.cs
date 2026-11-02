@@ -681,6 +681,88 @@ public class PackageToolsTests
         A.NotEqual(0, own.Code);
     }
 
+    // ------------------------------------------------------------ pipenv
+
+    [Fact]
+    public void PipfileLockIsSyncedVerifiedAndLockedWithPipenvInTheSelectedEnvironment()
+    {
+        using var t = new Temp();
+        File.WriteAllText(Path.Combine(t.Root, "Pipfile.lock"), "{}");
+        string? Which(string n) => n == "pipenv" ? "/bin/pipenv" : null;
+        Assert.Equal("there is no Pipfile next to it", LockFiles.Detect(t.Root, Which, false).Single().Note);
+        File.WriteAllText(Path.Combine(t.Root, "Pipfile"), "[packages]\n");
+        Assert.Equal("pipenv is not installed", LockFiles.Detect(t.Root, _ => null, false).Single().Note);
+        var row = LockFiles.Detect(t.Root, Which, false).Single();
+        Assert.True(row.Available);
+        Assert.Equal(("pipenv sync", "pipenv lock"), (row.Command, row.Compile));
+
+        var sync = LockFiles.MakePlan(t.Root, "Pipfile.lock", "/venv/bin/python", "/venv", isVenv: true, isLocal: true, Which, false);
+        Assert.Equal(("/bin/pipenv", "sync", "/venv", "0"), (sync.Program, string.Join(" ", sync.Args), sync.Env["VIRTUAL_ENV"], sync.Env["PIPENV_IGNORE_VIRTUALENVS"]));
+        var lockPlan = LockFiles.PipenvLockPlan(t.Root, "/venv", isVenv: true, isLocal: true, Which);
+        Assert.Equal(("/bin/pipenv", "lock", "/venv"), (lockPlan.Program, string.Join(" ", lockPlan.Args), lockPlan.Env["VIRTUAL_ENV"]));
+        Assert.Throws<ServiceException>(() => LockFiles.PipenvLockPlan(t.Root, "/usr", isVenv: false, true, Which));
+        Assert.Throws<ServiceException>(() => LockFiles.PipenvLockPlan(t.Root, "/venv", true, isLocal: false, Which));
+        Assert.Throws<ServiceException>(() => LockFiles.PipenvLockPlan(t.Root, "/venv", true, true, _ => null));
+
+        string answer = "Pipfile.lock is out-of-date. Run $ pipenv lock to update.";
+        var stale = LockFiles.CheckStale(t.Root, new[] { row }, Which, (program, args, folder) => (1, answer, ""))[0];
+        Assert.True(stale.Stale == true);
+        Assert.Equal("the Pipfile changed since Pipfile.lock was made: run pipenv lock", stale.StaleNote);
+        Assert.True(LockFiles.CheckStale(t.Root, new[] { row }, Which, (program, args, folder) => (0, "Pipfile.lock is up-to-date.", ""))[0].Stale == false);
+    }
+
+    [Fact]
+    public void TheEnvironmentsPipenvMadeForTheProjectAreFound()
+    {
+        using var t = new Temp();
+        string root = Path.Combine(t.Root, "my proj"), workon = Path.Combine(t.Root, "workon");
+        Directory.CreateDirectory(root);
+        foreach (var name in new[] { "my_proj-AbCd1234", "my_proj-short", "my_projx-AbCd1234", "my_proj-NoCfg123" })
+        {
+            Directory.CreateDirectory(Path.Combine(workon, name));
+            if (name != "my_proj-NoCfg123") File.WriteAllText(Path.Combine(workon, name, "pyvenv.cfg"), "home = x\n");
+        }
+        Assert.Equal("my_proj-AbCd1234", string.Join(",", InterpreterDiscovery.PipenvEnvironments(workon, root).Select(Path.GetFileName)));
+        A.Empty(InterpreterDiscovery.PipenvEnvironments(Path.Combine(t.Root, "none"), root));
+    }
+
+    /// <summary>With pipenv (PYMAGIC_TEST_PIPENV names pipenv.exe): Pipfile.lock made, told up to date, synced into a venv of the test, told out of date after the Pipfile changes; no environment of pipenv's own is made.</summary>
+    [Fact]
+    public void LivePipenvLocksSyncsAndVerifiesInTheSelectedEnvironment()
+    {
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_PIPENV") is not { Length: > 0 } pipenv || !File.Exists(pipenv) || RealPython == null) return;
+        string? Which(string n) => n == "pipenv" ? pipenv : LockFiles.Find(n);
+        using var t = new Temp();
+        string wheels = Path.Combine(t.Root, "wheels");
+        Directory.CreateDirectory(wheels);
+        File.Move(t.Wheel("pmpipenv", "2.0.0"), Path.Combine(wheels, "pmpipenv-2.0.0-py3-none-any.whl"));
+        File.WriteAllText(Path.Combine(t.Root, "Pipfile"), "[packages]\npmpipenv = {file = \"wheels/pmpipenv-2.0.0-py3-none-any.whl\"}\n\n[dev-packages]\n");
+        string python = new InterpreterManager(t.Root).CreateVenv(RealPython, ".venv", withPip: false);
+        string prefix = Path.Combine(t.Root, ".venv");
+        void Run(LockFiles.Plan plan)
+        {
+            var psi = new ProcessStartInfo(plan.Program) { WorkingDirectory = t.Root, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+            foreach (var a in plan.Args) psi.ArgumentList.Add(a);
+            foreach (var (k, v) in plan.Env) psi.Environment[k] = v;
+            using var p = Process.Start(psi)!;
+            var output = p.StandardOutput.ReadToEndAsync();
+            string err = p.StandardError.ReadToEnd();
+            Assert.True(p.WaitForExit(240000) && p.ExitCode == 0, plan.Program + " " + string.Join(" ", plan.Args) + ": " + err + output.Result);
+        }
+        Run(LockFiles.PipenvLockPlan(t.Root, prefix, true, true, Which));
+        A.Contains("pmpipenv", File.ReadAllText(Path.Combine(t.Root, "Pipfile.lock")));
+        LockFiles.Found Check() => LockFiles.CheckStale(t.Root, LockFiles.Detect(t.Root, Which, false), Which, LockFiles.RunTool).Single(f => f.Kind == "pipenv");
+        Assert.True(Check().Stale == false, Check().StaleNote);
+
+        Run(LockFiles.MakePlan(t.Root, "Pipfile.lock", python, prefix, true, true, Which, false));
+        Assert.Equal("pmpipenv 2.0.0", string.Join(",", DependencyTree.Read(python, null).Values.Where(d => d.Name.StartsWith("pmpipenv")).Select(d => d.Name + " " + d.Version)));
+
+        File.AppendAllText(Path.Combine(t.Root, "Pipfile"), "\n[requires]\npython_version = \"3.99\"\n");
+        Assert.True(Check().Stale == true, Check().StaleNote);
+        // pipenv worked in the test's environment: none of its own under ~/.virtualenvs for this folder
+        A.Empty(InterpreterDiscovery.PipenvEnvironments(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".virtualenvs"), t.Root));
+    }
+
     [Fact]
     public void AProgramRunsInTheProjectAndItsOutputStreams()
     {

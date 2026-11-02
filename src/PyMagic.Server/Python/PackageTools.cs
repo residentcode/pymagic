@@ -510,7 +510,7 @@ print(json.dumps(out))
     }
 }
 
-/// <summary>Lock files of the project and what keeps an environment equal to them: uv, poetry, pip-tools. The tools are only run when they are already there.</summary>
+/// <summary>Lock files of the project and what keeps an environment equal to them: uv, poetry, pip-tools, pipenv. The tools are only run when they are already there.</summary>
 public static class LockFiles
 {
     /// <param name="Stale">Whether the lock file no longer matches what it was made from (null: it could not be told).</param>
@@ -555,7 +555,12 @@ public static class LockFiles
             list.Add(new Found("requirements.txt", "pip-tools", "pip-tools", hasPipTools, "python -m piptools sync requirements.txt", hasPipTools ? null : "pip-tools is not installed in this interpreter", Compile: compile));
         }
         if (File.Exists(Path.Combine(root, "Pipfile.lock")))
-            list.Add(new Found("Pipfile.lock", "pipenv", "pipenv", false, "pipenv sync", "pipenv is not supported here"));
+        {
+            bool pipfile = File.Exists(Path.Combine(root, "Pipfile"));
+            bool ok = which("pipenv") != null && pipfile;
+            list.Add(new Found("Pipfile.lock", "pipenv", "pipenv", ok, (inInterpreter ? "python -m " : "") + "pipenv sync", ok ? null : !pipfile ? "there is no Pipfile next to it" : "pipenv is not installed" + where,
+                Compile: ok && !inInterpreter ? "pipenv lock" : null));
+        }
         return list;
     }
 
@@ -590,6 +595,16 @@ public static class LockFiles
                         if (code == 0) stale = false;
                         else if (Regex.IsMatch(text, @"poetry\.lock|lock file", RegexOptions.IgnoreCase)) (stale, note) = (true, "pyproject.toml changed since poetry.lock was made: run poetry lock");
                         else note = "poetry could not tell: " + PackageSettings.MaskText(LastLine(text));
+                        break;
+                    }
+                    case "pipenv" when f.Available && which("pipenv") is { } pipenv:
+                    {
+                        // `pipenv verify` compares the hash of the Pipfile with the lock's; it makes no environment
+                        var (code, output, error) = run(pipenv, new[] { "verify" }, root);
+                        string text = output + "\n" + error;
+                        if (code == 0) stale = false;
+                        else if (text.Contains("out-of-date", StringComparison.OrdinalIgnoreCase)) (stale, note) = (true, "the Pipfile changed since Pipfile.lock was made: run pipenv lock");
+                        else note = "pipenv could not tell: " + PackageSettings.MaskText(LastLine(text));
                         break;
                     }
                     case "pip-tools" when File.Exists(Path.Combine(root, "requirements.in")):
@@ -733,12 +748,33 @@ public static class LockFiles
         }
     }
 
+    /// <summary>
+    /// <c>pipenv lock</c>: Pipfile.lock made again from the Pipfile (with the Pipfile's own sources). pipenv works in the selected virtual
+    /// environment (VIRTUAL_ENV), so it makes none of its own under ~/.virtualenvs.
+    /// </summary>
+    public static Plan PipenvLockPlan(string root, string venvPrefix, bool isVenv, bool isLocal, Func<string, string?> which)
+    {
+        if (!isLocal) throw new ServiceException("Pipfile.lock is made on this computer only");
+        if (!isVenv) throw new ServiceException("select a virtual environment first: pipenv locks with it (and would make one of its own otherwise)");
+        if (!File.Exists(Path.Combine(root, "Pipfile"))) throw new ServiceException("this project has no Pipfile");
+        string pipenv = which("pipenv") ?? throw new ServiceException("pipenv is not installed");
+        return new Plan(pipenv, new[] { "lock" }, PipenvEnv(venvPrefix));
+    }
+
+    /// <summary>What every pipenv command is run with: the selected environment, no questions, no spinner, no colours, no notices.</summary>
+    public static Dictionary<string, string> PipenvEnv(string venvPrefix) => new()
+    {
+        ["VIRTUAL_ENV"] = venvPrefix, ["PIPENV_IGNORE_VIRTUALENVS"] = "0", ["PIPENV_YES"] = "1", ["PIPENV_NOSPIN"] = "1", ["PIPENV_VERBOSITY"] = "-1", ["NO_COLOR"] = "1",
+    };
+
     /// <summary>Runs a tool in the project and waits for it (a check that only reads, such as <c>uv lock --check</c>).</summary>
     public static (int Code, string Output, string Error) RunTool(string program, IReadOnlyList<string> args, string folder)
     {
         var psi = new System.Diagnostics.ProcessStartInfo(program) { WorkingDirectory = folder, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
         foreach (var a in args) psi.ArgumentList.Add(a);
         psi.Environment["NO_COLOR"] = "1";
+        psi.Environment["PIPENV_VERBOSITY"] = "-1";
+        psi.Environment["PIPENV_NOSPIN"] = "1";
         using var p = System.Diagnostics.Process.Start(psi)!;
         var output = p.StandardOutput.ReadToEndAsync();
         var error = p.StandardError.ReadToEndAsync();
@@ -762,6 +798,8 @@ public static class LockFiles
                     new Dictionary<string, string> { ["VIRTUAL_ENV"] = venvPrefix, ["POETRY_VIRTUALENVS_CREATE"] = "false" });
             case "pip-tools":
                 return new Plan(python, new[] { "-m", "piptools", "sync", Path.Combine(root, "requirements.txt") }, new Dictionary<string, string>());
+            case "pipenv":
+                return new Plan(which("pipenv")!, new[] { "sync" }, PipenvEnv(venvPrefix));
             default:
                 throw new ServiceException("that kind of lock file is not supported");
         }

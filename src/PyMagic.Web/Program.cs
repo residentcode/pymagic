@@ -1850,6 +1850,15 @@ app.Map("/run", async (HttpContext ctx) =>
                         // requirements.txt made again from requirements.in (the page asked for a second click: the file is rewritten)
                         try
                         {
+                            if (msg["file"]?.GetValue<string>() == "Pipfile.lock")
+                            {
+                                // Pipfile.lock made again by pipenv, in the selected environment
+                                var lockPlan = LockFiles.PipenvLockPlan(root, target.Prefix, target.IsVenv, target.Target.IsLocal, LockFiles.Find);
+                                packageOperation = true;
+                                session.StartProgram(root, lockPlan.Program, lockPlan.Args, lockPlan.Env);
+                                startedProgram = true;
+                                break;
+                            }
                             bool pipTools = PackageManager.List(target.Python, target: target.Target).Packages.Any(p => PackageManager.Normalize(p.Name) == "pip-tools");
                             var plan = LockFiles.CompilePlan(root, target.Python, target.Target.IsLocal, LockFiles.Find, pipTools, PackageSettings.Load(root));
                             packageOperation = true;

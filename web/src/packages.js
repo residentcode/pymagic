@@ -385,11 +385,11 @@ export function setupPackages() {
             };
             row.appendChild(b);
             if (lock.compile) {
-                // requirements.txt made again from requirements.in: the file is rewritten, so a second click
+                // requirements.txt made again from requirements.in (Pipfile.lock from the Pipfile): the file is rewritten, so a second click
                 const c = document.createElement('button');
                 c.className = 'lockcompile';
                 const armedKey = 'compile:' + lock.file;
-                c.textContent = lockArmed === armedKey ? 'Really? requirements.txt is written again' : 'Compile';
+                c.textContent = lockArmed === armedKey ? `Really? ${lock.file} is written again` : lock.kind === 'pipenv' ? 'Lock' : 'Compile';
                 c.classList.toggle('armed', lockArmed === armedKey);
                 c.disabled = client !== null;
                 c.title = lock.compile;
