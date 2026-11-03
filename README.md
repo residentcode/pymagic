@@ -178,7 +178,6 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - A cache of parsed stubs on disk (7): each start parses typeshed's builtins and the stubs a project uses again (the cache is in memory only).
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
-- Open Project: Attach (a second project folder in the same window, as PyCharm attaches one) is not there yet: the engine has one project folder per window (301).
 - Run configurations: Not tried yet: the three servers and uv with those packages installed.
 
 **Django compared with PyCharm** (from PyCharm's Django help pages and its 17 Django inspections, checked against the code on 30 October 2026)
@@ -215,6 +214,7 @@ Not work left: choices made and kept, noted where they were made.
 - New project: unlike PyCharm, a project made with a venv lists the packages of its kind (FastAPI, Flask, Jupyter) in requirements.txt without installing them; Django is installed, so that its own startproject writes the project, and with uv every kind's packages are added with uv add (items 285 and 287).
 - Editor menu: Left as they are: *Paste as Plain Text* (every paste into the editor is plain already) and submenus in the editor's right-click menu (Monaco's menu has none; Refactor… and Generate… open PyMagic's own menus, which have them)
 - Diagrams: Simpler than PyCharm's: no editing, notes or other layouts, and a model's relations come from its own fields.
+- Open Project: no Attach (a second project folder in the same window): the user does not want it; a project opens in this window or a new one (item 301).
 - Debugger: left on purpose: attaching to programs of Python 3.13 and earlier, which have no `sys.remote_exec` (PyCharm injects native code into the process; antivirus programs such as Kaspersky quarantine programs that do, so PyMagic attaches to 3.14 and later only)
 - Editor: PyMagic's keys differ where PyCharm's are already taken here: next / previous method is Ctrl+Shift+Down / Up (Alt+Down moves the line), the block's start / end is Alt+[ / Alt+] (Ctrl+[ indents)
 - Refactoring: Simpler than PyCharm's: Introduce Parameter gives the parameter a default instead of passing the value at each call, Invert Boolean works on variables (not on functions that return one), and moved members do not bring the imports they need.
