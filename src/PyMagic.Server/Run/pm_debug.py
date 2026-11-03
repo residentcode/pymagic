@@ -27,6 +27,7 @@ The program's own stdin/stdout/stderr are ordinary pipes handled by the host, no
 """
 import argparse
 import bdb
+import dis
 import builtins
 import contextlib
 import io
@@ -85,6 +86,25 @@ def member_keys(value, count):
         return [k for k, _ in children(value) or []]
     except BaseException:
         return []
+
+
+# a generator, coroutine or async generator: its "return" at a yield is only a pause
+_RESUMABLE = 0x20 | 0x80 | 0x200
+
+
+def suspended(frame):
+    """Whether a frame that returns only waits at a yield (or an await): it goes on later, as the same frame."""
+    code = frame.f_code
+    if not code.co_flags & _RESUMABLE:
+        return False
+    try:
+        op = dis.opname[code.co_code[frame.f_lasti]]
+        if op in ("YIELD_VALUE", "YIELD_FROM"):
+            return True
+        # 3.13 and newer stand at the RESUME after the yield already
+        return op == "RESUME" and frame.f_lasti >= 2 and dis.opname[code.co_code[frame.f_lasti - 2]] == "YIELD_VALUE"
+    except (IndexError, AttributeError):
+        return False
 
 
 def fingerprint(value):
@@ -609,7 +629,9 @@ class Debugger(bdb.Bdb):
 
     def dispatch_return(self, frame, arg):
         for key, watch in list(self.data_breaks.items()):
-            if watch["frame"] is frame:   # a local's data breakpoint ends with its call
+            # a local's data breakpoint ends with its call; a generator (or coroutine) that only stops at a yield goes on later in the
+            # same frame, so its locals are still watched
+            if watch["frame"] is frame and not suspended(frame):
                 del self.data_breaks[key]
                 self.send({"type": "dataBreakEnded", "key": key, "expression": watch["expression"]})
         if self.return_origin is not None and frame.f_back is self.return_origin and frame.f_code.co_name not in ("<genexpr>", "<listcomp>", "<dictcomp>", "<setcomp>"):

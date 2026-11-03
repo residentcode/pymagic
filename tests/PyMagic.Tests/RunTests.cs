@@ -812,6 +812,28 @@ public class RunTests
     }
 
     [Fact]
+    public void ADataBreakpointOnALocalOfAGeneratorGoesOnAfterItsYields()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        // n changes between the yields: the frame returns at each yield and goes on at the next next()
+        h.Script("gen.py", "def count():\n    n = 0\n    yield n\n    n = 5\n    yield n\n    n = 9\n    yield n\n\n\nfor v in count():\n    print(v)\nprint('done')\n");
+        h.Session.StartWithBreakpoints(h.Root, "gen.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray> { ["gen.py"] = new JsonArray(3) });
+        h.Type("stopped");
+        h.Request("setDataBreak", new JsonObject { ["frameId"] = 0, ["expression"] = "n" });
+        h.Command("continue");
+        var first = h.Type("stopped");
+        Assert.Equal("data", first["reason"]!.GetValue<string>());
+        Assert.Equal("n changed: 0 -> 5", first["message"]!.GetValue<string>());
+        h.Command("continue");
+        Assert.Equal("n changed: 5 -> 9", h.Type("stopped")["message"]!.GetValue<string>());
+        // the generator's end ends it
+        h.Command("continue");
+        Assert.Equal("n", h.Type("dataBreakEnded")["expression"]!.GetValue<string>());
+        h.Type("exited");
+    }
+
+    [Fact]
     public void TheDebuggedProgramIsItsOwnMainModule()
     {
         // found with python -m calendar under the debugger: enum.global_enum puts the members into sys.modules["__main__"]
