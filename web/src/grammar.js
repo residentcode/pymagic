@@ -72,7 +72,7 @@ export function setupGrammar({ relOf }) {
         if (!rel || !spellKind(rel)) return;
         schedule(model, 600);
         model.onDidChangeContent(() => schedule(model));
-        model.onDidDispose(() => { clearTimeout(timers.get(model)); timers.delete(model); found.delete(model); });
+        model.onWillDispose(() => { clearTimeout(timers.get(model)); timers.delete(model); found.delete(model); });
     }
     monaco.editor.onDidCreateModel((model) => setTimeout(() => watch(model), 0));
     for (const model of monaco.editor.getModels()) watch(model);

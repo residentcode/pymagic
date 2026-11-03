@@ -51,7 +51,8 @@ const FILES = {
     'emmet/page.hjs': 'ul>li*2\n',
     'tags/page.html': '<h1>{{ title }}</h1>\n<p>Welcome to {{ title }}</p>\n',
     'fullline/config.py': 'import json\n\n\ndef load_config(path):\n    with open(path) as f:\n        config = \n    return config\n',
-    'tw/input.css': '@import "tailwindcss";\n@theme { --color-brand: #3366ff; }\n',
+    'tw/input.css': '@import "tailwindcss" source(none);\n@plugin "flowbite/plugin";\n@source "../tw/**/*.html";\n@theme { --color-brand: #3366ff; }\n',
+    'node_modules/flowbite/plugin.js': 'module.exports = function () {};\n',
     'tw/page.html': '<div class="md:flex items-center">\n    <div class="ml-au"></div>\n    <p class="bg-bra"></p>\n    <p class="bg-acc"></p>\n</div>\n',
     'tags/App.jsx': 'export const App = () => (\n  <section className="a"><Item key={1} /></section>\n);\n',
     'emmet/App.vue': 'ul>li*2\n',
@@ -2807,6 +2808,8 @@ describe('changelists, the shelf, and choosing lines from the editor gutter', ()
         await page.evaluate(`window.__answer = 'put away'`);
         await page.evaluate(`[...document.querySelectorAll('#git-changes .gc-list[data-list="Changes"] button')].find((b) => b.textContent === 'Shelve').click()`);
         await page.waitFor(`document.querySelector('#git-shelf .gs-row[data-shelf]')`, 15000, 'the shelved set');
+        // the shelf may show the set a moment before the files are back to the last commit
+        for (let i = 0; i < 30 && status().length; i++) await sleep(300);
         assert.deepEqual(status(), []);
         assert.equal(readFileSync(join(projectRoot, 'cl_a.py'), 'utf8'), numbered(14));
         assert.equal(readFileSync(join(projectRoot, 'cl_g.py'), 'utf8'), numbered(14, [2, 'line 2 G']));
@@ -2994,6 +2997,35 @@ describe('New Project: the other kinds', () => {
         const tokens = await page.evaluate(`window.pymagic.monaco.editor.tokenize(window.pymagic.editor.getModel().getValue(), 'ejs').flat().map((t) => t.type)`);
         for (const want of ['tag.html', 'attribute.name.html', 'delimiter.html', 'identifier.js', 'comment.html'])
             assert.ok(tokens.includes(want), want + ' in ' + tokens.join(' '));
+    });
+
+    test('node_modules is shown in the project tree, excluded and read when it is opened', async () => {
+        const row = await page.waitFor(`(() => { const li = document.querySelector('li[data-path="node_modules"]'); return li ? li.className + ' | ' + li.title : ''; })()`, 15000, 'node_modules in the tree');
+        assert.match(row, /mark-excluded/);
+        assert.match(row, /npm packages/);
+        // what is inside it is not read until it is opened
+        assert.equal(await page.evaluate(`!!document.querySelector('li[data-path="node_modules/flowbite"]')`), false);
+        const tree = await page.evaluate(`fetch('/api/tree').then((r) => r.json())`);
+        assert.ok(tree.lazy.includes('node_modules'));
+        assert.ok(!tree.files.some((f) => f.path.startsWith('node_modules/')));
+    });
+
+    test('a Django project opened for the first time has a Django server to run, chosen in the toolbar', async () => {
+        const dj = project({
+            'manage.py': "import os\nimport sys\n\nif __name__ == '__main__':\n    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'shop.settings')\n    from django.core.management import execute_from_command_line\n    execute_from_command_line(sys.argv)\n",
+            'shop/__init__.py': '',
+            'shop/settings.py': "INSTALLED_APPS = ['store']\nROOT_URLCONF = 'shop.urls'\n",
+            'shop/urls.py': 'urlpatterns = []\n',
+            'store/__init__.py': '',
+        });
+        const other = await launch(dj);
+        try {
+            assert.equal(await other.page.waitFor(`document.querySelector('#run-config span').textContent === 'Django server' && 'Django server'`, 20000, 'the Django server configuration'), 'Django server');
+            const kept = JSON.parse(await other.page.evaluate(`fetch('/api/file?path=.pymagic/run-configurations.json').then((r) => r.text())`));
+            assert.equal(kept.selected, 'Django server');
+            assert.deepEqual([kept.configurations[0].kind, kept.configurations[0].script, kept.configurations[0].settings], ['django', 'manage.py', 'shop.settings']);
+        }
+        finally { await other.close(); }
     });
 
     test('Open Project: asked whether it replaces this window\'s project or opens in a new window, with Don\'t ask again', async () => {

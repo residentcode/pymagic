@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { read, startOf, parseEnv, formatEnv, uniqueName, blank, splitShared, compoundMembers, KINDS, parseMappings, formatMappings, portOf } from '../src/runconfig-model.js';
+import { read, startOf, parseEnv, formatEnv, uniqueName, blank, splitShared, compoundMembers, KINDS, parseMappings, formatMappings, portOf, firstConfiguration } from '../src/runconfig-model.js';
 
 test('what is stored is read into well-formed configurations, the broken ones left out', () => {
     const { configurations, selected } = read({
@@ -127,4 +127,19 @@ test('mapping lines and ports', () => {
     assert.equal(portOf('x'), 5678);
     assert.equal(portOf('65536'), 5678);
     assert.equal(portOf('1.5'), 5678);
+});
+
+test('a Django project opened for the first time gets a Django server, with its manage.py and settings module', () => {
+    const django = { found: true, manage: 'src\\manage.py', settingsModule: 'shop.settings' };
+    const c = firstConfiguration(null, null, django);
+    assert.equal(c.name, 'Django server');
+    assert.equal(c.kind, 'django');
+    assert.equal(c.script, 'src/manage.py');
+    assert.equal(c.settings, 'shop.settings');
+    assert.deepEqual(startOf(c).args.slice(0, 1), ['runserver']);
+    // configurations kept already (in the project or shared), or no Django: nothing made
+    assert.equal(firstConfiguration({ configurations: [] }, null, django), null);
+    assert.equal(firstConfiguration(null, { configurations: [] }, django), null);
+    assert.equal(firstConfiguration(null, null, { found: false }), null);
+    assert.equal(firstConfiguration(null, null, null), null);
 });

@@ -448,11 +448,13 @@ static bool IsEnvironmentFolder(string dir)
     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
 }
 
-// everything the explorer shows: folders and files (what the language server needs is /api/files)
+// everything the explorer shows: folders and files (what the language server needs is /api/files); node_modules is shown as PyCharm shows it,
+// an excluded folder of the project's npm packages, read one level at a time when it is opened as an environment is
 app.MapGet("/api/tree", () =>
 {
-    var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", "node_modules", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".pymagic", ".idea", ".vs", ".tox", ".eggs" };
+    var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".pymagic", ".idea", ".vs", ".tox", ".eggs" };
     var lazy = new List<string>();
+    var libraries = new List<string>();
     var dirs = new List<string>();
     var files = new List<(string Path, long Size)>();
     int budget = 20000;
@@ -474,13 +476,14 @@ app.MapGet("/api/tree", () =>
             if (skip.Contains(name) || name.EndsWith(".egg-info", StringComparison.OrdinalIgnoreCase)) continue;
             string rel = Path.GetRelativePath(root, d).Replace('\\', '/');
             dirs.Add(rel);
+            if (name.Equals("node_modules", StringComparison.OrdinalIgnoreCase)) { lazy.Add(rel); libraries.Add(rel); continue; }
             if (IsEnvironmentFolder(d)) { lazy.Add(rel); continue; }
             Walk(d);
         }
     }
     Walk(root);
     var marks = ProjectFolders.Marks;
-    return Results.Json(new { marks = new { sources = marks.Sources, tests = marks.Tests, excluded = marks.Excluded, templates = marks.Templates ?? new(), resources = marks.Resources ?? new(), autoTemplates = ProjectFolders.AutoTemplates, environments = lazy }, dirs = dirs.OrderBy(x => x, StringComparer.Ordinal), files = files.OrderBy(f => f.Path, StringComparer.Ordinal).Select(f => new { path = f.Path, size = f.Size }), lazy });
+    return Results.Json(new { marks = new { sources = marks.Sources, tests = marks.Tests, excluded = marks.Excluded, templates = marks.Templates ?? new(), resources = marks.Resources ?? new(), autoTemplates = ProjectFolders.AutoTemplates, environments = lazy.Except(libraries).ToList(), libraries }, dirs = dirs.OrderBy(x => x, StringComparer.Ordinal), files = files.OrderBy(f => f.Path, StringComparer.Ordinal).Select(f => new { path = f.Path, size = f.Size }), lazy });
 });
 
 // one folder's own folders and files (the tree reads an environment folder this way when it is opened); every folder in it is read the same way

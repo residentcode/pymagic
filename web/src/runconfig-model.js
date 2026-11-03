@@ -157,6 +157,15 @@ export function uniqueName(list, base) {
     for (let n = 2; ; n++) if (!taken.has(`${base} ${n}`)) return `${base} ${n}`;
 }
 
+/**
+ * The configuration a project gets the first time it is opened (nothing stored, nothing shared), as PyCharm does when it finds Django:
+ * a Django server with the project's manage.py and settings module, from /api/django. Null when there is no Django or a configuration is kept already.
+ */
+export function firstConfiguration(stored, shared, django) {
+    if (stored || shared || !django?.found || !django.manage) return null;
+    return { ...blank('Django server', 'django'), script: String(django.manage).replace(/\\/g, '/'), settings: django.settingsModule ?? '' };
+}
+
 export function toStored(configurations, selected) {
     return { selected, configurations };
 }

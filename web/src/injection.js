@@ -72,7 +72,7 @@ export function setupInjections({ database }) {
         if (model.getLanguageId() !== 'python') return;
         schedule(model, 50);
         model.onDidChangeContent(() => schedule(model));
-        model.onDidDispose(() => { marks.delete(model); clearTimeout(timers.get(model)); timers.delete(model); });
+        model.onWillDispose(() => { marks.delete(model); clearTimeout(timers.get(model)); timers.delete(model); });
     }
     monaco.editor.onDidCreateModel((model) => setTimeout(() => watch(model), 0));
     for (const model of monaco.editor.getModels()) watch(model);

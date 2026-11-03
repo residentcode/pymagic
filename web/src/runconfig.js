@@ -1,7 +1,7 @@
 // Run configurations: named ways to start a file (its parameters, the variables of its environment, the folder it starts in). The one that is chosen is what
 // Run, Debug and Profile start; with none chosen they start the file in the editor. They are kept in the project, in .pymagic/run-configurations.json.
 import { openMenu } from './menu';
-import { KINDS, blank, formatEnv, parseEnv, read, splitShared, toStored, uniqueName } from './runconfig-model.js';
+import { KINDS, blank, firstConfiguration, formatEnv, parseEnv, read, splitShared, toStored, uniqueName } from './runconfig-model.js';
 
 const $ = (id) => document.getElementById(id);
 const FILE = '.pymagic/run-configurations.json';
@@ -25,11 +25,17 @@ export function setupRunConfigurations({ currentFile }) {
     };
 
     const fetchJson = (file) => fetch('/api/file?path=' + encodeURIComponent(file)).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    ready = Promise.all([fetchJson(FILE), fetchJson(SHARED)]).then(([stored, shared]) => {
+    ready = Promise.all([fetchJson(FILE), fetchJson(SHARED)]).then(async ([stored, shared]) => {
         const sharedList = read(shared).configurations.map((c) => ({ ...c, shared: true }));
         hadShared = sharedList.length > 0;
         const own = read({ ...stored, configurations: [...(stored?.configurations ?? []), ...sharedList] });
         ({ configurations: list, selected } = own);
+        // a project opened for the first time: a Django project gets its Django server, chosen (and kept, so it is made once)
+        if (!stored && !shared) {
+            const django = await fetch('/api/django').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+            const first = firstConfiguration(stored, shared, django);
+            if (first) { list = [first]; selected = first.name; save(); }
+        }
         for (const fn of listeners) fn();
     }).catch(() => { /* none stored */ });
 

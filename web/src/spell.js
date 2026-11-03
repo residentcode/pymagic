@@ -54,7 +54,7 @@ export function setupSpelling({ relOf }) {
         if (!rel || !spellKind(rel)) return;
         schedule(model, 200);
         model.onDidChangeContent(() => schedule(model));
-        model.onDidDispose(() => { clearTimeout(timers.get(model)); timers.delete(model); });
+        model.onWillDispose(() => { clearTimeout(timers.get(model)); timers.delete(model); });
     }
 
     async function start() {

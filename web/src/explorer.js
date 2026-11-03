@@ -125,7 +125,7 @@ export function setupExplorer(deps) {
     let selected = '';
     let clip = null;          // { path, cut }: what Ctrl+X / Ctrl+C took, for Ctrl+V
     let dragging = null;      // the row being dragged onto a folder
-    let marks = { sources: [], tests: [], excluded: [], templates: [], resources: [], autoTemplates: [], environments: [] };
+    let marks = { sources: [], tests: [], excluded: [], templates: [], resources: [], autoTemplates: [], environments: [], libraries: [] };
     // folders whose content is read when they are opened (a Python environment: .venv, .conda, and every folder in one)
     let lazy = new Set();   // Mark Directory As (.pymagic/folders.json), and TEMPLATES['DIRS']
     let coverage = window.pymagicCoverageTree ?? null;   // {path: {lines, hit, branches, taken, percent}} from the Coverage panel, or null
@@ -143,7 +143,9 @@ export function setupExplorer(deps) {
 
     // an environment of the project (.venv, .conda) is excluded as PyCharm shows it: it is the interpreter's, not the project's code
     const isEnvironment = (path) => (marks.environments ?? []).includes(path);
-    const markOf = (path) => (marks.sources.includes(path) ? 'sources' : marks.tests.includes(path) ? 'tests' : marks.excluded.includes(path) || isEnvironment(path) ? 'excluded'
+    // node_modules too: the project's npm packages, shown and excluded
+    const isLibrary = (path) => (marks.libraries ?? []).includes(path);
+    const markOf = (path) => (marks.sources.includes(path) ? 'sources' : marks.tests.includes(path) ? 'tests' : marks.excluded.includes(path) || isEnvironment(path) || isLibrary(path) ? 'excluded'
         : (marks.templates ?? []).includes(path) || (marks.autoTemplates ?? []).includes(path) ? 'templates' : (marks.resources ?? []).includes(path) ? 'resources' : null);
 
     /** Mark Directory As: the folder becomes a sources root, test sources or excluded (or loses its mark); the page starts again so the analysis follows. */
@@ -185,8 +187,8 @@ export function setupExplorer(deps) {
         if (path === selected) li.classList.add('sel');
         // a marked folder has its colour: sources blue, test sources green, excluded orange (and what is inside an excluded folder is dim)
         const mark = isDir ? markOf(path) : null;
-        if (mark) { li.classList.add(`mark-${mark}`); li.title = `${path} (${isEnvironment(path) ? "the project's Python environment, excluded from the analysis" : MARK_LABELS[mark]}${mark === 'templates' && !(marks.templates ?? []).includes(path) ? ", from TEMPLATES['DIRS'] of the settings" : ''})`; }
-        if ([...marks.excluded, ...(marks.environments ?? [])].some((e) => path.startsWith(e + '/'))) li.classList.add('in-excluded');
+        if (mark) { li.classList.add(`mark-${mark}`); li.title = `${path} (${isEnvironment(path) ? "the project's Python environment, excluded from the analysis" : isLibrary(path) ? "the project's npm packages, excluded from the analysis and the search" : MARK_LABELS[mark]}${mark === 'templates' && !(marks.templates ?? []).includes(path) ? ", from TEMPLATES['DIRS'] of the settings" : ''})`; }
+        if ([...marks.excluded, ...(marks.environments ?? []), ...(marks.libraries ?? [])].some((e) => path.startsWith(e + '/'))) li.classList.add('in-excluded');
         if (clip?.cut && clip.path === path) li.classList.add('cut');
         li.draggable = true;
         li.ondragstart = (e) => {
