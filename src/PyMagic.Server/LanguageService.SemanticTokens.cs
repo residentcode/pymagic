@@ -122,7 +122,8 @@ public sealed partial class LanguageService
             int line = pos.Line, ch = pos.Character;
             data.Add(line - lastLine);
             data.Add(line == lastLine ? ch - lastChar : ch);
-            data.Add(length);
+            // the length in the client's units too (bytes for a UTF-8 client: a token is on one line)
+            data.Add(LineMap.Utf8.Value ? lines.PositionOf(start + length).Character - ch : length);
             data.Add((int)type);
             data.Add((int)mods);
             lastLine = line;

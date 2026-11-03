@@ -18,7 +18,7 @@ public sealed partial class RunSession : IDisposable
     {
         "setBreakpoints", "setExceptionBreak", "setFunctionBreaks", "setDataBreak", "clearDataBreak", "mute", "pause", "continue", "next", "stepIn", "stepInto", "stepOut", "runTo", "jump", "scopes", "variables",
         "values", "table", "evaluate", "setVariable", "setName", "reprOf", "typeSource", "setLoadPolicy",
-        "consoleExec", "consoleRunFile", "consoleVars", "consoleComplete",
+        "consoleExec", "consoleRunFile", "consoleVars", "consoleComplete", "consoleAttach", "consoleDetach",
     };
 
     readonly Action<JsonNode> _emit;
@@ -307,6 +307,8 @@ public sealed partial class RunSession : IDisposable
         try { _process = Process.Start(psi); }
         catch (System.ComponentModel.Win32Exception e) { Error($"cannot start '{psi.FileName}': {e.Message}"); return; }
         if (_process == null) { Error($"cannot start '{psi.FileName}'"); return; }
+        _job?.Dispose();
+        _job = ProcessJob.For(_process);   // what it starts is stopped with it (a reloader's server, a venv's interpreter)
         _process.StandardInput.Close();
         _emit(new JsonObject { ["type"] = "started", ["pid"] = _process.Id, ["debug"] = false });
         var readers = new[] { Pump(_process.StandardOutput, "stdout"), Pump(_process.StandardError, "stderr") };
@@ -379,6 +381,8 @@ public sealed partial class RunSession : IDisposable
         try { _process = Process.Start(psi); }
         catch (System.ComponentModel.Win32Exception e) { Error($"cannot start '{psi.FileName}': {e.Message}"); return; }
         if (_process == null) { Error($"cannot start '{psi.FileName}'"); return; }
+        _job?.Dispose();
+        _job = ProcessJob.For(_process);   // what it starts is stopped with it (a reloader's server, a venv's interpreter)
 
         // where the project is as the interpreter sees it: its tracebacks name those paths, and the page links them back to the project
         _emit(new JsonObject { ["type"] = "started", ["pid"] = _process.Id, ["debug"] = IsDebug, ["remoteRoot"] = Target.IsLocal ? null : Target.ToTarget(root) });
@@ -540,19 +544,25 @@ public sealed partial class RunSession : IDisposable
                 {
                     lock (_gate)
                     {
-                        if ((_map != null || !Target.IsLocal) && type == "setBreakpoints" && msg["file"]?.GetValue<string>() is { } bpFile)
+                        // a program of the debug server has a folder of its own: a path relative to the project would be taken from there
+                        if ((_map != null || !Target.IsLocal || _serving) && type == "setBreakpoints" && msg["file"]?.GetValue<string>() is { } bpFile)
                             msg["file"] = ToRemote(Path.GetFullPath(Path.Combine(_root ?? "", bpFile)));
                         // Run to Cursor names the file as the page does, relative to the project
                         if (type == "runTo" && msg["file"]?.GetValue<string>() is { } toFile)
                             msg["file"] = ToRemote(Path.GetFullPath(Path.Combine(_root ?? "", toFile)));
+                        // Attach Debugger of the console: pm_debug.py is a file of its own beside the other helpers, imported from where it was put
+                        if (type == "consoleAttach") msg["helper"] = Path.GetDirectoryName(ExtractHelper("pm_debug.py"));
                         string json = msg.ToJsonString();
-                        if (_serving) { RememberLocked(type!, msg, json); if (_channel != null) WriteRawLocked(json); }
+                        if (_serving) { RememberLocked(type!, msg, json); SendToProgramsLocked(type!, json); }
                         else if (_channel == null) _pending.Add(json); else WriteRawLocked(json);
                     }
                 }
                 break;
         }
     }
+
+    /// <summary>The job the program is in: stopping the run ends everything it started.</summary>
+    ProcessJob? _job;
 
     void Kill()
     {
@@ -566,6 +576,7 @@ public sealed partial class RunSession : IDisposable
         try { if (_process is { HasExited: false }) _process.Kill(entireProcessTree: true); }
         catch (InvalidOperationException) { }
         catch (System.ComponentModel.Win32Exception) { }
+        _job?.Kill();
         // the program on another machine keeps running when only the local end of the connection is gone
         if (_runId is { } id) { var target = Target; Task.Run(() => target.Stop(id)); }
     }
@@ -586,5 +597,6 @@ public sealed partial class RunSession : IDisposable
         _disposed = true;
         Kill();
         Cleanup();
+        _job?.Dispose();
     }
 }

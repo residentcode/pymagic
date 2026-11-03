@@ -27,6 +27,22 @@ public class LocalHistoryLabelTests
     }
 
     [Fact]
+    public void ALabelKeepsTheUnsavedTextOfOpenFiles()
+    {
+        var h = new LocalHistory(Root());
+        var disk = new[] { ("a.py", "a on disk\n"), ("b.py", "b on disk\n") };
+        var unsaved = new Dictionary<string, string> { ["A.py"] = "a typed, not saved\n", ["new.py"] = "never saved\n" };
+        var files = LocalHistory.WithUnsaved(disk, unsaved);
+        Assert.Equal("a.py,b.py,new.py", string.Join(",", files.Select(f => f.Rel)));
+        var label = h.PutLabel("with my edits", false, files);
+        var state = h.StateAt(label.Id).ToDictionary(x => x.Path, x => x.Text);
+        Assert.Equal("a typed, not saved\n", state["a.py"]);
+        Assert.Equal("b on disk\n", state["b.py"]);
+        Assert.Equal("never saved\n", state["new.py"]);
+        Assert.Equal(2, LocalHistory.WithUnsaved(disk, new Dictionary<string, string>()).Count);
+    }
+
+    [Fact]
     public void LabelsAreOrderedRemovedAndLimited()
     {
         var h = new LocalHistory(Root());

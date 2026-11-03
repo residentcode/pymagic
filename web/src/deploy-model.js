@@ -18,14 +18,15 @@ export function actionsFor(status) {
     return [['upload', 'Upload'], ['download', 'Download'], ['skip', 'Skip']];
 }
 
-/** A server in a line: "me@example.org (SFTP)", "FTP ftp.site.org", "a folder D:/share". */
+/** A server in a line: "SFTP me@example.org", "FTP ftp.site.org", "FTPS (implicit) ftp.site.org", "a folder D:/share". */
 export function describeServer(s) {
     if (s.type === 'folder') return `a folder ${s.root}`;
-    return `${{ sftp: 'SFTP', ftps: 'FTPS' }[s.type] ?? 'FTP'} ${s.user ? s.user + '@' : ''}${s.host}${(s.type === 'sftp' && s.port !== 22) || (s.type !== 'sftp' && s.port !== 21) ? ':' + s.port : ''}`;
+    const kind = { sftp: 'SFTP', ftps: s.implicitTls ? 'FTPS (implicit)' : 'FTPS' }[s.type] ?? 'FTP';
+    return `${kind} ${s.user ? s.user + '@' : ''}${s.host}${s.port !== defaultPort(s.type, s.implicitTls) ? ':' + s.port : ''}`;
 }
 
-/** The default port of a kind of server. */
-export function defaultPort(type) { return type === 'sftp' ? 22 : 21; }
+/** The default port of a kind of server: implicit FTPS (TLS from the first byte) listens on 990. */
+export function defaultPort(type, implicitTls = false) { return type === 'sftp' ? 22 : type === 'ftps' && implicitTls ? 990 : 21; }
 
 /** The question asked before something is deleted on a server: what goes, where, and that a folder takes what is in it. */
 export function deleteQuestion(entry, serverName, path) {

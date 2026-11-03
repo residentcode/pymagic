@@ -208,14 +208,16 @@ public sealed partial class LanguageService
         var classParameterDocs = Docstrings.Parameters(classDoc);
         var sb = new StringBuilder(name).Append('(');
         var labels = new List<ParameterInformation>();
+        // a parameter's place in the label counts what positions count: UTF-8 bytes for a client that chose them
+        int At() => LineMap.Utf8.Value ? Encoding.UTF8.GetByteCount(sb.ToString()) : sb.Length;
         bool first = true;
         foreach (var (text, param) in ParamParts(ev, s.Params))
         {
             if (!first) sb.Append(", ");
             first = false;
-            int from = sb.Length;
+            int from = At();
             sb.Append(text);
-            if (param != null) labels.Add(new ParameterInformation(new[] { from, sb.Length }, parameterDocs.GetValueOrDefault(param.Name) ?? classParameterDocs.GetValueOrDefault(param.Name)));
+            if (param != null) labels.Add(new ParameterInformation(new[] { from, At() }, parameterDocs.GetValueOrDefault(param.Name) ?? classParameterDocs.GetValueOrDefault(param.Name)));
         }
         sb.Append(')');
         if (s.Returns is { } r && r is not UnknownType { Explicit: false }) sb.Append(" -> ").Append(FormatType(ev, r));

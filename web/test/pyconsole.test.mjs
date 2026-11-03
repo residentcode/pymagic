@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/pyconsole-model.js', import.meta.url), 'utf8');
-const { consoleName, queueLabel, CommandQueue } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { consoleName, queueLabel, CommandQueue, historyMatches } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 test('a new console takes the lowest free number', () => {
     assert.equal(consoleName([]), 'Python console');
@@ -74,4 +74,12 @@ test('the queue tells when its line-up changes', async () => {
     const queue = new CommandQueue(() => Promise.resolve(1), () => seen.push(queue.waiting.length + (queue.busy ? 1 : 0)));
     await queue.add({ code: 'x' });
     assert.ok(seen.length >= 2 && seen.at(-1) === 0, seen.join(','));
+});
+
+test('the history list (Ctrl+Alt+E): the newest first, each once, filtered in any case', () => {
+    const history = ['x = 1', 'print(x)', 'def f():\n    return X', 'x = 1', '  '];
+    assert.deepEqual(historyMatches(history), ['x = 1', 'def f():\n    return X', 'print(x)']);
+    assert.deepEqual(historyMatches(history, ' X '), ['x = 1', 'def f():\n    return X', 'print(x)']);
+    assert.deepEqual(historyMatches(history, 'print'), ['print(x)']);
+    assert.deepEqual(historyMatches([], 'a'), []);
 });

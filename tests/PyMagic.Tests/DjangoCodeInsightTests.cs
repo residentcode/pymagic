@@ -129,6 +129,37 @@ public class DjangoCodeInsightTests
     }
 
     [Fact]
+    public void TheOtherUsesOfTheFunctionFollow()
+    {
+        // the urls with an app_name, a test that calls the view, reverse() and redirect() by the function, another view that uses it
+        string urls = "from django.urls import path\nfrom shop import views\n\napp_name = \"shop\"\nurlpatterns = [\n    path(\"\", views.index, name=\"index\"),\n]\n";
+        string tests = "from django.urls import reverse\nfrom shop import views\nfrom shop.views import index\nfrom shop.views import index as front\n\n\n" +
+            "def test_index(rf):\n    assert views.index(rf.get(\"/\")).status_code == 200\n    assert index(rf.get(\"/\"), page=2)\n    assert front(rf.get(\"/\"))\n    assert reverse(views.index) == \"/\"\n";
+        string views = "from django.shortcuts import render, redirect\n\n\ndef in|dex(request):\n    return render(request, \"shop/index.html\")\n\n\ndef old(request):\n    return redirect(index)\n";
+        var (svc, pos) = Project(Views, views, (Urls, urls), ("shop/tests.py", tests));
+        var action = svc.CodeActions(Root + Views, new Range(pos, pos)).Single(a => a.Title.StartsWith("Convert to class-based view"));
+        var texts = new Dictionary<string, string> { ["views.py"] = views.Replace("|", ""), ["urls.py"] = urls, ["tests.py"] = tests };
+        var r = new Dictionary<string, string>();
+        foreach (var (uri, edits) in action.Edit!.Changes)
+        {
+            string key = texts.Keys.Single(k => uri.EndsWith("/" + k));
+            string text = texts[key];
+            var lines = new LineMap(text);
+            foreach (var e in edits.OrderByDescending(e => lines.OffsetOf(e.Range.Start)))
+                text = text[..lines.OffsetOf(e.Range.Start)] + e.NewText + text[lines.OffsetOf(e.Range.End)..];
+            r[key] = text;
+        }
+        Assert.Contains("path(\"\", views.IndexView.as_view(), name=\"index\")", r["urls.py"]);
+        Assert.Contains("assert views.IndexView.as_view()(rf.get(\"/\")).status_code == 200\n", r["tests.py"]);
+        Assert.Contains("assert IndexView.as_view()(rf.get(\"/\"), page=2)\n", r["tests.py"]);
+        Assert.Contains("from shop.views import IndexView\nfrom shop.views import IndexView as front\n", r["tests.py"]);
+        Assert.Contains("assert front.as_view()(rf.get(\"/\"))\n", r["tests.py"]);
+        Assert.Contains("assert reverse(\"shop:index\") == \"/\"\n", r["tests.py"]);
+        Assert.Contains("class IndexView(TemplateView):", r["views.py"]);
+        Assert.Contains("    return redirect(\"shop:index\")\n", r["views.py"]);
+    }
+
+    [Fact]
     public void AFunctionThatReadsTheMethodOtherwiseIsNotOffered()
     {
         string views = "from django.http import HttpResponse\n\n\ndef in|dex(request):\n    x = 1\n    if request.method == \"PUT\":\n        x = 2\n    return HttpResponse(x)\n";

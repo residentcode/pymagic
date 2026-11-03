@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -219,7 +220,8 @@ public sealed class JupyterKernel : INotebookKernel
 
     /// <summary>
     /// The Python that runs a cell under the debugger of the IDE on a Jupyter server: the debugger (pm_debug.py) and the runner (pm_jdebug.py) are put in the kernel as modules
-    /// once, and the cell, with where to connect back to, goes to the runner as text. <paramref name="debug"/> is what the page sends: { host, port, token, file }.
+    /// once, and the cell, with where to connect back to, goes to the runner as text. <paramref name="debug"/> is what the page sends: { host, port, token, file, via? };
+    /// <c>via: "kernel"</c> (a server on another computer) has the debugger talk over the kernel's own channels (see <see cref="DebugRelay"/>).
     /// </summary>
     public static string DebugCode(string code, JsonNode debug)
     {
@@ -234,17 +236,142 @@ public sealed class JupyterKernel : INotebookKernel
             + "        _pm_mod.__file__ = _pm_name + '.py'\n"
             + "        _pm_sys.modules[_pm_name] = _pm_mod\n"
             + "        exec(compile(_pm_b64.b64decode(_pm_src).decode('utf-8'), _pm_name + '.py', 'exec'), _pm_mod.__dict__)\n"
-            + $"_pm_sys.modules['pm_jdebug'].run_debugged({Lit(code)}, {Lit(file)}, {Lit(host)}, {port}, {Lit(token)}, globals(), get_ipython())\n";
+            + $"_pm_sys.modules['pm_jdebug'].run_debugged({Lit(code)}, {Lit(file)}, {Lit(host)}, {port}, {Lit(token)}, globals(), get_ipython(){(ViaKernel(debug) ? ", channel=True" : "")})\n";
     }
+
+    static bool ViaKernel(JsonNode? debug) => debug?["via"]?.GetValue<string>() == "kernel";
 
     public void Execute(string id, string code, JsonNode? debug = null)
     {
+        bool via = ViaKernel(debug);
         var msg = Message("execute_request", new JsonObject
         {
-            ["code"] = debug == null ? code : DebugCode(code, debug), ["silent"] = false, ["store_history"] = true, ["user_expressions"] = new JsonObject(), ["allow_stdin"] = false, ["stop_on_error"] = true,
+            // the debugger over the kernel's channels takes what the IDE sends as answers to input requests
+            ["code"] = debug == null ? code : DebugCode(code, debug), ["silent"] = false, ["store_history"] = true, ["user_expressions"] = new JsonObject(), ["allow_stdin"] = via, ["stop_on_error"] = true,
         });
-        _pending[msg["header"]!["msg_id"]!.GetValue<string>()] = new Pending(id);
+        string msgId = msg["header"]!["msg_id"]!.GetValue<string>();
+        _pending[msgId] = new Pending(id);
+        if (via)
+        {
+            _relay?.Dispose();
+            _relay = new DebugRelay(this, msgId, debug!["host"]?.GetValue<string>() ?? "127.0.0.1", debug["port"] is JsonValue p && p.TryGetValue<int>(out var n) ? n : 0);
+        }
         _outgoing.Writer.TryWrite(msg.ToJsonString());
+    }
+
+    // ------------------------------------------------------------ the debugger over the kernel's own channels
+
+    /// <summary>The type of the display data the debugger in the kernel sends its messages as (pm_jdebug.py's MIME).</summary>
+    public const string DebugMime = "application/vnd.pymagic.debug+json";
+    /// <summary>The prompt of the input requests by which the debugger in the kernel asks for what the IDE sends (pm_jdebug.py's PROMPT).</summary>
+    public const string DebugPrompt = "\u0001pymagic-debug";
+
+    DebugRelay? _relay;
+
+    /// <summary>
+    /// Debug Cell on a Jupyter server on another computer: the kernel there cannot reach the IDE's debug server, so this end connects to it (it listens
+    /// on this computer) and carries the debugger's protocol over the kernel's channels: the lines the debugger sends come as display data of
+    /// <see cref="DebugMime"/> on IOPub (taken out of the cell's output) and go to the debug server; the lines the debug server sends are the answers
+    /// (<c>input_reply</c>) to the input requests the debugger's reader thread keeps asking (each waits until there is something to send). The debug
+    /// server sees an ordinary program connecting. An empty message from the kernel, or the end of the cell, ends it: the connection is closed and a
+    /// question still waiting is answered with nothing, which the debugger takes as the IDE gone.
+    /// </summary>
+    sealed class DebugRelay : IDisposable
+    {
+        readonly JupyterKernel _kernel;
+        public readonly string ExecuteId;
+        readonly TcpClient _tcp = new();
+        readonly Task _connected;
+        readonly object _gate = new();
+        readonly Queue<string> _lines = new();          // from the debug server, not sent yet
+        readonly Queue<JsonObject> _questions = new();  // input requests of the debugger, not answered yet
+        bool _ended;
+
+        public DebugRelay(JupyterKernel kernel, string executeId, string host, int port)
+        {
+            _kernel = kernel;
+            ExecuteId = executeId;
+            _connected = Task.Run(async () =>
+            {
+                try
+                {
+                    await _tcp.ConnectAsync(host, port);
+                    _ = Task.Run(ReadLoop);
+                }
+                catch (SocketException e) { _kernel.Fail($"Debug Cell: the debugger of PyMagic could not be reached at {host}:{port}: {e.Message}"); End(); }
+            });
+        }
+
+        async Task ReadLoop()
+        {
+            try
+            {
+                using var reader = new StreamReader(_tcp.GetStream(), new UTF8Encoding(false));
+                string? line;
+                while ((line = await reader.ReadLineAsync()) != null)
+                {
+                    lock (_gate) _lines.Enqueue(line);
+                    Pump();
+                }
+            }
+            catch (Exception e) when (e is IOException or ObjectDisposedException or InvalidOperationException) { }
+            End();
+        }
+
+        /// <summary>What the debugger sent: on to the debug server; an empty message ends the relay.</summary>
+        public void FromKernel(string text)
+        {
+            if (text.Length == 0) { End(); return; }
+            try
+            {
+                _connected.Wait(20000);
+                if (!_tcp.Connected) return;
+                var bytes = Encoding.UTF8.GetBytes(text.EndsWith('\n') ? text : text + "\n");
+                lock (_tcp) { _tcp.GetStream().Write(bytes); _tcp.GetStream().Flush(); }
+            }
+            catch (Exception e) when (e is IOException or ObjectDisposedException or InvalidOperationException or AggregateException) { End(); }
+        }
+
+        /// <summary>An input request of the debugger: answered with what the debug server sent, as soon as there is some.</summary>
+        public void Question(JsonObject header)
+        {
+            lock (_gate) _questions.Enqueue(header);
+            Pump();
+        }
+
+        void Pump()
+        {
+            var answers = new List<(JsonObject Header, string Value)>();
+            lock (_gate)
+            {
+                while (_questions.Count > 0 && (_lines.Count > 0 || _ended))
+                {
+                    // all the lines that are there go in one answer (the debugger splits them)
+                    string value = string.Join("\n", _lines);
+                    _lines.Clear();
+                    answers.Add((_questions.Dequeue(), value));
+                }
+            }
+            foreach (var (header, value) in answers) _kernel.Answer(header, value);
+        }
+
+        void End()
+        {
+            lock (_gate) { if (_ended) return; _ended = true; }
+            try { _tcp.Dispose(); } catch (Exception e) when (e is IOException or SocketException) { }
+            Pump();
+        }
+
+        public void Dispose() => End();
+    }
+
+    /// <summary>The answer to an input request (<c>input_reply</c> on the stdin channel).</summary>
+    void Answer(JsonObject request, string value)
+    {
+        var reply = Message("input_reply", new JsonObject { ["value"] = value });
+        reply["parent_header"] = request.DeepClone();
+        reply["channel"] = "stdin";
+        _outgoing.Writer.TryWrite(reply.ToJsonString());
     }
 
     public void Inspect(string id, JsonNode? path) =>
@@ -337,6 +464,18 @@ public sealed class JupyterKernel : INotebookKernel
             _emit(new JsonObject { ["type"] = "ready", ["python"] = version ?? "" });
             return;
         }
+        // the debugger over the kernel's channels: its messages are not output of the cell, its questions not the cell's
+        if (type == "display_data" && content["data"]?[DebugMime] is JsonValue debugText)
+        {
+            _relay?.FromKernel(debugText.GetValue<string>());
+            return;
+        }
+        if (type == "input_request")
+        {
+            if (content["prompt"]?.GetValue<string>() == DebugPrompt && _relay != null && msg["header"] is JsonObject header) _relay.Question((JsonObject)header.DeepClone());
+            else if (msg["header"] is JsonObject other) Answer(other, "");   // input() of a cell: this view has no way to type an answer
+            return;
+        }
         if (!_pending.TryGetValue(parent, out var p)) return;
         if (p.Answer != null)
         {
@@ -370,6 +509,7 @@ public sealed class JupyterKernel : INotebookKernel
         // the cell is done when the reply and the idle state have both come: output can still arrive after the reply
         if (p.Idle && p.Replied && _pending.TryRemove(parent, out _))
         {
+            if (_relay is { } relay && relay.ExecuteId == parent) { relay.Dispose(); _relay = null; }
             _emit(new JsonObject { ["type"] = "done", ["id"] = p.Id, ["status"] = p.Status, ["execution_count"] = p.Count });
             AskVariables();
         }
@@ -379,6 +519,7 @@ public sealed class JupyterKernel : INotebookKernel
     {
         if (_disposed) return;
         _disposed = true;
+        _relay?.Dispose();
         _cts.Cancel();
         _outgoing.Writer.TryComplete();
         var ws = _ws;

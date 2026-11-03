@@ -16,7 +16,8 @@ namespace PyMagic.Server;
 /// of the service's container says; else /workspace). The helper scripts of the debugger, test runner and notebook kernel are copied
 /// into that container with <c>docker cp</c>.</item>
 /// </list>
-/// Not tried against a real Docker engine yet.
+/// The libraries of the service are copied out for the editor (<see cref="Mirror"/>): from the running container in the exec form, from
+/// a container made of the service's image (and removed again) in the run form.
 /// </summary>
 public sealed class ComposeTarget : ExecutionTarget
 {
@@ -46,9 +47,13 @@ public sealed class ComposeTarget : ExecutionTarget
     // /workspace and /pymagic/<n> bookkeeping is the Docker target's
     readonly DockerTarget _paths;
 
+    readonly string? _mirrors;
+
     /// <param name="docker">Runs the docker program in the project folder and gives its output (null when it fails); for tests.</param>
-    public ComposeTarget(string service, string? file = null, bool exec = false, string? workDirInService = null, Func<string[], string?>? docker = null)
+    /// <param name="mirrors">The folder the libraries are copied to (for tests); else PyMagic's mirrors folder in LOCALAPPDATA.</param>
+    public ComposeTarget(string service, string? file = null, bool exec = false, string? workDirInService = null, Func<string[], string?>? docker = null, string? mirrors = null)
     {
+        _mirrors = mirrors;
         Service = service;
         File = string.IsNullOrWhiteSpace(file) ? null : file;
         Exec = exec;
@@ -166,10 +171,76 @@ public sealed class ComposeTarget : ExecutionTarget
         return _paths.ToHost(targetPath);
     }
 
-    /// <summary>The libraries inside the service's image are not copied out (no container of it is created here), so the editor does not read them.</summary>
-    public override string? Readable(string targetPath) => null;
+    // ------------------------------------------------------------ libraries of the service
 
-    public override IReadOnlyList<string> Mirror(IEnumerable<string> targetFolders) => targetFolders.Where(f => f.StartsWith('/')).Distinct().ToList();
+    /// <summary>One folder per service of a compose file of a project (a service of another project, or of another file, is another one).</summary>
+    string MirrorRoot => Path.Combine(_mirrors ?? Path.Combine(Environment.GetEnvironmentVariable("LOCALAPPDATA") ?? Path.GetTempPath(), "PyMagic", "mirrors"),
+        "k" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+            $"{Path.GetFullPath(_paths.Project ?? DockerTarget.DefaultProject ?? ".")}|{File}|{Service}|{Exec}")))[..11]);
+
+    string MirrorPathOf(string targetPath) => Path.Combine(MirrorRoot, targetPath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+
+    /// <summary>The project's own files are read where they are; the libraries of the service from their copy (see <see cref="Mirror"/>).</summary>
+    public override string? Readable(string targetPath)
+    {
+        if (!targetPath.StartsWith('/')) return null;
+        string host = ToHost(targetPath);
+        return host != targetPath ? host : MirrorPathOf(targetPath);
+    }
+
+    /// <summary>
+    /// Copies the service's library folders out with <c>docker cp</c> (once; a copy that exists is kept), so the editor can read the packages
+    /// the code imports: from the service's running container in the exec form; in the run form from a container made (not started) of the
+    /// service's image, which is removed again. Returns the folders that could not be copied.
+    /// </summary>
+    public override IReadOnlyList<string> Mirror(IEnumerable<string> targetFolders)
+    {
+        // the project's own folders are read in place
+        var wanted = targetFolders.Where(f => f.StartsWith('/') && ToHost(f) == f && !Directory.Exists(MirrorPathOf(f))).Distinct().ToList();
+        if (wanted.Count == 0) return wanted;
+        string? made = null, from;
+        if (Exec) from = ContainerId();
+        else
+        {
+            from = ImageOf() is { } image ? (_docker(new[] { "create", image }) ?? "").Trim() : null;
+            if (from is { Length: 0 }) from = null;
+            made = from;
+        }
+        if (from == null) return wanted;
+        var failed = new List<string>();
+        try
+        {
+            foreach (var folder in wanted)
+            {
+                string dest = MirrorPathOf(folder);
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                if (_docker(new[] { "cp", $"{from}:{folder}", dest }) == null) failed.Add(folder);
+            }
+        }
+        finally { if (made != null) _docker(new[] { "rm", made }); }
+        return failed;
+    }
+
+    /// <summary>
+    /// The image of the service, from <c>docker compose config --format json</c>: its <c>image</c>, else (a service that is only built) the name compose
+    /// gives what it builds, "project-service". Null when compose does not answer.
+    /// </summary>
+    string? ImageOf()
+    {
+        var args = new List<string> { "compose" };
+        if (File != null) { args.Add("-f"); args.Add(File); }
+        args.AddRange(new[] { "config", "--format", "json" });
+        if (_docker(args.ToArray()) is not { Length: > 0 } json) return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("services", out var services) || !services.TryGetProperty(Service, out var service)) return null;
+            if (service.TryGetProperty("image", out var image) && image.GetString() is { Length: > 0 } named) return named;
+            return root.TryGetProperty("name", out var project) && project.GetString() is { Length: > 0 } p ? $"{p}-{Service}" : null;
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
 
     public override bool Exists(string targetPath) => System.IO.File.Exists(ToHost(targetPath));
 

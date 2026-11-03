@@ -168,7 +168,9 @@ public class DeploymentTests
         public int Port => ((IPEndPoint)_control.LocalEndpoint).Port;
         readonly System.Security.Cryptography.X509Certificates.X509Certificate2? _cert;
         public int TlsSessions, ProtectedData, StoredFiles;
-        public MiniFtp(string root, System.Security.Cryptography.X509Certificates.X509Certificate2? cert = null) { _root = root; _cert = cert; _control.Start(); _thread = new Thread(Accept) { IsBackground = true }; _thread.Start(); }
+        readonly bool _implicit;
+        /// <param name="implicitTls">The control connection is TLS from its first byte (implicit FTPS), not after AUTH TLS.</param>
+        public MiniFtp(string root, System.Security.Cryptography.X509Certificates.X509Certificate2? cert = null, bool implicitTls = false) { _root = root; _cert = cert; _implicit = implicitTls; _control.Start(); _thread = new Thread(Accept) { IsBackground = true }; _thread.Start(); }
         void Accept()
         {
             while (!_stop)
@@ -183,6 +185,7 @@ public class DeploymentTests
         {
             using var _ = client;
             Stream stream = client.GetStream();
+            if (_implicit) { var tls = new System.Net.Security.SslStream(stream, false); tls.AuthenticateAsServer(_cert!); stream = tls; Interlocked.Increment(ref TlsSessions); }
             var reader = new StreamReader(stream, Encoding.UTF8);
             var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\r\n" };
             string cwd = "/";
@@ -352,37 +355,78 @@ public class DeploymentTests
     public void FtpsEncryptsTheControlAndTheDataConnectionAndChecksTheCertificate()
     {
         string share = Temp("ftps");
-        var saved = ServicePointManager.ServerCertificateValidationCallback;
         try
         {
             using var cert = SelfSigned();
             using var ftp = new MiniFtp(share, cert);
-            // a certificate this computer does not trust is refused (nothing is sent)
-            ServicePointManager.ServerCertificateValidationCallback = null;
-            using (var strict = new FtpRemote("127.0.0.1", ftp.Port, "anonymous", "", tls: true))
-                Assert.Contains("certificate", Msg(() => strict.List("")));
+            // a certificate this computer does not trust is refused (nothing is sent), and its fingerprint is told
+            string refused = Msg(() => new FtpsRemote("127.0.0.1", ftp.Port, "anonymous", "", false, "", null).Dispose());
+            Assert.Contains("not one this computer trusts", refused);
+            Assert.Contains(FtpsRemote.Fingerprint(cert), refused);
             Assert.Equal(0, ftp.StoredFiles);
-            // once it is trusted (the test says so for this one certificate), everything works over TLS
-            ServicePointManager.ServerCertificateValidationCallback = (_, c, _, _) => c is { } && c.GetCertHashString() == cert.GetCertHashString();
+            // once it is trusted (its fingerprint is the server's), everything works over TLS
             string project = Temp("ftpsproj");
             try
             {
                 Put(project, "pkg/mod.py", "x = 2\n");
-                var server = new DeployServer("ftps-x", "x", "ftps", "127.0.0.1", ftp.Port, "anonymous", "/site", "", false, new() { new DeployMapping("", "") }, new(), "");
+                var server = new DeployServer("ftps-x", "x", "ftps", "127.0.0.1", ftp.Port, "anonymous", "/site", "", false, new() { new DeployMapping("", "") }, new(), FtpsRemote.Fingerprint(cert));
                 var up = Deployment.Upload(project, server, new[] { "pkg" }); Assert.True(up.All(r => r.Ok), "upload " + string.Join(";", up.Select(r => r.Error)));
                 Assert.Equal("x = 2\n", File.ReadAllText(Path.Combine(share, "site", "pkg", "mod.py")));
                 Assert.True(Deployment.Compare(project, server, "pkg/mod.py").Same);
                 File.Delete(Path.Combine(project, "pkg", "mod.py"));
                 Assert.True(Deployment.Download(project, server, new[] { "pkg/mod.py" }).All(r => r.Ok));
                 Assert.Equal("x = 2\n", File.ReadAllText(Path.Combine(project, "pkg", "mod.py")));
+                using (var remote = Deployment.Open(project, server))
+                {
+                    Assert.Equal("mod.py", string.Join(",", remote.List("site/pkg").Select(e => e.Name)));
+                    Assert.True(remote.Stat("site/pkg") is { IsDir: true } && remote.Stat("site/nope") == null);
+                    Assert.Equal(0, remote.List("missing").Count);
+                }
                 Assert.True(Deployment.DeleteRemote(project, server, "pkg/mod.py").Ok);
                 Assert.True(!File.Exists(Path.Combine(share, "site", "pkg", "mod.py")));
+                // a folder that has files in it goes with them
+                Put(share, "site/full/a.txt", "a"); Put(share, "site/full/sub/b.txt", "b");
+                Assert.True(Deployment.DeleteRemote(project, server, "full").Ok);
+                Assert.True(!Directory.Exists(Path.Combine(share, "site", "full")));
                 // the server was asked for TLS on the control connection and for protected data connections
                 Assert.True(ftp.TlsSessions >= 1 && ftp.ProtectedData >= 1, $"tls {ftp.TlsSessions}, data {ftp.ProtectedData}");
             }
             finally { Directory.Delete(project, true); }
         }
-        finally { ServicePointManager.ServerCertificateValidationCallback = saved; Directory.Delete(share, true); }
+        finally { Directory.Delete(share, true); }
+    }
+
+    [Fact]
+    public void ImplicitFtpsAndASelfSignedCertificateTrustedOnceAndRemembered()
+    {
+        string share = Temp("ftpsi"), project = Temp("ftpsiproj");
+        try
+        {
+            using var cert = SelfSigned();
+            using var ftp = new MiniFtp(share, cert, implicitTls: true);
+            // the form: implicit TLS is on port 990 unless another is named
+            var parsed = DeployStore.Parse(new JsonObject { ["type"] = "ftps", ["host"] = "ftp.example.org", ["implicitTls"] = true });
+            Assert.True(parsed.ImplicitTls);
+            Assert.Equal(990, parsed.Port);
+            Assert.True(!DeployStore.Parse(new JsonObject { ["type"] = "ftp", ["host"] = "h", ["implicitTls"] = true }).ImplicitTls, "only FTPS has it");
+            var server = new DeployServer("ftps-i", "x", "ftps", "127.0.0.1", ftp.Port, "anonymous", "", "", false, new() { new DeployMapping("", "") }, new(), "", false, ImplicitTls: true);
+            DeployStore.Save(project, server, "");
+            // not trusted yet: refused; trusted by the user: taken, and its fingerprint is kept with the server
+            Assert.Contains("not one this computer trusts", Msg(() => Deployment.Open(project, server).Dispose()));
+            using (var remote = Deployment.Open(project, server, trustCertificate: true)) remote.Write("hello.txt", Encoding.UTF8.GetBytes("hi"));
+            Assert.Equal("hi", File.ReadAllText(Path.Combine(share, "hello.txt")));
+            var kept = DeployStore.Find(project, server.Id)!;
+            Assert.Equal(FtpsRemote.Fingerprint(cert), kept.HostKey);
+            Assert.True(kept.ImplicitTls, "kept in deployment.json");
+            Put(project, "a.py", "a = 1\n");
+            Assert.True(Deployment.Upload(project, kept, new[] { "a.py" }).All(r => r.Ok));
+            Assert.Equal("a = 1\n", File.ReadAllText(Path.Combine(share, "a.py")));
+            // the server shows another certificate: the remembered one is not it, and it is refused
+            using var other = SelfSigned();
+            using var ftp2 = new MiniFtp(share, other, implicitTls: true);
+            Assert.Contains("not the one trusted before", Msg(() => Deployment.Open(project, kept with { Port = ftp2.Port }).Dispose()));
+        }
+        finally { Directory.Delete(project, true); Directory.Delete(share, true); }
     }
 
     [Fact]

@@ -249,8 +249,12 @@ export function setupDeployment({ editor, currentFile, askText, reloadFromDisk, 
         field('uploadOnSave', 'On save', onSave, 'Upload a file to this server whenever it is saved');
         const delOnDelete = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!existing?.deleteOnDelete });
         field('deleteOnDelete', 'Delete on server', delOnDelete, 'Off by default. When a file is deleted in the project, delete its copy on this server too (files only, never a folder of the server)');
+        const implicitTls = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!existing?.implicitTls });
+        field('implicitTls', 'Implicit TLS', implicitTls, 'FTPS only: the connection is TLS from its first byte (usually port 990), not after AUTH TLS on port 21');
+        const trust = Object.assign(document.createElement('input'), { type: 'checkbox' });
+        field('trustCertificate', 'Trust its certificate', trust, 'FTPS only: take the certificate the server shows now even when this computer does not trust it (a self-signed one). Its fingerprint is remembered, and a different one is refused later');
         const forget = Object.assign(document.createElement('input'), { type: 'checkbox' });
-        if (existing?.hostKey) field('forgetKey', 'New host key', forget, 'Forget the remembered key of the server (after it was set up again)');
+        if (existing?.hostKey && existing.type === 'sftp') field('forgetKey', 'New host key', forget, 'Forget the remembered key of the server (after it was set up again)');
         const error = Object.assign(document.createElement('div'), { className: 'db-form-error' });
         const row = Object.assign(document.createElement('div'), { className: 'ask-buttons' });
         const ok = Object.assign(document.createElement('button'), { className: 'primary', textContent: 'Test and save' });
@@ -266,10 +270,15 @@ export function setupDeployment({ editor, currentFile, askText, reloadFromDisk, 
             f.user.closest('label').hidden = t === 'folder';
             f.password.closest('label').hidden = t === 'folder';
             f.keyFile.closest('label').hidden = t !== 'sftp';
-            f.passphrase.closest('label').hidden = t !== 'sftp';            f.root.closest('label').firstChild.textContent = t === 'folder' ? 'Folder' : 'Remote folder';
-            if (!existing) f.port.value = String(defaultPort(t));
+            f.passphrase.closest('label').hidden = t !== 'sftp';
+            f.implicitTls.closest('label').hidden = t !== 'ftps';
+            f.trustCertificate.closest('label').hidden = t !== 'ftps';
+            f.root.closest('label').firstChild.textContent = t === 'folder' ? 'Folder' : 'Remote folder';
+            if (!existing) f.port.value = String(defaultPort(t, implicitTls.checked));
         };
         type.onchange = show;
+        // the port follows implicit TLS while it is still a default one
+        implicitTls.onchange = () => { if (f.port.value === String(defaultPort('ftps', !implicitTls.checked))) f.port.value = String(defaultPort('ftps', implicitTls.checked)); };
         show();
         const done = () => shade.remove();
         cancel.onclick = done;
@@ -280,6 +289,7 @@ export function setupDeployment({ editor, currentFile, askText, reloadFromDisk, 
             const body = {
                 id: existing?.id, type: type.value, name: f.name.value, host: f.host.value, port: f.port.value, user: f.user.value, root: f.root.value, keyFile: f.keyFile.value,
                 uploadOnSave: onSave.checked, mappings: parseMappings(maps.value), excluded: f.excluded.value.split(',').map((x) => x.trim()).filter(Boolean), forgetKey: forget.checked,
+                implicitTls: implicitTls.checked, trustCertificate: trust.checked,
                 deleteOnDelete: delOnDelete.checked,
             };
             if (f.password.value || !existing) body.password = f.password.value;

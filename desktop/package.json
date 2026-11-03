@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron .",
     "icon": "electron icon/make-icon.js",
+    "wizard": "electron icon/make-wizard.js",
     "e2e": "node --test e2e/page.e2e.mjs"
   },
   "devDependencies": {

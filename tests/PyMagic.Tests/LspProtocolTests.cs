@@ -125,4 +125,76 @@ public class LspProtocolTests
         server.Handle(Msg("{\"jsonrpc\":\"2.0\",\"id\":\"s9\",\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"" + Uri + "\"},\"position\":{\"line\":0,\"character\":0}}}"));
         Assert.Equal(-32800, sent.Last(m => m["id"]?.ToJsonString() == "\"s9\"")["error"]!["code"]!.GetValue<int>());
     }
+
+    // ------------------------------------------------------------ answers whose places were counted without the line map (UTF-8 clients)
+
+    static string Caps(bool utf8) => utf8 ? """{"general":{"positionEncodings":["utf-8","utf-16"]}}""" : "{}";
+
+    static JsonNode Answer(List<JsonNode> sent, int id) { lock (sent) return sent.Last(m => m["id"]?.GetValue<int>() == id)["result"]!; }
+
+    [Fact]
+    public void ASymbolOfAFileNobodyOpenedIsPlacedInTheClientsUnits()
+    {
+        // workspace/symbol for a file only the index knows: the index keeps UTF-16 columns, a UTF-8 client gets bytes
+        string root = Path.Combine(Path.GetTempPath(), "pm_lsp_ws_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "other.py"), "def café_tool():\n    pass\n");
+            foreach (bool utf8 in new[] { true, false })
+            {
+                var sent = new List<JsonNode>();
+                var service = new LanguageService();
+                var server = new PyMagic.Server.Server(service, m => { lock (sent) sent.Add(m); });
+                string rootUri = new System.Uri(root + Path.DirectorySeparatorChar).AbsoluteUri;
+                server.Handle(Msg("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":\"" + rootUri + "\",\"capabilities\":" + Caps(utf8) + "}}"));
+                var waited = System.Diagnostics.Stopwatch.StartNew();
+                while (service.Index is not { Ready: true } && waited.ElapsedMilliseconds < 20000) Thread.Sleep(50);
+                Assert.True(service.Index is { Ready: true }, "the index was not built");
+                server.Handle(Msg("""{"jsonrpc":"2.0","id":2,"method":"workspace/symbol","params":{"query":"café_tool"}}"""));
+                var range = Answer(sent, 2).AsArray().Single(s => s!["name"]!.GetValue<string>() == "café_tool")!["location"]!["range"]!;
+                Assert.Equal(4, range["start"]!["character"]!.GetValue<int>());
+                // café_tool is 9 characters, 10 bytes
+                Assert.Equal(utf8 ? 14 : 13, range["end"]!["character"]!.GetValue<int>());
+                Assert.True(!LineMap.Utf8.Value);
+            }
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void AParameterOfASignatureIsPlacedInTheClientsUnits()
+    {
+        // signatureHelp: a parameter's place in the label counts bytes for a UTF-8 client (LSP: as positions do)
+        foreach (bool utf8 in new[] { true, false })
+        {
+            var (server, sent) = Start(utf8);
+            server.Handle(Msg("""{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///c:/proj/main.py","languageId":"python","version":1,"text":"def f(naïve, b):\n    pass\nf(1, \n"}}}"""));
+            server.Handle(Msg("""{"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///c:/proj/main.py"},"position":{"line":2,"character":5}}}"""));
+            var signature = Answer(sent, 2)["signatures"]![0]!;
+            string label = signature["label"]!.GetValue<string>();
+            var b = signature["parameters"]![1]!["label"]!.AsArray().Select(x => x!.GetValue<int>()).ToArray();
+            int at = label.IndexOf(", b", StringComparison.Ordinal) + 2;
+            int expected = utf8 ? System.Text.Encoding.UTF8.GetByteCount(label[..at]) : at;
+            Assert.Equal(expected, b[0]);
+            Assert.Equal(expected + 1, b[1]);
+            Assert.True(!utf8 || expected == at + 1, label);
+        }
+    }
+
+    [Fact]
+    public void ASemanticTokensLengthIsInTheClientsUnits()
+    {
+        // the length of a token counts bytes for a UTF-8 client, as its column does
+        foreach (bool utf8 in new[] { true, false })
+        {
+            var (server, sent) = Start(utf8);
+            server.Handle(Msg("""{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///c:/proj/main.py","languageId":"python","version":1,"text":"def naïve():\n    pass\n"}}}"""));
+            server.Handle(Msg("""{"jsonrpc":"2.0","id":2,"method":"pymagic/semanticTokens","params":{"textDocument":{"uri":"file:///c:/proj/main.py"}}}"""));
+            var data = Answer(sent, 2)["data"]!.AsArray().Select(x => x!.GetValue<int>()).ToArray();
+            // the function's name: line 0, column 4, 5 characters or 6 bytes
+            int i = Enumerable.Range(0, data.Length / 5).Select(k => k * 5).First(k => data[k] == 0 && data[k + 1] == 4);
+            Assert.Equal(utf8 ? 6 : 5, data[i + 2]);
+        }
+    }
 }

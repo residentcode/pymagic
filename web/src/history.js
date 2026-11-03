@@ -5,11 +5,13 @@
 import { showTab } from './panel';
 import { ago, clock, interleave, selectionHistory, size } from './history-model.js';
 import { toast } from './toast';
+import { setUnsavedTexts, unsavedFiles } from './labels.js';
 import { languageFor } from './file-language';
 
 const $ = (id) => document.getElementById(id);
 
-export function setupHistory({ monaco, editor, currentFile, openFile, askText }) {
+export function setupHistory({ monaco, editor, currentFile, openFile, askText, unsavedTexts }) {
+    if (unsavedTexts) setUnsavedTexts(unsavedTexts);
     let mode = 'file';     // 'file' | 'folder' (a folder's history, '' for the project) | 'selection'
     let versions = [];
     let labels = [];
@@ -294,9 +296,10 @@ export function setupHistory({ monaco, editor, currentFile, openFile, askText })
     async function putLabelByHand() {
         const name = await askText('Put a label', '', 'A name for the project as it is now; Local History can go back to it');
         if (!name?.trim()) return;
-        const res = await fetch('/api/history/label', { method: 'POST', body: JSON.stringify({ name: name.trim(), auto: false }) }).catch(() => null);
+        const unsaved = unsavedFiles();
+        const res = await fetch('/api/history/label', { method: 'POST', body: JSON.stringify({ name: name.trim(), auto: false, unsaved }) }).catch(() => null);
         if (!res?.ok) { toast('The label could not be put.', true); return; }
-        toast(`Label '${name.trim()}' put.`);
+        toast(`Label '${name.trim()}' put${unsaved.length ? `, with the unsaved changes of ${unsaved.length === 1 ? unsaved[0].path : `${unsaved.length} files`}` : ''}.`);
         void refresh();
     }
 

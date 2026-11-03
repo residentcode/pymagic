@@ -129,6 +129,7 @@ class Debugger(bdb.Bdb):
         super().__init__()
         self.sock = sock
         self.root = os.path.normcase(os.path.abspath(root))
+        self.also_mine = []        # folders outside the project whose code is the person's too: a scratch file's
         self.just_my_code = just_my_code
         self.commands = queue.Queue()
         self.send_lock = threading.Lock()
@@ -412,7 +413,7 @@ class Debugger(bdb.Bdb):
         """Gives the frames of every thread of the program that `wanted` accepts the trace function, so that their next
         lines are seen; the debugger's own thread is left alone."""
         for ident, top in sys._current_frames().items():
-            if ident == self.reader_ident:
+            if ident == self.reader_ident or ident in self.free_idents:
                 continue
             frame = top
             while frame is not None:
@@ -579,7 +580,7 @@ class Debugger(bdb.Bdb):
         if not filename or filename.startswith("<"):
             return False
         path = os.path.normcase(os.path.abspath(filename))
-        if not path.startswith(self.root + os.sep):
+        if not path.startswith(self.root + os.sep) and not any(path.startswith(folder + os.sep) for folder in self.also_mine):
             return False
         lowered = path.replace("\\", "/")
         return "/site-packages/" not in lowered and "/.venv/" not in lowered and "/venv/" not in lowered
@@ -730,7 +731,7 @@ class Debugger(bdb.Bdb):
         names = {t.ident: t.name for t in threading.enumerate()}
         found = []
         for ident, top in sys._current_frames().items():
-            if ident in (threading.get_ident(), self.reader_ident):
+            if ident in (threading.get_ident(), self.reader_ident) or ident in self.free_idents:
                 continue
             stack = self.collect(top)
             k = 0
@@ -765,9 +766,10 @@ class Debugger(bdb.Bdb):
         return frames
 
     reader_ident = None   # the thread that reads the host's messages: never traced, never held
+    free_idents = frozenset()   # threads that carry the messages to the host (a Jupyter kernel's IOPub thread): never traced, never held either
 
     def trace_dispatch(self, frame, event, arg):
-        if threading.get_ident() == self.reader_ident:
+        if threading.get_ident() == self.reader_ident or threading.get_ident() in self.free_idents:
             return None   # settrace_all_threads (Attach) reaches the debugger's own reader thread too
         # "suspend all": while one thread is stopped, every other one waits at its next traced event (a call, a line)
         if not self.resumed.is_set() and threading.get_ident() != self.stopped_ident:
@@ -1308,14 +1310,17 @@ def attach(host, port, token, root):
             frame = frame.f_back
 
 
-def connect(host, port, token="", root=None):
+def connect(host, port, token="", root=None, sock=None):
     """Debug server: called by a program that was started elsewhere (another computer, a container, a shell of its own) to
     connect back to the IDE that listens at host:port. From the next line on the program is debugged like any other
     session: the IDE's breakpoints stop it, it can be stepped and inspected. The program keeps running when the IDE
     stops listening or hangs up. `root` is the program's own project folder (the files "just my code" means); default: the
-    current folder."""
-    sock = socket.create_connection((host, int(port)))
+    current folder. `sock` is another way to the IDE than a connection to host:port (something with sendall, makefile,
+    close and shutdown, like the channel of a Jupyter kernel in pm_jdebug.py)."""
+    if sock is None:
+        sock = socket.create_connection((host, int(port)))
     dbg = Debugger(sock, root or os.getcwd())
+    dbg.free_idents = frozenset(getattr(sock, "free_threads", lambda: ())())
     dbg.attached = True
     dbg.send({"type": "hello", "token": token})
     reader = threading.Thread(target=dbg.read_loop, daemon=True, name="pymagic-debugger")
@@ -1335,7 +1340,7 @@ def connect(host, port, token="", root=None):
         threading.settrace(dbg.trace_dispatch)
         sys.settrace(dbg.trace_dispatch)
     for ident, top in sys._current_frames().items():
-        if ident == reader.ident:
+        if ident == reader.ident or ident in dbg.free_idents:
             continue
         frame = top
         while frame is not None:
@@ -1359,6 +1364,11 @@ def main():
 
     sock = socket.create_connection((options.host, options.port))
     dbg = Debugger(sock, options.root, just_my_code=not options.all_code)
+    if options.script:
+        # a script kept outside the project (a scratch file) is stepped through like the project's code
+        folder = os.path.normcase(os.path.dirname(os.path.abspath(options.script)))
+        if not (folder + os.sep).startswith(dbg.root + os.sep):
+            dbg.also_mine.append(folder)
     dbg.send({"type": "hello", "token": options.token})
     reader = threading.Thread(target=dbg.read_loop, daemon=True, name="pymagic-debugger")
     reader.start()

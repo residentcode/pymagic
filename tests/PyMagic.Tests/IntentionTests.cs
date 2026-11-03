@@ -223,6 +223,49 @@ public class IntentionTests
     }
 
     [Fact]
+    public void APlainImportBecomesAFromImportOfTheNamesItIsUsedFor()
+    {
+        Assert.Equal("from os import path, getcwd\nprint(path.join(getcwd(), 'x'), path.sep)\n",
+            Do("Convert to 'from os import path, getcwd'", "import o|s\nprint(os.path.join(os.getcwd(), 'x'), os.path.sep)\n"));
+        // an alias: its uses are the alias's
+        Assert.Equal("from numpy import array, zeros\na = array([1])\nb = zeros(2)\n",
+            Do("Convert to 'from numpy import array, zeros'", "import numpy a|s np\na = np.array([1])\nb = np.zeros(2)\n"));
+        // the module used alone, an attribute assigned or deleted, or a name that is bound already: not offered
+        Assert.True(!Has("Convert to 'from os import", "import o|s\nprint(os)\nos.getcwd()\n"));
+        Assert.True(!Has("Convert to 'from os import", "import o|s\nos.sep = '/'\n"));
+        Assert.True(!Has("Convert to 'from os import", "import o|s\ndel os.environ\n"));
+        Assert.True(!Has("Convert to 'from os import", "import o|s\ndef f(path):\n    return os.path.join(path)\n"));
+        Assert.True(!Has("Convert to 'from os import", "import o|s\ngetcwd = 1\nos.getcwd()\n"));
+        Assert.True(!Has("Convert to 'from os import", "import o|s\n"));
+    }
+
+    [Fact]
+    public void AnFStringIsMadeFromAStringWithEscapes()
+    {
+        Assert.Equal("n = 1\nprint(f'a\\tb {n}\\n')\n", Do("Convert to an f-string", "n = 1\nprint('a\\tb %s\\n' %| n)\n"));
+        Assert.Equal("n = 1\nprint(f'it\\'s {n}')\n", Do("Convert to an f-string", "n = 1\nprint('it\\'s {}'.format|(n))\n"));
+        Assert.Equal("n = 1\nprint(f'\\\\{n}')\n", Do("Convert to an f-string", "n = 1\nprint('\\\\' +| str(n))\n"));
+        // \N{...} keeps its braces, which the f-string would take for a field: not offered
+        Assert.True(!Has("Convert to an f-string", "n = 1\nprint('\\N{BULLET} %s' %| n)\n"));
+    }
+
+    [Fact]
+    public void APlainImportOfAModuleOfTheSamePackageBecomesRelative()
+    {
+        using var p = new Project();
+        p.File_("pkg/__init__.py", "");
+        p.File_("pkg/util.py", "def helper():\n    pass\n");
+        p.File_("pkg/sub/__init__.py", "");
+        p.File_("pkg/sub/util.py", "def helper():\n    pass\n");
+        Assert.Equal("from . import util\nutil.helper()\n", p.Do("pkg/sub/mod.py", "import pkg.sub.ut|il\npkg.sub.util.helper()\n", "Convert to a relative import"));
+        Assert.Equal("from .. import util\nutil.helper()\n", p.Do("pkg/sub/mod.py", "import pkg.ut|il\npkg.util.helper()\n", "Convert to a relative import"));
+        // the package used for something else, another package, or a top-level file: not offered
+        Assert.True(!p.Has("pkg/sub/mod.py", "import pkg.ut|il\npkg.util.helper()\nprint(pkg)\n", "Convert to a relative import"));
+        Assert.True(!p.Has("pkg/sub/mod.py", "import os.pa|th\n", "Convert to a relative import"));
+        Assert.True(!p.Has("main.py", "import pkg.ut|il\n", "Convert to a relative import"));
+    }
+
+    [Fact]
     public void ARelativeImportAndAnAbsoluteOneConvertIntoEachOther()
     {
         using var p = new Project();

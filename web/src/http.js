@@ -1,10 +1,12 @@
 // The HTTP client: requests written in .http and .rest files (JetBrains' format), each with ▶ Run above it (or Ctrl+Enter),
 // {{variables}} from the environments (edited with Environments… in the HTTP tab, kept in http-client.env.json / http-client.private.env.json), the response in the HTTP tab with a history,
-// a pasted cURL command turned into a request, and a request copied as cURL. The engine sends them (/api/http).
+// a pasted cURL command turned into a request, and a request copied as cURL. The engine sends them (/api/http). A body's `< file` lines are sent
+// as the files' bytes (multipart bodies too), `>> file` keeps the response in a file, and the scripts of `< {% %}` (before the request) and
+// `> {% %}` (on its response) run in a Worker, with PyCharm's `client`, `request` and `response` objects; their tests show in the Tests part.
 import * as monaco from 'monaco-editor';
 import { showTab } from './panel';
 import { toast } from './toast';
-import { parseRequests, requestAt, fileVariables, environment, resolve, parseCurl, formatRequest, toCurl, prettyBody, environmentRows, environmentFiles, SHARED_LABEL } from './http-model';
+import { parseRequests, requestAt, fileVariables, environment, resolve, substitute, parseCurl, formatRequest, toCurl, prettyBody, environmentRows, environmentFiles, SHARED_LABEL, bodyParts, runScript } from './http-model';
 
 const $ = (id) => document.getElementById(id);
 const HISTORY = '.pymagic/http-history.json';
@@ -14,6 +16,10 @@ monaco.languages.register({ id: 'http', extensions: ['.http', '.rest'], aliases:
 monaco.languages.setMonarchTokensProvider('http', {
     tokenizer: {
         root: [
+            // a pre-request or response handler script is JavaScript, up to %}
+            [/^[<>]\s*\{%/, { token: 'delimiter', next: '@script', nextEmbedded: 'javascript' }],
+            [/^>>!?\s.*$/, 'string'],
+            [/^>\s+\S.*$/, 'string'],
             [/^###.*$/, 'comment.doc'],
             [/^\s*(#|\/\/).*$/, 'comment'],
             [/^@\w+/, 'variable', '@assign'],
@@ -25,6 +31,7 @@ monaco.languages.setMonarchTokensProvider('http', {
             [/"([^"\\]|\\.)*"/, 'string'],
             [/-?\d+(\.\d+)?/, 'number'],
         ],
+        script: [[/%\}/, { token: 'delimiter', next: '@pop', nextEmbedded: '@pop' }]],
         url: [[/\{\{[^}]*\}\}/, 'variable'], [/HTTP\/[\d.]+/, 'keyword'], [/\S/, 'string'], [/$/, '', '@pop']],
         assign: [[/\{\{[^}]*\}\}/, 'variable'], [/[^{]+$/, 'string', '@pop'], [/$/, '', '@pop']],
     },
@@ -165,6 +172,30 @@ export function setupHttpClient(deps) {
     }
     $('http-env-edit').onclick = () => void editEnvironments();
 
+    // ------------------------------------------------------------ the scripts: in a Worker, away from the page, without network
+    // client.global's variables: kept for the next requests while PyMagic runs (as PyCharm keeps them until it restarts)
+    const globals = {};
+    let sandboxUrl = null;
+    function sandboxed(input, ms = 5000) {
+        sandboxUrl ??= URL.createObjectURL(new Blob([
+            `const runScript = ${runScript.toString()};\n`
+            + "for (const k of ['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'importScripts', 'indexedDB', 'caches', 'BroadcastChannel', 'Worker', 'SharedWorker'])\n"
+            + '    try { Object.defineProperty(self, k, { value: undefined, writable: false, configurable: false }); } catch { /* not there */ }\n'
+            + 'onmessage = (e) => postMessage(runScript(e.data));\n'], { type: 'text/javascript' }));
+        return new Promise((done) => {
+            const failed = (error) => ({ globals: input.globals, variables: input.variables, tests: [], log: [], error });
+            let worker;
+            try { worker = new Worker(sandboxUrl); }
+            catch (e) { done(failed(`The script could not be started: ${e}`)); return; }
+            const timer = setTimeout(() => { worker.terminate(); done(failed(`The script ran for more than ${ms / 1000} seconds and was stopped.`)); }, ms);
+            worker.onmessage = (e) => { clearTimeout(timer); worker.terminate(); done(e.data); };
+            worker.onerror = (e) => { e.preventDefault?.(); clearTimeout(timer); worker.terminate(); done(failed(e.message || 'The script failed.')); };
+            worker.postMessage(input);
+        });
+    }
+    // a file a request names (`< body.json`, `> handler.js`, `>> out.json`): from the .http file's folder, or from the project's root with a leading /
+    const pathFrom = (rel, path) => { const p = path.replace(/^\.\//, ''); return p.startsWith('/') ? p.slice(1) : folderOf(rel) + p; };
+
     // ------------------------------------------------------------ sending
     async function send(model, line) {
         const rel = deps.relOf(model);
@@ -176,49 +207,129 @@ export function setupHttpClient(deps) {
             toast('No request here: write one as `GET https://example.com`.');
             return;
         }
+        await sendRequest(rel, text, request);
+    }
+    /** The requests of a file kept as a run configuration: the one named (or on that line), or all of them in turn; `env` the environment to use. */
+    async function runFile(rel, which, env) {
+        const text = await readText(rel);
+        if (text === null) {
+            toast(`There is no file ${rel} in the project.`);
+            return;
+        }
+        const requests = parseRequests(text);
+        const chosen = !which ? requests : requests.filter((r) => r.name === which || `${r.method} ${r.url}` === which || String(r.line) === String(which));
+        if (!chosen.length) {
+            toast(`${rel} has no request ${which}.`);
+            return;
+        }
+        for (const r of chosen)
+            if (!(await sendRequest(rel, text, r, env)))
+                break;
+    }
+    /** Sends one request of a file; false when it could not be sent (a variable without a value, a file that is not there). */
+    async function sendRequest(rel, text, request, env) {
         const { pub, priv } = await refreshEnvironments(rel);
-        const vars = { ...environment(pub, priv, envBox.value || null).vars, ...fileVariables(text) };
+        if (env !== undefined && [...envBox.options].some((o) => o.value === env))
+            envBox.value = env;
+        const envVars = environment(pub, priv, envBox.value || null).vars;
+        let vars = { ...envVars, ...globals, ...fileVariables(text) };
+        // the pre-request script: request.variables.set(...) gives this request's variables
+        let preResult = null;
+        if (request.pre) {
+            preResult = await sandboxed({ script: request.pre, request: { method: request.method, url: request.url, headers: request.headers, body: request.body }, globals, environment: envVars, variables: {} });
+            Object.assign(globals, preResult.globals);
+            for (const k of Object.keys(globals)) if (!(k in preResult.globals)) delete globals[k];
+            vars = { ...envVars, ...globals, ...fileVariables(text), ...preResult.variables };
+        }
         const { request: r, missing } = resolve(request, vars);
         if (missing.length) {
             toast(`No value for ${missing.map((m) => `{{${m}}}`).join(', ')}` + (envBox.value ? ` in the environment ${envBox.value}: Environments… in the HTTP tab adds it` : ': choose an environment in the HTTP tab, or add it with Environments…'));
             showTab('httpclient');
-            return;
+            return false;
         }
-        let body = r.body;
-        if (r.bodyFile) {
-            const path = r.bodyFile.replace(/^\.\//, '');
-            body = await readText(path.startsWith('/') ? path.slice(1) : folderOf(rel) + path);
-            if (body === null) {
-                toast(`The body file ${r.bodyFile} is not in the project.`);
-                return;
+        const type = r.headers.find(([k]) => k.toLowerCase() === 'content-type')?.[1];
+        // the body's parts: its text, the files of its `< path` lines as their bytes, `<@ path` files with their {{variables}} filled in
+        let parts = r.bodyFile ? [{ file: r.bodyFile, vars: false }] : bodyParts(r.body, type);
+        for (const [n, part] of parts.entries()) {
+            if (part.file === undefined)
+                continue;
+            const path = pathFrom(rel, part.file);
+            if (part.vars) {
+                const content = await readText(path);
+                if (content === null) {
+                    toast(`The file ${part.file} of the body is not in the project.`);
+                    return false;
+                }
+                parts[n] = { text: substitute(content, vars).text };
             }
+            else
+                parts[n] = { file: path };
         }
+        parts = parts.length ? parts : null;
+        const shownBody = r.bodyFile ? `< ${r.bodyFile}` : r.body;
         showTab('httpclient');
         head.className = '';
         head.textContent = `${r.method} ${r.url} …`;
         bodyView.textContent = '';
+        const saveTo = r.output ? { file: pathFrom(rel, substitute(r.output.file, vars).text), overwrite: r.output.overwrite } : undefined;
         const answer = await fetch('/api/http', {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ method: r.method, url: r.url, headers: Object.fromEntries(r.headers), body, fromFile: true }),
+            body: JSON.stringify({ method: r.method, url: r.url, headers: Object.fromEntries(r.headers), parts, saveTo, fromFile: true }),
         }).then(async (res) => (res.ok ? res.json() : { error: (await res.json().catch(() => null))?.error ?? `HTTP ${res.status}` })).catch((e) => ({ error: String(e) }));
+        // the response handlers, in order: `> {% script %}` and `> handler.js`
+        const tests = [...(preResult?.tests ?? [])];
+        const log = [...(preResult?.log ?? [])];
+        const scriptErrors = preResult?.error ? [`Pre-request script: ${preResult.error}`] : [];
+        if (!answer.error)
+            for (const h of r.handlers ?? []) {
+                const script = h.script ?? await readText(pathFrom(rel, h.file));
+                if (script === null) {
+                    scriptErrors.push(`The response handler ${h.file} is not in the project.`);
+                    continue;
+                }
+                const out = await sandboxed({
+                    script, globals, environment: envVars, variables: preResult?.variables ?? {},
+                    request: { method: r.method, url: r.url, headers: r.headers, body: shownBody ?? null },
+                    response: { status: answer.status, headers: answer.headers, body: answer.body ?? '' },
+                });
+                for (const k of Object.keys(globals)) if (!(k in out.globals)) delete globals[k];
+                Object.assign(globals, out.globals);
+                tests.push(...out.tests);
+                log.push(...out.log);
+                if (out.error)
+                    scriptErrors.push(`Response handler: ${out.error}`);
+            }
         const entry = {
             when: new Date().toISOString(), file: rel, line: request.line, name: request.name, method: r.method, url: r.url,
-            request: { headers: r.headers, body: body ?? null },
+            request: { headers: r.headers, body: shownBody ?? null },
             ...(answer.error ? { error: answer.error } : { status: answer.status, reason: answer.reason, ms: answer.ms, size: answer.size, headers: answer.headers, body: (answer.body ?? '').slice(0, 64 * 1024), truncated: answer.truncated || (answer.body ?? '').length > 64 * 1024 }),
+            ...(tests.length || log.length || scriptErrors.length ? { tests, log, scriptErrors } : {}),
+            ...(answer.savedTo ? { savedTo: answer.savedTo } : {}),
         };
         history = [entry, ...history].slice(0, KEEP);
         void fetch('/api/file?path=' + encodeURIComponent(HISTORY), { method: 'PUT', body: JSON.stringify(history) }).catch(() => { /* kept for this session */ });
+        if (entry.tests && (scriptErrors.length || tests.some((x) => !x.passed)))
+            part = 'tests';
         show(entry);
         paintHistory();
+        if (answer.savedTo)
+            toast(`Response saved to ${answer.savedTo}`);
+        return !answer.error;
     }
+    window.addEventListener('pymagic:runHttp', (e) => void runFile(e.detail.file, e.detail.request, e.detail.environment));
 
     // ------------------------------------------------------------ the HTTP tab
     const sizeText = (n) => (n >= 1024 * 1024 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`);
     function show(entry) {
         shown = entry;
         head.className = entry.error ? 'err' : entry.status >= 400 ? 'bad' : 'ok';
+        const passed = (entry.tests ?? []).filter((x) => x.passed).length;
+        const testText = entry.tests?.length || entry.scriptErrors?.length
+            ? ` · tests ${passed}/${entry.tests.length}${entry.scriptErrors?.length ? ', script failed' : ''}` : '';
         head.textContent = entry.error ? `${entry.method} ${entry.url}: ${entry.error}`
-            : `${entry.status} ${entry.reason ?? ''} · ${entry.ms} ms · ${sizeText(entry.size ?? 0)} · ${entry.method} ${entry.url}`;
+            : `${entry.status} ${entry.reason ?? ''} · ${entry.ms} ms · ${sizeText(entry.size ?? 0)}${testText} · ${entry.method} ${entry.url}`;
+        if (!entry.error && (entry.scriptErrors?.length || entry.tests?.some((x) => !x.passed)))
+            head.className = 'bad';
         paintPart();
         document.querySelectorAll('#http-history .http-item').forEach((el, i) => el.classList.toggle('sel', history[i] === entry));
     }
@@ -229,11 +340,25 @@ export function setupHttpClient(deps) {
             return;
         }
         const type = Object.entries(shown.headers ?? {}).find(([k]) => k.toLowerCase() === 'content-type')?.[1];
-        bodyView.textContent = part === 'headers' ? Object.entries(shown.headers ?? {}).map(([k, v]) => `${k}: ${v}`).join('\n')
+        bodyView.textContent = part === 'tests' ? testsText(shown)
+            : part === 'headers' ? Object.entries(shown.headers ?? {}).map(([k, v]) => `${k}: ${v}`).join('\n')
             : part === 'request' ? formatRequest({ method: shown.method, url: shown.url, headers: shown.request?.headers ?? [], body: shown.request?.body ?? null })
                 : prettyBody(shown.body, type) + (shown.truncated ? '\n… (cut: only the start of the body is kept)' : '');
     }
     document.querySelectorAll('#http-parts button').forEach((b) => { b.onclick = () => { part = b.dataset.part; paintPart(); }; });
+    /** What the scripts of a request said: each test passed or failed (with why), the script errors, client.log's lines, and where the response was saved. */
+    function testsText(entry) {
+        const lines = [];
+        for (const x of entry.tests ?? [])
+            lines.push(x.passed ? `✓ ${x.name}` : `✗ ${x.name}${x.error && x.error !== x.name ? `: ${x.error}` : ''}`);
+        for (const e of entry.scriptErrors ?? [])
+            lines.push(`✗ ${e}`);
+        if (entry.log?.length)
+            lines.push('', 'Log:', ...entry.log);
+        if (entry.savedTo)
+            lines.push('', `The response was saved to ${entry.savedTo}`);
+        return lines.length ? lines.join('\n') : 'No response handler: write one after the request, as\n> {%\n    client.test("Status 200", () => client.assert(response.status === 200));\n%}';
+    }
     function paintHistory() {
         list.textContent = '';
         for (const entry of history) {
@@ -313,6 +438,18 @@ export function setupHttpClient(deps) {
         ed.addAction({ id: 'pymagic.http.runAtCursor', label: 'Run HTTP request', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
             precondition: 'editorLangId == http', contextMenuGroupId: 'navigation', contextMenuOrder: 0,
             run: () => { const m = ed.getModel(), p = ed.getPosition(); if (m && p) void send(m, p.lineNumber); } });
+        // the request at the cursor kept as a run configuration, chosen, to run again with Run (Shift+F10) or in a compound
+        ed.addAction({ id: 'pymagic.http.saveRunConfig', label: 'Save HTTP request as run configuration', precondition: 'editorLangId == http',
+            contextMenuGroupId: 'navigation', contextMenuOrder: 1,
+            run: () => {
+                const m = ed.getModel(), p = ed.getPosition();
+                const rel = m && deps.relOf(m);
+                const r = rel && p ? requestAt(parseRequests(m.getValue()), p.lineNumber) : null;
+                if (!r) { toast('No request here.'); return; }
+                const request = r.name ?? `${r.method} ${r.url}`;
+                window.dispatchEvent(new CustomEvent('pymagic:addRunConfig', { detail: { kind: 'http', name: r.name ?? `${r.method} ${r.url.replace(/^https?:\/\//, '').slice(0, 40)}`, script: rel, request, environment: envBox.value } }));
+                toast(`Kept as a run configuration: Run sends ${request}`);
+            } });
         // a cURL command pasted into an .http file becomes a request
         ed.onDidPaste((e) => {
             const model = ed.getModel();
@@ -327,5 +464,5 @@ export function setupHttpClient(deps) {
     }
     monaco.editor.getEditors().forEach(addHttpActions);
     monaco.editor.onDidCreateEditor(addHttpActions);
-    return { send };
+    return { send, runFile };
 }

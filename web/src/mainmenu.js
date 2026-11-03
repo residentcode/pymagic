@@ -13,6 +13,32 @@ import { askChoice } from './ask.js';
 const $ = (id) => document.getElementById(id);
 const press = (id) => () => $(id).click();
 let findActionOpen = () => {};
+let menuItems = () => [];
+
+/** The main menu's commands tell a macro being recorded which they are (macros.js), by their place in the menu: "Edit > Copy". */
+function traced(list, path = []) {
+    return list.map((item) => {
+        // Find action is not recorded: the command chosen in it is
+        if (item === '-' || item.noMacro || (!item.submenu && !item.run)) return item;
+        if (item.submenu) return { ...item, submenu: traced(item.submenu, [...path, item.label]) };
+        const where = [...path, item.label].join(' > ');
+        return { ...item, run: () => { window.dispatchEvent(new CustomEvent('pymagic:menu-ran', { detail: { path: where } })); return item.run(); } };
+    });
+}
+
+/** Runs the command of the main menu at a place ("Edit > Copy"), as a macro plays it; false when the menu has no such command now, or it is dim. */
+export async function runMenuPath(path) {
+    let list = menuItems();
+    const parts = path.split(' > ');
+    for (let i = 0; i < parts.length; i++) {
+        const item = list.find((x) => x !== '-' && x.label === parts[i]);
+        if (!item || item.disabled) return false;
+        if (i === parts.length - 1) { if (!item.run) return false; await item.run(); return true; }
+        if (!item.submenu) return false;
+        list = item.submenu;
+    }
+    return false;
+}
 
 /** The Refactor submenu: of the main menu, and of the editor's own menu (Refactor…). */
 export function refactorMenu(editor, refactor) {
@@ -169,7 +195,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 { label: 'Check a regular expression…', run: () => nav.checkRegex() },
                 '-',
                 { label: 'Search everywhere…', key: 'Ctrl+P', run: () => void search.anythingPicker() },
-                { label: 'Find action…', key: 'Ctrl+Shift+A', run: () => setTimeout(() => findActionOpen()) },
+                { label: 'Find action…', key: 'Ctrl+Shift+A', noMacro: true, run: () => setTimeout(() => findActionOpen()) },
                 { label: 'Go to symbol…', key: 'Ctrl+Alt+O', run: () => void search.symbolPicker() },
                 { label: 'Go to line…', key: 'Ctrl+G', run: act('editor.action.gotoLine') },
                 '-',
@@ -327,7 +353,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
         return out;
     }
     function findAction() {
-        const all = leaves(items());
+        const all = leaves(traced(items()));
         const overlay = document.createElement('div');
         overlay.id = 'sigdialog';
         const box = document.createElement('div');
@@ -391,6 +417,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
     }
     defineCommand({ id: 'pymagic.window.findAction', label: 'Find action (any command)', group: 'Window', keys: ['Ctrl+Shift+A'], everywhere: true, run: () => findAction() });
     findActionOpen = findAction;
-    $('brand').querySelector('.mark').onclick = async () => { await loadRecent(); openMenu($('brand'), items()); };
+    menuItems = items;
+    $('brand').querySelector('.mark').onclick = async () => { await loadRecent(); openMenu($('brand'), traced(items())); };
     $('brand').querySelector('.mark').title = 'Main menu';
 }

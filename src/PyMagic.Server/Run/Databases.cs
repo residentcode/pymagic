@@ -11,7 +11,10 @@ namespace PyMagic.Server;
 /// <param name="Manage">The manage.py of that Django project, by its path from the root (`manage.py migrate` makes the database).</param>
 /// <param name="Server">"postgres" or "mysql" for a database server (its Path is <c>server:id</c>); null for an SQLite file.</param>
 /// <param name="Detail">What the panel shows beside a server: <c>host:port/database</c>.</param>
-public sealed record DataSource(string Path, string Name, long Size, bool Added, bool Exists = true, string? Django = null, string? Manage = null, string? Server = null, string? Detail = null);
+/// <param name="Offer">A PostgreSQL or MySQL database the Django settings name that no kept server is yet: the server form's fields
+/// (alias, host, port, user, password, database, name), filled in when it is clicked.</param>
+public sealed record DataSource(string Path, string Name, long Size, bool Added, bool Exists = true, string? Django = null, string? Manage = null, string? Server = null, string? Detail = null,
+    Dictionary<string, string>? Offer = null);
 
 /// <summary>
 /// The Database panel's engine side: the SQLite files of a project, and the requests on them (schema, a page of rows,
@@ -74,7 +77,16 @@ public static class Databases
             else if (!File.Exists(full)) found[rel] = new DataSource(rel, System.IO.Path.GetFileName(full), 0, false, Exists: false, Django: settings, Manage: manage);
         }
         var all = found.Values.OrderBy(s => s.Path, StringComparer.OrdinalIgnoreCase).ToList();
-        all.AddRange(DbServers.Load(root).Select(v => new DataSource(DbServers.PathOf(v.Id), v.Name, 0, true, Server: v.Kind, Detail: $"{v.Host}:{v.Port}/{v.Database}")));
+        var servers = DbServers.Load(root);
+        // the PostgreSQL and MySQL databases of the Django settings that are not connected yet, offered with their settings
+        foreach (var (settings, alias, kind, fields) in DjangoServers(root))
+        {
+            if (servers.Any(v => v.Kind == kind && string.Equals(v.Host, fields["host"], StringComparison.OrdinalIgnoreCase) && v.Port.ToString() == fields["port"] && v.Database == fields["database"]))
+                continue;
+            all.Add(new DataSource($"django:{settings}:{alias}", $"{alias} ({fields["database"]})", 0, false, Exists: false, Django: settings, Server: kind,
+                Detail: $"{fields["host"]}:{fields["port"]}/{fields["database"]}", Offer: new Dictionary<string, string>(fields) { ["alias"] = alias }));
+        }
+        all.AddRange(servers.Select(v => new DataSource(DbServers.PathOf(v.Id), v.Name, 0, true, Server: v.Kind, Detail: $"{v.Host}:{v.Port}/{v.Database}" + (v.SshHost.Length > 0 ? $" via SSH {v.SshHost}" : "") + (v.SslMode is "require" or "verify-ca" or "verify-full" ? " · TLS" : ""))));
         return all;
 
         void Add(string full, bool added)
@@ -126,6 +138,107 @@ public static class Databases
             }
         }
         return result;
+    }
+
+    static readonly System.Text.RegularExpressions.Regex DatabasesStart = new(@"^DATABASES\s*=\s*\{", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.Compiled);
+    static readonly System.Text.RegularExpressions.Regex AliasStart = new(@"['""](?<alias>[\w-]+)['""]\s*:\s*(?:dict\(|\{)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// The PostgreSQL and MySQL databases of the project's Django settings (each entry of <c>DATABASES</c> whose ENGINE is one of theirs, GeoDjango's
+    /// too): the server form's fields from its HOST, PORT, USER, PASSWORD and NAME. A value may be a literal, or read from the environment as
+    /// <c>os.environ.get("DB_HOST", "localhost")</c>, <c>os.getenv(...)</c>, <c>os.environ["DB_HOST"]</c>, django-environ's <c>env("DB_HOST", default=...)</c> or
+    /// decouple's <c>config(...)</c>: the variable's value here when it is set, else the default written.
+    /// </summary>
+    public static List<(string Settings, string Alias, string Kind, Dictionary<string, string> Fields)> DjangoServers(string root)
+    {
+        var result = new List<(string, string, string, Dictionary<string, string>)>();
+        var django = DjangoProject.Scan(root);
+        if (!django.Found || django.Manage == null) return result;
+        string baseDir = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(System.IO.Path.Combine(root, django.Manage)))!;
+        foreach (var module in django.SettingsChoices ?? Array.Empty<string>())
+        {
+            string stem = System.IO.Path.Combine(baseDir, module.Replace('.', System.IO.Path.DirectorySeparatorChar));
+            string file = File.Exists(stem + ".py") ? stem + ".py" : System.IO.Path.Combine(stem, "__init__.py");
+            string text;
+            try { text = File.ReadAllText(file); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            foreach (var (alias, entry) in DatabaseEntries(text))
+            {
+                string engine = SettingOf(entry, "ENGINE") ?? "";
+                string? kind = engine.Contains("postgres", StringComparison.OrdinalIgnoreCase) || engine.Contains("postgis", StringComparison.OrdinalIgnoreCase) ? "postgres"
+                    : engine.Contains("mysql", StringComparison.OrdinalIgnoreCase) ? "mysql" : null;
+                if (kind == null) continue;
+                string host = SettingOf(entry, "HOST") ?? "";
+                string port = SettingOf(entry, "PORT") ?? "";
+                var fields = new Dictionary<string, string>
+                {
+                    ["host"] = host.Length > 0 ? host : "localhost",
+                    ["port"] = int.TryParse(port, out _) ? port : (kind == "postgres" ? "5432" : "3306"),
+                    ["user"] = SettingOf(entry, "USER") ?? "",
+                    ["password"] = SettingOf(entry, "PASSWORD") ?? "",
+                    ["database"] = SettingOf(entry, "NAME") ?? "",
+                    ["name"] = $"{alias} ({module})",
+                };
+                if (!result.Any(r => r.Item1 == module && r.Item2 == alias)) result.Add((module, alias, kind, fields));
+            }
+        }
+        return result;
+    }
+
+    // the entries of DATABASES = {...}: "alias": {...} or dict(...), with what is inside each (nested braces and parentheses counted)
+    static IEnumerable<(string Alias, string Entry)> DatabaseEntries(string text)
+    {
+        var start = DatabasesStart.Match(text);
+        if (!start.Success) yield break;
+        int open = start.Index + start.Length - 1;
+        int close = Closing(text, open);
+        string body = text[(open + 1)..close];
+        int at = 0;
+        while (AliasStart.Match(body, at) is { Success: true } m)
+        {
+            int from = m.Index + m.Length - 1;
+            int to = Closing(body, from);
+            // only the top level of DATABASES: an alias inside another entry ("OPTIONS": {...}) is skipped with it
+            yield return (m.Groups["alias"].Value, body[(from + 1)..to]);
+            at = Math.Min(body.Length, to + 1);
+        }
+    }
+
+    // where the bracket at `open` closes (strings skipped), or the end
+    static int Closing(string text, int open)
+    {
+        int depth = 0;
+        for (int i = open; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c is '"' or '\'')
+            {
+                int end = text.IndexOf(c, i + 1);
+                if (end < 0) return text.Length;
+                i = end;
+            }
+            else if (c == '#') { int nl = text.IndexOf('\n', i); if (nl < 0) return text.Length; i = nl; }
+            else if (c is '{' or '(' or '[') depth++;
+            else if (c is '}' or ')' or ']') { if (--depth == 0) return i; }
+        }
+        return text.Length;
+    }
+
+    static readonly System.Text.RegularExpressions.Regex EnvCall = new(
+        @"^(?:os\.environ\.get|os\.getenv|env(?:\.\w+)?|config)\(\s*['""](?<var>\w+)['""]\s*(?:,\s*(?:default\s*=\s*)?(?<default>['""][^'""]*['""]|\d+))?", System.Text.RegularExpressions.RegexOptions.Compiled);
+    static readonly System.Text.RegularExpressions.Regex EnvIndex = new(@"^os\.environ\[\s*['""](?<var>\w+)['""]\s*\]", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // a setting of one entry ("HOST": "db" or HOST="db"): its literal, or the environment's value / the default it names
+    static string? SettingOf(string entry, string key)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(entry, $@"(?:['""]{key}['""]\s*:|\b{key}\s*=)\s*(?<expr>[\w.]+\([^)]*\)|[^,\n}}]*)");
+        if (!m.Success) return null;
+        string expr = m.Groups["expr"].Value.Trim();
+        if (System.Text.RegularExpressions.Regex.Match(expr, @"^['""](?<s>[^'""]*)['""]") is { Success: true } literal) return literal.Groups["s"].Value;
+        if (System.Text.RegularExpressions.Regex.Match(expr, @"^\d+") is { Success: true } number) return number.Value;
+        if (EnvCall.Match(expr) is { Success: true } call)
+            return Environment.GetEnvironmentVariable(call.Groups["var"].Value) ?? (call.Groups["default"].Success ? call.Groups["default"].Value.Trim('\'', '"') : null);
+        if (EnvIndex.Match(expr) is { Success: true } index) return Environment.GetEnvironmentVariable(index.Groups["var"].Value);
+        return null;
     }
 
     static List<string> AddedPaths(string root)

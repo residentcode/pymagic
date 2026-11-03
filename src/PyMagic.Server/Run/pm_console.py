@@ -6,6 +6,9 @@ The host sends JSON lines over a local TCP socket, as to the debugger:
   consoleRunFile  {id, path}       run a file in the console's names (Run File in Python Console). Answer: consoleDone {id}
   consoleVars     {id}             the console's names. Answer: consoleVars {id, vars: [{name, type, value}]}
   consoleComplete {id, text}       the completions of the last word. Answer: consoleCompletions {id, items}
+  consoleAttach   {id, host, port, token, helper}   Attach Debugger: connect to the IDE's debug server (pm_debug, from the folder
+                                   `helper`); the code run from then on stops at the IDE's breakpoints. Answer: consoleDone {id, error?}
+  consoleDetach   {id}             the debugger lets go; the console goes on. Answer: consoleDone {id}
 With --ipython the code runs in IPython's InteractiveShell (magics, Out[n]) when IPython is installed; if it is not, a note is
 printed and the console is the plain one.
 What the code prints goes to this program's output, which the host shows.
@@ -31,6 +34,7 @@ class Console:
         self.names = {"__name__": "__main__", "__builtins__": builtins, "__doc__": None}
         self.compiler = codeop.CommandCompiler()
         self.shell = None        # IPython's InteractiveShell when --ipython found IPython
+        self.debugger = None     # pm_debug's Debugger while the IDE's debugger is attached (Attach Debugger)
 
     def use_ipython(self):
         """Makes this console IPython's shell (magics, Out[n], its completion); False, with a note, when IPython is not installed."""
@@ -149,6 +153,27 @@ class Console:
         except BaseException:
             self.show_error()
 
+    def attach(self, msg):
+        """Connects this thread (the one that runs the commands) to the IDE's debug server; an earlier connection is let go first."""
+        self.detach()
+        helper = msg.get("helper")
+        if helper and helper not in sys.path:
+            sys.path.append(helper)
+        import pm_debug
+        self.debugger = pm_debug.connect(msg.get("host", "127.0.0.1"), int(msg["port"]), msg.get("token", ""), os.getcwd())
+        print("The debugger is attached: the breakpoints of the project stop the code run here")
+
+    def detach(self):
+        dbg, self.debugger = self.debugger, None
+        if dbg is None:
+            return
+        try:
+            dbg.detach()
+            dbg.sock.shutdown(socket.SHUT_RDWR)   # its reader thread holds the socket: this lets the IDE see the connection end
+        except BaseException:  # noqa: BLE001 - the IDE may have gone already
+            pass
+        print("The debugger is detached")
+
     def variables(self):
         out = []
         hidden = set(getattr(self.shell, "user_ns_hidden", ()) or ()) | {"In", "Out", "get_ipython", "exit", "quit"} if self.shell is not None else set()
@@ -208,6 +233,19 @@ class Console:
                 self.send({"type": "consoleVars", "id": rid, "vars": self.variables()})
             elif kind == "consoleComplete":
                 self.send({"type": "consoleCompletions", "id": rid, **self.completions(msg.get("text", ""))})
+            elif kind == "consoleAttach":
+                error = None
+                try:
+                    self.attach(msg)
+                except Exception as e:  # noqa: BLE001 - the console goes on without the debugger
+                    self.debugger = None
+                    error = "The debugger could not attach: %s" % e
+                sys.stdout.flush()
+                self.send({"type": "consoleDone", "id": rid, "more": False, **({"error": error} if error else {})})
+            elif kind == "consoleDetach":
+                self.detach()
+                sys.stdout.flush()
+                self.send({"type": "consoleDone", "id": rid, "more": False})
 
 
 def main():

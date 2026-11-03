@@ -45,6 +45,10 @@ export function installerConfig() {
       shortcutName: PRODUCT,
       installerIcon: ICON,
       uninstallerIcon: ICON,
+      // PyMagic's own pictures (icon/wizard-*.svg, drawn into these by `npm run wizard`): the sidebar of the first and last pages, the header of the others
+      installerSidebar: 'icon/wizard-sidebar.bmp',
+      uninstallerSidebar: 'icon/wizard-sidebar.bmp',
+      installerHeader: 'icon/wizard-header.bmp',
       uninstallDisplayName: PRODUCT,
       runAfterFinish: true,             // the "Run PyMagic" box on the last page
       artifactName: 'PyMagic-Setup-${version}.${ext}',

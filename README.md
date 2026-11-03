@@ -155,12 +155,11 @@ The test project is a plain console runner because this machine's NuGet only has
 Everything that is known to be left, in one place, gathered on 30 October 2026 from the "Not done" and "Still open" notes of items 2 to 154 (the item a line comes from is in brackets), and from PyCharm's own dialogs and menus (what PyMagic's notes never named). **How it is kept:** when an item does one of these, the line goes from here to [work_done.md](work_done.md#done-from-the-open-work-list) and the item says so; a new item's own "Not done" note is added here too. Code signing, auto-update and anything else for selling PyMagic are left out on purpose.
 
 **Editor**
-- Positions the engine writes without its line map, if any are left, still count UTF-16 units.
 
 **Run, debug and tests**
 
 **Installer**
-- Still open: PyMagic's own pictures in the wizard (66); the wizard's two new pages were not looked at on screen (only the silent installs were run)
+- Not seen on screen: the sidebar picture (item 331), shown only on the finish page after an install and in the uninstaller; the folder page's refusal of a folder that is not PyMagic's (only its rule's tests and the silent installs ran).
 
 **Type engine** (ibnbolbna's area until 31 October 2026, ours from then on; what ibnbolbna did and left is in [docs/ibnbolbna-work.md](docs/ibnbolbna-work.md))
 - The PyCharm inspections that need full types (47, 77; issue #48): Still open: tuple assignment balance; pandas' two inspections. PyCharm Professional's own (Spark, BDD, mock, notebooks) are a choice still to make.
@@ -174,31 +173,20 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - A cache of parsed stubs on disk (7): each start parses typeshed's builtins and the stubs a project uses again (the cache is in memory only).
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
-- Run configurations: Not tried yet: the three servers and uv with those packages installed.
 
 **Django compared with PyCharm** (from PyCharm's Django help pages and its 17 Django inspections, checked against the code on 30 October 2026)
-- Run configurations: The task before launch is another configuration; the Django tab's own `test` buttons still give plain text.
-- Code insight: Other uses of a converted function (`reverse(views.index)`, tests that call it) are left as they are.
 
 **Compared with PyCharm's help, area by area** (from its help contents of about 1,000 pages and its 103 Python inspections, checked against the code on 30 October 2026; areas not compared yet are at the end)
 - Code vision and inlay hints: Found while checking it: `def total(shapes): return sum(s.area() for s in shapes)` is inferred as `-> int` when the items are unknown (`sum` of unknown values gives `int`, not an unknown); a type engine point, so the hint says what the engine says.
-- Tests: Not tried yet: Trial with Twisted installed (it needs the download)
-- Python console: Still missing: Attach Debugger from it and the Ctrl+Alt+E history list.
-- Notebooks: Still open: Debug Cell on a Jupyter server on another computer (the kernel there cannot reach the debugger of PyMagic; no way in is opened)
+- Python console: Not built: Attach Debugger with an interpreter elsewhere than this computer (WSL, Docker, SSH); the history list is kept while PyMagic runs, not across restarts (item 317).
+- Notebooks: Not checked: Debug Cell on a Jupyter server on another computer against a real ipykernel (item 326 was checked with a small Jupyter server of the tests).
 - Compared on 1 November 2026 (item 224; what was "Not compared yet"), PyMagic had none of these unless said:
-  - Database tools and SQL: Not built: SSH tunnels and TLS settings for a server, a server's other databases (one database per connection), stored procedures and triggers in the tree, and the project's own Django PostgreSQL/MySQL settings offered as sources.
-  - HTTP client: Left: response handler scripts (`> {% ... %}`, JavaScript run on the response) and `>> file` are skipped; multipart bodies and files sent as bytes; requests kept to run again later as a run configuration.
-  - Profiler (has: a cProfile table of functions and their callers, item 68): the graph shows one function's neighbours, not the whole program's graph at once.
+  - Database tools and SQL (item 312): Not read: django-environ's `env.db()` and DATABASE_URL settings. Not checked: PostgreSQL's and MySQL's routines, a server's other databases, TLS and SSH tunnels against real servers (they need downloads).
+  - HTTP client (item 313): Not built: PyCharm's newer extras: `jsonPath`, `client.global` kept across restarts, WebSocket, GraphQL and gRPC requests.
   - Inspections beyond Python and Django (has: requirements files, item 196; HTML, CSS and JavaScript in templates, item 182): Then checked (item 233): regular expressions in f-strings, triple-quoted and escaped strings, and in a name set once at the top of the file; a link from one Markdown file to a heading of another; YAML against a schema for GitHub workflows (item 231). Not checked: a pattern joined at run time (`"a" + x`, `.format()`), YAML against other schemas than those of items 231, 234 and 235 (mkdocs, dependabot and codecov YAML and `tox.toml` are done too). Not done: OpenAPI 3.1 (needs `$dynamicRef`), CRDs and Kustomization files, and the `if`/`then`/`not` rules of the Renovate schema.
-  - Intention actions (has: lambda to def, Invert boolean, implement abstract methods, create from use, Change Signature, the quote of a string by typing it, item 223): Left: `import a` made `from a import b` only for a submodule written `a.b`, and a relative import converted only inside a package; an f-string conversion skips a string with a backslash.
-  - Local History (has: the versions of a file and of a folder, compared and restored, items 114 and 171): Not built: a label that also keeps the unsaved text of open files, and the history of a selection across a rename of the file.
-  - Scratch files: Not built: a scratch debugged with breakpoints, and *Move to the project*.
-  - Language injections (has: HTML, CSS and JavaScript in templates): Not built: injections in other languages' strings than Python, and `# language=` on a string built from parts.
-  - Markdown and reStructuredText (has: Markdown highlighted): Not done: Mermaid kinds other than flowcharts and sequence diagrams (the Mermaid library is a download, which needs a yes)
-  - Macros: Not carried by a macro: mouse clicks, the clipboard keys, menus and function keys.
-  - Run Anything and the Services window: Not built: the notebook kernels are not listed in it, a debugger or profiler for the members of a compound, and a Output tab per member.
-  - Deployment (lowest, with Docker and remote interpreters): Not built: implicit FTPS (port 990) and trusting a self-signed FTPS certificate.
-  - Remote interpreters over SSH and Docker in depth (lowest; has: WSL, a Docker image and an SSH host as the interpreter; see *Git, packages and interpreters* above): Not built: libraries of a Compose service's image shown in the editor, the debugger and test runner in the exec form, and a debug server that holds several programs at once.
+  - Run Anything and the Services window (item 314): one member of a compound at a time is debugged (the Run panel has one debug session; PyCharm opens a debugger tab per member).
+  - Deployment (item 324): Not checked: implicit FTPS and a trusted self-signed certificate against a real FTPS server (checked with a small FTPS server of the tests).
+  - Remote interpreters over SSH and Docker in depth (item 325): Not checked: a Compose service's libraries against a real Docker engine (checked with recorded docker answers).
 
 
 ### Different from PyCharm on purpose
@@ -219,4 +207,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 311 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 331 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

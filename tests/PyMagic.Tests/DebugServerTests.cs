@@ -126,6 +126,57 @@ public class DebugServerTests
     }
 
     [Fact]
+    public void TheServerHoldsSeveralProgramsAtOnceAndShowsOneStopAtATime()
+    {
+        if (!HavePython) return;
+        using var r = new Rig();
+        r.Session.Listen(r.Root, "127.0.0.1", 0, "", Array.Empty<(string, string)>(), new Dictionary<string, JsonArray> { ["prog.py"] = new JsonArray(7) });
+        var listening = r.Type("listening");
+        string snippet = listening["snippet"]!.GetValue<string>();
+        File.Copy(Path.Combine(listening["helper"]!.GetValue<string>(), "pm_debug.py"), Path.Combine(r.Root, "pm_debug.py"));
+        var first = r.Program(r.Root, "prog.py", Body(snippet, Work));
+        var c1 = r.Type("connected");
+        Assert.Equal(1, c1["program"]!.GetValue<int>());
+        Assert.Equal(7, Line(r.Type("stopped")));
+
+        // a second program connects while the first is stopped: it is let in, and stops at the same breakpoint, which waits to be shown
+        string other = Path.Combine(r.Root, "other");
+        Directory.CreateDirectory(other);
+        File.Copy(Path.Combine(r.Root, "pm_debug.py"), Path.Combine(other, "pm_debug.py"));
+        // the same file name on the same machine: the breakpoint of prog.py is the other folder's prog.py only by its own path, so it gets one too
+        r.Session.Handle(new JsonObject { ["type"] = "setBreakpoints", ["file"] = "other/prog.py", ["lines"] = new JsonArray(7) });
+        var second = r.Program(other, "prog.py", Body(snippet, Work.Replace("total([1, 2, 3])", "total([10, 20])")));
+        var c2 = r.Type("connected");
+        Assert.Equal(2, c2["program"]!.GetValue<int>());
+        Assert.Equal(2, c2["programs"]!.GetValue<int>());
+        r.Next(e => e["type"]?.GetValue<string>() == "output" && e["text"]!.GetValue<string>().Contains("stopped too"));
+        Assert.True(!r.Seen.Skip(r.Seen.IndexOf(c2)).Any(e => e["type"]?.GetValue<string>() == "stopped"), "the second stop is not shown over the first");
+        // what the page asks goes to the program whose stop is shown
+        Assert.Equal("[1, 2, 3]", r.Evaluate("items")["result"]!.GetValue<string>());
+
+        // the first goes on (no breakpoints any more): its stop goes, and the second program's comes up
+        r.Session.Handle(new JsonObject { ["type"] = "setBreakpoints", ["file"] = "prog.py", ["lines"] = new JsonArray() });
+        r.Session.Handle(new JsonObject { ["type"] = "setBreakpoints", ["file"] = "other/prog.py", ["lines"] = new JsonArray() });
+        r.Session.Handle(new JsonObject { ["type"] = "continue" });
+        r.Type("running");
+        var shown = r.Type("stopped");
+        Assert.Equal(2, shown["program"]!.GetValue<int>());
+        Assert.Equal(7, Line(shown));
+        Assert.True(first.WaitForExit(15000));
+        Assert.Contains("result 6", first.StandardOutput.ReadToEnd());
+        var gone = r.Type("disconnected");
+        Assert.Equal(1, gone["program"]!.GetValue<int>());
+        Assert.Equal(1, gone["programs"]!.GetValue<int>());
+        Assert.Equal("[10, 20]", r.Evaluate("items")["result"]!.GetValue<string>());
+        r.Session.Handle(new JsonObject { ["type"] = "continue" });
+        Assert.True(second.WaitForExit(15000));
+        Assert.Contains("result 30", second.StandardOutput.ReadToEnd());
+        Assert.Equal(0, r.Type("disconnected")["programs"]!.GetValue<int>());
+        r.Session.Handle(new JsonObject { ["type"] = "stop" });
+        Assert.True(r.Type("exited")["detached"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void StopDetachesFromAConnectedProgramWhichGoesOn()
     {
         if (!HavePython) return;

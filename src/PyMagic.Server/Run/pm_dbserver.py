@@ -2,19 +2,23 @@
 pm_db.py answers for an SQLite file, with the same shapes, for a server:
 
   {"op": "test",   "server"}                                  connects and says the server's version
-  {"op": "schema", "server"}                                  tables and views: columns, primary key, indexes, foreign keys
+  {"op": "schema", "server"}                                  tables and views: columns, primary key, indexes, foreign keys;
+                                                              the stored functions and procedures, and the triggers
   {"op": "rows",   "server", "table", "where", "order", "desc", "limit", "offset"}
   {"op": "apply",  "server", "table", "changes": [...]}        in one transaction; a key is the primary key's columns
   {"op": "run",    "server", "sql", "limit"}                  one statement of the console
   {"op": "import", "server", "table", "csv"}                  the rows of a CSV file added to a table, all or none
+  {"op": "databases", "server"}                               the server's databases, and the one connected to
 
-"server" is {"kind": "postgres" | "mysql", "host", "port", "user", "password", "database"}. PostgreSQL needs the psycopg package
+"server" is {"kind": "postgres" | "mysql", "host", "port", "user", "password", "database", "ssl": {"mode", "ca", "cert", "key"},
+"via": {"host", "port"}} (ssl and via optional: via is the SSH tunnel's end on this computer, which the engine opened). PostgreSQL needs the psycopg package
 (psycopg[binary]) and MySQL the PyMySQL package in the project's Python; without it the answer says so. A table of a schema other
 than public (PostgreSQL) is named schema.table.
 """
 import datetime
 import decimal
 import json
+import re
 import sys
 import time
 import uuid
@@ -67,26 +71,94 @@ class Dialect:
         return "%s IS NOT DISTINCT FROM %%s" % self.quote(column) if self.kind == "postgres" else "%s <=> %%s" % self.quote(column)
 
     def connect(self):
-        s = self.server
-        timeout = 8
         if self.kind == "postgres":
             try:
                 import psycopg
             except ImportError:
                 raise Missing('PostgreSQL needs the psycopg package in this Python: pip install "psycopg[binary]"')
             # client-side binding: the server coerces a text value to the column's type, as it does a typed-in literal
-            return psycopg.connect(host=s.get("host") or "localhost", port=int(s.get("port") or 5432), user=s.get("user") or "postgres",
-                                   password=s.get("password") or None, dbname=s.get("database") or "postgres", connect_timeout=timeout,
-                                   cursor_factory=psycopg.ClientCursor)
+            return psycopg.connect(cursor_factory=psycopg.ClientCursor, **postgres_args(self.server))
         if self.kind == "mysql":
             try:
                 import pymysql
             except ImportError:
                 raise Missing("MySQL needs the PyMySQL package in this Python: pip install PyMySQL")
-            return pymysql.connect(host=s.get("host") or "localhost", port=int(s.get("port") or 3306), user=s.get("user") or "root",
-                                   password=s.get("password") or "", database=s.get("database") or None, connect_timeout=timeout,
-                                   charset="utf8mb4", autocommit=False)
+            return pymysql.connect(**mysql_args(self.server))
         raise Missing("unknown kind of server %r" % self.kind)
+
+
+TIMEOUT = 8
+
+
+def postgres_args(s):
+    """psycopg's (libpq's) connection settings. Through an SSH tunnel ("via") libpq connects to the tunnel's address (hostaddr) and
+    still checks the certificate against the server's own name (host), so verify-full works through a tunnel too."""
+    args = {"host": s.get("host") or "localhost", "port": int(s.get("port") or 5432), "user": s.get("user") or "postgres",
+            "password": s.get("password") or None, "dbname": s.get("database") or "postgres", "connect_timeout": TIMEOUT}
+    via = s.get("via")
+    if via:
+        args["hostaddr"] = via["host"]
+        args["port"] = int(via["port"])
+    ssl = s.get("ssl") or {}
+    if ssl.get("mode"):
+        args["sslmode"] = ssl["mode"]
+    for key, name in (("ca", "sslrootcert"), ("cert", "sslcert"), ("key", "sslkey")):
+        if ssl.get(key):
+            args[name] = ssl[key]
+    return args
+
+
+def mysql_args(s):
+    """PyMySQL's connection settings; TLS as an SSLContext made here (see tls_context)."""
+    via = s.get("via")
+    args = {"host": via["host"] if via else s.get("host") or "localhost", "port": int(via["port"] if via else s.get("port") or 3306),
+            "user": s.get("user") or "root", "password": s.get("password") or "", "database": s.get("database") or None,
+            "connect_timeout": TIMEOUT, "charset": "utf8mb4", "autocommit": False}
+    ssl = s.get("ssl") or {}
+    mode = ssl.get("mode") or ""
+    if mode == "disable":
+        args["ssl_disabled"] = True
+    elif mode in ("require", "verify-ca", "verify-full") or ssl.get("ca") or ssl.get("cert"):
+        args["ssl"] = tls_context(mode or "require", ssl.get("ca"), ssl.get("cert"), ssl.get("key"), s.get("host") or "localhost")
+    return args
+
+
+def tls_context(mode, ca=None, cert=None, key=None, server_name=None):
+    """An SSLContext for libpq's modes: require encrypts without checking the certificate, verify-ca checks it against the CA file,
+    verify-full also checks that it names the server. The name checked is the server's own even when the connection goes to an SSH
+    tunnel on this computer."""
+    import ssl
+
+    class Context(ssl.SSLContext):
+        def wrap_socket(self, sock, *a, **k):
+            k["server_hostname"] = server_name
+            return super().wrap_socket(sock, *a, **k)
+
+    ctx = Context(ssl.PROTOCOL_TLS_CLIENT)
+    if mode in ("verify-ca", "verify-full"):
+        if ca:
+            ctx.load_verify_locations(cafile=ca)
+        else:
+            ctx.load_default_certs()
+        ctx.check_hostname = mode == "verify-full"
+        ctx.verify_mode = ssl.CERT_REQUIRED
+    else:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    if cert:
+        ctx.load_cert_chain(cert, key or None)
+    return ctx
+
+
+def databases(d, db):
+    """The other databases of the server, the one connected to among them: PostgreSQL's that can be connected to, MySQL's without its own."""
+    if d.kind == "postgres":
+        names = [r[0] for r in fetch(db, "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY datname")]
+        current = fetch(db, "SELECT current_database()")[0][0]
+    else:
+        names = [r[0] for r in fetch(db, "SHOW DATABASES") if r[0] not in ("information_schema", "performance_schema", "mysql", "sys")]
+        current = fetch(db, "SELECT DATABASE()")[0][0]
+    return {"databases": names, "current": current}
 
 
 def version(d, db):
@@ -101,10 +173,75 @@ def fetch(db, sql, args=()):
     return cur.fetchall()
 
 
-def schema(d, db):
+def schema(d, db, routines=True):
+    """Tables and views; with `routines` also the stored functions and procedures and the triggers, each with its definition."""
     if d.kind == "postgres":
-        return {"objects": schema_postgres(db)}
-    return {"objects": schema_mysql(db)}
+        answer = {"objects": schema_postgres(db)}
+        if routines:
+            answer.update(routines_postgres(db))
+        return answer
+    answer = {"objects": schema_mysql(db)}
+    if routines:
+        answer.update(routines_mysql(db))
+    return answer
+
+
+def qualified(schema_name, name):
+    return name if schema_name == "public" else "%s.%s" % (schema_name, name)
+
+
+def routines_postgres(db):
+    """The functions and procedures of the database's own schemas (not those an extension brought), and the triggers of its tables."""
+    routines = []
+    for s, name, kind, args, result, definition in fetch(db, """SELECT n.nspname, p.proname, p.prokind, pg_get_function_identity_arguments(p.oid),
+                                                                       pg_get_function_result(p.oid), pg_get_functiondef(p.oid)
+                                                                FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                                                                WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%%'
+                                                                  AND n.nspname NOT LIKE 'pg_temp%%' AND p.prokind IN ('f', 'p')
+                                                                  AND NOT EXISTS (SELECT 1 FROM pg_depend x WHERE x.objid = p.oid AND x.deptype = 'e')
+                                                                ORDER BY n.nspname, p.proname"""):
+        routines.append({"name": qualified(s, name), "kind": "procedure" if kind == "p" else "function", "args": args or "",
+                         "returns": result if kind != "p" else None, "sql": definition})
+    triggers = []
+    for s, table, name, definition in fetch(db, """SELECT n.nspname, c.relname, t.tgname, pg_get_triggerdef(t.oid, true)
+                                                   FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+                                                   WHERE NOT t.tgisinternal AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                                                   ORDER BY n.nspname, c.relname, t.tgname"""):
+        triggers.append(dict(trigger_of(definition), name=name, table=qualified(s, table), sql=definition))
+    return {"routines": routines, "triggers": triggers}
+
+
+def routines_mysql(db):
+    """The stored functions and procedures of the database, and its triggers, with a CREATE statement made from information_schema."""
+    params = {}
+    for routine, mode, name, typ in fetch(db, """SELECT specific_name, parameter_mode, parameter_name, dtd_identifier FROM information_schema.parameters
+                                                 WHERE specific_schema = DATABASE() AND ordinal_position > 0 ORDER BY specific_name, ordinal_position"""):
+        params.setdefault(routine, []).append(("%s " % mode if mode else "") + "%s %s" % (name, typ))
+    routines = []
+    for name, kind, returns, body in fetch(db, """SELECT routine_name, routine_type, dtd_identifier, routine_definition FROM information_schema.routines
+                                                  WHERE routine_schema = DATABASE() ORDER BY routine_name"""):
+        args = ", ".join(params.get(name, []))
+        kind = "procedure" if str(kind).upper() == "PROCEDURE" else "function"
+        sql = "CREATE %s `%s`(%s)%s\n%s" % (kind.upper(), name, args, " RETURNS %s" % returns if kind == "function" and returns else "", body or "")
+        routines.append({"name": name, "kind": kind, "args": args, "returns": returns if kind == "function" else None, "sql": sql})
+    triggers = []
+    for name, table, timing, event, statement in fetch(db, """SELECT trigger_name, event_object_table, action_timing, event_manipulation, action_statement
+                                                              FROM information_schema.triggers WHERE trigger_schema = DATABASE() ORDER BY event_object_table, trigger_name"""):
+        sql = "CREATE TRIGGER `%s` %s %s ON `%s` FOR EACH ROW\n%s" % (name, timing, event, table, statement)
+        triggers.append({"name": name, "table": table, "timing": str(timing).upper(), "event": str(event).upper(), "sql": sql})
+    return {"routines": routines, "triggers": triggers}
+
+
+# CREATE TRIGGER name BEFORE | AFTER | INSTEAD OF INSERT [OR UPDATE ...] ON table, as pg_get_triggerdef writes it
+TRIGGER_HEAD = re.compile(r"\bTRIGGER\s+(?:\"[^\"]*\"|\S+)\s+(BEFORE\b|AFTER\b|INSTEAD\s+OF\b)?\s*((?:INSERT|DELETE|UPDATE|TRUNCATE)(?:\s+OF\s+.+?)?(?:\s+OR\s+(?:INSERT|DELETE|UPDATE|TRUNCATE)(?:\s+OF\s+.+?)?)*)\s+ON\b", re.I)
+
+
+def trigger_of(sql):
+    m = TRIGGER_HEAD.search(sql or "")
+    if not m:
+        return {"timing": "", "event": ""}
+    event = re.sub(r"\s+OF\s+.+?(?=\s+OR\s+|$)", "", m.group(2), flags=re.I)
+    return {"timing": re.sub(r"\s+", " ", (m.group(1) or "BEFORE").upper()), "event": re.sub(r"\s+", " ", event.upper())}
 
 
 def schema_postgres(db):
@@ -175,7 +312,7 @@ def schema_mysql(db):
 
 
 def rows(d, db, table, where="", order="", desc=False, limit=200, offset=0):
-    objs = schema(d, db)["objects"]
+    objs = schema(d, db, routines=False)["objects"]
     obj = next((o for o in objs if o["name"] == table), None)
     if obj is None:
         return {"error": "No table or view named %s." % table}
@@ -240,7 +377,7 @@ def run(d, db, sql, limit=500):
 
 def import_csv(d, db, table, csv_path):
     import csv
-    obj = next((o for o in schema(d, db)["objects"] if o["name"] == table), None)
+    obj = next((o for o in schema(d, db, routines=False)["objects"] if o["name"] == table), None)
     if obj is None:
         return {"error": "No table named %s." % table}
     names = [c["name"] for c in obj["columns"]]
@@ -292,6 +429,8 @@ def main():
             answer = {"version": str(version(d, db))}
         elif op == "schema":
             answer = schema(d, db)
+        elif op == "databases":
+            answer = databases(d, db)
         elif op == "rows":
             answer = rows(d, db, request.get("table", ""), request.get("where") or "", request.get("order") or "", bool(request.get("desc")),
                           min(int(request.get("limit") or 200), MAX_ROWS), int(request.get("offset") or 0))

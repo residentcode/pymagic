@@ -109,7 +109,68 @@ public class ComposeTargetTests
         Assert.Equal(Path.Combine(Path.GetFullPath(root), "src", "a.py"), t.ToHost("/workspace/src/a.py"));
         Assert.Equal("/usr/lib/x", t.ToHost("/usr/lib/x"));
         Assert.Equal("host.docker.internal", t.HelperAddress().Connect);
-        Assert.True((t.Readable("/usr/lib/python3/site-packages")) == null);
+        // the project's files are read in place, a library from its copy
+        Assert.Equal(Path.Combine(Path.GetFullPath(root), "src", "a.py"), t.Readable("/workspace/src/a.py"));
+        Assert.True(t.Readable("/usr/lib/python3/site-packages")!.EndsWith(Path.Combine("usr", "lib", "python3", "site-packages"), StringComparison.Ordinal));
+        Assert.True(t.Readable("relative") == null);
+    }
+
+    [Fact]
+    public void TheLibrariesOfTheServiceAreCopiedOutForTheEditor()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "proj"), mirrors = Path.Combine(Path.GetTempPath(), "pm_compose_mirror_" + Guid.NewGuid().ToString("N"));
+        const string lib = "/usr/local/lib/python3.12", site = "/usr/local/lib/python3.12/site-packages";
+        try
+        {
+            // the run form: a container is made of the service's image (one that is only built is "project-service"), copied from, and removed
+            var calls = new List<string>();
+            string? Run(string[] a)
+            {
+                string line = string.Join(" ", a);
+                calls.Add(line);
+                if (line == "compose -f dev.yml config --format json") return """{"name":"demo","services":{"web":{"build":{"context":"."}},"db":{"image":"postgres:16"}}}""";
+                if (line == "create demo-web") return "c0ffee0000c0ffee\n";
+                if (line.StartsWith("cp c0ffee0000c0ffee:", StringComparison.Ordinal)) { Directory.CreateDirectory(a[2]); return ""; }
+                return "";
+            }
+            var t = new ComposeTarget("web", "dev.yml", docker: Run, mirrors: mirrors) { Project = root };
+            Assert.Equal(0, t.Mirror(new[] { lib, site, "/workspace", "/workspace/src" }).Count);
+            Assert.True(calls.Contains($"cp c0ffee0000c0ffee:{lib} {t.Readable(lib)}"), string.Join(" | ", calls));
+            Assert.True(calls.Contains("rm c0ffee0000c0ffee"), "the container made for the copy is removed");
+            Assert.True(!calls.Any(c => c.Contains(":/workspace")), "the project is read in place, not copied");
+            Assert.True(t.Readable(site)!.StartsWith(mirrors, StringComparison.Ordinal) && Directory.Exists(t.Readable(lib)));
+            // once copied it is kept: nothing is asked of docker again
+            calls.Clear();
+            Assert.Equal(0, t.Mirror(new[] { lib }).Count);
+            Assert.Equal(0, calls.Count);
+            // a service with an image of its own
+            var db = new List<string>();
+            new ComposeTarget("db", "dev.yml", docker: a => { db.Add(string.Join(" ", a)); return Run(a); }, mirrors: mirrors) { Project = root }.Mirror(new[] { lib });
+            Assert.True(db.Contains("create postgres:16"), string.Join(" | ", db));
+
+            // the exec form: from the service's running container, which stays
+            string id = "0123456789abcdef0123";
+            var exec = new List<string>();
+            string? Exec(string[] a)
+            {
+                string line = string.Join(" ", a);
+                exec.Add(line);
+                if (line == "compose ps -q api") return id + "\n";
+                if (line.StartsWith($"cp {id}:", StringComparison.Ordinal)) { Directory.CreateDirectory(a[2]); return ""; }
+                return "";
+            }
+            var e = new ComposeTarget("api", null, exec: true, workDirInService: "/app", docker: Exec, mirrors: mirrors) { Project = root };
+            Assert.Equal(0, e.Mirror(new[] { lib, "/app" }).Count);
+            Assert.True(exec.Contains($"cp {id}:{lib} {e.Readable(lib)}"), string.Join(" | ", exec));
+            Assert.True(!exec.Any(c => c.StartsWith("rm ", StringComparison.Ordinal) || c.StartsWith("create ", StringComparison.Ordinal)));
+            Assert.True(e.Readable(lib) != t.Readable(lib), "each service has its own copy");
+            Assert.Equal(Path.GetFullPath(root), e.Readable("/app"));
+
+            // no container to copy from (compose does not answer, the service is not running): every folder is told as not copied
+            Assert.Equal(1, new ComposeTarget("web", docker: _ => null, mirrors: mirrors) { Project = root }.Mirror(new[] { lib }).Count);
+            Assert.Equal(1, new ComposeTarget("worker", exec: true, docker: _ => "", mirrors: mirrors) { Project = root }.Mirror(new[] { lib }).Count);
+        }
+        finally { if (Directory.Exists(mirrors)) Directory.Delete(mirrors, true); }
     }
 
     const string Sample = """

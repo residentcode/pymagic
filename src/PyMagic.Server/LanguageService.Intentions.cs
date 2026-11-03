@@ -46,7 +46,8 @@ public sealed partial class LanguageService
         prefix = m.Groups[1].Value;
         quote = m.Groups[2].Value[0];
         body = m.Groups[3].Value;
-        return !prefix.Contains('r', StringComparison.OrdinalIgnoreCase) && !body.Contains('\\');   // escapes would change meaning when braces are doubled
+        // escapes mean the same in an f-string's text (\n, \t, \', \\), but for \N{...}, whose braces would be doubled
+        return !prefix.Contains('r', StringComparison.OrdinalIgnoreCase) && !body.Contains("\\N{", StringComparison.Ordinal);
     }
 
     /// <summary>`{expr}` field of an f-string: the expression may not hold the string's own quote, a backslash or a comment.</summary>
@@ -383,6 +384,54 @@ public sealed partial class LanguageService
                 add($"Convert to 'from {pkg} import {leaf}'", edits.ToArray());
             }
         }
+        // import a  =>  from a import b, c (its uses `a.b` and `a.c` become `b` and `c`), and `import a.b as ab` the same way; not when `a` is
+        // used alone, when an attribute of it is assigned or deleted, or when one of the names is bound to something else in the file
+        if (around.OfType<ImportStmt>().FirstOrDefault() is { Names: [{ Name: var whole, AsName: var asName }] } imp2 && (asName != null || !whole.Contains('.'))
+            && !all.OfType<ImportStmt>().Any(i => !ReferenceEquals(i, imp2) && i.Names.Any(n => (n.AsName ?? n.Name.Split('.')[0]) == (asName ?? whole))))
+        {
+            string bound = asName ?? whole;
+            var stored = StoredTargets(all);
+            var refs = all.OfType<NameExpr>().Where(n => n.Name == bound).ToList();
+            var names = new List<string>();
+            var edits = new List<Edit>();
+            bool ok = refs.Count > 0;
+            foreach (var n in refs)
+            {
+                if (m.ParentOf(n) is not AttributeExpr a || !ReferenceEquals(a.Value, n) || stored.Contains(a) || text[a.Start..a.End].Contains('\n')) { ok = false; break; }
+                if (!names.Contains(a.Attr)) names.Add(a.Attr);
+                edits.Add(new Edit(a.Start, a.End, a.Attr));
+            }
+            if (ok && !names.Any(name => BoundInFile(all, name)))
+            {
+                string list = string.Join(", ", names);
+                edits.Insert(0, new Edit(imp2.Start, imp2.End, $"from {whole} import {list}"));
+                add($"Convert to 'from {whole} import {list}'", edits.ToArray());
+            }
+        }
+        // import pkg.sub.util inside the package  =>  from . import util (its uses `pkg.sub.util` become `util`)
+        if (around.OfType<ImportStmt>().FirstOrDefault() is { Names: [{ Name: var inPackage, AsName: null }] } imp3 && inPackage.Contains('.'))
+        {
+            string[] package = (m.IsPackage ? m.Name : m.Name.Contains('.') ? m.Name[..m.Name.LastIndexOf('.')] : "").Split('.', StringSplitOptions.RemoveEmptyEntries);
+            string[] target = inPackage.Split('.');
+            string[] parent = target[..^1];
+            string leaf = target[^1];
+            int common = 0;
+            while (common < package.Length && common < parent.Length && package[common] == parent[common]) common++;
+            if (common > 0 && !all.OfType<ImportStmt>().Any(i => !ReferenceEquals(i, imp3) && i.Names.Any(n => n.AsName == null && n.Name.Split('.')[0] == target[0])))
+            {
+                // every use of `pkg` has to be the whole chain `pkg.sub.util`, which becomes `util`
+                var heads = all.OfType<NameExpr>().Where(n => n.Name == target[0]).ToList();
+                var chains = all.OfType<AttributeExpr>().Where(a => a.Attr == leaf && DottedOf(a.Value) == string.Join(".", parent) && !text[a.Start..a.End].Contains('\n')).ToList();
+                bool wholeChains = heads.All(h => chains.Any(c => c.Start == h.Start)) && !StoredTargets(all).Overlaps(chains);
+                if (wholeChains && !BoundInFile(all, leaf))
+                {
+                    string fromPart = new string('.', 1 + (package.Length - common)) + string.Join(".", parent.Skip(common));
+                    var edits = new List<Edit> { new(imp3.Start, imp3.End, $"from {fromPart} import {leaf}") };
+                    edits.AddRange(chains.Select(c => new Edit(c.Start, c.End, leaf)));
+                    add("Convert to a relative import", edits.ToArray());
+                }
+            }
+        }
         // from a import b  =>  import a.b (b has to be a module; its uses `b` become `a.b`)
         if (around.OfType<ImportFromStmt>().FirstOrDefault() is { Level: 0, Module: { } module, IsStar: false, Names: [{ Name: var leaf2, AsName: null }] } from && workspace.GetModule(module + "." + leaf2) != null)
         {
@@ -425,6 +474,42 @@ public sealed partial class LanguageService
             }
         }
     }
+
+    /// <summary>The expressions a statement assigns to or deletes (through tuples and lists): `a.x = 1`, `del a.x`, `a.x += 1`, `for a.x in ...`.</summary>
+    static HashSet<Node> StoredTargets(List<Node> all)
+    {
+        var stored = new HashSet<Node>(ReferenceEqualityComparer.Instance);
+        void Add(Expr e)
+        {
+            stored.Add(e);
+            if (e is TupleExpr t) foreach (var x in t.Items) Add(x);
+            else if (e is ListExpr l) foreach (var x in l.Items) Add(x);
+            else if (e is StarExpr s) Add(s.Value);
+        }
+        foreach (var n in all)
+        {
+            switch (n)
+            {
+                case AssignStmt a: foreach (var t in a.Targets) Add(t); break;
+                case AugAssignStmt a: Add(a.Target); break;
+                case AnnAssignStmt a: Add(a.Target); break;
+                case DelStmt d: foreach (var t in d.Targets) Add(t); break;
+                case ForStmt f: Add(f.Target); break;
+            }
+        }
+        return stored;
+    }
+
+    /// <summary>Whether a name is bound or used for something in the file: a name read or assigned, a def, a class, a parameter, an import.</summary>
+    static bool BoundInFile(List<Node> all, string name) => all.Any(n => n switch
+    {
+        NameExpr x => x.Name == name,
+        FunctionDef f => f.Name == name,
+        ClassDef c => c.Name == name,
+        Parameter p => p.Name == name,
+        ImportAlias i => (i.AsName ?? i.Name.Split('.')[0]) == name,
+        _ => false,
+    });
 
     static string? DottedOf(Expr e) => e switch { NameExpr n => n.Name, AttributeExpr { Value: var v } a when DottedOf(v) is { } head => head + "." + a.Attr, _ => null };
 

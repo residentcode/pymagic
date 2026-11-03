@@ -23,6 +23,11 @@ test('a server in words', () => {
     assert.equal(defaultPort('ftps'), 21);
     assert.equal(defaultPort('ftp'), 21);
     assert.equal(defaultPort('sftp'), 22);
+    // implicit FTPS: its own port, and said so
+    assert.equal(defaultPort('ftps', true), 990);
+    assert.equal(defaultPort('ftp', true), 21);
+    assert.equal(describeServer({ type: 'ftps', host: 'ftp.site.org', port: 990, user: 'me', implicitTls: true }), 'FTPS (implicit) me@ftp.site.org');
+    assert.equal(describeServer({ type: 'ftps', host: 'ftp.site.org', port: 21, user: '', implicitTls: true }), 'FTPS (implicit) ftp.site.org:21');
 });
 
 test('the question before a delete on a server says what goes', () => {

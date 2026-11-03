@@ -1,4 +1,4 @@
-import * as monaco from 'monaco-editor';
+import * as monaco from 'monaco-editor';
 import { libraryModel, showLibraryFile } from './libview.js';
 import { LIB_SCHEME, libraryPathOf, pathOfLibraryUri } from './libview-model.js';
 import { LspClient } from './lsp';
@@ -1023,7 +1023,7 @@ async function main() {
         },
     };
     runConfigs = setupRunConfigurations({ currentFile: () => currentRel });
-    runHooks = setupRun({ ...common, root: info.root, runConfig: () => runConfigs.current(), runConfigByName: (name) => runConfigs.byName(name), showDiff: (...a) => git.showDiff(...a), askText: (...a) => explorer.askText(...a),
+    runHooks = setupRun({ ...common, root: info.root, scratches: info.scratches, runConfig: () => runConfigs.current(), runConfigByName: (name) => runConfigs.byName(name), showDiff: (...a) => git.showDiff(...a), askText: (...a) => explorer.askText(...a),
         // a notebook's cells are debugged as files of their own: their breakpoints and the stops in them
         cellFileOf: (model) => notebook?.cellFileOf(model), cellAtFile: (file, line) => notebook?.cellAtFile(file, line), editorOfModel: (model) => notebook?.editorOf(model) });
     notebook?.connectDebugger(runHooks.notebook);
@@ -1069,7 +1069,12 @@ async function main() {
     });
     window.addEventListener('pymagic:sidebar', (e) => { if (e.detail === 'structure') structure.show(); });
     const bookmarks = setupBookmarks({ monaco, editor, openFile, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')), revealInTree: (rel) => explorer?.select(rel) });
-    const history = setupHistory({ monaco, editor, currentFile: () => currentRel, openFile, askText: (...a) => explorer.askText(...a) });
+    const history = setupHistory({
+        monaco, editor, currentFile: () => currentRel, openFile, askText: (...a) => explorer.askText(...a),
+        // a label keeps the open files as the editor has them, with what is not saved yet
+        unsavedTexts: () => Object.fromEntries([...models].map(([key, model]) => [relPathOf.get(key), model])
+            .filter(([rel, model]) => rel && model.getValue() !== savedText.get(rel)).map(([rel, model]) => [rel, model.getValue()])),
+    });
     setupScratches({ openFile, askText: (...a) => explorer.askText(...a), forget: forgetPath, currentFile: () => currentRel });
     recents = setupRecent({ exists: (rel) => knownFiles.has(rel) });
     const editorNav = setupEditorNav({
@@ -1104,7 +1109,7 @@ async function main() {
         openIn: (ed, rel, sel) => split.openIn(ed, rel, sel),
     });
     setupInspections(lsp);
-    const pyConsole = setupPythonConsole({ editor, saveAll: common.saveAll, relOf: (model) => model && relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+    const pyConsole = setupPythonConsole({ editor, saveAll: common.saveAll, debugSession: () => runHooks?.consoleSession() ?? Promise.resolve(null), relOf: (model) => model && relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     const diagrams = !plugin('diagrams') ? null : setupDiagrams({ lsp, relOfUri, currentUri: () => { const m = editor.getModel(); return m && m.getLanguageId() === 'python' ? serverUri.get(m) : null; },
         openAt: (rel, line) => openFile(rel, new monaco.Range(line, 1, line, 1)),
         askText: (...a) => explorer.askText(...a),
@@ -1198,7 +1203,7 @@ async function main() {
         setupPullRequests();
     if (plugin('deployment'))
         setupDeployment({ editor, currentFile: () => currentRel, askText: (...a) => explorer.askText(...a), reloadFromDisk, saveAll: common.saveAll });
-    setupServices({ providers: [() => runHooks.services(), () => pyConsole.services(), () => terminal.services()] });
+    setupServices({ providers: [() => runHooks.services(), () => pyConsole.services(), () => terminal.services(), () => notebook?.services((rel) => openFile(rel)) ?? []] });
     setupRunAnything({ runConfigs, runHooks, editor });
     if (plugin('macros'))
         setupMacros({ editor, askText: (...a) => explorer.askText(...a) });

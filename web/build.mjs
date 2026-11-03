@@ -43,6 +43,8 @@ const options = {
 
 // Tailwind CSS's design system, on its own (the page loads it only in a project that uses Tailwind): its theme and utilities go in as text
 const tailwind = { ...options, entryPoints: { tailwind: 'src/tailwind-entry.js' }, loader: { '.css': 'text' } };
+// the Mermaid library, on its own too (the Markdown preview loads it only for a diagram mermaid-lite.js does not draw)
+const mermaid = { ...options, entryPoints: { mermaid: 'src/mermaid-entry.js' } };
 
-if (watch) { await (await context(options)).watch(); await (await context(tailwind)).watch(); }
-else { await build(options); await build(tailwind); }
+if (watch) { for (const o of [options, tailwind, mermaid]) await (await context(o)).watch(); }
+else { await build(options); await build(tailwind); await build(mermaid); }

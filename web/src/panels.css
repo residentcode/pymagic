@@ -240,7 +240,7 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 .db-node:hover { background: var(--hover); } .db-node .caret { width: 10px; color: var(--dim); }
 .db-node .db-detail { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
 .db-source .db-name { font-weight: 600; } .db-table .db-name, .db-view .db-name { color: var(--sym); } .db-pk .db-name { text-decoration: underline; }
-.db-column, .db-index { cursor: default; } .db-empty { padding: 8px 10px; color: var(--dim); font-family: inherit; white-space: normal; }
+.db-column, .db-index { cursor: default; } .db-routine .db-name, .db-trigger .db-name { color: var(--violet); } .db-empty { padding: 8px 10px; color: var(--dim); font-family: inherit; white-space: normal; }
 #db-bar .db-mode.active { background: var(--accent); color: #fff; } #db-data-bar { display: flex; gap: 4px; align-items: center; } #db-data-bar[hidden] { display: none; }
 #http-history-col { width: 28%; } #http-main { flex: 1; } #http-parts { display: flex; gap: 2px; } #http-parts button.active { background: var(--accent); color: #fff; }
 .http-item { display: flex; gap: 8px; padding: 1px 8px; cursor: pointer; white-space: nowrap; } .http-item:hover { background: var(--hover); } .http-item.sel { background: var(--accent); color: #fff; }
@@ -266,6 +266,8 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 .prof-node rect.prof-share { fill: #e06c4c; stroke: none; } .prof-node.unknown { opacity: .6; }
 .prof-node-name { fill: var(--fg); font-weight: 600; } .prof-node-detail, .prof-edge-label { fill: var(--dim); font-size: 10px; }
 .prof-edge { fill: none; stroke: var(--dim); } .prof-arrowhead { fill: var(--dim); }
+.prof-edge.back { stroke-dasharray: 4 3; } .prof-edge.lit { stroke: var(--accent); } .prof-edge.faded { opacity: .25; }
+.prof-graph-switch { display: flex; gap: 4px; padding: 4px; } .prof-graph-switch button.active { background: var(--accent); color: #fff; }
 #prof-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #prof-bar label { white-space: nowrap; }
 .cov-hit { border-left: 3px solid var(--good); margin-left: 3px; } .cov-miss { border-left: 3px solid var(--bad); margin-left: 3px; }
@@ -596,7 +598,8 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 #sigdialog pre.skipped { opacity: 0.45; }
 #sigdialog .add .word { background: var(--good)66; border-radius: 2px; } #sigdialog .del .word { background: var(--bad)66; border-radius: 2px; }
 
-.db-server-form { width: 440px; } .db-form-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; } .db-form-row > span { width: 78px; flex: none; color: var(--dim); }
+.db-server-form { width: 480px; max-height: 90vh; overflow-y: auto; } .db-form-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; } .db-form-row > span { width: 110px; flex: none; color: var(--dim); }
+.db-form-group { margin: 4px 0 8px; } .db-form-group > summary { cursor: pointer; color: var(--dim); margin-bottom: 6px; } .db-form-group .ask-hint { margin-bottom: 6px; }
 .db-form-row > input, .db-form-row > select { flex: 1; min-width: 0; } .db-form-error { color: var(--bad-strong, #e5534b); font-size: 12px; min-height: 16px; white-space: pre-wrap; margin-top: 6px; }
 .db-server .db-name::before { content: '⛁ '; }
 .ask-buttons button[hidden] { display: none; }

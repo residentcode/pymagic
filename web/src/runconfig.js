@@ -1,7 +1,8 @@
 // Run configurations: named ways to start a file (its parameters, the variables of its environment, the folder it starts in). The one that is chosen is what
 // Run, Debug and Profile start; with none chosen they start the file in the editor. They are kept in the project, in .pymagic/run-configurations.json.
 import { openMenu } from './menu';
-import { KINDS, blank, firstConfiguration, formatEnv, parseEnv, read, splitShared, toStored, uniqueName } from './runconfig-model.js';
+import { parseRequests } from './http-model.js';
+import { BEFORE_TASKS, KINDS, blank, firstConfiguration, formatEnv, parseEnv, read, splitShared, toStored, uniqueName } from './runconfig-model.js';
 
 const $ = (id) => document.getElementById(id);
 const FILE = '.pymagic/run-configurations.json';
@@ -40,6 +41,16 @@ export function setupRunConfigurations({ currentFile }) {
     }).catch(() => { /* none stored */ });
 
     const choose = (name) => { selected = name; save(); };
+    // a request of an .http file kept to run again (the editor's "Save as run configuration"): added, or the one of the same request found, and chosen
+    window.addEventListener('pymagic:addRunConfig', async (e) => {
+        await ready;
+        const c = e.detail;
+        const same = list.find((o) => o.kind === c.kind && o.script === c.script && (o.request ?? '') === (c.request ?? ''));
+        if (same) { choose(same.name); return; }
+        const made = { ...blank(uniqueName(list, c.name), c.kind), script: c.script, request: c.request ?? '', environment: c.environment ?? '' };
+        list.push(made);
+        choose(made.name);
+    });
     const current = () => list.find((c) => c.name === selected) ?? null;
 
     /** The menu under the chip of the command bar. */
@@ -59,6 +70,7 @@ export function setupRunConfigurations({ currentFile }) {
         await ready;
         const files = await fetch('/api/files').then((r) => r.json()).catch(() => []);
         const scripts = files.filter((f) => f.endsWith('.py'));
+        const httpFiles = files.filter((f) => /\.(http|rest)$/i.test(f));
         const folders = [...new Set(files.map((f) => f.slice(0, Math.max(0, f.lastIndexOf('/')))).filter((d) => d))].sort();
         const draft = list.map((c) => ({ ...c, env: { ...c.env } }));
         let at = Math.max(0, draft.findIndex((c) => c.name === selected));
@@ -204,8 +216,7 @@ export function setupRunConfigurations({ currentFile }) {
                     field('Settings', text('settings', 'site_cfg.settings'), 'DJANGO_SETTINGS_MODULE; empty for the one manage.py names.'),
                     check('Test server', 'testServer', 'manage.py testserver: a server on a test database filled from the fixtures below.'), field('Fixtures', text('fixtures', 'users.json items.json')),
                     check('Open the browser when the server is up', 'openBrowser'), check('Debug only my code', 'justMyCode', 'Off lets the debugger stop in Django and the libraries too.'),
-                    field('Log files', text('logFiles', 'logs/debug.log'), 'Files of the project whose new lines show in the console while it runs, comma separated.'),
-                    field('Before launch', text('before', 'the name of another configuration'), 'Run that configuration first (migrate, say) and start this one when it has finished.')],
+                    field('Log files', text('logFiles', 'logs/debug.log'), 'Files of the project whose new lines show in the console while it runs, comma separated.')],
                 djangoTests: [field('Target', text('target', 'shop, shop.tests or shop.tests.ItemTests.test_create'), 'An app, a module, a class or one test; empty for all.'),
                     field('Settings', text('settings', 'site_cfg.settings'), 'Empty for the one manage.py names.'), check('Stop at the first failure', 'failfast', '--failfast.')],
                 fastapi: [field('Application', text('app', 'main:app'), 'module:variable, given to uvicorn.'), field('Host', text('host', '127.0.0.1')), field('Port', text('port', '8000')), check('Reload on changes', 'reload', 'uvicorn --reload.')],
@@ -226,6 +237,34 @@ export function setupRunConfigurations({ currentFile }) {
                     field('The program reaches this computer as', text('connectHost', 'empty: this computer\'s name'), 'Goes into the snippet to put in the program: an address of this computer that the program can reach.'),
                     field('Path mappings', maps, 'Which folder of this computer is which folder on the machine the program runs on: local=remote. A relative local folder is in the project. Without mappings the files are taken to be the same on both sides.'),
                     check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'), check('Open the Run panel when started', 'openPanel'));
+                return;
+            }
+            if (c.kind === 'http') {
+                // a request of an .http file (or all of them), sent by the HTTP client with an environment, its response in the HTTP tab
+                const file = document.createElement('select');
+                file.add(new Option('Choose an .http file…', ''));
+                for (const f of httpFiles) file.add(new Option(f, f));
+                if (c.script && !httpFiles.includes(c.script)) file.add(new Option(c.script + ' (not found)', c.script));
+                file.value = c.script;
+                const request = text('request', 'All the requests of the file, in turn');
+                const names = document.createElement('datalist');
+                names.id = 'rc-http-requests';
+                request.setAttribute('list', names.id);
+                const fill = () => {
+                    names.replaceChildren();
+                    if (!c.script) return;
+                    void fetch('/api/file?path=' + encodeURIComponent(c.script)).then((r) => (r.ok ? r.text() : '')).then((source) => {
+                        names.replaceChildren(...parseRequests(source).map((r) => Object.assign(document.createElement('option'), { value: r.name ?? `${r.method} ${r.url}` })));
+                    }).catch(() => { });
+                };
+                file.onchange = () => { c.script = file.value; fill(); };
+                fill();
+                const requestBox = document.createElement('div');
+                requestBox.append(request, names);
+                form.append(field('Name', name), field('Kind', kind), field('File', file),
+                    field('Request', requestBox, 'Its name (### name or # @name), or its METHOD url line as written; empty sends every request of the file in turn.'),
+                    field('Environment', text('environment', 'dev'), 'An environment of http-client.env.json; empty for the one chosen in the HTTP tab.'),
+                    check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'));
                 return;
             }
             if (c.kind === 'compound') {
@@ -252,10 +291,30 @@ export function setupRunConfigurations({ currentFile }) {
                     check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'), check('Open the Run panel when started', 'openPanel'));
                 return;
             }
+            // Before launch: tasks one per line, run in order before this one (another configuration, a manage.py command, the browser), added from + or typed
+            const before = document.createElement('textarea');
+            before.rows = 3;
+            before.spellcheck = false;
+            before.placeholder = 'migrate\nmanage.py collectstatic --noinput\nbrowser http://127.0.0.1:8000/';
+            before.value = c.before ?? '';
+            before.oninput = () => { c.before = before.value; };
+            const addTask = document.createElement('button');
+            addTask.type = 'button';
+            addTask.textContent = '+ Task';
+            addTask.title = 'Add a task to run before this configuration';
+            const addLine = (line) => { c.before = [...(c.before ?? '').split(/\r?\n/).filter((l) => l.trim()), line].join('\n'); before.value = c.before; before.focus(); };
+            addTask.onclick = () => openMenu(addTask, [
+                ...draft.filter((o) => o !== c && o.kind !== 'compound' && o.kind !== 'djangoTests' && o.kind !== 'debugserver').map((o) => ({ label: `${BEFORE_TASKS[0][1]}: ${o.name}`, run: () => addLine(o.name) })),
+                ...BEFORE_TASKS.slice(1).map(([, label, example]) => ({ label: `${label}…`, run: () => addLine(example) })),
+            ]);
+            const beforeBox = document.createElement('div');
+            beforeBox.className = 'rc-before';
+            beforeBox.append(before, addTask);
             form.append(
                 field('Name', name),
                 field('Kind', kind),
                 ...what,
+                field('Before launch', beforeBox, 'One task a line, run in order; this configuration starts when they have finished well. A name runs that configuration (migrate, say), manage.py … a command of the project, browser … opens an address.'),
                 field(c.kind === 'script' || c.kind === 'module' ? 'Parameters' : 'More options', args, 'Typed as on a command line: words separated by spaces, "quotes" keep a space in one word.'),
                 field('Working folder', cwd),
                 field('Python interpreter', interpreterBox, 'Empty: the project\'s interpreter. A path of this machine, or one of WSL, Docker or SSH as the interpreter list names it (wsl:Ubuntu|/usr/bin/python3).'),
@@ -290,6 +349,7 @@ export function setupRunConfigurations({ currentFile }) {
             if (names.some((n) => !n) || new Set(names).size !== names.length) { window.alert('Every configuration needs a name of its own.'); return; }
             if (draft.some((c) => c.kind === 'compound' && !c.members.split(/\r?\n/).some((n) => n.trim()))) { window.alert('A compound configuration needs at least one configuration to start.'); return; }
             if (draft.some((c) => (c.kind === 'script' || c.kind === 'django') && !c.script)) { window.alert('Every script configuration needs its script.'); return; }
+            if (draft.some((c) => c.kind === 'http' && !c.script)) { window.alert('An HTTP request configuration needs its .http file.'); return; }
             if (draft.some((c) => c.kind === 'module' && !/^[A-Za-z_][\w]*(\.[A-Za-z_][\w]*)*$/.test(c.module))) { window.alert('A module configuration needs a module name, such as http.server.'); return; }
             list = draft.map((c) => ({ ...c, name: c.name.trim() }));
             selected = chosen ? chosen.name.trim() : null;

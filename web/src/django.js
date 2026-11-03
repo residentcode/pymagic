@@ -2,7 +2,7 @@
 // and the apps with their migrations.
 import { showTab } from './panel';
 import { toast } from './toast';
-import { COMMANDS, splitArguments, migrationLabel, parseCommands, parseOptions, completeManage, groupStructure, appOf, addModel, addView, registerModel } from './django-model';
+import { COMMANDS, testRunOf, splitArguments, migrationLabel, parseCommands, parseOptions, completeManage, groupStructure, appOf, addModel, addView, registerModel } from './django-model';
 import { defineCommand } from './commands.js';
 const $ = (id) => document.getElementById(id);
 function el(tag, className, text) {
@@ -129,6 +129,13 @@ export function setupDjango(deps) {
         if (!project?.manage)
             return;
         const settings = chosenSettings();
+        // manage.py test runs through the Tests panel, as a Django tests configuration does: the results in its tree, not as plain text
+        const tests = debug ? null : testRunOf(args, settings && settings !== project.settingsModule ? settings : '');
+        if (tests) {
+            showTab('tests');
+            window.dispatchEvent(new CustomEvent('pymagic:runTests', { detail: { ...tests, framework: 'django' } }));
+            return;
+        }
         const withSettings = settings && settings !== project.settingsModule && !args.some((a) => a.startsWith('--settings')) ? [...args, `--settings=${settings}`] : args;
         const started = await deps.run.runScript(project.manage, withSettings, debug);
         if (started === false)

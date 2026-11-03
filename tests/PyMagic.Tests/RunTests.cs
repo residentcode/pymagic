@@ -58,7 +58,7 @@ public class RunTests
             int id = ++_id;
             body["type"] = type; body["id"] = id;
             Session.Handle(body);
-            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", "setDataBreak" => "dataBreakSet", "values" => "values", "jump" => "jumped", "table" => "table", "setName" => "setName", "reprOf" => "reprOf", "typeSource" => "typeSource", "consoleExec" or "consoleRunFile" => "consoleDone", "consoleVars" => "consoleVars", "consoleComplete" => "consoleCompletions", _ => "evaluated" };
+            string reply = type switch { "scopes" => "scopes", "variables" => "variables", "setVariable" => "variableSet", "setDataBreak" => "dataBreakSet", "values" => "values", "jump" => "jumped", "table" => "table", "setName" => "setName", "reprOf" => "reprOf", "typeSource" => "typeSource", "consoleExec" or "consoleRunFile" or "consoleAttach" or "consoleDetach" => "consoleDone", "consoleVars" => "consoleVars", "consoleComplete" => "consoleCompletions", _ => "evaluated" };
             return Next(e => e["type"]?.GetValue<string>() == reply && e["id"]?.GetValue<int>() == id);
         }
 
@@ -161,6 +161,48 @@ public class RunTests
         Assert.Contains("42", output);
         Assert.Contains("hi!", output);
         Assert.Contains("ZeroDivisionError", output);
+    }
+
+    /// <summary>Attach Debugger of the console: the console connects to a debug server (as Debug Cell's kernel does), a breakpoint in a file of the
+    /// project stops a function the console calls, and after Detach the console goes on without the debugger.</summary>
+    [Fact]
+    public void TheConsoleAttachesToTheDebuggerAndStopsAtABreakpoint()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("lib.py", "def double(n):\n    m = n * 2\n    return m\n");
+        h.Session.StartConsole(h.Root, null);
+        h.Type("consoleReady");
+        var events = new BlockingCollection<JsonNode>();
+        using var server = new RunSession(events.Add);
+        server.Listen(h.Root, "127.0.0.1", 0, "", Array.Empty<(string, string)>(), new Dictionary<string, JsonArray> { ["lib.py"] = new JsonArray(2) });
+        var seen = new List<string>();
+        JsonNode Next(string type)
+        {
+            while (true)
+            {
+                if (!events.TryTake(out var e, TimeSpan.FromSeconds(30))) throw new AssertionException("timed out waiting for " + type + "; the debugger said: " + string.Join(" | ", seen) + "; the console said: " + h.AllOutput());
+                seen.Add(e.ToJsonString());
+                if (e["type"]?.GetValue<string>() == type) return e;
+            }
+        }
+        var listening = Next("listening");
+        var attached = h.Request("consoleAttach", new JsonObject { ["host"] = "127.0.0.1", ["port"] = listening["port"]!.GetValue<int>(), ["token"] = listening["token"]!.GetValue<string>() });
+        Assert.True(attached["error"] == null, attached.ToJsonString());
+        Next("connected");
+        h.Request("consoleExec", new JsonObject { ["code"] = "from lib import double" });
+        h.Session.Handle(new JsonObject { ["type"] = "consoleExec", ["id"] = 900, ["code"] = "print('got', double(21))" });
+        var stopped = Next("stopped");
+        Assert.Equal(2, stopped["frames"]![0]!["line"]!.GetValue<int>());
+        Assert.True(stopped["frames"]![0]!["file"]!.GetValue<string>().EndsWith("lib.py"));
+        server.Handle(new JsonObject { ["type"] = "continue" });
+        h.Next(e => e["type"]?.GetValue<string>() == "consoleDone" && e["id"]?.GetValue<int>() == 900);
+        Assert.Contains("got 42", h.AllOutput());
+        h.Request("consoleDetach", new JsonObject());
+        Next("disconnected");
+        h.Request("consoleExec", new JsonObject { ["code"] = "print('again', double(5))" });   // no stop now
+        Assert.Contains("again 10", h.AllOutput());
+        Assert.Contains("The debugger is detached", h.AllOutput());
     }
 
     [Fact]
@@ -421,6 +463,38 @@ public class RunTests
         Assert.Equal(8, Line(h.Type("stopped")));
         h.Command("continue");
         h.Type("exited");
+    }
+
+    [Fact]
+    public void AScratchFileKeptOutsideTheProjectStopsAtItsBreakpointsAndIsSteppedThrough()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        string scratches = Path.Combine(Path.GetTempPath(), "pm_scratch_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(scratches);
+        try
+        {
+            string scratch = Path.Combine(scratches, "try.py");
+            File.WriteAllText(scratch, "def add(a, b):\n    return a + b\nx = add(1, 2)\ny = x * 2\nprint('y =', y)\n");
+            // the server names a scratch's breakpoints by where it is kept (Program.cs DebugFile)
+            h.Session.Start(h.Root, scratch, true, Array.Empty<string>(), new Dictionary<string, List<int>> { [scratch] = new() { 3 } });
+            var stopped = h.Type("stopped");
+            Assert.Equal(3, Line(stopped));
+            Assert.True(stopped["frames"]![0]!["file"]!.GetValue<string>().EndsWith("try.py"));
+            // its code is the person's: stepping goes into its functions, as in a file of the project
+            h.Command("stepIn");
+            var inside = h.Type("stopped");
+            Assert.Equal(2, Line(inside));
+            Assert.Equal("add", inside["frames"]![0]!["name"]!.GetValue<string>());
+            h.Command("stepOut");
+            Assert.Equal(3, Line(h.Type("stopped")));
+            h.Command("next");
+            Assert.Equal(4, Line(h.Type("stopped")));
+            h.Command("continue");
+            Assert.Equal(0, h.Type("exited")["code"]!.GetValue<int>());
+            Assert.Contains("y = 6", h.AllOutput());
+        }
+        finally { try { Directory.Delete(scratches, true); } catch (IOException) { } }
     }
 
     [Fact]

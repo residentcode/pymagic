@@ -1,6 +1,7 @@
 """PyMagic's SQLite helper: one request as JSON on stdin, its answer as JSON on stdout (the standard sqlite3 module only).
 
-  {"op": "schema", "path"}                                   tables and views: columns, primary key, indexes, foreign keys
+  {"op": "schema", "path"}                                   tables and views: columns, primary key, indexes, foreign keys;
+                                                             the triggers (and no routines: SQLite has none)
   {"op": "rows", "path", "table", "where", "order", "desc", "limit", "offset"}
                                                              a page of a table's rows, with the key of each row and the count
   {"op": "apply", "path", "table", "changes": [...]}          edits of the data editor, in one transaction:
@@ -15,6 +16,7 @@ nothing after its point as {"real": "2.0"}.
 """
 import json
 import pathlib
+import re
 import sqlite3
 import sys
 import time
@@ -46,6 +48,18 @@ def connect(path, write=False):
     return sqlite3.connect(pathlib.Path(path).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
 
 
+# CREATE [TEMP] TRIGGER [IF NOT EXISTS] name [BEFORE | AFTER | INSTEAD OF] INSERT | DELETE | UPDATE [OF ...] ON table
+TRIGGER_HEAD = re.compile(r"\bTRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:\"[^\"]*\"|`[^`]*`|\[[^\]]*\]|\S+)\s+(BEFORE\b|AFTER\b|INSTEAD\s+OF\b)?\s*(INSERT|DELETE|UPDATE)\b", re.I)
+
+
+def trigger_of(sql):
+    """When a trigger fires, from its CREATE TRIGGER: {"timing": "BEFORE" | "AFTER" | "INSTEAD OF", "event": "INSERT" | ...}."""
+    m = TRIGGER_HEAD.search(sql or "")
+    if not m:
+        return {"timing": "", "event": ""}
+    return {"timing": re.sub(r"\s+", " ", (m.group(1) or "BEFORE").upper()), "event": m.group(2).upper()}
+
+
 def schema(path):
     db = connect(path)
     try:
@@ -59,7 +73,10 @@ def schema(path):
             keys = [{"column": f[3], "table": f[2], "to": f[4]} for f in db.execute("PRAGMA foreign_key_list(%s)" % quote(name))]
             rowid = kind == "table" and "WITHOUT ROWID" not in (sql or "").upper()
             objects.append({"name": name, "kind": kind, "columns": columns, "indexes": indexes, "foreignKeys": keys, "rowid": rowid, "sql": sql})
-        return {"objects": objects}
+        triggers = [dict(trigger_of(sql), name=name, table=table, sql=sql)
+                    for name, table, sql in db.execute("SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY tbl_name, name")]
+        # SQLite has no stored procedures
+        return {"objects": objects, "triggers": triggers, "routines": []}
     finally:
         db.close()
 

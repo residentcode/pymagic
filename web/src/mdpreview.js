@@ -1,11 +1,13 @@
 // The live preview of a Markdown or reStructuredText file, beside the editor: it follows the typing, scrolls with the editor, opens the files a
-// link names, draws Mermaid flowcharts and sequence diagrams (mermaid-lite.js), and exports the page as an HTML file. The page is built from the
+// link names, draws Mermaid flowcharts and sequence diagrams (mermaid-lite.js) and the other kinds with the Mermaid library (mermaid.js, loaded
+// when one is shown), and exports the page as an HTML file. The page is built from the
 // tree markdown-doc.js reads (never from text as HTML); reStructuredText comes back from docutils as HTML and is cut down to a list of safe tags.
 import * as monaco from 'monaco-editor';
 import { blocksDoc } from './markdown-doc';
 import { safeHref } from './markdown-lite';
 import { parseMermaid, layoutFlow, clip } from './mermaid-lite';
 import { toast } from './toast';
+import { themeNow } from './settings';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const kindOf = (rel) => (/\.(md|markdown)$/i.test(rel ?? '') ? 'md' : /\.rst$/i.test(rel ?? '') ? 'rst' : null);
@@ -110,16 +112,39 @@ function sequenceSvg(diagram) {
     return root;
 }
 
-/** A Mermaid diagram as an element: a drawing for the kinds that are read, the text with a note for the others. */
+/** Loads dist/mermaid.js once (the Mermaid library, for the kinds mermaid-lite.js does not draw). */
+let mermaidLoad = null;
+function loadMermaid() {
+    mermaidLoad ??= new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'mermaid.js';
+        s.onload = () => resolve(self.pymagicMermaid);
+        s.onerror = () => { mermaidLoad = null; reject(new Error('mermaid.js was not loaded')); };
+        document.head.append(s);
+    });
+    return mermaidLoad;
+}
+
+/**
+ * A Mermaid diagram as an element: flowcharts and sequence diagrams drawn here at once (mermaid-lite.js); every other kind drawn by the Mermaid
+ * library, which is loaded the first time one is shown (the text stays until it is drawn, and with Mermaid's message when it cannot be).
+ */
 export function diagramElement(text) {
     const d = parseMermaid(text);
     const box = el('div', 'md-mermaid');
     if (d.type === 'flow' && d.nodes.length) box.append(flowSvg(d));
     else if (d.type === 'sequence' && d.participants.length) box.append(sequenceSvg(d));
-    else {
-        box.append(el('div', 'md-note-line', d.type === 'unsupported' ? `A Mermaid "${d.kind}" diagram is shown as its text: PyMagic draws flowcharts and sequence diagrams.` : 'An empty diagram.'));
-        box.append(el('pre', null, text));
+    else if (d.type === 'unsupported') {
+        const pre = el('pre', null, text);
+        box.append(pre);
+        const dark = themeNow() !== 'light';
+        void loadMermaid().then((m) => m.render(text, dark)).then((svgText) => {
+            pre.remove();
+            box.insertAdjacentHTML('beforeend', svgText);
+            box.classList.add('md-mermaid-lib');
+        }).catch((e) => box.prepend(el('div', 'md-note-line', `This "${d.kind}" diagram cannot be drawn: ${String(e?.message ?? e).split('\n')[0]}`)));
     }
+    else box.append(el('div', 'md-note-line', 'An empty diagram.'), el('pre', null, text));
     return box;
 }
 

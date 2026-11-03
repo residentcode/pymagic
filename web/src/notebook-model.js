@@ -479,6 +479,14 @@ export function isLocalServer(server) {
     return host === 'localhost' || host === '[::1]' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
 }
 
+/**
+ * How the debugger of a cell reaches the IDE (Debug Cell): the built-in kernel and a Jupyter server on this computer connect to the IDE's
+ * debug server (undefined); a server on another computer cannot, so its debugger talks over the kernel's own channels ('kernel').
+ */
+export function debugRoute(server) {
+    return server && !isLocalServer(server) ? 'kernel' : undefined;
+}
+
 /** The saved servers from their JSON text (anything that is not a valid server is dropped). */
 export function parseServers(text) {
     let list;

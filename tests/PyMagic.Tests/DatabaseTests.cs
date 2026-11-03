@@ -83,11 +83,58 @@ public class DatabaseTests
                 "    'logs': {'NAME': os.path.join(BASE_DIR, 'logs.sqlite3'), 'ENGINE': 'django.db.backends.sqlite3'},\n" +
                 "    'pg': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'shop'},\n" +
                 "    'mem': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'},\n}\n");
-            var found = Databases.Find(root);
+            var found = Databases.Find(root).Where(s => s.Offer == null).ToList();
             Assert.Equal("site/data/db.sqlite3,site/logs.sqlite3", string.Join(",", found.Select(s => s.Path)));
             Assert.True(found.All(s => !s.Exists && s.Django == "mysite.settings.base" && s.Manage == "site/manage.py"), "not made yet, named by the settings");
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void ThePostgresAndMysqlDatabasesOfDjangosSettingsAreOfferedUntilConnected()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "pm_dj_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "shop"));
+        Environment.SetEnvironmentVariable("PM_TEST_DB_HOST", "db.internal");
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "manage.py"), "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'shop.settings')\nfrom django.core.management import execute_from_command_line\n");
+            File.WriteAllText(Path.Combine(root, "shop", "__init__.py"), "");
+            File.WriteAllText(Path.Combine(root, "shop", "settings.py"), """
+                import os
+                DATABASES = {
+                    "default": {
+                        "ENGINE": "django.db.backends.postgresql",
+                        "NAME": os.environ.get("PM_TEST_DB_NAME", "shop"),   # the default, the variable is not set
+                        "USER": "shopper",
+                        "PASSWORD": os.getenv("PM_TEST_DB_PASSWORD"),
+                        "HOST": os.environ["PM_TEST_DB_HOST"],
+                        "PORT": 5433,
+                        "OPTIONS": {"sslmode": "require", "other": {"x": 1}},
+                    },
+                    'legacy': dict(ENGINE='django.db.backends.mysql', NAME='old_shop', USER='root', PASSWORD='pw', HOST='127.0.0.1'),
+                    "maps": {"ENGINE": "django.contrib.gis.db.backends.postgis", "NAME": "geo"},
+                    "cache": {"ENGINE": "django.db.backends.sqlite3", "NAME": "cache.sqlite3"},
+                }
+                """);
+            var offers = Databases.Find(root).Where(s => s.Offer != null).ToList();
+            Assert.Equal("default:postgres:db.internal:5433/shop,legacy:mysql:127.0.0.1:3306/old_shop,maps:postgres:localhost:5432/geo",
+                string.Join(",", offers.Select(s => $"{s.Offer!["alias"]}:{s.Server}:{s.Detail}")));
+            var pg = offers[0];
+            Assert.Equal("shopper", pg.Offer!["user"]);
+            Assert.Equal("", pg.Offer["password"]);
+            Assert.Equal("shop.settings", pg.Django!);
+            Assert.True(!pg.Exists, "not connected: not a source of the console");
+            Assert.Equal("pw", offers[1].Offer!["password"]);
+            // once connected it is a server of the project, no longer an offer
+            DbServers.Save(root, DbServers.Parse(new JsonObject { ["kind"] = "mysql", ["host"] = "127.0.0.1", ["port"] = "3306", ["user"] = "root", ["database"] = "old_shop" }), "pw");
+            Assert.Equal("default,maps", string.Join(",", Databases.Find(root).Where(s => s.Offer != null).Select(s => s.Offer!["alias"])));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PM_TEST_DB_HOST", null);
+            Directory.Delete(root, true);
+        }
     }
 
     [Fact]
@@ -105,6 +152,25 @@ public class DatabaseTests
         Assert.True(!tag["rowid"]!.GetValue<bool>(), "WITHOUT ROWID");
         Assert.Equal("item_id -> item.id", $"{tag["foreignKeys"]![0]!["column"]} -> {tag["foreignKeys"]![0]!["table"]}.{tag["foreignKeys"]![0]!["to"]}");
         Assert.Equal("view", objects[2]!["kind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void TheSchemaListsTheTriggersOfTheTablesWithTheirDefinition()
+    {
+        if (!HavePython) return;
+        using var p = new Project();
+        Assert.True(p.Ask("run", new JsonObject { ["sql"] = "CREATE TABLE log (what TEXT)" })["error"] == null);
+        Assert.True(p.Ask("run", new JsonObject { ["sql"] = "CREATE TRIGGER item_added AFTER INSERT ON item BEGIN INSERT INTO log VALUES (new.name); END" })["error"] == null);
+        Assert.True(p.Ask("run", new JsonObject { ["sql"] = "CREATE TRIGGER IF NOT EXISTS \"no update\" INSTEAD OF UPDATE ON cheap BEGIN SELECT 1; END" })["error"] == null);
+        Assert.True(p.Ask("run", new JsonObject { ["sql"] = "CREATE TRIGGER gone DELETE ON item BEGIN SELECT 1; END" })["error"] == null);
+        var schema = p.Ask("schema", new JsonObject());
+        var triggers = schema["triggers"]!.AsArray();
+        Assert.Equal("cheap:no update:INSTEAD OF UPDATE,item:gone:BEFORE DELETE,item:item_added:AFTER INSERT",
+            string.Join(",", triggers.Select(t => $"{t!["table"]}:{t["name"]}:{t["timing"]} {t["event"]}")));
+        Assert.Contains("INSERT INTO log", triggers[2]!["sql"]!.GetValue<string>());
+        Assert.Equal(0, schema["routines"]!.AsArray().Count);   // SQLite has no stored procedures
+        // a trigger is no table of the tree
+        Assert.True(schema["objects"]!.AsArray().All(o => o!["name"]!.GetValue<string>() != "item_added"));
     }
 
     [Fact]

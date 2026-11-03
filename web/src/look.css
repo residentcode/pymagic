@@ -683,6 +683,18 @@ li.mark-resources .fname, li.mark-resources .folder { color: var(--teal, #6cc4c4
 .svc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .svc-state { color: var(--dim); font-size: 12px; }
 .svc-row button.danger { color: var(--bad-strong, #e5534b); }
+.svc-row.chosen { background: var(--sel-soft); } .svc-dot.starting, .svc-dot.idle { background: #56b6c2; }
+/* the output of the chosen service beside the list (a member of a compound has its own) */
+#services-main { flex: 1 1 45%; } #services-detail { flex: 1 1 55%; } #services-detail[hidden] { display: none; }
+/* the Python console's history list (Ctrl+Alt+E), over the bottom of the console */
+#pyc-main { position: relative; }
+.pyc-history { position: absolute; left: 10px; right: 10px; bottom: 56px; max-height: 60%; display: flex; flex-direction: column; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.3); z-index: 20; padding: 6px; gap: 6px; }
+.pyc-history-rows { overflow: auto; font-family: var(--mono); font-size: 12.5px; }
+.pyc-history-row { padding: 3px 8px; border-radius: 5px; cursor: pointer; white-space: pre; overflow: hidden; text-overflow: ellipsis; max-height: 4.6em; }
+.pyc-history-row.active, .pyc-history-row:hover { background: var(--sel-soft); }
+#pyc-debug.on { color: var(--accent); }
+.rc-before { display: flex; gap: 6px; align-items: flex-start; } .rc-before textarea { flex: 1; min-width: 0; }
+#services-output { margin: 0; padding: 8px 12px; white-space: pre-wrap; word-break: break-word; }
 .ra-box { width: min(640px, 92vw); } .ra-box input { font-size: 15px; padding: 8px 10px; }
 .ra-list { max-height: 320px; overflow: auto; margin-top: 8px; }
 .ra-row { display: flex; align-items: baseline; gap: 12px; padding: 5px 10px; cursor: pointer; border-radius: 6px; }

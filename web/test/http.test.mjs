@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/http-model.js', import.meta.url), 'utf8');
-const { parseRequests, requestAt, fileVariables, environment, substitute, resolve, parseCurl, formatRequest, toCurl, prettyBody, environmentRows, environmentFiles } =
+const { parseRequests, requestAt, fileVariables, environment, substitute, resolve, parseCurl, formatRequest, toCurl, prettyBody, environmentRows, environmentFiles, bodyParts, runScript } =
     await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const FILE = [
@@ -112,4 +112,98 @@ test('the environment files as rows of the editor in the HTTP tab, and back', ()
     // nothing at all
     assert.deepEqual(environmentFiles([], []), { public: null, private: null });
     assert.deepEqual(environmentRows(null, null), { envs: [], rows: [] });
+});
+
+test('response handlers, >> files and pre-request scripts are read from a request', () => {
+    const text = [
+        '< {%',
+        '    request.variables.set("id", "7");',
+        '%}',
+        'GET https://example.com/items/{{id}}',
+        'Accept: application/json',
+        '> {%',
+        '    client.test("ok", () => client.assert(response.status === 200));',
+        '%}',
+        '>> ./out/item.json',
+        '',
+        '###',
+        'POST https://example.com/items',
+        'Content-Type: application/json',
+        '',
+        '{"name": "pen"}',
+        '',
+        '> {% client.global.set("made", response.body.id); %}',
+        '> ./checks.js',
+        '>>! saved.json',
+        '',
+        '###',
+        'GET https://example.com/plain',
+    ].join('\n');
+    const [get, post, plain] = parseRequests(text);
+    assert.equal(get.line, 4);
+    assert.equal(get.pre.trim(), 'request.variables.set("id", "7");');
+    assert.deepEqual(get.headers, [['Accept', 'application/json']]);
+    assert.equal(get.body, null);
+    assert.equal(get.handlers.length, 1);
+    assert.match(get.handlers[0].script, /client\.test\("ok"/);
+    assert.deepEqual(get.output, { file: './out/item.json', overwrite: false });
+    assert.equal(post.body, '{"name": "pen"}');
+    assert.deepEqual(post.handlers, [{ script: ' client.global.set("made", response.body.id); ' }, { file: './checks.js' }]);
+    assert.deepEqual(post.output, { file: 'saved.json', overwrite: true });
+    assert.equal(plain.pre, null);
+    assert.deepEqual(plain.handlers, []);
+    assert.equal(plain.output, null);
+});
+
+test('bodyParts: the files of < lines sent as they are, a multipart body with CRLF lines', () => {
+    const body = ['--B', 'Content-Disposition: form-data; name="title"', '', 'A cat', '--B', 'Content-Disposition: form-data; name="photo"; filename="cat.png"',
+        'Content-Type: image/png', '', '< ./cat.png', '--B', 'Content-Disposition: form-data; name="meta"', '', '<@ meta.json', '--B--'].join('\n');
+    const parts = bodyParts(body, 'multipart/form-data; boundary=B');
+    assert.deepEqual(parts, [
+        { text: '--B\r\nContent-Disposition: form-data; name="title"\r\n\r\nA cat\r\n--B\r\nContent-Disposition: form-data; name="photo"; filename="cat.png"\r\nContent-Type: image/png\r\n\r\n' },
+        { file: './cat.png', vars: false },
+        { text: '\r\n' },
+        { text: '--B\r\nContent-Disposition: form-data; name="meta"\r\n\r\n' },
+        { file: 'meta.json', vars: true },
+        { text: '\r\n' },
+        { text: '--B--\r\n' },
+    ]);
+    // the text that the parts make, the files left as their names
+    assert.equal(parts.map((x) => x.text ?? `[${x.file}]`).join(''),
+        '--B\r\nContent-Disposition: form-data; name="title"\r\n\r\nA cat\r\n--B\r\nContent-Disposition: form-data; name="photo"; filename="cat.png"\r\nContent-Type: image/png\r\n\r\n[./cat.png]\r\n--B\r\nContent-Disposition: form-data; name="meta"\r\n\r\n[meta.json]\r\n--B--\r\n');
+    // an ordinary body keeps its own line ends; a body of text only is one part
+    assert.deepEqual(bodyParts('{\n  "a": 1\n}', 'application/json'), [{ text: '{\n  "a": 1\n}' }]);
+    assert.deepEqual(bodyParts(null, 'text/plain'), []);
+});
+
+test('runScript: client, response and request as PyCharm gives them to a handler', () => {
+    const response = { status: 201, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': 'a=1, b=2', Date: 'Mon, 03 Nov 2026 10:00:00 GMT' }, body: '{"id": 42, "tags": ["x"]}' };
+    const r = runScript({
+        script: [
+            'client.test("created", () => { client.assert(response.status === 201, "status"); });',
+            'client.test("json", () => { client.assert(response.contentType.mimeType === "application/json"); client.assert(response.body.tags[0] === "x"); });',
+            'client.test("fails", () => { client.assert(response.body.id === 1, "the id is 1"); });',
+            'client.test("throws", () => { response.body.nothing.here; });',
+            'client.global.set("id", response.body.id);',
+            'client.global.set("obj", {a: 1});',
+            'client.global.clear("old");',
+            'client.log("date", response.headers.valueOf("date"), response.headers.valuesOf("set-cookie").length);',
+            'client.log(request.environment.get("host"), request.method);',
+            'client.exit();',
+            'client.log("not reached");',
+        ].join('\n'),
+        response, globals: { old: 'x', kept: 'y' }, environment: { host: 'http://h' }, request: { method: 'POST', url: 'http://h/items', headers: [] },
+    });
+    assert.deepEqual(r.tests.map((t) => [t.name, t.passed]), [['created', true], ['json', true], ['fails', false], ['throws', false]]);
+    assert.equal(r.tests[2].error, 'the id is 1');
+    assert.match(r.tests[3].error, /TypeError/);
+    assert.deepEqual(r.globals, { kept: 'y', id: '42', obj: '{"a":1}' });
+    assert.deepEqual(r.log, ['date Mon, 03 Nov 2026 10:00:00 GMT 2', 'http://h POST']);
+    assert.equal(r.error, undefined);
+    // an error of the script itself, a failed assert outside a test, and a pre-request script's variables
+    assert.match(runScript({ script: 'nope(', response }).error, /SyntaxError/);
+    assert.deepEqual(runScript({ script: 'client.assert(false, "bad")', response }).tests, [{ name: 'bad', passed: false, error: 'bad' }]);
+    assert.deepEqual(runScript({ script: 'request.variables.set("n", 5)' }).variables, { n: '5' });
+    // a body that is not JSON stays text
+    assert.equal(runScript({ script: 'client.log(typeof response.body)', response: { status: 200, headers: {}, body: 'plain' } }).log[0], 'string');
 });

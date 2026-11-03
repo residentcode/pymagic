@@ -329,6 +329,29 @@ public class TestRunnerTests
     }
 
     [Fact]
+    public void TrialRunsTwistedTestCasesWithTheirOutcomes()
+    {
+        // with Twisted installed: Trial's TestCase, a Deferred that a test returns, a failure and a skip
+        if (!HavePython || !CanRun("-c \"import twisted.trial.unittest\"")) return;
+        using var p = new Project();
+        p.File("test_tw.py",
+            "from twisted.internet import defer\nfrom twisted.trial import unittest\n\n\nclass Clock(unittest.TestCase):\n" +
+            "    def test_sum(self):\n        self.assertEqual(1 + 1, 2)\n\n" +
+            "    def test_wrong(self):\n        self.assertEqual(1, 2)\n\n" +
+            "    def test_later(self):\n        d = defer.succeed(3)\n        d.addCallback(lambda v: self.assertEqual(v, 3))\n        return d\n\n" +
+            "    def test_skipped(self):\n        raise unittest.SkipTest('not here')\n");
+        var r = Results(p.Run("trial"));
+        const string id = "test_tw.py::Clock::";
+        Assert.Equal("passed", Outcome(r, id + "test_sum"));
+        Assert.Equal("failed", Outcome(r, id + "test_wrong"));
+        Assert.Equal(10, r[id + "test_wrong"]["line"]!.GetValue<int>());
+        Assert.Equal("passed", Outcome(r, id + "test_later"));
+        Assert.Equal("skipped", Outcome(r, id + "test_skipped"));
+        // one test asked for
+        Assert.Equal(id + "test_sum", string.Join(",", Results(p.Run("trial", id + "test_sum")).Keys));
+    }
+
+    [Fact]
     public void NoseRunsPlainTestFunctionsBesideTestCases()
     {
         if (!HavePython) return;

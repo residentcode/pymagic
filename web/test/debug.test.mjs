@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/debug-model.js', import.meta.url), 'utf8');
 const { codeOf, namesOf, inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem,
-    declarationLine, historyStep, framesOfStop, threadHeadings } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+    declarationLine, historyStep, framesOfStop, threadHeadings, serverProgramNote } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 test('codeOf: comments and the text of strings are left out', () => {
     assert.equal(codeOf('x = "a # b"  # note'), 'x = "     "  ');
@@ -116,4 +116,14 @@ test('threadHeadings: one heading before each thread, none when only the stopped
     const frames = framesOfStop({ frames: [{ id: 0 }, { id: 1 }], threads: [{ name: 'spinner', frames: [{ id: 2 }, { id: 3 }] }] });
     assert.deepEqual([...threadHeadings(frames, 'MainThread')], [[0, 'MainThread (stopped)'], [2, 'spinner']]);
     assert.equal(threadHeadings(framesOfStop({ frames: [{ id: 0 }] }), 'MainThread').size, 0);
+});
+
+test('serverProgramNote: several programs on the debug server, and the last one leaving', () => {
+    assert.equal(serverProgramNote({ type: 'connected', from: '10.0.0.2:5000', program: 1, programs: 1 }).text, 'Program 1 connected from 10.0.0.2:5000.\n');
+    assert.match(serverProgramNote({ type: 'connected', from: 'b', program: 2, programs: 2 }).text, /^Program 2 connected from b \(2 programs are connected/);
+    assert.deepEqual(serverProgramNote({ type: 'disconnected', program: 1, programs: 1 }), { text: 'Program 1 disconnected; 1 program is still connected.\n', still: true });
+    assert.equal(serverProgramNote({ type: 'disconnected', program: 2, programs: 0 }).still, false);
+    // an engine that does not number them
+    assert.equal(serverProgramNote({ type: 'connected', from: 'x' }).text, 'A program connected from x.\n');
+    assert.equal(serverProgramNote({ type: 'disconnected' }).still, false);
 });

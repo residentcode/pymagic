@@ -2,7 +2,7 @@
 // and lists who called it.
 import { showTab } from './panel';
 import { toast } from './toast';
-import { callGraph, formatTime, hottest, labelOf, locationOf, rowsOf, sameFunction } from './profile-model';
+import { callGraph, formatTime, hottest, labelOf, locationOf, rowsOf, sameFunction, wholeGraph } from './profile-model';
 
 const $ = (id) => document.getElementById(id);
 
@@ -15,6 +15,8 @@ export function setupProfiler(deps) {
     let data = null;           // the answer of /api/profile
     let opened = null;         // the row whose callers and callees are listed (and drawn in the graph)
     let graph = false;         // the call graph instead of the list
+    let whole = false;         // the graph of the whole program, not one function's neighbours
+    let picked = null;         // the box chosen in the whole graph: its arrows stand out
     const snapshotBox = $('prof-snapshot');
 
     function cell(text, cls, title) {
@@ -71,8 +73,97 @@ export function setupProfiler(deps) {
             el.textContent = text;
         return el;
     };
+    /** Above the graph: the neighbours of one function, or the whole program. */
+    function graphSwitch() {
+        const bar = document.createElement('div');
+        bar.className = 'prof-graph-switch';
+        const one = document.createElement('button');
+        one.textContent = 'Around one function';
+        one.title = 'Who called the chosen function and what it called';
+        const all = document.createElement('button');
+        all.textContent = 'The whole program';
+        all.title = 'Every function that took time, the entry points on the left (the 60 most expensive; "project code only" leaves out libraries)';
+        one.classList.toggle('active', !whole);
+        all.classList.toggle('active', whole);
+        one.onclick = () => { whole = false; if (picked) opened = picked; paint(); };
+        all.onclick = () => { whole = true; picked = opened; paint(); };
+        bar.append(one, all);
+        return bar;
+    }
+    function arrowDefs(pic) {
+        const defs = svg('defs', {});
+        const marker = svg('marker', { id: 'prof-arrow', viewBox: '0 0 10 10', refX: 10, refY: 5, markerWidth: 8, markerHeight: 8, markerUnits: 'userSpaceOnUse', orient: 'auto' });   // the same size whatever the line's width
+        marker.append(svg('path', { d: 'M 0 0 L 10 5 L 0 10 z', class: 'prof-arrowhead' }));
+        defs.append(marker);
+        pic.append(defs);
+    }
+
+    /**
+     * The whole program's graph: a box for each function that took time, in columns by how deep it is called. A click on a box makes its
+     * arrows stand out (and is the function "Around one function" shows); a double click opens it.
+     */
+    function paintWhole() {
+        const g = wholeGraph(data, { projectOnly: project.checked });
+        if (!g.boxes.length) {
+            list.replaceChildren(graphSwitch(), cell('Nothing to draw. Uncheck "project code only".', 'detail'));
+            return;
+        }
+        const pad = 16, total = data.total > 0 ? data.total : 1;
+        const top = pad + 40;   // room above the boxes for the arrows that go back
+        const pic = svg('svg', { width: g.width + pad * 2, height: g.height + top + pad + 18, class: 'prof-graph' });
+        arrowDefs(pic);
+        const isPicked = (fn) => !!picked && sameFunction(picked, fn);
+        for (const e of g.edges) {
+            const lit = isPicked(e.from.fn) || isPicked(e.to.fn);
+            const cls = 'prof-edge' + (e.back ? ' back' : '') + (picked ? (lit ? ' lit' : ' faded') : '');
+            const width = 1 + Math.min(5, (5 * e.time) / total);
+            let d, lx, ly;
+            if (e.back) {
+                // a call back to the left (recursion through others): over the boxes, from the top of one to the top of the other
+                const x1 = pad + e.from.x + e.from.width / 2, y1 = top + e.from.y, x2 = pad + e.to.x + e.to.width / 2 + 12, y2 = top + e.to.y;
+                const lift = Math.min(y1, y2) - 30;
+                d = `M ${x1} ${y1} C ${x1} ${lift}, ${x2} ${lift}, ${x2} ${y2}`;
+                lx = (x1 + x2) / 2;
+                ly = lift + 4;
+            } else {
+                const x1 = pad + e.from.x + e.from.width, y1 = top + e.from.y + e.from.height / 2, x2 = pad + e.to.x, y2 = top + e.to.y + e.to.height / 2;
+                const mid = (x1 + x2) / 2;
+                d = `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
+                lx = x2 - 6;
+                ly = y2 - 5;
+            }
+            pic.append(svg('path', { d, class: cls, 'stroke-width': width, 'marker-end': 'url(#prof-arrow)' }));
+            // the counts on the arrows of the chosen box, or on every arrow while there are few
+            if (lit || (!picked && g.edges.length <= 40))
+                pic.append(svg('text', { x: lx, y: ly, class: 'prof-edge-label', 'text-anchor': e.back ? 'middle' : 'end' }, `${e.calls}× · ${formatTime(e.time)}`));
+        }
+        for (const b of g.boxes) {
+            const chosen = isPicked(b.fn);
+            const group = svg('g', { class: 'prof-node' + (chosen ? ' center' : ''), transform: `translate(${pad + b.x},${top + b.y})` });
+            group.append(svg('rect', { width: b.width, height: b.height, rx: 5 }));
+            group.append(svg('rect', { width: Math.max(2, b.width * Math.min(1, b.fn.cumulative / total)), height: 3, y: b.height - 3, class: 'prof-share' }));
+            group.append(svg('text', { x: 8, y: 14, class: 'prof-node-name' }, (labelOf(b.fn) + (b.self ? ' ↻' : '')).slice(0, 28)));
+            group.append(svg('text', { x: 8, y: 27, class: 'prof-node-detail' }, `${formatTime(b.fn.cumulative)} · ${formatTime(b.fn.own)} itself`.slice(0, 36)));
+            group.append(svg('title', {}, `${labelOf(b.fn)}, ${locationOf(b.fn)}: ${formatTime(b.fn.cumulative)} with callees, ${formatTime(b.fn.own)} itself, ${b.fn.calls} calls`
+                + (b.self ? `; calls itself ${b.self}×` : '') + ' (click to pick it; double-click to open it)'));
+            group.onclick = () => { picked = chosen ? null : b.fn; opened = picked ?? opened; paint(); };
+            group.ondblclick = () => openAt(b.fn);
+            pic.append(group);
+        }
+        if (g.hidden)
+            pic.append(svg('text', { x: pad, y: top + g.height + pad + 10, class: 'prof-edge-label' }, `… ${g.hidden} cheaper functions are left out (the list has them all)`));
+        const holder = document.createElement('div');
+        holder.className = 'prof-graph-holder';
+        holder.append(pic);
+        list.replaceChildren(graphSwitch(), holder);
+    }
+
     /** The call graph around the opened function (else the hottest of the project): a click on a box goes there. */
     function paintGraph() {
+        if (whole) {
+            paintWhole();
+            return;
+        }
         const center = opened ?? hottest(data) ?? data.functions[0];
         if (!center) {
             list.replaceChildren(cell('Nothing was profiled.', 'detail'));
@@ -81,11 +172,7 @@ export function setupProfiler(deps) {
         const g = callGraph(center);
         const pad = 16, total = data.total > 0 ? data.total : 1;
         const pic = svg('svg', { width: g.width + pad * 2, height: g.height + pad * 2 + 18, class: 'prof-graph' });
-        const defs = svg('defs', {});
-        const marker = svg('marker', { id: 'prof-arrow', viewBox: '0 0 10 10', refX: 10, refY: 5, markerWidth: 8, markerHeight: 8, markerUnits: 'userSpaceOnUse', orient: 'auto' });   // the same size whatever the line's width
-        marker.append(svg('path', { d: 'M 0 0 L 10 5 L 0 10 z', class: 'prof-arrowhead' }));
-        defs.append(marker);
-        pic.append(defs);
+        arrowDefs(pic);
         for (const e of g.edges) {
             const x1 = pad + e.from.x + e.from.width, y1 = pad + e.from.y + e.from.height / 2, x2 = pad + e.to.x, y2 = pad + e.to.y + e.to.height / 2;
             const mid = (x1 + x2) / 2;
@@ -113,7 +200,7 @@ export function setupProfiler(deps) {
         const holder = document.createElement('div');
         holder.className = 'prof-graph-holder';
         holder.append(pic);
-        list.replaceChildren(holder);
+        list.replaceChildren(graphSwitch(), holder);
     }
 
     function paint() {
@@ -182,6 +269,7 @@ export function setupProfiler(deps) {
             if (!res.ok) { data = null; paint(); return; }
             data = await res.json();
             opened = null;
+            picked = null;
             paint();
             if (announce) {
                 showTab('profiler');
@@ -209,7 +297,7 @@ export function setupProfiler(deps) {
         snapshotBox.value = r.snapshot;
         await load(true, r.snapshot);
     };
-    $('prof-clear').onclick = () => { data = null; opened = null; paint(); };
+    $('prof-clear').onclick = () => { data = null; opened = null; picked = null; paint(); };
     filter.oninput = paint;
     project.onchange = paint;
     sort.onchange = paint;

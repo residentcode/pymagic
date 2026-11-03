@@ -101,6 +101,9 @@ public sealed class SymbolIndex : IDisposable
     FileEntry? Read(string path)
     {
         const long TooBig = 8 * 1024 * 1024;
+        // the index keeps UTF-16 columns, whichever client's request started it (an answer to a UTF-8 client converts them)
+        bool utf8 = LineMap.Utf8.Value;
+        LineMap.Utf8.Value = false;
         try
         {
             if (Stamp(path) is not { } stamp || stamp.Length > TooBig) return null;
@@ -124,6 +127,7 @@ public sealed class SymbolIndex : IDisposable
         }
         catch (IOException) { return null; }
         catch (UnauthorizedAccessException) { return null; }
+        finally { LineMap.Utf8.Value = utf8; }
     }
 
     // ------------------------------------------------------------ keeping up

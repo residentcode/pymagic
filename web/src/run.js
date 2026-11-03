@@ -1,12 +1,13 @@
 // Run and debug: toolbar, output panel, breakpoints in the gutter, stepping, frames, variables and evaluate.
 import * as monaco from 'monaco-editor';
-import { compoundMembers, parseMappings, portOf, startOf } from './runconfig-model.js';
+import { beforeSteps, compoundMembers, parseMappings, portOf, startOf } from './runconfig-model.js';
 import { RunClient } from './runclient';
+import { withOutput } from './services-model.js';
 import { showTab } from './panel';
 import { editBreakpoint, isPlain } from './bpdialog';
 import { ansiReader } from './ansi';
 import { colouredSpans } from './terminal';
-import { inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem, declarationLine, historyStep, framesOfStop, threadHeadings } from './debug-model.js';
+import { inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem, declarationLine, historyStep, framesOfStop, threadHeadings, serverProgramNote } from './debug-model.js';
 import { openMenu } from './menu';
 import { toast } from './toast';
 import { linkPieces } from './tracelink-model.js';
@@ -17,6 +18,7 @@ const norm = (p) => p.replace(/\\/g, '/').toLowerCase();
 export function setupRun(deps) {
     const { editor } = deps;
     const rootNorm = norm(deps.root).replace(/\/$/, '');
+    const scratchNorm = deps.scratches ? norm(deps.scratches).replace(/\/$/, '') : '';
     const metaOf = new Map(); // model uri + decoration id -> settings of a breakpoint
     const keyOf = (model, id) => model.uri.toString() + '#' + id;
     const isBp = (d) => !!d.options.glyphMarginClassName?.startsWith('bp-glyph');
@@ -229,7 +231,8 @@ export function setupRun(deps) {
             output.scrollTop = output.scrollHeight;
     }
     let serving = false, connected = false;   // a debug server is listening / a program is connected to it
-    let cellHook = null, cellMode = false;    // Debug Cell: who waits for the address of the debug server / the session debugs a notebook cell
+    let cellHook = null, cellMode = false;    // Debug Cell: who waits for the address of the debug server / the session debugs a notebook cell ('cell') or the console ('console')
+    let hookFor = 'cell';                     // what the debug server that is starting is for: a notebook 'cell' or the Python 'console' (Attach Debugger)
     function setButtons() {
         const active = run !== null;
         $('b-run').disabled = active;
@@ -245,6 +248,8 @@ export function setupRun(deps) {
     }
     function relOfAbsolute(file) {
         const n = norm(file);
+        // a scratch file is kept outside the project and opened as .scratches/name
+        if (scratchNorm && n.startsWith(scratchNorm + '/') && !n.slice(scratchNorm.length + 1).includes('/')) return '.scratches/' + file.replace(/\\/g, '/').slice(scratchNorm.length + 1);
         return n.startsWith(rootNorm + '/') ? file.replace(/\\/g, '/').slice(rootNorm.length + 1) : null;
     }
     function clearCurrentLine() {
@@ -878,8 +883,9 @@ export function setupRun(deps) {
                     // Debug Cell: the notebook is told where to connect; there is no snippet to show
                     const hook = cellHook, mine = run;
                     cellHook = null;
-                    cellMode = true;
-                    append('Debugging a notebook cell: the cell runs in the notebook\'s kernel, under the debugger.\n', 'info');
+                    cellMode = hookFor;
+                    append(hookFor === 'console' ? 'The debugger is attached to the Python console: the breakpoints of the project stop the code it runs. Detach Debugger (or Stop) ends it; the console goes on.\n'
+                        : 'Debugging a notebook cell: the cell runs in the notebook\'s kernel, under the debugger.\n', 'info');
                     hook({ host: m.host, port: m.port, token: m.token, end: () => { if (run && run === mine) run.send({ type: 'stop' }); } });
                     break;
                 }
@@ -890,10 +896,12 @@ export function setupRun(deps) {
             }
             case 'connected':
                 connected = true;
-                append(`A program connected from ${m.from}.\n`, 'info');
+                append(serverProgramNote(m).text, 'info');
                 setButtons();
                 break;
             case 'disconnected':
+                // others still connected: the engine says what their stops are (a program that goes away is "running")
+                if (serverProgramNote(m).still) { append(serverProgramNote(m).text, 'info'); break; }
                 connected = false;
                 paused = false;
                 frames = [];
@@ -936,6 +944,8 @@ export function setupRun(deps) {
                     append(`Stopped: ${m.message}\n`, 'info');
                 if (m.reason === 'exception')
                     append(`Paused on exception: ${m.message}\n`, 'err');
+                if (m.program)
+                    append(`In program ${m.program}\n`, 'info');
                 if (m.thread && m.thread !== 'MainThread')
                     append(`Paused in thread ${m.thread}${m.suspended === 'thread' ? ' (the other threads go on)' : ''}\n`, 'info');
                 renderFrames();
@@ -956,13 +966,14 @@ export function setupRun(deps) {
                 void refreshWatches();
                 break;
             case 'exited':
-                append(cellMode ? '\nThe cell is done; the debugger is detached.\n' : m.detached ? (serving ? '\nDebug server stopped; a program that was connected goes on running.\n' : '\nDetached; the program goes on running.\n') : `\nProcess finished with exit code ${m.code}\n`, 'info');
+                append(cellMode === 'console' ? '\nThe debugger is detached from the Python console.\n' : cellMode ? '\nThe cell is done; the debugger is detached.\n' : m.detached ? (serving ? '\nDebug server stopped; a program that was connected goes on running.\n' : '\nDetached; the program goes on running.\n') : `\nProcess finished with exit code ${m.code}\n`, 'info');
                 clearInterval(logTimer);
                 openBrowser = false;
+                if (lastLaunch?.extra?.member) lastLaunch.extra.member.code = m.code ?? null;
                 if (afterExit) {
                     const next = afterExit;
                     afterExit = null;
-                    window.setTimeout(next, 0);
+                    window.setTimeout(() => next(m.detached ? 0 : m.code ?? null), 0);
                 }
                 if (profiling) {
                     profiling = false;
@@ -973,6 +984,8 @@ export function setupRun(deps) {
         }
     }
     function finish() {
+        // a Before launch task that ended without exiting (an error, the connection lost) starts nothing after it
+        if (afterExit) { const next = afterExit; afterExit = null; window.setTimeout(() => next(null), 0); }
         run?.close();
         run = null;
         serving = connected = false;
@@ -988,7 +1001,8 @@ export function setupRun(deps) {
     }
     // ------------------------------------------------------------ commands
     let profiling = false;
-    let afterExit = null, beforeDone = false, stoppedByUser = false;
+    // afterExit: called with the exit code when the program of a Before launch task ends (null when it did not end by itself)
+    let afterExit = null, stoppedByUser = false;
     // what a configuration adds while it runs: the browser opened at the server's address, log files followed in the console
     let openBrowser = false, logTimer = 0;
     const logSizes = new Map();
@@ -1013,11 +1027,16 @@ export function setupRun(deps) {
             return;
         const chosen = deps.runConfig?.();
         if (chosen?.kind === 'compound') {
-            await startCompound(chosen, debug || profile);
+            await startCompound(chosen, debug, profile);
             return;
         }
         if (chosen) {
             const s = startOf(chosen);
+            // an HTTP request of an .http file: sent by the HTTP client, its response in the HTTP tab
+            if (s.http) {
+                window.dispatchEvent(new CustomEvent('pymagic:runHttp', { detail: s.http }));
+                return;
+            }
             if (s.debugServer) {
                 await startDebugServer(s.debugServer, chosen.openPanel);
                 return;
@@ -1027,19 +1046,37 @@ export function setupRun(deps) {
                 window.dispatchEvent(new CustomEvent('pymagic:runTests', { detail: { ...s.tests, debug } }));
                 return;
             }
-            // Before launch: another configuration first, and this one when it has finished
-            if (chosen.before && deps.runConfigByName?.(chosen.before) && !beforeDone) {
-                const first = startOf(deps.runConfigByName(chosen.before));
-                append(`Before launch: ${chosen.before}\n`, 'info');
-                const finished = new Promise((resolve) => { afterExit = resolve; });
-                await launch(first.file ?? null, false, false, first.args, { ...first });
-                await finished;
-                if (stoppedByUser) { stoppedByUser = false; return; }
-                beforeDone = true;
-                try { await start(debug, profile); } finally { beforeDone = false; }
-                return;
+            // Before launch: other configurations, manage.py commands and the browser first, in order; this one starts when they have finished
+            // well (a task that fails or is stopped starts nothing), the output of all of them kept in the Output one after the other
+            const { steps, skipped } = beforeSteps(chosen, (name) => deps.runConfigByName?.(name) ?? null);
+            let kept = false;
+            if (steps.length || skipped.length) {
+                output.textContent = '';
+                kept = true;
+                if (chosen.openPanel !== false) showTab('output');
             }
-            await launch(s.file ?? null, debug, profile, s.args, { ...s, openPanel: chosen.openPanel, openBrowser: chosen.kind === 'django' && chosen.openBrowser, logFiles: chosen.logFiles });
+            for (const k of skipped) append(`Before launch: ${k.name} is left out, ${k.why}.\n`, 'err');
+            for (const step of steps) {
+                if (step.browser) {
+                    append(`Before launch: the browser at ${step.browser}\n`, 'info');
+                    window.open(step.browser, '_blank');
+                    continue;
+                }
+                append(`Before launch: ${step.label}\n`, 'info');
+                const task = step.config ? startOf(step.config) : { ...s, module: undefined, file: step.file, args: step.manage, allCode: undefined };
+                const finished = new Promise((resolve) => { afterExit = resolve; });
+                if (!(await launch(task.file ?? null, false, false, task.args, { ...task, keepOutput: true, openPanel: chosen.openPanel, label: `${step.label} (before ${chosen.name})` }))) {
+                    afterExit = null;
+                    return;
+                }
+                const code = await finished;
+                if (stoppedByUser) { stoppedByUser = false; append(`Before launch was stopped; ${chosen.name} is not started.\n`, 'info'); return; }
+                if (code !== 0) {
+                    append(`Before launch: ${step.label} ${code === null ? 'did not finish' : `ended with exit code ${code}`}; ${chosen.name} is not started.\n`, 'err');
+                    return;
+                }
+            }
+            await launch(s.file ?? null, debug, profile, s.args, { ...s, keepOutput: kept, openPanel: chosen.openPanel, openBrowser: chosen.kind === 'django' && chosen.openBrowser, logFiles: chosen.logFiles });
             return;
         }
         const model = editor.getModel();
@@ -1208,8 +1245,11 @@ export function setupRun(deps) {
             if (r && bps.length)
                 breakpoints[r] = wire(m, bps);
         }
-        output.textContent = '';
-        colours = ansiReader();
+        // the program after its Before launch tasks keeps their output above its own
+        if (!extra.keepOutput) {
+            output.textContent = '';
+            colours = ansiReader();
+        }
         debugging = debug;
         profiling = profile;
         paused = false;
@@ -1219,7 +1259,7 @@ export function setupRun(deps) {
         openBrowser = !!extra.openBrowser;
         followLogs((extra.logFiles ?? '').split(',').map((s) => s.trim()).filter(Boolean));
         testsRun = !!extra.tests;
-        lastLaunch = { rel, debug, profile, args, extra, started: Date.now(), label: extra.module ? `python -m ${extra.module}` : extra.tests ? 'tests' : (rel ?? 'a program') };
+        lastLaunch = { rel, debug, profile, args, extra, started: Date.now(), label: extra.label ?? (extra.module ? `python -m ${extra.module}` : extra.tests ? 'tests' : (rel ?? 'a program')) };
         run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, tests: extra.tests, profileTests: extra.profileTests, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
             exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value, functionBreaks: functionNames(),
             envFiles: extra.envFiles, interpreter: extra.interpreter, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots });
@@ -1235,8 +1275,11 @@ export function setupRun(deps) {
     }
     // ------------------------------------------------------------ compound configurations
     // A compound starts several configurations together. Each member runs on a connection of its own (without the debugger), its lines in the Output
-    // marked with its name, and each is a row of the Services window to stop or restart.
+    // marked with its name, and each is a row of the Services window to stop or restart, with its own output beside the list. One member at a time
+    // can run in the Run panel instead, under the debugger or the profiler (Debug, Profile of its row; the first one when the compound is debugged).
+    const MEMBER_TEXT = 200000;   // the characters of a member's own output that are kept
     function sayFor(entry, text, cls = '') {
+        entry.text = withOutput(entry.text, text, MEMBER_TEXT);
         let out = '';
         for (const part of text.split(/(?<=\n)/)) {
             if (entry.lineStart) out += `[${entry.name}] `;
@@ -1253,6 +1296,7 @@ export function setupRun(deps) {
         setButtons();
     }
     function launchSide(entry) {
+        if (inPanel(entry)) return;
         const s = startOf(entry.config);
         const client = new RunClient({ type: 'start', file: s.file, module: s.module, args: s.args, env: s.env, cwd: s.cwd, envFiles: s.envFiles, interpreter: s.interpreter,
             uv: s.uv, uvPath: s.uvPath, contentRoots: s.contentRoots, sourceRoots: s.sourceRoots, allCode: s.allCode, debug: false, profile: false, breakpoints: {}, exceptionBreak: 'uncaught' });
@@ -1261,6 +1305,7 @@ export function setupRun(deps) {
         entry.code = null;
         entry.started = Date.now();
         entry.lineStart = true;
+        entry.text = '';
         client.onMessage = (m) => {
             if (entry.client !== client) return;
             if (m.type === 'started') sayFor(entry, `Running (pid ${m.pid})\n`, 'info');
@@ -1271,46 +1316,90 @@ export function setupRun(deps) {
         client.onClose = () => { if (entry.client === client) { sayFor(entry, '\nConnection to the host lost.\n', 'err'); endSide(entry, null); } };
         setButtons();
     }
-    const stopSide = (entry) => { if (entry.live) entry.client?.send({ type: 'stop' }); };
+    // the member that runs in the Run panel (under the debugger or the profiler) rather than on a connection of its own
+    const inPanel = (entry) => run !== null && lastLaunch?.extra?.member === entry;
+    const stopSide = (entry) => {
+        if (inPanel(entry)) run.send({ type: 'stop' });
+        else if (entry.live) entry.client?.send({ type: 'stop' });
+    };
+    /** Starts a member in the Run panel under the debugger (or the profiler): its breakpoints stop, the Debug tab shows its frames. It stops first
+     * when it runs on its own; false when another program has the Run panel. */
+    async function debugSide(entry, profile = false) {
+        if (run !== null) {
+            append(`${entry.name}: the Run panel has a program running; stop it first to ${profile ? 'profile' : 'debug'} this one.\n`, 'err');
+            showTab('output');
+            return false;
+        }
+        stopSide(entry);
+        for (let i = 0; i < 50 && entry.live; i++) await new Promise((ok) => setTimeout(ok, 100));
+        if (entry.live || run !== null) return false;
+        const s = startOf(entry.config);
+        entry.code = null;
+        entry.started = Date.now();
+        return launch(s.file ?? null, !profile, profile, s.args, { ...s, label: entry.name, member: entry, openPanel: true });
+    }
     async function restartSide(entry) {
+        if (inPanel(entry)) {
+            const again = lastLaunch;
+            run.send({ type: 'stop' });
+            for (let i = 0; i < 50 && run !== null; i++) await new Promise((ok) => setTimeout(ok, 100));
+            if (run === null) await launch(again.rel, again.debug, again.profile, again.args, { ...again.extra, openPanel: false });
+            return;
+        }
         stopSide(entry);
         for (let i = 0; i < 50 && entry.live; i++) await new Promise((ok) => setTimeout(ok, 100));
         if (!entry.live) launchSide(entry);
     }
     const groupOf = (group) => [...sides.values()].filter((e) => e.group === group);
     /** Starts the members of a compound that are not running; the running ones are left. */
-    async function startCompound(compound, withDebugger = false) {
+    async function startCompound(compound, debug = false, profile = false) {
         const { members, skipped } = compoundMembers(compound, (name) => deps.runConfigByName?.(name) ?? null);
         if (compound.openPanel !== false) showTab('output');
-        if (withDebugger) append('A compound runs its configurations without the debugger.\n', 'info');
         for (const k of skipped) append(`${compound.name}: ${k.name} is left out, ${k.why}.\n`, 'err');
         if (!members.length) { append(`${compound.name}: there is no configuration to start.\n`, 'err'); return; }
         await deps.saveAll();
         for (const [name, e] of sides) if (e.group === compound.name && !e.live && !members.some((m) => m.name === name)) sides.delete(name);
         for (const c of members) {
+            if (c.kind === 'http') { window.dispatchEvent(new CustomEvent('pymagic:runHttp', { detail: startOf(c).http })); continue; }
             let entry = sides.get(c.name);
             if (entry?.live) continue;
             if (!entry) { entry = { name: c.name, live: false }; sides.set(c.name, entry); }
             entry.config = c;
             entry.group = compound.name;
+            // debugged or profiled: the first member goes to the Run panel under the debugger (or the profiler), the others run as they do
+            if ((debug || profile) && run === null) {
+                append(`${compound.name}: ${c.name} runs under the ${profile ? 'profiler' : 'debugger'} in the Run panel, the others without it (Debug or Profile of a row in the Services window moves another one there).\n`, 'info');
+                if (await debugSide(entry, profile)) { debug = profile = false; continue; }
+            }
             launchSide(entry);
         }
     }
     /** The members of compounds, as rows of the Services window: each stopped or restarted by itself, the group started or stopped as a whole. */
     function sideServices() {
-        return [...sides.values()].map((e) => ({
-            id: 'side:' + e.name, group: 'Compound ' + e.group, name: e.name,
-            state: e.live ? 'running' : 'finished', started: e.live ? e.started : undefined,
-            detail: e.live ? undefined : e.code === null ? 'did not run' : `exit code ${e.code}`, done: !e.live,
-            show: () => showTab('output'),
-            stop: e.live ? () => stopSide(e) : undefined,
-            restart: () => restartSide(e),
-            groupActions: [
-                { label: 'Start all', title: 'Start the members that are not running', run: () => { for (const o of groupOf(e.group)) if (!o.live) launchSide(o); } },
-                { label: 'Stop all', title: 'Stop every member of this compound', run: () => { for (const o of groupOf(e.group)) stopSide(o); } },
-                { label: 'Close', title: 'Take the finished members out of the list', run: () => { for (const o of groupOf(e.group)) if (!o.live) sides.delete(o.name); } },
-            ],
-        }));
+        return [...sides.values()].map((e) => {
+            const panel = inPanel(e);
+            const ranInPanel = lastLaunch?.extra?.member === e;
+            const live = e.live || panel;
+            return {
+                id: 'side:' + e.name, group: 'Compound ' + e.group, name: e.name,
+                state: panel ? (paused ? 'paused' : profiling ? 'profiling' : 'debugging') : e.live ? 'running' : 'finished', started: live ? e.started : undefined,
+                detail: panel ? 'in the Run panel' : e.live ? undefined : e.code === null || e.code === undefined ? 'did not run' : `exit code ${e.code}`, done: !live,
+                // its own output beside the list; the one that ran in the Run panel has the Run panel's
+                output: () => (ranInPanel ? output.textContent : e.text ?? ''),
+                show: () => { if (panel) showTab(debugging ? 'debug' : 'output'); else window.dispatchEvent(new CustomEvent('pymagic:showService', { detail: 'side:' + e.name })); },
+                stop: live ? () => stopSide(e) : undefined,
+                restart: () => restartSide(e),
+                actions: panel ? [] : [
+                    { label: 'Debug', title: 'Run it again in the Run panel under the debugger: its breakpoints stop', run: () => debugSide(e) },
+                    { label: 'Profile', title: 'Run it again in the Run panel under the profiler', run: () => debugSide(e, true) },
+                ],
+                groupActions: [
+                    { label: 'Start all', title: 'Start the members that are not running', run: () => { for (const o of groupOf(e.group)) if (!o.live && !inPanel(o)) launchSide(o); } },
+                    { label: 'Stop all', title: 'Stop every member of this compound', run: () => { for (const o of groupOf(e.group)) stopSide(o); } },
+                    { label: 'Close', title: 'Take the finished members out of the list', run: () => { for (const o of groupOf(e.group)) if (!o.live && !inPanel(o)) sides.delete(o.name); } },
+                ],
+            };
+        });
     }
     const raisedBox = $('exc-raised');
     try {
@@ -1710,12 +1799,25 @@ export function setupRun(deps) {
         void launch(null, false, true, [], { profileTests: e.detail });
     });
     window.addEventListener('pymagic:stopDebugTests', () => { if (run && testsRun) run.send({ type: 'stop' }); });
+    /** A debug server on a free port for a notebook cell ('cell', Debug Cell) or the Python console ('console', Attach Debugger): resolves with
+     * { host, port, token, end } once it listens, null when another run is going. */
+    async function debugServerFor(kind) {
+        if (run)
+            return null;
+        hookFor = kind;
+        const got = new Promise((resolve) => { cellHook = resolve; });
+        if (!(await startDebugServer({ host: '127.0.0.1', port: 0, connectHost: '', mappings: [] }, true))) {
+            cellHook = null;
+            return null;
+        }
+        return got;
+    }
     return {
         onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null,
         /** `python -m module args`; false when a run is going. */
         runModule: (module, args = [], debug = false) => launch(null, debug, false, args, { module }),
         /** The program that is running, as a service of the Services window: stopped, restarted (started again as it was) or shown. */
-        services: () => [...(run === null || !lastLaunch ? [] : [{
+        services: () => [...(run === null || !lastLaunch || lastLaunch.extra?.member ? [] : [{
             id: 'run', group: 'Run', name: lastLaunch.label, started: lastLaunch.started,
             state: paused ? 'paused' : debugging ? 'debugging' : profiling ? 'profiling' : 'running',
             show: () => showTab('output'),
@@ -1729,6 +1831,12 @@ export function setupRun(deps) {
             },
         }]), ...sideServices()],
         attach,
+        /** Attach Debugger of the Python console: a debug server the console connects to, as Debug Cell's: { host, port, token, end, live } (null when another run
+         * is going); `live()` tells whether the session still runs (Stop in the Run panel ends it too). */
+        consoleSession: async () => {
+            const s = await debugServerFor('console');
+            return s && { ...s, live: () => run !== null && cellMode === 'console' };
+        },
         /**
          * What the notebook view needs to debug a cell: `attachEditor` gives a cell's editor the breakpoint margin and F9; `cellSession` starts a debug
          * server for one cell and resolves with { host, port, token, end } (null when another run is going); `breakpointsOf` / `restoreBreakpoints`
@@ -1738,16 +1846,7 @@ export function setupRun(deps) {
             attachEditor(ed) {
                 glyphMouse(ed);   // F9 is the command of every editor: it toggles in the cell when the cell has the focus
             },
-            async cellSession() {
-                if (run)
-                    return null;
-                const got = new Promise((resolve) => { cellHook = resolve; });
-                if (!(await startDebugServer({ host: '127.0.0.1', port: 0, connectHost: '', mappings: [] }, true))) {
-                    cellHook = null;
-                    return null;
-                }
-                return got;
-            },
+            cellSession: () => debugServerFor('cell'),
             breakpointsOf: (model) => breakpointsOf(model),
             restoreBreakpoints(model, list) {
                 for (const bp of list)

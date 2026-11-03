@@ -1,5 +1,5 @@
-// A reader and a layout for the two Mermaid diagrams that most READMEs hold: flowcharts (`graph TD`, `flowchart LR`) and sequence diagrams. The
-// full Mermaid library is a download of its own, so other kinds are reported as unsupported and shown as their text. No DOM here:
+// A reader and a layout for the two Mermaid diagrams that most READMEs hold: flowcharts (`graph TD`, `flowchart LR`) and sequence diagrams, drawn
+// at once without the Mermaid library; the other kinds are reported as unsupported here, and the preview draws them with the library (mermaid.js). No DOM here:
 // web/test/mermaid.test.mjs checks it; mdpreview.js draws the layout as SVG.
 
 const unquote = (s) => s.trim().replace(/^"(.*)"$/s, '$1').replace(/<br\s*\/?>/gi, ' ').trim();

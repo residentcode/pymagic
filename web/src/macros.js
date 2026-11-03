@@ -1,7 +1,12 @@
 // Macros: the typing and the editing keys of the editor recorded, played back (once, or many times), kept by name in the project
 // (.pymagic/macros.json) and given a key. macro-model.js says what a key press means; here are the recording, the playing and the dialog.
+// Besides the keys of the table a macro carries the clipboard keys (played with a clipboard of its own, which starts as the system's), the clicks
+// and drags of the mouse in the text, the commands the editor runs for any other key (F2, F12, Shift+F6...), for its own menu and the command
+// palette, and the commands of the main menu and of Find action, by their place in the menu.
 import * as monaco from 'monaco-editor';
-import { allowedCombo, comboOf, compress, describe, stepOf, tidy } from './macro-model';
+import { allowedCombo, comboOf, compress, copiedText, describe, isTableCommand, pastedParts, recordedCommand, stepOf, tidy } from './macro-model';
+import { runById } from './commands.js';
+import { runMenuPath } from './mainmenu.js';
 import { toast } from './toast';
 
 const $ = (id) => document.getElementById(id);
@@ -40,22 +45,92 @@ export function setupMacros({ editor, askText }) {
         }
     }
 
-    function onKey(e) {
-        if (!recording || e.defaultPrevented) return;
-        const inEditor = e.target?.closest?.('.monaco-editor') && !e.target.closest('.inj-window');
-        if (!inEditor) return;
-        const step = stepOf(e);
-        if (step) recording.push(step);
-        else if (!['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) skipped++;
-    }
     let skipped = 0;
+    let awaiting = false;        // a key of the text that is not in the table: the command the editor runs for it is recorded
+    let picking = false;         // a key or a click outside the text (a menu of the editor, the command palette): the command it runs is recorded
+    let inMenu = false;          // a command of the main menu runs: it is recorded as such, not the commands it runs
+    let watches = [];            // the listeners of the recording: the command service, the mouse of each editor
+
+    // what the person does is handled in this turn of the page: a command the editor runs in it is theirs
+    const soon = (fn) => setTimeout(fn, 0);
+    /** The text of an editor (its own input), not a box in it such as Find or Rename. */
+    const inText = (t) => !!t?.closest?.('.monaco-editor') && !t.closest('.inj-window') && (t.classList?.contains('inputarea') || t.classList?.contains('native-edit-context'));
+
+    function onKey(e) {
+        if (!recording || e.defaultPrevented || ['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return;
+        if (!inText(e.target)) {
+            picking = true;
+            soon(() => { picking = false; });
+            return;
+        }
+        const step = stepOf(e);
+        if (step) { recording.push(step); return; }
+        awaiting = true;
+        soon(() => { if (awaiting) skipped++; awaiting = false; });
+    }
     document.addEventListener('keydown', onKey, true);
+    for (const type of ['mousedown', 'mouseup', 'click']) {
+        document.addEventListener(type, (e) => {
+            if (!recording || e.target?.closest?.('.monaco-editor .view-lines, .monaco-editor .margin')) return;
+            picking = true;
+            soon(() => { picking = false; });
+        }, true);
+    }
+    window.addEventListener('pymagic:menu-ran', (e) => {
+        if (!recording || !e.detail?.path) return;
+        recording.push({ k: 'menu', path: e.detail.path });
+        inMenu = true;
+        soon(() => { inMenu = false; });
+    });
+
+    /** The command the editor ran for a key, for a menu of its own or the command palette, with its name for the list. */
+    function onCommand({ commandId }) {
+        if (!recording || inMenu || !(awaiting || picking)) return;
+        const id = recordedCommand(commandId);
+        if (!id) return;
+        awaiting = false;
+        const ed = active();
+        const label = ed.getAction?.(commandId)?.label ?? ed.getSupportedActions?.().find((a) => a.id === id || a.id.endsWith(':' + id))?.label;
+        recording.push(label ? { k: 'cmd', id, label } : { k: 'cmd', id });
+    }
+
+    /** A click in the text: where, how many (a double click selects the word), with Shift (extends) or Alt (adds a cursor); a drag selects. */
+    function onMouseDown(m) {
+        if (!recording || !m.event.leftButton || !m.target.position) return;
+        const T = monaco.editor.MouseTargetType;
+        if (m.target.type !== T.CONTENT_TEXT && m.target.type !== T.CONTENT_EMPTY) return;
+        if (m.event.ctrlKey || m.event.metaKey) { skipped++; return; }
+        const { lineNumber: line, column } = m.target.position;
+        const n = Math.min(3, Math.max(1, m.event.detail || 1));
+        const lastStep = recording[recording.length - 1];
+        // the second press of a double click: the click before it becomes the double click
+        if (n > 1 && lastStep?.k === 'click' && lastStep.line === line && !lastStep.to) { lastStep.n = n; delete lastStep.mode; return; }
+        recording.push({ k: 'click', line, column, n: 1, ...(m.event.shiftKey ? { mode: 'extend' } : m.event.altKey ? { mode: 'add' } : {}) });
+    }
+    function onMouseUp(ed) {
+        const lastStep = recording?.[recording.length - 1];
+        if (lastStep?.k !== 'click' || lastStep.n !== 1 || lastStep.mode) return;
+        const sel = ed.getSelection();
+        if (!sel || sel.isEmpty() || sel.selectionStartLineNumber !== lastStep.line || sel.selectionStartColumn !== lastStep.column) return;
+        lastStep.to = [sel.positionLineNumber, sel.positionColumn];
+    }
+
+    function watch(on) {
+        for (const w of watches) w.dispose();
+        watches = [];
+        if (!on) return;
+        // the editors share one command service: every command run for a key, a menu of the editor or the palette passes it
+        const commands = editor._commandService;
+        if (commands?.onDidExecuteCommand) watches.push(commands.onDidExecuteCommand(onCommand));
+        for (const ed of monaco.editor.getEditors()) watches.push(ed.onMouseDown(onMouseDown), ed.onMouseUp(() => onMouseUp(ed)));
+    }
 
     function start() {
         if (recording) return;
         recording = [];
         skipped = 0;
         quiet(true);
+        watch(true);
         indicator.hidden = false;
         indicator.textContent = '● Recording a macro';
         indicator.title = 'Typing and editing keys are being recorded (Ctrl+Alt+Shift+R stops)';
@@ -67,6 +142,7 @@ export function setupMacros({ editor, askText }) {
         const steps = compress(recording);
         recording = null;
         quiet(false);
+        watch(false);
         indicator.hidden = true;
         if (!steps.length) { toast('Nothing was recorded.'); return null; }
         last = { steps };
@@ -76,17 +152,78 @@ export function setupMacros({ editor, askText }) {
 
     // ------------------------------------------------------------ playing
 
-    function play(steps, times = 1) {
+    /** The clipboard keys, with the macro's own clipboard ({text, whole}: whole lines when copied from no selection, pasted above the line). */
+    function clipboard(ed, op, clip) {
+        const model = ed.getModel();
+        const sels = ed.getSelections() ?? [];
+        if (!model || !sels.length) return clip;
+        if (op === 'paste') {
+            if (!clip?.text) return clip;
+            if (clip.whole && sels.every((s) => s.isEmpty())) {
+                ed.executeEdits('macro', [...new Set(sels.map((s) => s.positionLineNumber))].map((line) => ({ range: new monaco.Range(line, 1, line, 1), text: clip.text })));
+            } else {
+                const parts = pastedParts(clip.text, sels.length);
+                ed.executeEdits('macro', sels.map((s, i) => ({ range: s, text: parts[i], forceMoveMarkers: true })),
+                    (inverse) => inverse.map((e) => new monaco.Selection(e.range.endLineNumber, e.range.endColumn, e.range.endLineNumber, e.range.endColumn)));
+            }
+            return clip;
+        }
+        const copied = copiedText(sels.map((s) => model.getValueInRange(s)), sels.map((s) => model.getLineContent(s.positionLineNumber)));
+        if (op === 'cut') {
+            if (copied.whole) ed.trigger('macro', 'editor.action.deleteLines', null);
+            else ed.executeEdits('macro', sels.filter((s) => !s.isEmpty()).map((s) => ({ range: s, text: '' })));
+        }
+        return copied;
+    }
+
+    /** A click of the macro: the cursor put, the selection extended, a cursor added, the word or the line selected, or the text dragged over. */
+    function click(ed, s) {
+        const model = ed.getModel();
+        if (!model) return;
+        const at = model.validatePosition({ lineNumber: s.line, column: s.column });
+        const sel = (a, b) => new monaco.Selection(a.lineNumber, a.column, b.lineNumber, b.column);
+        if (s.to) ed.setSelection(sel(at, model.validatePosition({ lineNumber: s.to[0], column: s.to[1] })));
+        else if (s.n === 2) {
+            const word = model.getWordAtPosition(at);
+            ed.setSelection(word ? new monaco.Selection(at.lineNumber, word.startColumn, at.lineNumber, word.endColumn) : sel(at, at));
+        } else if (s.n === 3) {
+            const lastLine = at.lineNumber === model.getLineCount();
+            ed.setSelection(new monaco.Selection(at.lineNumber, 1, lastLine ? at.lineNumber : at.lineNumber + 1, lastLine ? model.getLineMaxColumn(at.lineNumber) : 1));
+        } else if (s.mode === 'extend') {
+            const now = ed.getSelection();
+            ed.setSelection(new monaco.Selection(now.selectionStartLineNumber, now.selectionStartColumn, at.lineNumber, at.column));
+        } else if (s.mode === 'add') ed.setSelections([...(ed.getSelections() ?? []), sel(at, at)]);
+        else ed.setPosition(at);
+        ed.revealPositionInCenterIfOutsideViewport(ed.getPosition());
+    }
+
+    async function play(steps, times = 1) {
         const ed = active();
         ed.focus();
+        // the clipboard of the macro starts as the system's, and the system's has what the macro left in it at the end
+        let clip = null;
+        const usesClipboard = steps.some((s) => s.k === 'clip');
+        if (steps.some((s) => s.k === 'clip' && s.op === 'paste')) {
+            try { clip = { text: await navigator.clipboard.readText(), whole: false }; } catch { clip = { text: '', whole: false }; }
+        }
+        const start = clip?.text;
         ed.pushUndoStop();
+        let missing = '';
         for (let n = 0; n < times; n++) {
             for (const s of steps) {
-                if (s.k === 'text') ed.trigger('macro', 'type', { text: s.text });
-                else ed.trigger('macro', s.id, null);
+                try {
+                    if (s.k === 'text') ed.trigger('macro', 'type', { text: s.text });
+                    else if (s.k === 'clip') clip = clipboard(ed, s.op, clip);
+                    else if (s.k === 'click') click(ed, s);
+                    else if (s.k === 'menu') { if (!(await runMenuPath(s.path))) missing ||= s.path; }
+                    else if (isTableCommand(s.id)) ed.trigger('macro', s.id, null);
+                    else await runById(s.id, ed);
+                } catch (err) { console.warn('A step of the macro failed', s, err); }
             }
         }
         ed.pushUndoStop();
+        if (usesClipboard && clip?.text && clip.text !== start) navigator.clipboard?.writeText(clip.text).catch(() => { /* the system's clipboard keeps what it had */ });
+        if (missing) toast(`The main menu has no command '${missing}' now: the macro went on without it.`, true);
     }
 
     async function playLast() {

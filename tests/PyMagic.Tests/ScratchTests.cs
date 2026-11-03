@@ -47,6 +47,28 @@ public class ScratchTests
     }
 
     [Fact]
+    public void AScratchIsMovedToTheProject()
+    {
+        using var f = new Folder();
+        string project = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "pm_scratch_proj_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Scratches.Create("try.py", "print('hi')\n");
+            string target = System.IO.Path.Combine(project, "tools", "try_it.py");
+            Assert.True(Scratches.MoveTo(".scratches/try.py", target));
+            Assert.Equal("print('hi')\n", File.ReadAllText(target));
+            Assert.Equal(0, Scratches.List().Count);
+            // no such scratch, or a file of the project there already: nothing moves
+            Assert.True(!Scratches.MoveTo("try.py", System.IO.Path.Combine(project, "other.py")));
+            Scratches.Create("b.py", "b\n");
+            Assert.True(!Scratches.MoveTo("b.py", target));
+            Assert.Equal("print('hi')\n", File.ReadAllText(target));
+            Assert.Equal(1, Scratches.List().Count);
+        }
+        finally { try { Directory.Delete(project, true); } catch (IOException) { } }
+    }
+
+    [Fact]
     public void AScratchIsRenamedAndDeleted()
     {
         using var f = new Folder();

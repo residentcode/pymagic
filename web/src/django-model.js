@@ -145,3 +145,19 @@ export function addModelSerializer(text, model, fields) {
     out = withImport(out, `from .models import ${model}`);
     return endWith(out, `\n\nclass ${model}Serializer(serializers.ModelSerializer):\n    class Meta:\n        model = ${model}\n        fields = [${['id', ...fields].map((f) => `"${f}"`).join(', ')}]\n`);
 }
+
+/** `manage.py test` as a run of the Tests panel (its results in the tree): {ids, failfast, settings}, or null for another command or for options
+ * the Tests panel's runner does not take (those still run as plain text in the Run panel). The labels are an app, a module, a class or one test. */
+export function testRunOf(args, settings = '') {
+    if (args[0] !== 'test') return null;
+    const ids = [];
+    let failfast = false;
+    for (const a of args.slice(1)) {
+        if (a === '--failfast') failfast = true;
+        else if (a.startsWith('--settings=')) settings = a.slice('--settings='.length);
+        else if (a === '--noinput' || a === '--no-input') continue;
+        else if (a.startsWith('-')) return null;
+        else ids.push(a);
+    }
+    return { ids, failfast, settings: settings || undefined };
+}

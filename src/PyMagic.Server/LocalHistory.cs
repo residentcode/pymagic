@@ -199,6 +199,25 @@ public sealed class LocalHistory
         }
     }
 
+    /// <summary>
+    /// The files a label keeps when some are open with changes not saved yet: those as the editor has them (path -> text, any case of the
+    /// path), the others as the disk has them; an unsaved file the disk does not have yet is kept too.
+    /// </summary>
+    public static List<(string Rel, string Text)> WithUnsaved(IEnumerable<(string Rel, string Text)> disk, IReadOnlyDictionary<string, string> unsaved)
+    {
+        var open = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (rel, text) in unsaved) open[rel.Replace('\\', '/').TrimStart('/')] = text;
+        var files = new List<(string Rel, string Text)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (rel, text) in disk)
+        {
+            seen.Add(rel);
+            files.Add((rel, open.TryGetValue(rel, out var mine) ? mine : text));
+        }
+        foreach (var (rel, text) in open) if (!seen.Contains(rel)) files.Add((rel, text));
+        return files;
+    }
+
     public bool RemoveLabel(string id)
     {
         lock (_gate)
@@ -208,6 +227,55 @@ public sealed class LocalHistory
             if (removed) SaveLabels(labels);
             return removed;
         }
+    }
+
+    /// <summary>
+    /// A file or folder renamed or moved in the project: the versions of each file go with it, so its history (and the history of lines
+    /// selected in it) goes on under the new name. Versions the new path had already (a file once there) are kept beside them. Returns how
+    /// many files' histories moved.
+    /// </summary>
+    public int Rename(string fromRel, string toRel)
+    {
+        string from = fromRel.Replace('\\', '/').Trim('/'), to = toRel.Replace('\\', '/').Trim('/');
+        if (from.Length == 0 || to.Length == 0 || string.Equals(from, to, StringComparison.Ordinal)) return 0;
+        string store = Path.Combine(_root, ".pymagic", "history");
+        if (!Directory.Exists(store)) return 0;
+        int moved = 0;
+        lock (_gate)
+        {
+            foreach (var folder in Directory.GetDirectories(store))
+            {
+                string marker = Path.Combine(folder, "path.txt");
+                string rel;
+                try { if (!File.Exists(marker)) continue; rel = File.ReadAllText(marker).Trim().Replace('\\', '/'); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+                string? now = string.Equals(rel, from, StringComparison.OrdinalIgnoreCase) ? to
+                    : rel.StartsWith(from + "/", StringComparison.OrdinalIgnoreCase) ? to + rel[from.Length..] : null;
+                if (now == null) continue;
+                try
+                {
+                    string target = FolderOf(now);
+                    if (!string.Equals(Path.GetFullPath(target), Path.GetFullPath(folder), StringComparison.OrdinalIgnoreCase))
+                    {
+                        Directory.CreateDirectory(target);
+                        foreach (var f in Directory.GetFiles(folder, "*.txt"))
+                        {
+                            if (Path.GetFileName(f) == "path.txt") continue;
+                            string dest = Path.Combine(target, Path.GetFileName(f));
+                            if (!File.Exists(dest)) File.Move(f, dest);
+                        }
+                        Directory.Delete(folder, true);
+                    }
+                    File.WriteAllText(Path.Combine(target, "path.txt"), now);
+                    // the most versions a file keeps holds for the two histories put together
+                    var versions = Directory.GetFiles(target, "*.txt").Where(f => Path.GetFileName(f) != "path.txt").OrderBy(f => f, StringComparer.Ordinal).ToList();
+                    foreach (var old in versions.Take(Math.Max(0, versions.Count - _perFile))) File.Delete(old);
+                    moved++;
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* that file's history stays under its old name */ }
+            }
+        }
+        return moved;
     }
 
     /// <summary>The text of the version just older than this one, or null when it is the first.</summary>

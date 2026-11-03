@@ -161,13 +161,14 @@ export function applyKeybindings(changes) {
 let stale = new Set();             // old keys of editors' actions whose key changed
 let given = new Map();             // a stale key given to another command -> that command
 
-/** Runs a command of the keymap by its id: PyMagic's, else an action of the editor (Monaco's or one PyMagic added). */
-function runById(id, ed) {
+/** Runs a command of the keymap by its id: PyMagic's, else an action of the editor (Monaco's or one PyMagic added). A macro plays its commands so too. */
+export function runById(id, ed) {
     const own = registry.get(id);
-    if (own) return void own.run(ed);
+    if (own) return Promise.resolve(own.run(ed));
     const action = ed?.getAction?.(id) ?? ed?.getSupportedActions?.().find((a) => a.id.endsWith(':' + id));
-    if (action) void action.run();
-    else ed?.trigger('keymap', id, null);
+    if (action) return Promise.resolve(action.run());
+    ed?.trigger('keymap', id, null);
+    return Promise.resolve();
 }
 
 /** Starts the keymap: the main editor (the one a command acts on when none has the focus, and whose actions are listed). */

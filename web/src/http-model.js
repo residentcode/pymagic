@@ -7,15 +7,29 @@ const comment = (line) => /^\s*(#|\/\/)/.test(line);
 
 /**
  * The requests of a file, in order: {line (1-based, of the request line), name, method, url, headers: [[name, value]],
- * body (text or null), bodyFile (the path after `<`, or null)}. Requests are separated by `###` lines (the rest of the
- * line names the request, as `# @name x` does); comments (`#`, `//`) and `@name = value` lines are not requests; a URL
- * goes on over indented lines that start with `?` or `&`; headers end at the first empty line, the body runs to the
- * next request (response handlers `> {% ... %}` and `>> file` left out).
+ * body (text or null), bodyFile (the path after `<`, or null), pre (the script of `< {% ... %}` before the request line, or null),
+ * handlers ([{script} | {file}]: `> {% ... %}` and `> handler.js` after the body), output ({file, overwrite}: `>> file`, `>>! file`; or null)}.
+ * Requests are separated by `###` lines (the rest of the line names the request, as `# @name x` does); comments (`#`, `//`) and
+ * `@name = value` lines are not requests; a URL goes on over indented lines that start with `?` or `&`; headers end at the first empty line,
+ * the body runs to the next request or to its response handler.
  */
 export function parseRequests(text) {
     const lines = text.split(/\r?\n/);
     const requests = [];
     let i = 0;
+    // a script between {% and %}, from line k (its first line starts with `<` or `>`): [script, the line after it]
+    const scriptAt = (block, k) => {
+        const first = block[k].replace(/^[<>]\s*\{%/, '');
+        if (first.includes('%}'))
+            return [first.slice(0, first.indexOf('%}')), k + 1];
+        const parts = [first];
+        let m = k + 1;
+        for (; m < block.length && !block[m].includes('%}'); m++)
+            parts.push(block[m]);
+        if (m < block.length)
+            parts.push(block[m].slice(0, block[m].indexOf('%}')));
+        return [parts.join('\n'), m + 1];
+    };
     while (i < lines.length) {
         // one block: up to the next ### line
         let name = null;
@@ -28,8 +42,15 @@ export function parseRequests(text) {
             i++;
         const block = lines.slice(start, i);
         let j = 0;
-        // comments, variables and blank lines before the request line
-        while (j < block.length && (!block[j].trim() || comment(block[j]) || /^@\w+\s*=/.test(block[j]))) {
+        let pre = null;
+        // comments, variables, a pre-request script and blank lines before the request line
+        while (j < block.length && (!block[j].trim() || comment(block[j]) || /^@\w+\s*=/.test(block[j]) || /^<\s*\{%/.test(block[j]))) {
+            if (/^<\s*\{%/.test(block[j])) {
+                const [script, next] = scriptAt(block, j);
+                pre = (pre ? pre + '\n' : '') + script;
+                j = next;
+                continue;
+            }
             const named = /^\s*(?:#|\/\/)\s*@name\s+(\S+)/.exec(block[j]);
             if (named)
                 name = named[1];
@@ -40,18 +61,18 @@ export function parseRequests(text) {
         const m = REQUEST_LINE.exec(block[j].trim());
         if (!m)
             continue;
-        const request = { line: start + j + 1, name, method: m[1] ?? 'GET', url: m[2], headers: [], body: null, bodyFile: null };
+        const request = { line: start + j + 1, name, method: m[1] ?? 'GET', url: m[2], headers: [], body: null, bodyFile: null, pre, handlers: [], output: null };
         j++;
         while (j < block.length && /^\s+[?&]/.test(block[j]))
             request.url += block[j++].trim();
-        for (; j < block.length && block[j].trim(); j++) {
+        for (; j < block.length && block[j].trim() && !/^[<>]/.test(block[j]); j++) {
             if (comment(block[j]))
                 continue;
             const h = /^([^:\s]+)\s*:\s*(.*)$/.exec(block[j]);
             if (h)
                 request.headers.push([h[1], h[2].trim()]);
         }
-        const body = block.slice(j + 1);
+        const body = block.slice(j < block.length && !block[j].trim() ? j + 1 : j);
         // response handlers and redirects of the response to a file end the body
         const handler = body.findIndex((l) => /^>\s*(\{%|\S)|^>>!?\s/.test(l));
         const kept = (handler >= 0 ? body.slice(0, handler) : body).join('\n').replace(/\s+$/, '');
@@ -59,9 +80,65 @@ export function parseRequests(text) {
             request.bodyFile = kept.replace(/^<\s+/, '').trim();
         else if (kept.trim())
             request.body = kept;
+        for (let k = handler; handler >= 0 && k < body.length;) {
+            const l = body[k];
+            const out = /^>>(!?)\s+(\S.*?)\s*$/.exec(l);
+            if (out) {
+                request.output = { file: out[2], overwrite: out[1] === '!' };
+                k++;
+            }
+            else if (/^>\s*\{%/.test(l)) {
+                const [script, next] = scriptAt(body, k);
+                request.handlers.push({ script });
+                k = next;
+            }
+            else if (/^>\s*\S/.test(l)) {
+                request.handlers.push({ file: l.replace(/^>\s*/, '').trim() });
+                k++;
+            }
+            else
+                k++;
+        }
         requests.push(request);
     }
     return requests;
+}
+
+/**
+ * The parts of a body as they are sent: text, and the files its `< path` lines name (sent as their bytes, as in a multipart body's file
+ * part), `<@ path` for a file whose {{variables}} are filled in first. A multipart body (its Content-Type says so) has its lines ended by
+ * CRLF, as the format asks. [{text}] | [{file, vars}].
+ */
+export function bodyParts(body, contentType) {
+    if (body === null || body === undefined)
+        return [];
+    const multipart = /multipart\//i.test(contentType ?? '');
+    const eol = multipart ? '\r\n' : '\n';
+    const parts = [];
+    let text = [];
+    const flush = (last) => {
+        if (!text.length)
+            return;
+        parts.push({ text: text.join(eol) + (last ? '' : eol) });
+        text = [];
+    };
+    const lines = String(body).split(/\r?\n/);
+    lines.forEach((line, n) => {
+        const file = /^<(@?)\s+(\S.*?)\s*$/.exec(line);
+        if (file) {
+            flush(false);
+            parts.push({ file: file[2], vars: file[1] === '@' });
+            if (n < lines.length - 1)
+                parts.push({ text: eol });
+        }
+        else
+            text.push(line);
+    });
+    flush(true);
+    // a multipart body ends with its closing boundary's line end
+    if (multipart && parts.length && parts[parts.length - 1].text !== undefined && !parts[parts.length - 1].text.endsWith('\r\n'))
+        parts[parts.length - 1].text += '\r\n';
+    return parts.filter((part) => part.file !== undefined || part.text !== '');
 }
 
 /** The request whose block holds a line (1-based): the last one starting at or before it. */
@@ -326,4 +403,89 @@ export function prettyBody(body, contentType) {
         catch { /* not JSON after all */ }
     }
     return body ?? '';
+}
+
+/**
+ * Runs a response handler or pre-request script as PyCharm's HTTP client does, with its `client` and `response` (and `request`) objects:
+ * client.global.set/get/isEmpty/clear/clearAll (variables kept for the next requests, used as {{name}}), client.test(name, fn),
+ * client.assert(condition, message), client.log(...), client.exit(); response.body (parsed when it is JSON), response.headers.valueOf/valuesOf,
+ * response.status, response.contentType {mimeType, charset}; request.variables.set/get (for this request, before it is sent),
+ * request.environment.get, request.method, request.url. `input` is {script, response?, request?, globals, environment, variables}.
+ * Answers {globals, variables, tests: [{name, passed, error?}], log: [text], error?}. Self-contained: the page runs it in a Worker
+ * (its source is this function's text), away from the page and without network.
+ */
+export function runScript(input) {
+    const globals = { ...(input.globals ?? {}) };
+    const variables = { ...(input.variables ?? {}) };
+    const environment = input.environment ?? {};
+    const tests = [];
+    const log = [];
+    const text = (v) => (typeof v === 'string' ? v : (() => { try { return JSON.stringify(v); } catch { return String(v); } })());
+    const EXIT = {};
+    class AssertionFailed extends Error { }
+    let current = null;
+    const client = {
+        global: {
+            set: (name, value) => { globals[String(name)] = value === undefined || value === null ? '' : typeof value === 'string' ? value : text(value); },
+            get: (name) => (Object.prototype.hasOwnProperty.call(globals, name) ? globals[name] : null),
+            isEmpty: () => Object.keys(globals).length === 0,
+            clear: (name) => { delete globals[name]; },
+            clearAll: () => { for (const k of Object.keys(globals)) delete globals[k]; },
+        },
+        test(name, fn) {
+            const test = { name: String(name), passed: true };
+            tests.push(test);
+            current = test;
+            try { fn(); }
+            catch (e) {
+                if (e === EXIT) { current = null; throw e; }
+                test.passed = false;
+                test.error = e instanceof AssertionFailed ? e.message : `${e?.name ?? 'Error'}: ${e?.message ?? e}`;
+            }
+            current = null;
+        },
+        assert(condition, message) {
+            if (condition)
+                return;
+            const why = message === undefined ? 'Assertion failed' : String(message);
+            if (current)
+                throw new AssertionFailed(why);
+            tests.push({ name: why, passed: false, error: why });
+        },
+        log: (...args) => { log.push(args.map(text).join(' ')); },
+        exit: () => { throw EXIT; },
+    };
+    const r = input.response;
+    let response;
+    if (r) {
+        const headers = Object.entries(r.headers ?? {});
+        const type = (headers.find(([k]) => k.toLowerCase() === 'content-type')?.[1] ?? '').split(';');
+        const charset = (type.slice(1).find((p) => /charset=/i.test(p)) ?? '').replace(/.*charset=/i, '').trim();
+        let body = r.body ?? '';
+        if (/json/i.test(type[0])) {
+            try { body = JSON.parse(body); } catch { /* the text as it came */ }
+        }
+        const values = (name) => headers.filter(([k]) => k.toLowerCase() === String(name).toLowerCase()).flatMap(([, v]) => String(v).split(/,\s*/));
+        response = {
+            status: r.status, body,
+            headers: { valueOf: (name) => headers.find(([k]) => k.toLowerCase() === String(name).toLowerCase())?.[1] ?? null, valuesOf: (name) => values(name) },
+            contentType: { mimeType: type[0].trim(), charset: charset || 'UTF-8' },
+        };
+    }
+    const q = input.request ?? {};
+    const request = {
+        method: q.method, url: q.url, body: q.body ?? null,
+        headers: { findByName: (name) => (q.headers ?? []).find(([k]) => k.toLowerCase() === String(name).toLowerCase())?.[1] ?? null, all: () => (q.headers ?? []).map(([name, value]) => ({ name, value })) },
+        variables: { set: (name, value) => { variables[String(name)] = typeof value === 'string' ? value : text(value); }, get: (name) => variables[name] ?? null },
+        environment: { get: (name) => (Object.prototype.hasOwnProperty.call(environment, name) ? environment[name] : null) },
+    };
+    let error;
+    try {
+        new Function('client', 'response', 'request', `"use strict";\n${input.script}`)(client, response, request);
+    }
+    catch (e) {
+        if (e !== EXIT)
+            error = `${e?.name ?? 'Error'}: ${e?.message ?? e}`;
+    }
+    return { globals, variables, tests, log, ...(error ? { error } : {}) };
 }

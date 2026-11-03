@@ -72,3 +72,17 @@ export class CommandQueue {
         if (gone.length) this.onChange();
     }
 }
+
+/** The console's history as the list of Ctrl+Alt+E shows it: the newest first, each command once, only the ones that have `filter` in them (any case). */
+export function historyMatches(history, filter = '') {
+    const want = filter.trim().toLowerCase();
+    const seen = new Set();
+    const out = [];
+    for (let i = history.length - 1; i >= 0; i--) {
+        const h = history[i];
+        if (!h.trim() || seen.has(h)) continue;
+        seen.add(h);
+        if (!want || h.toLowerCase().includes(want)) out.push(h);
+    }
+    return out;
+}

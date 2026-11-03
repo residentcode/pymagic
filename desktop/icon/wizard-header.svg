@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 57" width="150" height="57">
+  <!-- The picture at the top of the setup wizard's other pages (150 x 57, on NSIS's white band): PyMagic's tile and name.
+       desktop/icon/make-wizard.js turns it into wizard-header.bmp. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7b5cff"/>
+      <stop offset="1" stop-color="#2f80ed"/>
+    </linearGradient>
+  </defs>
+  <rect width="150" height="57" fill="#ffffff"/>
+  <g transform="translate(10 10.5) scale(0.140625)">
+    <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#tile)"/>
+    <path fill="#ffffff" fill-rule="evenodd" d="M66 56 H138 A50 50 0 0 1 138 156 H102 V200 H66 Z M102 88 H134 A18 18 0 0 1 134 124 H102 Z"/>
+    <path fill="#ffd866" d="M190 44 L198 70 L224 78 L198 86 L190 112 L182 86 L156 78 L182 70 Z"/>
+    <path fill="#ffd866" d="M212 132 L216 144 L228 148 L216 152 L212 164 L208 152 L196 148 L208 144 Z"/>
+  </g>
+  <text x="54" y="34" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" fill="#1b1e2b">PyMagic</text>
+</svg>

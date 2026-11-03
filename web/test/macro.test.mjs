@@ -1,7 +1,7 @@
 // Checks of web/src/macro-model.js: `node web/test/macro.test.mjs` (tests/PyMagic.Tests/WebScriptTests.cs runs it).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { stepOf, compress, describe, comboOf, allowedCombo, tidy } from '../src/macro-model.js';
+import { stepOf, compress, describe, comboOf, allowedCombo, tidy, recordedCommand, copiedText, pastedParts, isTableCommand } from '../src/macro-model.js';
 
 const key = (k, mods = '') => ({ key: k, ctrlKey: mods.includes('c'), shiftKey: mods.includes('s'), altKey: mods.includes('a'), metaKey: false });
 
@@ -18,8 +18,13 @@ test('a key press is a typed character or a command of the editor', () => {
     assert.deepEqual(stepOf(key('ArrowUp', 'a')), { k: 'cmd', id: 'editor.action.moveLinesUpAction' });
     // AltGr (Ctrl+Alt) makes a character on many keyboards
     assert.deepEqual(stepOf(key('@', 'ca')), { k: 'text', text: '@' });
-    // what a macro cannot carry
-    assert.equal(stepOf(key('c', 'c')), null);        // the clipboard
+    // the clipboard keys
+    assert.deepEqual(stepOf(key('c', 'c')), { k: 'clip', op: 'copy' });
+    assert.deepEqual(stepOf(key('x', 'c')), { k: 'clip', op: 'cut' });
+    assert.deepEqual(stepOf(key('v', 'c')), { k: 'clip', op: 'paste' });
+    assert.deepEqual(stepOf(key('Insert', 's')), { k: 'clip', op: 'paste' });
+    assert.deepEqual(stepOf(key('Delete', 's')), { k: 'clip', op: 'cut' });
+    // not in the table: a function key's command is recorded from the editor (macros.js), a lone modifier never
     assert.equal(stepOf(key('F5')), null);
     assert.equal(stepOf(key('Shift', 's')), null);
     assert.equal(stepOf(key('x', 'a')), null);
@@ -56,4 +61,35 @@ test('what the project keeps is tidied: names unique, keys allowed, empty macros
     ]);
     assert.deepEqual(kept, [{ name: 'one', key: 'Ctrl+Alt+1', steps: [{ k: 'text', text: 'ab' }] }, { name: 'two', key: '', steps: [{ k: 'cmd', id: 'undo' }] }]);
     assert.deepEqual(tidy('nonsense'), []);
+});
+
+
+test('the commands the editor runs that a macro records: without the editor\'s prefix, not the typing, the clipboard, the pickers or its own', () => {
+    assert.equal(recordedCommand('editor.action.revealDefinition'), 'editor.action.revealDefinition');
+    assert.equal(recordedCommand('vs.editor.ICodeEditor:1:pymagic.refactor.rename'), 'pymagic.refactor.rename');
+    for (const id of ['type', 'paste', 'replacePreviousChar', 'editor.action.quickCommand', 'vs.editor.ICodeEditor:1:pymagic.macro.toggle', '_internal', 'editor.action.clipboardCopyAction', '', null]) {
+        assert.equal(recordedCommand(id), null, String(id));
+    }
+    assert.ok(isTableCommand('deleteLeft') && isTableCommand('editor.action.commentLine') && !isTableCommand('editor.action.rename'));
+});
+
+test('the macro\'s clipboard: what is copied and what each cursor gets', () => {
+    assert.deepEqual(copiedText(['ab', '', 'cd'], ['x', 'y', 'z']), { text: 'ab\ncd', whole: false });
+    // nothing selected: the lines whole, as the editor copies them
+    assert.deepEqual(copiedText(['', ''], ['one', 'two']), { text: 'one\ntwo\n', whole: true });
+    assert.deepEqual(pastedParts('a\nb', 2), ['a', 'b']);
+    assert.deepEqual(pastedParts('a\nb\n', 2), ['a', 'b']);
+    assert.deepEqual(pastedParts('a\nb', 3), ['a\nb', 'a\nb', 'a\nb']);
+    assert.deepEqual(pastedParts('x', 1), ['x']);
+});
+
+test('clicks, the clipboard, menus and recorded commands are kept and described', () => {
+    const steps = [
+        { k: 'click', line: 3, column: 5, n: 1 }, { k: 'click', line: 3, column: 5, n: 2 }, { k: 'click', line: 4, column: 1, n: 1, mode: 'extend' },
+        { k: 'click', line: 1, column: 1, n: 1, to: [2, 4] }, { k: 'clip', op: 'copy' }, { k: 'clip', op: 'paste' },
+        { k: 'menu', path: 'Code > Reformat code' }, { k: 'cmd', id: 'editor.action.revealDefinition', label: 'Go to Definition' },
+    ];
+    assert.equal(describe(steps, 1000), 'Click 3:5 · Double-click 3:5 · Shift+Click 4:1 · Drag 1:1–2:4 · Copy · Paste · Menu Code > Reformat code · Go to Definition');
+    const kept = tidy([{ name: 'm', steps: [...steps, { k: 'click', line: 0, column: 1 }, { k: 'clip', op: 'shred' }, { k: 'menu', path: 'nowhere' }, { k: 'click', line: 1, column: 1, to: ['a', 1] }] }]);
+    assert.deepEqual(kept[0].steps, steps);
 });

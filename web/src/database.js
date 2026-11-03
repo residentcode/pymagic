@@ -30,13 +30,22 @@ export function setupDatabase(deps) {
         sources = await fetch('/api/db/sources').then((r) => (r.ok ? r.json() : [])).catch(() => []);
         const chosen = sourceBox.value;
         sourceBox.replaceChildren(...sources.filter((s) => s.exists).map((s) => new Option(s.server ? `${s.name} (${s.server === 'postgres' ? 'PostgreSQL' : 'MySQL'})` : s.path, s.path)));
-        if (sources.some((s) => s.path === chosen))
+        for (const [path, list] of databaseLists)
+            for (const name of list.databases)
+                if (name !== list.current && sources.some((s) => s.path === path))
+                    sourceBox.add(new Option(`${name} (${sources.find((s) => s.path === path).name})`, `${path}/${name}`));
+        if ([...sourceBox.options].some((o) => o.value === chosen))
             sourceBox.value = chosen;
         if (sources.length === 1)
             open.add(sources[0].path);
         for (const s of sources)
-            if (open.has(s.path) && s.exists)
+            if (open.has(s.path) && s.exists) {
+                if (s.server) await loadDatabases(s.path);
                 await loadSchema(s.path);
+            }
+        for (const key of open)
+            if (key.startsWith('db:server:'))
+                await loadSchema(key.slice(3));
         paintTree();
     }
     async function loadSchema(path, again = false) {
@@ -44,9 +53,25 @@ export function setupDatabase(deps) {
             return schemas.get(path);
         const r = await ask({ op: 'schema', path });
         schemas.set(path, r.objects ?? []);
+        extras.set(path, { triggers: r.triggers ?? [], routines: r.routines ?? [] });
         if (r.error)
             toast(r.error);
         return schemas.get(path);
+    }
+    const extras = new Map();   // path -> { triggers, routines }: the stored functions and procedures, the triggers of the tables
+    /** A routine's or trigger's definition, put at the end of the console's text to read or change (and run). */
+    function showDefinition(what, sql) {
+        setMode('console');
+        const ed = consoleEditor();
+        const model = ed.getModel();
+        const text = model.getValue();
+        const at = text.trimEnd().length ? text.replace(/\s*$/, '\n\n') : '';
+        const definition = `-- ${what}\n${String(sql ?? '').trim()}\n`;
+        model.setValue(at + definition);
+        const line = model.getPositionAt(at.length).lineNumber;
+        ed.revealLineInCenter(line);
+        ed.setSelection(new monaco.Selection(line, 1, model.getLineCount(), 1));
+        ed.focus();
     }
     function node(label, cls, detail, depth, toggle, onOpen) {
         const row = document.createElement('div');
@@ -77,6 +102,13 @@ export function setupDatabase(deps) {
             return;
         }
         for (const s of sources) {
+            if (s.offer) {
+                // a PostgreSQL or MySQL database of the Django settings, not connected yet: a click opens the form filled from them
+                const row = node(s.name, 'db-source db-server db-missing', `${kindName(s.server)} · ${s.detail} · not connected · ${s.django}`, 0, null);
+                row.title = `The database ${s.offer.alias} of ${s.django}. Click to connect to it (the form is filled from the settings)`;
+                row.onclick = () => serverForm({ ...s.offer, kind: s.server });
+                continue;
+            }
             if (!s.exists) {
                 // named by the Django settings, not made yet: manage.py migrate makes it, with Django's tables
                 const row = node(s.path, 'db-source db-missing', `not made yet · ${s.django}`, 0, null);
@@ -89,42 +121,103 @@ export function setupDatabase(deps) {
             }
             const isOpen = open.has(s.path);
             const row = s.server
-                ? node(s.name, 'db-source db-server', `${s.server === 'postgres' ? 'PostgreSQL' : 'MySQL'} · ${s.detail}`, 0, isOpen)
+                ? node(s.name, 'db-source db-server', `${kindName(s.server)} · ${s.detail}`, 0, isOpen)
                 : node(s.path, 'db-source', `${Math.round(s.size / 1024)} KB`, 0, isOpen);
-            row.title = s.server ? 'A database server; right-click to disconnect it (its data stays where it is)'
+            row.title = s.server ? 'A database server; right-click to change its connection or disconnect it (its data stays where it is)'
                 : (s.added ? 'Added by hand; right-click to take it out of the list' : 'Found in the project') + (s.django ? ` · the database of ${s.django}` : '');
-            row.onclick = async () => { toggleNode(s.path); if (open.has(s.path)) await loadSchema(s.path); paintTree(); };
+            row.onclick = async () => {
+                toggleNode(s.path);
+                if (open.has(s.path)) {
+                    if (s.server) await loadDatabases(s.path);
+                    await loadSchema(s.path);
+                }
+                paintTree();
+            };
             row.oncontextmenu = (e) => {
                 e.preventDefault();
                 if (s.server) {
-                    if (confirm(`Disconnect ${s.name}? Its saved password is forgotten; the server is not touched.`))
-                        void fetch('/api/db/servers?id=' + encodeURIComponent(s.path.slice('server:'.length)), { method: 'DELETE' }).then(loadSources);
+                    const id = s.path.slice('server:'.length);
+                    openMenu({ x: e.clientX, y: e.clientY }, [
+                        { label: 'Change the connection…', run: () => void editServer(id) },
+                        { label: 'Show the other databases again', run: () => { databaseLists.delete(s.path); open.add(s.path); void loadDatabases(s.path).then(paintTree); } },
+                        '-',
+                        { label: 'Disconnect', run: () => {
+                            if (confirm(`Disconnect ${s.name}? Its saved passwords are forgotten; the server is not touched.`))
+                                void fetch('/api/db/servers?id=' + encodeURIComponent(id), { method: 'DELETE' }).then(loadSources);
+                        } },
+                    ]);
                 } else if (s.added && confirm(`Take ${s.path} out of the list? The file stays.`))
                     void fetch('/api/db/sources?path=' + encodeURIComponent(s.path), { method: 'DELETE' }).then(loadSources);
             };
             if (!isOpen)
                 continue;
-            for (const o of schemas.get(s.path) ?? []) {
-                const key = `${s.path}/${o.name}`;
-                const tableOpen = open.has(key);
-                const t = node(o.name, 'db-' + o.kind, o.kind === 'view' ? 'view' : `${o.columns.length} columns`, 1, tableOpen, () => void openTable(s.path, o.name));
-                t.title = 'Double-click to see its rows' + (o.kind === 'table' ? ' and change them' : '');
-                t.onclick = () => { toggleNode(key); paintTree(); };
-                if (!tableOpen)
-                    continue;
-                for (const c of o.columns) {
-                    const fk = o.foreignKeys.find((f) => f.column === c.name);
-                    node(c.name, 'db-column' + (c.pk ? ' db-pk' : ''), [c.type || 'any', c.pk ? 'primary key' : '', c.notNull ? 'not null' : '', fk ? `→ ${fk.table}.${fk.to ?? ''}` : '',
-                        c.default !== null && c.default !== undefined ? `= ${c.default}` : ''].filter(Boolean).join(' · '), 2, null);
+            // a server with more than one database: each is a node of its own (the one it was connected with first), opened by a click
+            const list = s.server ? databaseLists.get(s.path) : null;
+            if (list && list.databases.length > 1) {
+                for (const name of list.databases) {
+                    const path = name === list.current ? s.path : `${s.path}/${name}`;
+                    const dbOpen = open.has('db:' + path);
+                    const d = node(name, 'db-database', name === list.current ? 'database · connected with' : 'database', 1, dbOpen);
+                    d.title = 'A database of this server: click to see its tables';
+                    d.onclick = async () => { toggleNode('db:' + path); if (open.has('db:' + path)) await loadSchema(path); paintTree(); };
+                    if (dbOpen)
+                        paintObjects(path, 2);
                 }
-                for (const ix of o.indexes)
-                    node(ix.name, 'db-index', `${ix.unique ? 'unique ' : ''}index (${ix.columns.join(', ')})`, 2, null);
+                continue;
+            }
+            paintObjects(s.path, 1);
+        }
+    }
+    /** The tables and views of a data source (each opening into its columns, indexes and triggers), then its routines. */
+    function paintObjects(path, depth) {
+        for (const o of schemas.get(path) ?? []) {
+            const key = `${path}/${o.name}`;
+            const tableOpen = open.has(key);
+            const t = node(o.name, 'db-' + o.kind, o.kind === 'view' ? 'view' : `${o.columns.length} columns`, depth, tableOpen, () => void openTable(path, o.name));
+            t.title = 'Double-click to see its rows' + (o.kind === 'table' ? ' and change them' : '');
+            t.onclick = () => { toggleNode(key); paintTree(); };
+            if (!tableOpen)
+                continue;
+            for (const c of o.columns) {
+                const fk = o.foreignKeys.find((f) => f.column === c.name);
+                node(c.name, 'db-column' + (c.pk ? ' db-pk' : ''), [c.type || 'any', c.pk ? 'primary key' : '', c.notNull ? 'not null' : '', fk ? `→ ${fk.table}.${fk.to ?? ''}` : '',
+                    c.default !== null && c.default !== undefined ? `= ${c.default}` : ''].filter(Boolean).join(' · '), depth + 1, null);
+            }
+            for (const ix of o.indexes)
+                node(ix.name, 'db-index', `${ix.unique ? 'unique ' : ''}index (${ix.columns.join(', ')})`, depth + 1, null);
+            for (const tr of (extras.get(path)?.triggers ?? []).filter((x) => x.table === o.name)) {
+                const row = node(tr.name, 'db-trigger', ['trigger', [tr.timing, tr.event].filter(Boolean).join(' ')].filter(Boolean).join(' · '), depth + 1, null, () => showDefinition(`trigger ${tr.name} on ${tr.table}`, tr.sql));
+                row.title = 'Double-click to see its definition in the console';
             }
         }
+        // the stored functions and procedures (PostgreSQL, MySQL; SQLite has none)
+        for (const r of extras.get(path)?.routines ?? []) {
+            const detail = `${r.kind} (${r.args ?? ''})${r.returns ? ` → ${r.returns}` : ''}`;
+            const row = node(r.name, 'db-routine', detail, depth, null, () => showDefinition(`${r.kind} ${r.name}`, r.sql));
+            row.title = 'Double-click to see its definition in the console';
+        }
+    }
+    const kindName = (kind) => (kind === 'postgres' ? 'PostgreSQL' : 'MySQL');
+    // a server's databases: { databases, current }, asked for once when it is first opened
+    const databaseLists = new Map();
+    async function loadDatabases(path) {
+        if (databaseLists.has(path))
+            return databaseLists.get(path);
+        const r = await ask({ op: 'databases', path });
+        const list = r.error ? { databases: [], current: null } : { databases: r.databases ?? [], current: r.current };
+        databaseLists.set(path, list);
+        // the console can run against each of them
+        const server = sources.find((x) => x.path === path);
+        for (const name of list.databases) {
+            const other = `${path}/${name}`;
+            if (name !== list.current && ![...sourceBox.options].some((o) => o.value === other))
+                sourceBox.add(new Option(`${name} (${server?.name ?? path})`, other));
+        }
+        return list;
     }
     const toggleNode = (key) => { if (open.has(key)) open.delete(key); else open.add(key); };
 
-    $('db-refresh').onclick = async () => { schemas.clear(); await loadSources(); };
+    $('db-refresh').onclick = async () => { schemas.clear(); databaseLists.clear(); await loadSources(); };
     $('db-add').onclick = async () => {
         const path = await deps.askText('Add an SQLite database', 'db.sqlite3', 'A file of the project, from its folder; a new one is made');
         if (!path?.trim())
@@ -141,17 +234,33 @@ export function setupDatabase(deps) {
     // ------------------------------------------------------------ a PostgreSQL or MySQL server
     const DEFAULT_PORTS = { postgres: '5432', mysql: '3306' };
     const DRIVERS = { postgres: 'psycopg[binary]', mysql: 'PyMySQL' };
+    // TLS as libpq names it; MySQL has no "allow" or "prefer" here (PyMySQL either encrypts or does not)
+    const TLS_MODES = [['', "The driver's default"], ['disable', 'Off'], ['allow', 'Allow'], ['prefer', 'Prefer'], ['require', 'Require (not checked)'],
+        ['verify-ca', 'Verify the CA'], ['verify-full', 'Verify the CA and the host name']];
     $('db-add-server').onclick = () => void serverForm();
-    function serverForm() {
+    /** The form of a server that is kept already, filled with its settings (its passwords are kept unless new ones are typed). */
+    async function editServer(id) {
+        const list = await fetch('/api/db/servers').then((r) => (r.ok ? r.json() : [])).catch(() => []);
+        const server = list.find((x) => x.id === id);
+        if (server)
+            serverForm({ ...server, replaces: id });
+        else
+            toast('That server is not in the project any more.');
+    }
+    /**
+     * The form that connects to a server: where it is and who connects, TLS, and an SSH tunnel through another machine (the SSH/SSL tab of
+     * PyCharm's data sources). `start` fills it: a server to change (with `replaces`, its id), or what the Django settings name.
+     */
+    function serverForm(start = {}) {
         const shade = document.createElement('div');
         shade.className = 'ask-shade';
         const box = document.createElement('div');
         box.className = 'ask-box db-server-form';
         const title = document.createElement('div');
         title.className = 'ask-title';
-        title.textContent = 'Connect to a database server';
+        title.textContent = start.replaces ? `Change the connection of ${start.name ?? 'the server'}` : 'Connect to a database server';
         const fields = {};
-        const addField = (key, label, element, hint) => {
+        const addField = (key, label, element, hint, into = box) => {
             const row = document.createElement('label');
             row.className = 'db-form-row';
             const name = document.createElement('span');
@@ -161,27 +270,64 @@ export function setupDatabase(deps) {
                 element.title = hint;
             row.append(name, element);
             fields[key] = element;
-            box.append(row);
+            into.append(row);
+            return row;
         };
         const kind = document.createElement('select');
         kind.append(new Option('PostgreSQL', 'postgres'), new Option('MySQL', 'mysql'));
-        const input = (type = 'text', value = '') => { const i = document.createElement('input'); i.type = type; i.value = value; i.spellcheck = false; i.autocomplete = 'off'; return i; };
+        kind.value = start.kind ?? 'postgres';
+        const input = (type = 'text', value = '', placeholder = '') => { const i = document.createElement('input'); i.type = type; i.value = value; i.placeholder = placeholder; i.spellcheck = false; i.autocomplete = 'off'; return i; };
+        const passwordHint = start.replaces ? 'Empty keeps the password that is kept' : '';
         box.append(title);
         addField('kind', 'Server', kind);
-        addField('host', 'Host', input('text', 'localhost'));
-        addField('port', 'Port', input('text', DEFAULT_PORTS.postgres));
-        addField('user', 'User', input('text', 'postgres'));
-        addField('password', 'Password', input('password'), 'Kept in .pymagic/db-servers.private.json of the project: keep that file out of version control');
-        addField('database', 'Database', input('text', 'postgres'));
-        addField('name', 'Name', input('text'), 'Optional: how the server is listed');
+        addField('host', 'Host', input('text', start.host ?? 'localhost'));
+        addField('port', 'Port', input('text', String(start.port ?? DEFAULT_PORTS[kind.value])));
+        addField('user', 'User', input('text', start.user ?? (kind.value === 'postgres' ? 'postgres' : 'root')));
+        addField('password', 'Password', input('password', start.password ?? '', passwordHint), 'Kept in .pymagic/db-servers.private.json of the project: keep that file out of version control');
+        addField('database', 'Database', input('text', start.database ?? (kind.value === 'postgres' ? 'postgres' : '')), 'The one connected to first; the server\'s other databases are listed under it in the tree');
+        addField('name', 'Name', input('text', start.name ?? ''), 'Optional: how the server is listed');
+
+        // TLS: the drivers' own settings
+        const tls = document.createElement('details');
+        tls.className = 'db-form-group';
+        tls.innerHTML = '<summary>TLS / SSL</summary>';
+        const mode = document.createElement('select');
+        addField('sslMode', 'Encryption', mode, 'require encrypts; the verify modes also check the server\'s certificate', tls);
+        addField('sslCa', 'CA file', input('text', start.sslCa ?? '', 'root.crt'), 'The certificate of the authority that signed the server\'s; a path, or from the project\'s folder', tls);
+        addField('sslCert', 'Client certificate', input('text', start.sslCert ?? '', 'optional'), 'When the server asks for one', tls);
+        addField('sslKey', 'Client key', input('text', start.sslKey ?? '', 'optional'), 'The key of the client certificate', tls);
+        const fillModes = () => {
+            const was = mode.value || start.sslMode || '';
+            mode.replaceChildren(...TLS_MODES.filter(([m]) => kind.value === 'postgres' || !['allow', 'prefer'].includes(m)).map(([m, label]) => new Option(label, m)));
+            mode.value = [...mode.options].some((o) => o.value === was) ? was : '';
+        };
+        fillModes();
+        tls.open = !!(start.sslMode || start.sslCa || start.sslCert);
+
+        // SSH: the server reached through another machine
+        const ssh = document.createElement('details');
+        ssh.className = 'db-form-group';
+        ssh.innerHTML = '<summary>SSH tunnel</summary>';
+        const sshNote = document.createElement('div');
+        sshNote.className = 'ask-hint';
+        sshNote.textContent = "Through Windows' own ssh (OpenSSH): Host and Port above are then the server as the SSH machine sees it (often localhost). A key file, ssh-agent or a password.";
+        ssh.append(sshNote);
+        addField('sshHost', 'SSH host', input('text', start.sshHost ?? '', 'empty: no tunnel'), 'The machine to go through', ssh);
+        addField('sshPort', 'SSH port', input('text', String(start.sshPort ?? 22)), '', ssh);
+        addField('sshUser', 'SSH user', input('text', start.sshUser ?? ''), 'Empty: the one of ~/.ssh/config, or your Windows user name', ssh);
+        addField('sshKey', 'Key file', input('text', start.sshKey ?? '', 'empty: ssh-agent and ~/.ssh/id_*'), 'A private key file (OpenSSH format); ~/ for your folder', ssh);
+        addField('sshPassword', 'SSH password', input('password', '', start.replaces ? 'Empty keeps the one that is kept' : 'only without a key'), 'Kept in .pymagic/db-servers.private.json, given to ssh only', ssh);
+        ssh.open = !!start.sshHost;
+
         kind.onchange = () => {
             fields.port.value = DEFAULT_PORTS[kind.value];
             fields.user.value = kind.value === 'postgres' ? 'postgres' : 'root';
             fields.database.value = kind.value === 'postgres' ? 'postgres' : '';
+            fillModes();
         };
         const note = document.createElement('div');
         note.className = 'ask-hint db-form-note';
-        note.textContent = "The password is kept in .pymagic/db-servers.private.json of the project: keep that file out of version control. PyMagic connects with the project's Python and its psycopg / PyMySQL package.";
+        note.textContent = "The passwords are kept in .pymagic/db-servers.private.json of the project: keep that file out of version control. PyMagic connects with the project's Python and its psycopg / PyMySQL package.";
         const error = document.createElement('div');
         error.className = 'db-form-error';
         const row = document.createElement('div');
@@ -190,12 +336,12 @@ export function setupDatabase(deps) {
         install.textContent = 'Install the driver';
         install.hidden = true;
         const ok = document.createElement('button');
-        ok.textContent = 'Connect';
+        ok.textContent = start.replaces ? 'Save' : 'Connect';
         ok.className = 'primary';
         const cancel = document.createElement('button');
         cancel.textContent = 'Cancel';
         row.append(install, ok, cancel);
-        box.append(note, error, row);
+        box.append(tls, ssh, note, error, row);
         shade.append(box);
         const done = () => shade.remove();
         cancel.onclick = done;
@@ -206,11 +352,13 @@ export function setupDatabase(deps) {
         };
         ok.onclick = async () => {
             ok.disabled = true;
-            error.textContent = 'Connecting…';
+            error.textContent = fields.sshHost.value.trim() ? 'Opening the SSH tunnel and connecting…' : 'Connecting…';
             install.hidden = true;
             const body = {};
             for (const [key, element] of Object.entries(fields))
                 body[key] = element.value;
+            if (start.replaces)
+                body.replaces = start.replaces;
             let answer;
             try { answer = await fetch('/api/db/servers', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.json()); }
             catch (e) { answer = { error: String(e) }; }
@@ -222,13 +370,16 @@ export function setupDatabase(deps) {
             }
             done();
             toast(`Connected: ${answer.version ?? 'ok'}`);
+            if (start.replaces)
+                for (const key of [...schemas.keys()]) if (key.startsWith('server:' + start.replaces)) schemas.delete(key);
+            databaseLists.delete(answer.path);
             open.add(answer.path);
             await loadSources();
             sourceBox.value = answer.path;
         };
         box.onkeydown = (e) => {
             if (e.key === 'Escape') done();
-            else if (e.key === 'Enter' && e.target !== cancel && e.target !== install) { e.preventDefault(); ok.click(); }
+            else if (e.key === 'Enter' && e.target !== cancel && e.target !== install && e.target.tagName !== 'SUMMARY') { e.preventDefault(); ok.click(); }
             e.stopPropagation();
         };
         document.body.append(shade);

@@ -4,11 +4,15 @@
 // beside it after each command; Up / Down walk what was typed; Tab completes; Restart starts it again (with the starting script of the
 // settings, .pymagic/console-startup.py when there is one). Commands given while one runs wait in a queue that shows under the output
 // (a waiting command can be taken out with its x). With IPython ticked, the console is IPython's shell when the project's Python has it.
+// Ctrl+Alt+E (History) lists the commands run so far, newest first, to filter and put one back in the input. Attach Debugger connects the
+// console to the debugger of the Run panel (a debug server, as Debug Cell's): the project's breakpoints stop the code the console runs.
 // The engine runs pm_console.py (RunSession.StartConsole).
 import * as monaco from 'monaco-editor';
 import { RunClient } from './runclient';
 import { showTab } from './panel';
-import { CommandQueue, consoleName, queueLabel } from './pyconsole-model.js';
+import { CommandQueue, consoleName, historyMatches, queueLabel } from './pyconsole-model.js';
+import { defineCommand } from './commands.js';
+import { toast } from './toast';
 
 const $ = (id) => document.getElementById(id);
 const STARTUP = '.pymagic/console-startup.py';
@@ -100,6 +104,8 @@ export function setupPythonConsole(deps) {
 
     /** Stops the process of a console and forgets what it was going to run. */
     function end(c) {
+        c.debugSession?.end();
+        c.debugSession = null;
         c.queue.clear();
         c.client?.send({ type: 'stop' });
         c.client?.close();
@@ -268,6 +274,96 @@ export function setupPythonConsole(deps) {
         end(c);
         void start(c);
     }
+
+    // ---- Ctrl+Alt+E: the history of the console, newest first, filtered as it is typed; Enter (or a click) puts the command in the input
+    let historyBox = null;
+    function closeHistory() { historyBox?.remove(); historyBox = null; }
+    function showHistory(c = active) {
+        showTab('pyconsole');
+        if (historyBox) { closeHistory(); return; }
+        const box = document.createElement('div');
+        box.className = 'pyc-history';
+        box.id = 'pyc-history-list';
+        const filter = document.createElement('input');
+        filter.placeholder = 'Filter the commands run in this console (Enter puts one in the input, Esc closes)';
+        filter.spellcheck = false;
+        filter.autocomplete = 'off';
+        const list = document.createElement('div');
+        list.className = 'pyc-history-rows';
+        let shown = [], at = 0;
+        const choose = (code) => {
+            closeHistory();
+            input.value = code;
+            input.focus();
+            input.setSelectionRange(code.length, code.length);
+        };
+        const paint = () => {
+            shown = historyMatches(c.history, filter.value);
+            at = Math.min(at, Math.max(0, shown.length - 1));
+            list.replaceChildren(...shown.map((code, i) => {
+                const row = document.createElement('div');
+                row.className = 'pyc-history-row' + (i === at ? ' active' : '');
+                row.textContent = code;
+                row.title = code;
+                row.onmousedown = (e) => { e.preventDefault(); choose(code); };
+                return row;
+            }));
+            if (!shown.length) {
+                const none = document.createElement('div');
+                none.className = 'side-empty';
+                none.textContent = c.history.length ? 'No command has that in it.' : 'Nothing has been run in this console yet.';
+                list.append(none);
+            }
+            list.children[at]?.scrollIntoView?.({ block: 'nearest' });
+        };
+        filter.oninput = () => { at = 0; paint(); };
+        filter.onkeydown = (e) => {
+            if (e.key === 'Escape') { e.preventDefault(); closeHistory(); input.focus(); }
+            else if (e.key === 'ArrowDown') { e.preventDefault(); at = Math.min(shown.length - 1, at + 1); paint(); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); at = Math.max(0, at - 1); paint(); }
+            else if (e.key === 'Enter' && shown[at] !== undefined) { e.preventDefault(); choose(shown[at]); }
+        };
+        filter.onblur = () => setTimeout(() => { if (historyBox === box && !box.contains(document.activeElement)) closeHistory(); }, 150);
+        box.append(filter, list);
+        $('pyc-main').append(box);
+        historyBox = box;
+        paint();
+        filter.focus();
+    }
+    defineCommand({ id: 'pymagic.consoleHistory', label: 'Python console history', group: 'Run', keys: ['Ctrl+Alt+E'], everywhere: true, run: () => showHistory() });
+    $('pyc-history').onclick = () => showHistory();
+
+    // ---- Attach Debugger: the console connects to a debug server of the Run panel and stays debugged until Detach (or Stop there)
+    const debugButton = $('pyc-debug');
+    const attached = (c) => !!c.debugSession?.live();
+    function paintDebug() {
+        const on = !!active && attached(active);
+        debugButton.textContent = on ? 'Detach Debugger' : 'Attach Debugger';
+        debugButton.classList.toggle('on', on);
+    }
+    async function toggleDebugger(c = active) {
+        if (attached(c)) {
+            const session = c.debugSession;
+            c.debugSession = null;
+            await c.client?.ask({ type: 'consoleDetach' }).catch(() => null);
+            session.end();
+            paintDebug();
+            return;
+        }
+        if (!(await start(c)) || !c.client) return;
+        const session = await deps.debugSession();
+        if (!session) { toast('Another run or debug session is going: stop it first', true); return; }
+        c.debugSession = session;
+        const answer = await c.client.ask({ type: 'consoleAttach', host: session.host, port: session.port, token: session.token });
+        if (answer?.error) {
+            append(c, answer.error + '\n', 'err');
+            c.debugSession = null;
+            session.end();
+        }
+        paintDebug();
+    }
+    debugButton.onclick = () => void toggleDebugger();
+    window.setInterval(paintDebug, 1000);   // Stop in the Run panel ends the session too
 
     // the Django console: another console, with Django set up
     window.addEventListener('pymagic:djangoConsole', () => {

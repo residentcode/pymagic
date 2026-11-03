@@ -38,7 +38,7 @@ export function setupScratches({ openFile, askText, forget, currentFile }) {
             when.className = 'scratch-when';
             when.textContent = ago(now, Date.parse(f.modified));
             row.append(name, when);
-            row.title = 'Kept outside the project · right-click: rename, delete';
+            row.title = 'Kept outside the project · right-click: rename, move to the project, delete';
             row.onclick = () => void openFile(PREFIX + f.name);
             row.oncontextmenu = (e) => { e.preventDefault(); menu(e, f); };
             box.append(row);
@@ -48,6 +48,8 @@ export function setupScratches({ openFile, askText, forget, currentFile }) {
     function menu(e, f) {
         openMenu({ x: e.clientX, y: e.clientY }, [
             { label: 'Rename…', run: () => void rename(f) },
+            { label: 'Move to the project…', run: () => void moveToProject(f) },
+            '-',
             { label: 'Delete', run: () => void remove(f) },
         ]);
     }
@@ -67,6 +69,19 @@ export function setupScratches({ openFile, askText, forget, currentFile }) {
         await load();
     }
 
+    /** Move to the project: the scratch becomes a file of the project (where it goes is asked), opened there; it is no longer a scratch. */
+    async function moveToProject(f) {
+        const to = await askText('Move to the project', f.name, 'A path in the project: the scratch file becomes that file and leaves the scratches');
+        if (!to?.trim()) return;
+        const res = await fetch('/api/scratches/move', { method: 'POST', body: JSON.stringify({ name: f.name, to: to.trim() }) }).catch(() => null);
+        if (!res?.ok) { toast(res ? await res.text() : 'It could not be moved.', true); return; }
+        const { path } = await res.json();
+        await forget(PREFIX + f.name);
+        await load();
+        await openFile(path);
+        toast(`${f.name} is ${path} in the project now.`);
+    }
+
     /** A new scratch file: the name's extension is its language. */
     async function create(suggested = 'scratch.py', text) {
         const name = await askText('New scratch file', suggested, 'The extension is the language: .py .js .json .md .sql .html .http .yml …');
@@ -80,7 +95,15 @@ export function setupScratches({ openFile, askText, forget, currentFile }) {
 
     $('scratch-new').onclick = () => void create();
     defineCommand({ id: 'pymagic.scratch.new', label: 'New scratch file', group: 'Window', keys: ['Ctrl+Shift+Alt+Insert'], everywhere: true, run: () => void create() });
+    defineCommand({
+        id: 'pymagic.scratch.moveToProject', label: 'Move the scratch file to the project', group: 'Window',
+        run: () => {
+            const rel = currentFile();
+            if (!rel?.startsWith(PREFIX)) { toast('The file in the editor is not a scratch file.', true); return; }
+            void moveToProject({ name: rel.slice(PREFIX.length) });
+        },
+    });
     window.addEventListener('pymagic:saved', () => void load());
     void load();
-    return { load, create, isScratch: (rel) => rel.startsWith(PREFIX) };
+    return { load, create, moveToProject, isScratch: (rel) => rel.startsWith(PREFIX) };
 }

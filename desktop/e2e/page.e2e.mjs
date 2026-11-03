@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { launch, project, removeTree, sleep } from './app.mjs';
 
 const FILES = {
@@ -1347,7 +1347,8 @@ describe('a debug server a program started elsewhere connects back to', () => {
         const exited = new Promise((ok) => program.on('exit', ok));
         try {
             assert.equal(await page.waitFor(`!${$('b-over')}.disabled && document.querySelector('#frames div.sel')?.textContent`, 30000, 'the stop'), 'work remote_job.py:2');
-            assert.match(await output(), /A program connected from 127\.0\.0\.1/);
+            // the console names the program (numbered, as the server holds several at once)
+            await page.waitFor(`/(A program|Program 1) connected from 127\\.0\\.0\\.1/.test(${$('output')}.textContent)`, 10000, 'the connect line');
             assert.match(await page.waitFor(`${$('vars')}.textContent.includes('n = 21') && ${$('vars')}.textContent`, 10000, 'the variables'), /n = 21/);
             await page.evaluate(`${$('b-over')}.click()`);
             assert.equal(await page.waitFor(`!${$('b-over')}.disabled && document.querySelector('#frames div.sel')?.textContent.startsWith('work') && document.querySelector('#frames div.sel').textContent.endsWith(':3') && document.querySelector('#frames div.sel').textContent`, 10000, 'the step'), 'work remote_job.py:3');
@@ -3059,8 +3060,8 @@ describe('New Project: the other kinds', () => {
             // every node opened, then the inherited test double-clicked
             const row = `[...document.querySelectorAll('#tests-tree .trow')].find((r) => r.querySelector('.tname').textContent === 'test_status' && r.closest('li').parentElement.closest('li')?.querySelector('.tname').textContent === 'UserApi')`;
             await q.waitFor(`(() => { [...document.querySelectorAll('#tests-tree .trow .caret')].find((c) => c.textContent === '▸')?.click(); return !!${row}; })()`, 30000, 'the inherited test in the tree');
-            await q.evaluate(`${row}.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
-            const at = await q.waitFor(`(() => { const e = window.pymagic.editor; return e.getModel().uri.path === '/tests/base.py' && e.getPosition().lineNumber; })()`, 15000, 'tests/base.py opened');
+            // double-clicked again while the file is not open (the tree may draw itself again as discovery ends)
+            const at = await q.waitFor(`(() => { const e = window.pymagic.editor; if (e.getModel().uri.path === '/tests/base.py') return e.getPosition().lineNumber; ${row}?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); return 0; })()`, 15000, 'tests/base.py opened');
             assert.equal(at, 5);
             // in the subclass's file: the class and its own test have marks, the inherited one none
             await q.evaluate(`window.pymagic.openFile('tests/test_child.py')`);
@@ -3335,6 +3336,149 @@ describe('New Project: the other kinds', () => {
         await pick('Flask');
         assert.deepEqual([await shown('np-js'), await shown('np-python-env')], [false, true]);
         await page.evaluate(`document.getElementById('np-cancel').click()`);
+    });
+});
+
+describe('the Open work of 3 November: the HTTP client\'s scripts, Before launch, the console\'s history, the whole profile, imports, injections, FTPS, Mermaid', () => {
+    const put = (rel, text) => { mkdirSync(dirname(join(app.root, rel)), { recursive: true }); writeFileSync(join(app.root, rel), text); };
+    const runAt = (line) => page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: ${line}, column: 2 }); ed.focus(); return ed.getAction('pymagic.http.runAtCursor').run(); })()`);
+
+    test('HTTP client: a response handler\'s test is shown in the Tests part, and its global fills the next request', async () => {
+        put('scripted.http', 'GET {{host}}/items\n> {% client.test("ok", function () { client.assert(response.status === 200, "status"); }); client.global.set("seen", response.body.method); %}\n\n###\nGET {{host}}/again?m={{seen}}\n');
+        await open('scripted.http');
+        await runAt(1);
+        await page.waitFor(`document.getElementById('http-status').textContent.includes('tests 1/1')`, 15000, 'the handler\'s test');
+        await runAt(5);
+        await page.waitFor(`document.getElementById('http-body').textContent.includes('/again?m=GET')`, 15000, 'the global in the next request');
+    });
+
+    test('HTTP client: >> file keeps the response in the project, under a new name the second time', async () => {
+        put('saved.http', 'GET {{host}}/items\n>> out/r.json\n');
+        await open('saved.http');
+        await runAt(1);
+        const first = join(app.root, 'out', 'r.json'), second = join(app.root, 'out', 'r-1.json');
+        for (let i = 0; i < 60 && !existsSync(first); i++) await sleep(250);
+        assert.equal(JSON.parse(readFileSync(first, 'utf8')).method, 'GET');
+        await runAt(1);
+        for (let i = 0; i < 60 && !existsSync(second); i++) await sleep(250);
+        assert.ok(existsSync(second), 'the second response under out/r-1.json');
+    });
+
+    test('Python console: Ctrl+Alt+E lists the commands run, newest first and once each, filtered as it is typed', async () => {
+        const type = (code) => page.evaluate(`(() => { const i = document.getElementById('pyc-input'); i.value = ${JSON.stringify(code)}; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+        await page.evaluate(`document.getElementById('t-pyconsole').click()`);
+        await page.waitFor(`[...document.querySelectorAll('.pyc-out')].some((o) => !o.hidden && o.textContent.includes('Python 3'))`, 30000, 'the console');
+        for (const c of ['hx = 1', 'print(hx)', 'hx = 1']) {
+            await type(c);
+            await sleep(400);
+        }
+        await page.waitFor(`[...document.querySelectorAll('.pyc-out')].some((o) => !o.hidden && o.textContent.includes('>>> print(hx)'))`, 15000, 'the commands to run');
+        await page.evaluate(`document.getElementById('pyc-history').click()`);
+        const rows = await page.waitFor(`(() => { const r = [...document.querySelectorAll('#pyc-history-list .pyc-history-row')].map((x) => x.textContent); return r.length ? r : null; })()`, 5000, 'the history list');
+        assert.equal(rows[0], 'hx = 1');
+        assert.equal(rows.filter((r) => r === 'hx = 1').length, 1);
+        assert.ok(rows.includes('print(hx)'));
+        await page.evaluate(`(() => { const f = document.querySelector('#pyc-history-list input'); f.value = 'pri'; f.dispatchEvent(new Event('input', { bubbles: true })); f.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+        assert.equal(await page.waitFor(`!document.getElementById('pyc-history-list') && document.getElementById('pyc-input').value`, 5000, 'the command put back'), 'print(hx)');
+        await page.evaluate(`document.getElementById('pyc-input').value = ''`);
+    });
+
+    test('Profiler: the whole program\'s graph draws every function in columns by depth, and a click picks a box', async () => {
+        // the file in the editor, not a configuration an earlier test chose (the debug server's)
+        await page.evaluate(`document.getElementById('run-config').click()`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((r) => r.textContent.includes('Current file'))`, 5000, 'the configuration menu');
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((r) => r.textContent.includes('Current file')).click()`);
+        put('deep.py', 'def leaf():\n    return sum(range(20000))\n\n\ndef mid():\n    return leaf()\n\n\ndef main():\n    mid()\n    leaf()\n\n\nmain()\n');
+        await open('deep.py');
+        await page.evaluate(`document.getElementById('b-profile').click()`);
+        await page.waitFor(`document.getElementById('profiler-tab').classList.contains('active') && document.getElementById('prof-summary').textContent.startsWith('deep.py')`, 30000, 'the profile').catch(async (e) => { throw new Error(e.message + ' | summary: ' + await page.evaluate(`document.getElementById('prof-summary').textContent`) + ' | output: ' + (await page.evaluate(`document.getElementById('output').textContent`)).slice(-400) + ' | file: ' + await page.evaluate('window.pymagic.editor.getModel().uri.path')); });
+        await page.evaluate(`document.getElementById('prof-graph').click()`);
+        await page.waitFor(`[...document.querySelectorAll('.prof-graph-switch button')].some((b) => b.textContent === 'The whole program')`, 5000, 'the switch');
+        await page.evaluate(`[...document.querySelectorAll('.prof-graph-switch button')].find((b) => b.textContent === 'The whole program').click()`);
+        const boxes = await page.waitFor(`(() => { const n = [...document.querySelectorAll('#prof-list svg .prof-node')].map((g) => [g.querySelector('.prof-node-name').textContent, g.getBoundingClientRect().left]); return n.length >= 3 ? n : null; })()`, 5000, 'the boxes');
+        const x = Object.fromEntries(boxes);
+        assert.ok(x.main < x.mid && x.mid < x.leaf, JSON.stringify(x));   // columns by how deep each is called
+        await page.evaluate(`[...document.querySelectorAll('#prof-list svg .prof-node')].find((g) => g.querySelector('.prof-node-name').textContent === 'mid').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+        assert.equal(await page.waitFor(`document.querySelector('#prof-list svg .prof-node.center .prof-node-name')?.textContent`, 5000, 'the picked box'), 'mid');
+        await page.evaluate(`[...document.querySelectorAll('.prof-graph-switch button')].find((b) => b.textContent === 'Around one function').click()`);
+    });
+
+    test('Intention: import os becomes from os import getcwd, and its uses follow', async () => {
+        put('imp_os.py', 'import os\nprint(os.getcwd())\n');
+        await open('imp_os.py');
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 1, column: 9 }); ed.focus(); ed.getAction('editor.action.quickFix').run(); })()`);
+        const titles = await page.waitFor(`(() => { const rows = [...document.querySelectorAll('.action-widget .monaco-list-row')]; return rows.length ? rows.map((r) => r.textContent.trim()) : null; })()`, 15000, 'the quick-fix menu');
+        const title = titles.find((t) => t.includes("from os import getcwd"));
+        assert.ok(title, titles.join(' | '));
+        const at = await page.evaluate(`(() => { const r = [...document.querySelectorAll('.action-widget .monaco-list-row')].find((x) => x.textContent.includes('from os import getcwd')); const b = r.getBoundingClientRect(); return { x: b.left + 20, y: b.top + b.height / 2 }; })()`);
+        await page.click(at.x, at.y);
+        assert.equal(await page.waitFor(`window.pymagic.editor.getValue().startsWith('from os') && window.pymagic.editor.getValue()`, 10000, 'the import changed'), 'from os import getcwd\nprint(getcwd())\n');
+    });
+
+    test('Language injections: SQL in a JavaScript string by its comment, and in Python strings built from parts', async () => {
+        const injected = (rel) => page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); if (!m.uri.path.endsWith(${JSON.stringify(rel)})) return null; const kw = m.getAllDecorations().filter((d) => (d.options.inlineClassName ?? '').includes('inj-kw')).map((d) => m.getValueInRange(d.range)); return kw.length ? kw : null; })()`, 15000, 'the injected keywords of ' + rel);
+        put('inj_parts.py', '# language=sql\nq = ("SELECT id "\n     "FROM item "\n     "WHERE id = " + str(3))\n');
+        await open('inj_parts.py');
+        const py = await injected('inj_parts.py');
+        for (const k of ['SELECT', 'FROM', 'WHERE']) assert.ok(py.includes(k), py.join(','));
+        put('inj_js.js', '// language=sql\nconst q = "SELECT * FROM t";\n');
+        await open('inj_js.js');
+        const js = await injected('inj_js.js');
+        assert.ok(js.includes('SELECT') && js.includes('FROM'), js.join(','));
+    });
+
+    test('Deployment: an FTPS server can be implicit, which moves its port to 990', async () => {
+        const fill = (id, value) => page.evaluate(`(() => { const e = document.getElementById(${JSON.stringify(id)}); e.value = ${JSON.stringify(value)}; e.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+        await page.evaluate(`${$('t-deployment')}.click()`);
+        await page.evaluate(`${$('dep-add')}.click()`);
+        await page.waitFor(`document.getElementById('dep-form-type')`, 5000, 'the form');
+        const shown = () => page.evaluate(`!document.getElementById('dep-form-implicitTls').closest('label').hidden`);
+        await fill('dep-form-type', 'sftp');
+        assert.equal(await shown(), false, 'not for SFTP');
+        await fill('dep-form-type', 'ftps');
+        assert.equal(await shown(), true);
+        assert.equal(await page.evaluate(`document.getElementById('dep-form-port').value`), '21');
+        await page.evaluate(`(() => { const c = document.getElementById('dep-form-implicitTls'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+        assert.equal(await page.evaluate(`document.getElementById('dep-form-port').value`), '990');
+        await page.evaluate(`(() => { const c = document.getElementById('dep-form-implicitTls'); c.checked = false; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+        assert.equal(await page.evaluate(`document.getElementById('dep-form-port').value`), '21');
+        await page.evaluate(`[...document.querySelectorAll('.dep-form button')].find((b) => b.textContent === 'Cancel').click()`);
+    });
+
+    test('Markdown: a Mermaid pie chart is drawn by the Mermaid library, which is loaded for it', async () => {
+        put('pie.md', '# Pets\n\n```mermaid\npie title Pets\n    "Dogs" : 3\n    "Cats" : 2\n```\n');
+        await open('pie.md');
+        if (await page.evaluate(`!document.querySelector('.md-pane:not([hidden])')`)) await page.evaluate(`${$('md-toggle')}.click()`);
+        const text = await page.waitFor(`document.querySelector('.md-body .md-mermaid-lib svg')?.textContent`, 30000, 'the pie chart');
+        assert.ok(text.includes('Dogs') && text.includes('Cats'), text);
+        assert.equal(await page.evaluate(`!!window.pymagicMermaid`), true);
+        await page.evaluate(`${$('md-toggle')}.click()`);
+    });
+
+    test('Before launch: another configuration runs first, and a failing one stops the launch', async () => {
+        const proj = project({
+            'prep.py': "print('prepared')\n",
+            'main.py': "print('main ran')\n",
+            '.pymagic/run-configurations.json': JSON.stringify({ selected: 'main', configurations: [
+                { name: 'prep', kind: 'script', script: 'prep.py' },
+                { name: 'main', kind: 'script', script: 'main.py', before: 'prep' }] }),
+        });
+        const other = await launch(proj);
+        const q = other.page;
+        const out = () => q.evaluate(`document.getElementById('output').textContent`);
+        try {
+            await q.waitFor(`document.querySelector('#run-config span').textContent === 'main'`, 20000, 'main chosen');
+            await q.evaluate(`document.getElementById('b-run').click()`);
+            await q.waitFor(`document.getElementById('output').textContent.includes('main ran')`, 30000, 'main to run');
+            const text = await out();
+            assert.ok(text.indexOf('prepared') >= 0 && text.indexOf('prepared') < text.indexOf('main ran'), text);
+            // prep fails: main does not start
+            writeFileSync(join(proj, 'prep.py'), 'import sys\nsys.exit(2)\n');
+            await q.evaluate(`document.getElementById('b-run').click()`);
+            await q.waitFor(`/exit code 2/.test(document.getElementById('output').textContent) && /not started/.test(document.getElementById('output').textContent)`, 30000, 'the launch stopped');
+            assert.ok(!(await out()).includes('main ran'), await out());
+        }
+        finally { await other.close(); }
     });
 });
 

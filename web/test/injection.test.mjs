@@ -1,7 +1,7 @@
 // Checks of web/src/injection-model.js: `node web/test/injection.test.mjs` (tests/PyMagic.Tests/WebScriptTests.cs runs it).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scanPython, findInjections, maskHoles, unescapeBody, escapeBody, regexTokens } from '../src/injection-model.js';
+import { scanPython, findInjections, maskHoles, unescapeBody, escapeBody, regexTokens, fragmentText, sourceRanges } from '../src/injection-model.js';
 
 const bodies = (text) => findInjections(text).map((i) => [i.language, text.slice(i.start, i.end), i.why]);
 
@@ -71,4 +71,53 @@ test('the parts of a regular expression', () => {
     assert.deepEqual(kinds('(?:a|b)*'), ['group:(?:', 'alternation:|', 'group:)', 'quantifier:*']);
     assert.deepEqual(kinds('[]a]\\]'), ['class:[]a]', 'escape:\\]']);
     assert.deepEqual(kinds('a{x}'), []);
+});
+
+test('a string built from parts is one fragment: # language= marks every part, and keywords are read in the whole', () => {
+    const src = '# language=sql\nq = "SELECT " + cols + " FROM t WHERE id = " + str(n)\n';
+    const found = findInjections(src);
+    assert.deepEqual(found.map((i) => [i.language, src.slice(i.start, i.end), i.why]), [['sql', 'SELECT ', 'comment'], ['sql', ' FROM t WHERE id = ', 'comment']]);
+    assert.equal(found[0].chain, found[1].chain);
+    assert.deepEqual(found[0].chain.values, [true]);
+    // what it stands for: the parts, an x for the value between them
+    const { text, pieces } = fragmentText(src, found[0]);
+    assert.equal(text, 'SELECT x FROM t WHERE id = ');
+    // a token over the x is cut at the parts
+    assert.deepEqual(sourceRanges(pieces, 0, 6).map(([a, b]) => src.slice(a, b)), ['SELECT']);
+    assert.deepEqual(sourceRanges(pieces, 5, 12).map(([a, b]) => src.slice(a, b)), ['T ', ' FRO']);
+    // without a comment: SELECT in one part and FROM in the next still say SQL; strings one after the other inside brackets are parts too
+    const multi = 'q = ("SELECT a, b "\n     "FROM item "  # the table\n     "WHERE a = ?")\n';
+    assert.deepEqual(findInjections(multi).map((i) => [i.language, multi.slice(i.start, i.end), i.why]),
+        [['sql', 'SELECT a, b ', 'keywords'], ['sql', 'FROM item ', 'keywords'], ['sql', 'WHERE a = ?', 'keywords']]);
+    // the comment over a statement over lines
+    assert.equal(findInjections('# language=json\nd = (\n    "{" +\n    "}"\n)\n').length, 2);
+    // separate arguments, items of a list and lines of their own are not parts of one string
+    assert.deepEqual(findInjections('f("SELECT a", "FROM b")\n'), []);
+    assert.deepEqual(findInjections('xs = ["SELECT a",\n      "FROM b"]\n'), []);
+    assert.deepEqual(findInjections('a = "SELECT a"\n"FROM b"\n'), []);
+    assert.deepEqual(findInjections('m = "Hello " + name + "!"\n'), []);
+});
+
+test('JavaScript strings: // language= and /* language= */, the tag of a template, the calls, SQL by its keywords', () => {
+    const js = (src) => findInjections(src, 'javascript').map((i) => [i.language, src.slice(i.start, i.end), i.why]);
+    assert.deepEqual(js('// language=SQL\nconst q = "anything";\n'), [['sql', 'anything', 'comment']]);
+    assert.deepEqual(js('const page = /* language=html */ \'<b>x</b>\';\n'), [['html', '<b>x</b>', 'comment']]);
+    assert.deepEqual(js('const t = html`<p>${name}</p>`;\nconst s = css`a { color: red }`;\n'), [['html', '<p>${name}</p>', 'tag'], ['css', 'a { color: red }', 'tag']]);
+    assert.deepEqual(js('db.query("UPDATE x SET y = 1");\nconst r = new RegExp("a+b");\nJSON.parse(\'{"a": 1}\');\n').map((b) => b[0]), ['sql', 'regex', 'json']);
+    assert.deepEqual(js('const q = `SELECT id FROM item WHERE id = ${id}`;\n'), [['sql', 'SELECT id FROM item WHERE id = ${id}', 'keywords']]);
+    // a string built from parts, and a quote in a comment or a template's value that does not end anything
+    const parts = '// language=sql\nconst q = "SELECT " + cols +\n  " FROM t";\n';
+    assert.deepEqual(js(parts).map((b) => b[1]), ['SELECT ', ' FROM t']);
+    assert.deepEqual(js("// it's\nconst a = `x ${f('}')} y`; // language=html\n"), [['html', "x ${f('}')} y", 'comment']]);
+    assert.deepEqual(js('const m = "Please select an item";\n'), []);
+    // the holes of a template keep their places
+    assert.equal(maskHoles('a ${b + {c: 1}.c} d', false, true).text, 'a xxxxxxxxxxxxxxx d');
+});
+
+test('the escapes of a JavaScript template are read and put back', () => {
+    const t = { raw: false, quote: '`', triple: true, template: true };
+    assert.equal(unescapeBody('a \\` \\${x} \\n', false, true), 'a ` ${x} \n');
+    assert.equal(unescapeBody('\\$', false), null);
+    assert.equal(escapeBody('a ` ${x} \\ b\nc', t), 'a \\` \\${x} \\\\ b\nc');
+    for (const body of ['plain', 'a \\` b', 'cost \\${x}']) assert.equal(escapeBody(unescapeBody(body, false, true), t), body);
 });

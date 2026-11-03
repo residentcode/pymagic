@@ -65,4 +65,13 @@ public sealed class LineMap
     }
 
     public Range RangeOf(int start, int end) => new(PositionOf(start), PositionOf(end));
+
+    /// <summary>The offset of a line and a column in UTF-16 units, whatever <see cref="Utf8"/> says (for columns kept from before, like the symbol index's).</summary>
+    public int OffsetOfUtf16(int line, int character)
+    {
+        if (line < 0) return 0;
+        if (line >= _starts.Count) return _length;
+        int lineEnd = line + 1 < _starts.Count ? _starts[line + 1] : _length;
+        return Math.Min(_starts[line] + Math.Max(character, 0), lineEnd);
+    }
 }

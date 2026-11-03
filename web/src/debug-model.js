@@ -166,3 +166,15 @@ export function threadHeadings(frames, stoppedThread) {
     });
     return headings;
 }
+
+/**
+ * What the Debug console says when a program connects to the debug server or leaves it (it holds several at once):
+ * `{ text, still }`, still being whether programs are left connected (the debugger then stays as it is).
+ */
+export function serverProgramNote(m) {
+    const n = m.programs ?? 0, which = m.program ? `Program ${m.program}` : 'A program';
+    if (m.type === 'connected')
+        return { text: `${which} connected from ${m.from}${n > 1 ? ` (${n} programs are connected; one program's stop is shown at a time)` : ''}.\n`, still: true };
+    if (n > 0) return { text: `${which} disconnected; ${n === 1 ? '1 program is' : `${n} programs are`} still connected.\n`, still: true };
+    return { text: 'The program disconnected; the debug server is waiting for the next one.\n', still: false };
+}

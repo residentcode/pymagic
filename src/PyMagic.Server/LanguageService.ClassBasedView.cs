@@ -9,6 +9,9 @@ namespace PyMagic.Server;
 /// Convert to class-based view (Alt+Enter on a view function's name): a function that only renders a template becomes a TemplateView
 /// (`template_name`, its context in get_context_data), one split on `if request.method == "POST":` a View with get() and post();
 /// its decorators go on the class through method_decorator, and the path() entries that name it take `NameView.as_view()`.
+/// The other uses follow, as PyCharm's: a call (a test's `views.index(request)`) becomes `views.IndexView.as_view()(request)`, `reverse(views.index)`
+/// (and reverse_lazy, redirect, resolve_url) the name of its url (`reverse("shop:index")`, left as it is when its path() has no name), any other reference
+/// `IndexView.as_view()`, and a `from .views import index` imports the class.
 /// </summary>
 public sealed partial class LanguageService
 {
@@ -28,6 +31,7 @@ public sealed partial class LanguageService
         var own = new List<Edit>();
         int start = LineStart(m.Source, fd.Start), end = LineEndInclusive(m.Source, fd.End);
         own.Add(new Edit(start, end, text.Replace("{Name}", className)));
+        own.AddRange(OtherUsesOfView(snap, m, m, fd, className, UrlNameOfView(snap, fd), start, end));
         var imports = new List<Edit>();
         if (!m.Semantics.ModuleScope.Symbols.ContainsKey(baseName)) imports.Add(ImportEdit(m, baseModule, baseName));
         if (fd.Decorators.Count > 0 && !m.Semantics.ModuleScope.Symbols.ContainsKey("method_decorator")) imports.Add(ImportEdit(m, "django.utils.decorators", "method_decorator"));
@@ -36,24 +40,11 @@ public sealed partial class LanguageService
             own.Add(group.Count() == 1 ? group.First() : new Edit(group.Key.Start, group.Key.End, group.First().Text + string.Concat(group.Skip(1).Select(g => g.Text.TrimStart('\n')))));
         edits[uri] = own.Select(e => new TextEdit(lines.RangeOf(e.Start, e.End), e.Text)).ToList();
 
-        // urls: views.index -> views.IndexView.as_view(), index -> IndexView.as_view() (and its import)
-        var ev = snap.Workspace.Evaluator;
-        foreach (var um in snap.Project.Where(x => !x.IsStub && x.Source.Contains(fd.Name, StringComparison.Ordinal) && (x.Source.Contains("path(", StringComparison.Ordinal) || x.Source.Contains("url(", StringComparison.Ordinal))))
+        // the other modules that use it: the urls, the tests, other views
+        string? urlName = UrlNameOfView(snap, fd);
+        foreach (var um in snap.Project.Where(x => !x.IsStub && !ReferenceEquals(x, m) && x.Source.Contains(fd.Name, StringComparison.Ordinal)))
         {
-            var changes = new List<Edit>();
-            bool byName = false;
-            foreach (var call in AstChildren.Descendants(um.Ast).OfType<CallExpr>())
-            {
-                if (CalleeName(call) is not ("path" or "re_path" or "url") || call.Args.Count < 2 || call.Args[1].Name != null) continue;
-                var view = call.Args[1].Value;
-                if (ev.TypeOf(um, view) is not FunctionType { Info.Node: FunctionDef target } || !ReferenceEquals(target, fd)) continue;
-                if (view is AttributeExpr a) changes.Add(new Edit(a.End - a.Attr.Length, a.End, className + ".as_view()"));
-                else if (view is NameExpr) { changes.Add(new Edit(view.Start, view.End, className + ".as_view()")); byName = true; }
-            }
-            if (byName)
-                foreach (var imp in um.Ast.Body.OfType<ImportFromStmt>())
-                    foreach (var alias in imp.Names.Where(n => n.Name == fd.Name && n.AsName == null))
-                        changes.Add(new Edit(alias.Start, alias.End, className));
+            var changes = OtherUsesOfView(snap, um, m, fd, className, urlName, -1, -1);
             if (changes.Count == 0) continue;
             var ul = Lines(um);
             string key = um.Path != null ? UriOfPath(um.Path) : snap.ByUri.FirstOrDefault(kv => ReferenceEquals(kv.Value, um)).Key ?? "";
@@ -62,6 +53,82 @@ public sealed partial class LanguageService
             list.AddRange(changes.Select(e => new TextEdit(ul.RangeOf(e.Start, e.End), e.Text)));
         }
         yield return new CodeAction($"Convert to class-based view ({baseName})", RefactorActionKind("class-based-view"), new WorkspaceEdit(edits));
+    }
+
+    /// <summary>
+    /// The edits of one module for the uses of a view function that becomes the class `className` (defined in `views`): see the class's summary.
+    /// The text between `skipFrom` and `skipTo` (the function itself, in its own module) is left out.
+    /// </summary>
+    List<Edit> OtherUsesOfView(Snapshot snap, ModuleInfo um, ModuleInfo views, FunctionDef fd, string className, string? urlName, int skipFrom, int skipTo)
+    {
+        var ev = snap.Workspace.Evaluator;
+        var changes = new List<Edit>();
+        bool self = ReferenceEquals(um, views);
+        // the names the module has the function by: its own, or the one it imports it as
+        var names = new HashSet<string>(StringComparer.Ordinal) { fd.Name };
+        foreach (var imp in um.Ast.Body.OfType<ImportFromStmt>())
+            foreach (var alias in imp.Names.Where(n => n.Name == fd.Name && n.AsName != null)) names.Add(alias.AsName!);
+        Dictionary<Node, Node>? parents = null;
+        foreach (var node in AstChildren.Descendants(um.Ast))
+        {
+            if (node is not (NameExpr or AttributeExpr) || node.Start >= skipFrom && node.Start < skipTo) continue;
+            if (node is NameExpr n0 && !names.Contains(n0.Name) || node is AttributeExpr a0 && a0.Attr != fd.Name) continue;
+            var use = (Expr)node;
+            if (ev.TypeOf(um, use) is not FunctionType { Info.Node: FunctionDef target } || !ReferenceEquals(target, fd)) continue;
+            if (parents == null)
+            {
+                parents = new Dictionary<Node, Node>(ReferenceEqualityComparer.Instance);
+                foreach (var p in AstChildren.Descendants(um.Ast))
+                    foreach (var c in AstChildren.Of(p)) parents[c] = p;
+            }
+            parents.TryGetValue(use, out var parent);
+            Node? grand = parent != null && parents.TryGetValue(parent, out var g) ? g : null;
+            // reverse(views.index): the url's name, when its path() gives one (a class's as_view() is a new function each time, reverse cannot find it)
+            if (parent is Argument arg && grand is CallExpr outer && CalleeName(outer) is "reverse" or "reverse_lazy" or "redirect" or "resolve_url"
+                && outer.Args.Count > 0 && ReferenceEquals(outer.Args[0], arg) && arg.Name == null)
+            {
+                if (urlName != null) changes.Add(new Edit(use.Start, use.End, "\"" + urlName + "\""));
+                continue;
+            }
+            // a path() entry, a call (views.index(request) -> views.IndexView.as_view()(request)) and any other reference take the view of the class
+            string asView = className + ".as_view()";
+            if (use is AttributeExpr a) changes.Add(new Edit(a.End - a.Attr.Length, a.End, asView));
+            else changes.Add(new Edit(use.Start, use.End, ((NameExpr)use).Name == fd.Name ? asView : ((NameExpr)use).Name + ".as_view()"));
+        }
+        // from .views import index -> IndexView (as idx keeps its alias)
+        if (!self)
+            foreach (var imp in um.Ast.Body.OfType<ImportFromStmt>().Where(i => ImportsFrom(i, um, views)))
+                foreach (var alias in imp.Names.Where(n => n.Name == fd.Name))
+                    changes.Add(alias.AsName == null ? new Edit(alias.Start, alias.End, className) : new Edit(alias.Start, alias.Start + fd.Name.Length, className));
+        return changes;
+    }
+
+    /// <summary>Whether a `from … import` of a module reads the module `views` (absolute, or relative from the same package).</summary>
+    static bool ImportsFrom(ImportFromStmt imp, ModuleInfo of, ModuleInfo views)
+    {
+        string? module = imp.Module;
+        if (imp.Level == 0) return module == views.Name;
+        var package = of.Name.Split('.').ToList();
+        if (!of.IsPackage) package.RemoveAt(package.Count - 1);
+        for (int i = 1; i < imp.Level && package.Count > 0; i++) package.RemoveAt(package.Count - 1);
+        if (module != null) package.Add(module);
+        return string.Join('.', package) == views.Name;
+    }
+
+    /// <summary>The name of the url a path() gives the view (`name="index"`), with the `app_name` of its urls module before it ("shop:index"); null when none has one.</summary>
+    string? UrlNameOfView(Snapshot snap, FunctionDef fd)
+    {
+        var ev = snap.Workspace.Evaluator;
+        foreach (var um in snap.Project.Where(x => !x.IsStub && x.Source.Contains(fd.Name, StringComparison.Ordinal) && x.Source.Contains("path(", StringComparison.Ordinal)))
+            foreach (var call in AstChildren.Descendants(um.Ast).OfType<CallExpr>())
+            {
+                if (CalleeName(call) is not ("path" or "re_path" or "url") || call.Args.Count < 2 || call.Args[1].Name != null) continue;
+                if (ev.TypeOf(um, call.Args[1].Value) is not FunctionType { Info.Node: FunctionDef target } || !ReferenceEquals(target, fd)) continue;
+                if (call.Args.FirstOrDefault(a => a.Name == "name")?.Value is not ConstExpr c || FixtureModel.StringValue(c) is not string name) continue;
+                string? app = um.Ast.Body.OfType<AssignStmt>().Where(s => s.Targets is [NameExpr { Name: "app_name" }]).Select(s => s.Value is ConstExpr v ? FixtureModel.StringValue(v) : null).LastOrDefault();
+                return string.IsNullOrEmpty(app) ? name : app + ":" + name;
+            }
+        return null;
     }
 
     /// <summary>A function of a views module, or one a path() names.</summary>

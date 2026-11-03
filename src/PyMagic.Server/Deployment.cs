@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -9,11 +10,13 @@ namespace PyMagic.Server;
 public sealed record DeployMapping(string Local, string Remote);
 
 /// <summary>
-/// A server the project is deployed to (item 244): a folder (a share, a USB stick), an FTP server (<c>ftp</c>, or <c>ftps</c>: explicit TLS), or an SFTP server. <c>DeleteOnDelete</c> (off unless chosen) takes a file off the server when it is deleted in the project. <c>Root</c> is the
+/// A server the project is deployed to (item 244): a folder (a share, a USB stick), an FTP server (<c>ftp</c>, or <c>ftps</c>: explicit TLS, or
+/// implicit TLS when <c>ImplicitTls</c>), or an SFTP server. <c>HostKey</c> is the SFTP server's key, or the fingerprint of the FTPS server's certificate
+/// that was trusted (a self-signed one). <c>DeleteOnDelete</c> (off unless chosen) takes a file off the server when it is deleted in the project. <c>Root</c> is the
 /// folder on it everything below is relative to (for a folder server, the folder itself).
 /// </summary>
 public sealed record DeployServer(string Id, string Name, string Type, string Host, int Port, string User, string Root, string KeyFile, bool UploadOnSave,
-    List<DeployMapping> Mappings, List<string> Excluded, string HostKey, bool DeleteOnDelete = false);
+    List<DeployMapping> Mappings, List<string> Excluded, string HostKey, bool DeleteOnDelete = false, bool ImplicitTls = false);
 
 public sealed record RemoteEntry(string Name, bool IsDir, long Size, DateTime Modified);
 
@@ -73,7 +76,8 @@ public static class DeployStore
             host = "";
         }
         else if (host.Length == 0) throw new ServiceException("Name the host.");
-        int port = body["port"] is { } p && int.TryParse(p.ToString(), out var n) ? n : (type is "ftp" or "ftps" ? 21 : 22);
+        bool implicitTls = type == "ftps" && body["implicitTls"]?.GetValue<bool>() == true;
+        int port = body["port"] is { } p && int.TryParse(p.ToString(), out var n) ? n : implicitTls ? 990 : (type is "ftp" or "ftps" ? 21 : 22);
         if (port is < 1 or > 65535) throw new ServiceException("The port is a number from 1 to 65535.");
         string user = (body["user"]?.GetValue<string>() ?? "").Trim();
         foreach (var field in new[] { host, user, root }) if (field.Any(char.IsControl)) throw new ServiceException("A name has a control character in it.");
@@ -85,7 +89,7 @@ public static class DeployStore
         if (mappings == null || mappings.Count == 0) mappings = new() { new DeployMapping("", "") };
         if (mappings.Any(m => m.Local.Split('/').Contains("..") || m.Remote.Split('/').Contains(".."))) throw new ServiceException("A mapping cannot climb out of its folder.");
         var excluded = (body["excluded"] as System.Text.Json.Nodes.JsonArray)?.Select(x => x?.GetValue<string>()?.Trim() ?? "").Where(x => x.Length > 0).ToList() ?? new();
-        return new DeployServer(id, name, type, host, port, user, root, (body["keyFile"]?.GetValue<string>() ?? "").Trim(), body["uploadOnSave"]?.GetValue<bool>() ?? false, mappings, excluded, body["hostKey"]?.GetValue<string>() ?? "", body["deleteOnDelete"]?.GetValue<bool>() ?? false);
+        return new DeployServer(id, name, type, host, port, user, root, (body["keyFile"]?.GetValue<string>() ?? "").Trim(), body["uploadOnSave"]?.GetValue<bool>() ?? false, mappings, excluded, body["hostKey"]?.GetValue<string>() ?? "", body["deleteOnDelete"]?.GetValue<bool>() ?? false, implicitTls);
     }
 
     static string Clean(string? path) => (path ?? "").Trim().Replace('\\', '/').Trim('/');
@@ -153,48 +157,49 @@ public sealed class FolderRemote : IRemote
 #pragma warning disable SYSLIB0014   // FtpWebRequest is the client that needs no download
 public sealed class FtpRemote : IRemote
 {
-    readonly string _host; readonly int _port; readonly NetworkCredential _credential; readonly bool _tls;
-    /// <param name="tls">FTPS: the control and the data connection are encrypted (explicit TLS: AUTH TLS on the usual port); the server's certificate must be one this computer trusts.</param>
-    public FtpRemote(string host, int port, string user, string password, bool tls = false) { _host = host; _port = port; _credential = new NetworkCredential(user, password); _tls = tls; }
+    readonly string _host; readonly int _port; readonly NetworkCredential _credential;
+    /// <summary>Plain FTP; FTPS is <see cref="FtpsRemote"/>.</summary>
+    public FtpRemote(string host, int port, string user, string password) { _host = host; _port = port; _credential = new NetworkCredential(user, password); }
 
     FtpWebRequest Request(string path, string method)
     {
         var uri = new UriBuilder("ftp", _host, _port) { Path = "/" + string.Join("/", path.Split('/', StringSplitOptions.RemoveEmptyEntries).Select(Uri.EscapeDataString)) };
         var r = (FtpWebRequest)WebRequest.Create(uri.Uri);
-        r.Method = method; r.Credentials = _credential; r.UsePassive = true; r.EnableSsl = _tls; r.UseBinary = true; r.KeepAlive = false; r.Timeout = 20000; r.ReadWriteTimeout = 30000;
+        r.Method = method; r.Credentials = _credential; r.UsePassive = true; r.UseBinary = true; r.KeepAlive = false; r.Timeout = 20000; r.ReadWriteTimeout = 30000;
         return r;
     }
 
-    /// <summary>The answer of the server; a certificate this computer does not accept (FTPS) is told as a <see cref="ServiceException"/>.</summary>
-    static WebResponse Respond(FtpWebRequest request) => Wrap(request.GetResponse);
-
-    static T Wrap<T>(Func<T> call)
-    {
-        try { return call(); }
-        catch (System.Security.Authentication.AuthenticationException e) { throw new ServiceException("The secure connection could not be made: " + e.Message + " (the server's certificate must be one this computer trusts)"); }
-    }
+    static WebResponse Respond(FtpWebRequest request) => request.GetResponse();
 
     static readonly Regex Unix =new(@"^(?<kind>[-dlDL])[\w-]{9}[+@.]?\s+\d+\s+\S+\s+\S+\s+(?<size>\d+)\s+(?<date>\w{3}\s+\d{1,2}\s+(?:\d{4}|\d{1,2}:\d{2}))\s+(?<name>.+)$", RegexOptions.Compiled);
     static readonly Regex Dos = new(@"^(?<date>\d{2}-\d{2}-\d{2,4}\s+\d{1,2}:\d{2}[AP]M)\s+(?<size><DIR>|\d+)\s+(?<name>.+)$", RegexOptions.Compiled);
 
     public IReadOnlyList<RemoteEntry> List(string dir)
     {
-        var entries = new List<RemoteEntry>();
+        var lines = new List<string>();
         try
         {
             using var res = (FtpWebResponse)Respond(Request(dir, WebRequestMethods.Ftp.ListDirectoryDetails));
             using var reader = new StreamReader(res.GetResponseStream(), Encoding.UTF8);
             string? line;
-            while ((line = reader.ReadLine()) != null)
-            {
-                if (Unix.Match(line) is { Success: true } u && u.Groups["name"].Value is var n && n is not ("." or ".."))
-                    entries.Add(new RemoteEntry(n.Contains(" -> ") ? n[..n.IndexOf(" -> ", StringComparison.Ordinal)] : n, u.Groups["kind"].Value is "d" or "D", long.Parse(u.Groups["size"].Value), ParseUnixDate(u.Groups["date"].Value)));
-                else if (Dos.Match(line) is { Success: true } d)
-                    entries.Add(new RemoteEntry(d.Groups["name"].Value, d.Groups["size"].Value == "<DIR>", d.Groups["size"].Value == "<DIR>" ? 0 : long.Parse(d.Groups["size"].Value),
-                        DateTime.TryParseExact(d.Groups["date"].Value, new[] { "MM-dd-yy hh:mmtt", "MM-dd-yyyy hh:mmtt", "MM-dd-yy h:mmtt" }, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var t) ? t : DateTime.MinValue));
-            }
+            while ((line = reader.ReadLine()) != null) lines.Add(line);
         }
         catch (WebException e) when (e.Response is FtpWebResponse { StatusCode: FtpStatusCode.ActionNotTakenFileUnavailable }) { return Array.Empty<RemoteEntry>(); }
+        return ParseListing(lines);
+    }
+
+    /// <summary>The lines of a LIST answer, in the Unix and the DOS formats, as entries: folders first, then by name.</summary>
+    internal static List<RemoteEntry> ParseListing(IEnumerable<string> lines)
+    {
+        var entries = new List<RemoteEntry>();
+        foreach (var line in lines)
+        {
+            if (Unix.Match(line) is { Success: true } u && u.Groups["name"].Value is var n && n is not ("." or ".."))
+                entries.Add(new RemoteEntry(n.Contains(" -> ") ? n[..n.IndexOf(" -> ", StringComparison.Ordinal)] : n, u.Groups["kind"].Value is "d" or "D", long.Parse(u.Groups["size"].Value), ParseUnixDate(u.Groups["date"].Value)));
+            else if (Dos.Match(line) is { Success: true } d)
+                entries.Add(new RemoteEntry(d.Groups["name"].Value, d.Groups["size"].Value == "<DIR>", d.Groups["size"].Value == "<DIR>" ? 0 : long.Parse(d.Groups["size"].Value),
+                    DateTime.TryParseExact(d.Groups["date"].Value, new[] { "MM-dd-yy hh:mmtt", "MM-dd-yyyy hh:mmtt", "MM-dd-yy h:mmtt" }, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var t) ? t : DateTime.MinValue));
+        }
         return entries.OrderByDescending(e => e.IsDir).ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -225,7 +230,7 @@ public sealed class FtpRemote : IRemote
         }
         var req = Request(path, WebRequestMethods.Ftp.UploadFile);
         req.ContentLength = data.Length;
-        using (var stream = Wrap(() => req.GetRequestStream())) stream.Write(data, 0, data.Length);
+        using (var stream = req.GetRequestStream()) stream.Write(data, 0, data.Length);
         using var res = (FtpWebResponse)Respond(req);
     }
 
@@ -244,6 +249,210 @@ public sealed class FtpRemote : IRemote
     public void Dispose() { }
 }
 #pragma warning restore SYSLIB0014
+
+/// <summary>
+/// FTPS through a client of its own (the framework's FtpWebRequest knows neither implicit TLS nor a certificate trusted for one server):
+/// explicit TLS (AUTH TLS on the usual port, 21) or implicit TLS (the connection is TLS from its first byte, port 990), with the data
+/// connections protected too (PBSZ 0, PROT P) and passive (EPSV, else PASV to the control connection's own address). A certificate this
+/// computer trusts is taken; another one (a self-signed one) only when its SHA-256 fingerprint is the one remembered for the server, or
+/// when the user chose to trust it, and then it is remembered. One control connection serves all the requests of an instance.
+/// </summary>
+public sealed class FtpsRemote : IRemote
+{
+    readonly string _host;
+    readonly TcpClient _control;
+    Stream _stream;
+    readonly System.Net.Security.RemoteCertificateValidationCallback _check;
+    string? _refused;
+
+    /// <param name="knownCert">The fingerprint ("AB:CD:…") of the certificate trusted before, or "".</param>
+    /// <param name="learn">Not null when a certificate this computer does not trust is to be trusted now: it is told the fingerprint.</param>
+    public FtpsRemote(string host, int port, string user, string password, bool implicitTls, string knownCert, Action<string>? learn)
+    {
+        _host = host;
+        _check = (_, cert, _, errors) =>
+        {
+            if (cert == null) { _refused = "The server showed no certificate."; return false; }
+            if (errors == System.Net.Security.SslPolicyErrors.None) return true;
+            string seen = Fingerprint(cert);
+            if (knownCert.Length > 0)
+            {
+                if (string.Equals(knownCert, seen, StringComparison.OrdinalIgnoreCase)) return true;
+                _refused = $"The server's certificate is not the one trusted before ({knownCert}, now {seen}). If the server was given a new certificate on purpose, edit the server and tick Trust its certificate.";
+                return false;
+            }
+            if (learn != null) { learn(seen); knownCert = seen; return true; }
+            _refused = $"The server's certificate is not one this computer trusts ({cert.Subject}, SHA-256 {seen}). If it is the server's own certificate (a self-signed one), edit the server and tick Trust its certificate.";
+            return false;
+        };
+        _control = new TcpClient { ReceiveTimeout = 20000, SendTimeout = 20000 };
+        try
+        {
+            if (!_control.ConnectAsync(host, port).Wait(20000)) throw new TimeoutException("no answer in 20 seconds");
+            _stream = _control.GetStream();
+            if (implicitTls) _stream = Secure(_stream);
+            Expect(Reply(), 2);
+            if (!implicitTls)
+            {
+                Expect(Command("AUTH TLS"), 2, "The server does not offer TLS (AUTH TLS)");
+                _stream = Secure(_stream);
+            }
+            var (code, text) = Command("USER " + user);
+            if (code == 331) (code, text) = Command("PASS " + password);
+            if (code is < 200 or >= 300) throw new ServiceException("The server did not let this user in: " + text);
+            Command("PBSZ 0");
+            Expect(Command("PROT P"), 2, "The server does not protect the data connections (PROT P)");
+            Expect(Command("TYPE I"), 2);
+        }
+        catch (Exception e) when (e is IOException or SocketException or TimeoutException or AggregateException or System.Security.Authentication.AuthenticationException)
+        {
+            _control.Dispose();
+            throw new ServiceException(_refused ?? "Could not connect: " + (e is AggregateException a ? a.InnerException?.Message ?? a.Message : e.Message));
+        }
+    }
+
+    /// <summary>A certificate's SHA-256 fingerprint as it is usually shown: pairs of hex digits with colons.</summary>
+    public static string Fingerprint(System.Security.Cryptography.X509Certificates.X509Certificate cert) =>
+        string.Join(":", System.Security.Cryptography.SHA256.HashData(cert.GetRawCertData()).Select(b => b.ToString("X2")));
+
+    Stream Secure(Stream inner)
+    {
+        var ssl = new System.Net.Security.SslStream(inner, false, _check);
+        ssl.AuthenticateAsClient(_host);
+        return ssl;
+    }
+
+    // ------------------------------------------------------------ the control connection
+
+    (int Code, string Text) Reply()
+    {
+        // a reply of several lines starts "123-" and ends with a line "123 "
+        string first = ReadLine() ?? throw new IOException("The server closed the connection.");
+        var text = new StringBuilder(first);
+        if (first.Length > 3 && first[3] == '-')
+            for (string? line; (line = ReadLine()) != null;) { text.Append('\n').Append(line); if (line.Length >= 4 && line.StartsWith(first[..3], StringComparison.Ordinal) && line[3] == ' ') break; }
+        return (first.Length >= 3 && int.TryParse(first[..3], out int code) ? code : 0, text.ToString());
+    }
+
+    string? ReadLine()
+    {
+        // byte by byte: a reader with a buffer would swallow what a TLS handshake that follows needs
+        var bytes = new List<byte>();
+        while (true)
+        {
+            int b = _stream.ReadByte();
+            if (b < 0) return bytes.Count == 0 ? null : Encoding.UTF8.GetString(bytes.ToArray());
+            if (b == '\n') return Encoding.UTF8.GetString(bytes.ToArray()).TrimEnd('\r');
+            bytes.Add((byte)b);
+        }
+    }
+
+    (int Code, string Text) Command(string line)
+    {
+        if (line.Any(c => c is '\r' or '\n')) throw new ServiceException("A name has a line break in it.");
+        var bytes = Encoding.UTF8.GetBytes(line + "\r\n");
+        _stream.Write(bytes, 0, bytes.Length);
+        _stream.Flush();
+        return Reply();
+    }
+
+    static void Expect((int Code, string Text) reply, int kind, string? what = null)
+    {
+        if (reply.Code / 100 != kind) throw new ServiceException((what != null ? what + ": " : "") + reply.Text.Trim());
+    }
+
+    // ------------------------------------------------------------ data connections
+
+    TcpClient Passive()
+    {
+        var address = ((IPEndPoint)_control.Client.RemoteEndPoint!).Address;
+        int port;
+        var (code, text) = Command("EPSV");
+        if (code == 229 && Regex.Match(text, @"\(\|\|\|(\d+)\|\)") is { Success: true } e) port = int.Parse(e.Groups[1].Value);
+        else
+        {
+            (code, text) = Command("PASV");
+            var m = Regex.Match(text, @"(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)");
+            if (code != 227 || !m.Success) throw new ServiceException("The server offers no passive data connection: " + text.Trim());
+            // the address in the answer is not used (behind a router it is often one that cannot be reached): the server's own is
+            port = int.Parse(m.Groups[5].Value) * 256 + int.Parse(m.Groups[6].Value);
+        }
+        var data = new TcpClient { ReceiveTimeout = 30000, SendTimeout = 30000 };
+        if (!data.ConnectAsync(address, port).Wait(20000)) { data.Dispose(); throw new ServiceException("The data connection could not be made."); }
+        return data;
+    }
+
+    /// <summary>Runs a command that sends or takes data; null when the server refused it with a 5xx (a file or folder that is not there).</summary>
+    T? Transfer<T>(string command, Func<Stream, T> work) where T : class
+    {
+        using var data = Passive();
+        var (code, text) = Command(command);
+        if (code / 100 == 5) return null;
+        if (code / 100 != 1) throw new ServiceException(text.Trim());
+        T result;
+        using (var ssl = new System.Net.Security.SslStream(data.GetStream(), false, _check))
+        {
+            ssl.AuthenticateAsClient(_host);
+            result = work(ssl);
+            try { ssl.ShutdownAsync().Wait(5000); } catch (Exception x) when (x is IOException or AggregateException or ObjectDisposedException) { /* the server closed it first */ }
+        }
+        data.Close();
+        Expect(Reply(), 2);
+        return result;
+    }
+
+    static string P(string path) => string.Join("/", path.Split('/', StringSplitOptions.RemoveEmptyEntries));
+
+    public IReadOnlyList<RemoteEntry> List(string dir)
+    {
+        string p = P(dir);
+        var lines = Transfer(p.Length == 0 ? "LIST" : "LIST " + p, s =>
+        {
+            var found = new List<string>();
+            using var reader = new StreamReader(s, Encoding.UTF8, false, 4096, leaveOpen: true);
+            for (string? line; (line = reader.ReadLine()) != null;) found.Add(line);
+            return found;
+        });
+        return lines == null ? Array.Empty<RemoteEntry>() : FtpRemote.ParseListing(lines);
+    }
+
+    public byte[] Read(string path)
+    {
+        return Transfer("RETR " + P(path), s => { using var ms = new MemoryStream(); s.CopyTo(ms); return ms.ToArray(); })
+            ?? throw new ServiceException("It is not on the server: " + P(path));
+    }
+
+    public void Write(string path, byte[] data)
+    {
+        // the folders above are made first (one that exists is refused, which is fine)
+        var parts = P(path).Split('/');
+        for (int i = 1; i < parts.Length; i++) Command("MKD " + string.Join("/", parts.Take(i)));
+        if (Transfer("STOR " + P(path), s => { s.Write(data, 0, data.Length); s.Flush(); return ""; }) == null) throw new ServiceException("The server did not take " + P(path));
+    }
+
+    public void Delete(string path)
+    {
+        string p = P(path);
+        if (Command("DELE " + p).Code / 100 == 2) return;
+        // a folder: what is in it first
+        foreach (var e in List(p)) Delete(p + "/" + e.Name);
+        Expect(Command("RMD " + p), 2);
+    }
+
+    public RemoteEntry? Stat(string path)
+    {
+        string p = P(path);
+        string name = p.Split('/').Last();
+        return List(p.Contains('/') ? p[..p.LastIndexOf('/')] : "").FirstOrDefault(e => e.Name == name);
+    }
+
+    public void Dispose()
+    {
+        try { Command("QUIT"); } catch (Exception e) when (e is IOException or ServiceException or ObjectDisposedException or SocketException) { /* gone already */ }
+        _stream.Dispose();
+        _control.Dispose();
+    }
+}
 
 public sealed class SftpRemote : IRemote
 {
@@ -304,14 +513,15 @@ public static class Deployment
 
     static readonly string[] AlwaysExcluded = { ".git", ".pymagic", "__pycache__", ".venv", "venv", ".conda", "node_modules", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vs" };
 
-    public static IRemote Open(string root, DeployServer server)
+    /// <param name="trustCertificate">FTPS: a certificate this computer does not trust is taken this time, and its fingerprint remembered (the user chose to trust it).</param>
+    public static IRemote Open(string root, DeployServer server, bool trustCertificate = false)
     {
         string password = DeployStore.PasswordOf(root, server.Id);
         return server.Type switch
         {
             "folder" => new FolderRemote(server.Root),
             "ftp" => new FtpRemote(server.Host, server.Port, server.User, password),
-            "ftps" => new FtpRemote(server.Host, server.Port, server.User, password, tls: true),
+            "ftps" => new FtpsRemote(server.Host, server.Port, server.User, password, server.ImplicitTls, server.HostKey, trustCertificate ? key => RememberKey(root, server.Id, key) : null),
             _ => new SftpRemote(server.Host, server.Port, server.User, password, KeyPath(root, server.KeyFile), server.HostKey, key => RememberKey(root, server.Id, key), DeployStore.PassphraseOf(root, server.Id)),
         };
     }

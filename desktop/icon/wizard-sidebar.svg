@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 164 314" width="164" height="314">
+  <!-- The picture on the left of the setup wizard's first and last pages (164 x 314, as NSIS shows it): PyMagic's tile, name and colours.
+       desktop/icon/make-wizard.js turns it into wizard-sidebar.bmp. -->
+  <defs>
+    <linearGradient id="side" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#151824"/>
+      <stop offset="1" stop-color="#0f111a"/>
+    </linearGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7b5cff"/>
+      <stop offset="1" stop-color="#2f80ed"/>
+    </linearGradient>
+  </defs>
+  <rect width="164" height="314" fill="url(#side)"/>
+  <circle cx="132" cy="40" r="70" fill="#8a6bff" opacity="0.10"/>
+  <circle cx="20" cy="290" r="60" fill="#2f80ed" opacity="0.10"/>
+  <g transform="translate(42 70) scale(0.3125)">
+    <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#tile)"/>
+    <path fill="#ffffff" fill-rule="evenodd" d="M66 56 H138 A50 50 0 0 1 138 156 H102 V200 H66 Z M102 88 H134 A18 18 0 0 1 134 124 H102 Z"/>
+    <path fill="#ffd866" d="M190 44 L198 70 L224 78 L198 86 L190 112 L182 86 L156 78 L182 70 Z"/>
+    <path fill="#ffd866" d="M212 132 L216 144 L228 148 L216 152 L212 164 L208 152 L196 148 L208 144 Z"/>
+  </g>
+  <text x="82" y="178" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="24" font-weight="600" fill="#e7e9f3">PyMagic</text>
+  <text x="82" y="200" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11" fill="#9aa0b8">a Python IDE</text>
+  <rect x="58" y="214" width="48" height="3" rx="1.5" fill="#8a6bff"/>
+</svg>

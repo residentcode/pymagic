@@ -121,4 +121,36 @@ public class LocalHistoryTests
         Assert.Equal(5, h.ListFolder("").Count);
         Assert.Equal(0, h.ListFolder("nothing").Count);
     }
+
+    [Fact]
+    public void AFileRenamedOrMovedKeepsItsHistoryUnderTheNewName()
+    {
+        var h = new LocalHistory(Root());
+        var t0 = new DateTime(2026, 11, 1, 10, 0, 0, DateTimeKind.Utc);
+        h.Record("app/models.py", "one\n", t0);
+        h.Record("app/models.py", "two\n", t0.AddMinutes(1));
+        Assert.Equal(1, h.Rename("app/models.py", "app/entities.py"));
+        Assert.Equal(0, h.List("app/models.py").Count);
+        var moved = h.List("app/entities.py");
+        Assert.Equal(2, moved.Count);
+        Assert.Equal("one\n", h.Read("app/entities.py", moved[1].Id));
+        Assert.Equal("app/entities.py", h.ListFolder("app").First().Path);
+        // a new save goes on after the old ones
+        h.Record("app/entities.py", "three\n", t0.AddMinutes(2));
+        Assert.Equal("two\n", h.Before("app/entities.py", h.List("app/entities.py")[0].Id));
+        // a folder: every file in it, and a file once at the new place keeps its versions beside them
+        h.Record("lib/util.py", "u\n", t0);
+        h.Record("lib/sub/deep.py", "d\n", t0);
+        h.Record("pkg/util.py", "old\n", t0.AddMinutes(-5));
+        h.Record("library.py", "not in lib\n", t0);
+        Assert.Equal(2, h.Rename("lib", "pkg"));
+        Assert.Equal(2, h.List("pkg/util.py").Count);
+        Assert.Equal("d\n", h.Read("pkg/sub/deep.py", h.List("pkg/sub/deep.py")[0].Id));
+        Assert.Equal(1, h.List("library.py").Count);
+        Assert.Equal(0, h.ListFolder("lib").Count);
+        // a change of case only keeps the one history, under the new spelling
+        Assert.Equal(1, h.Rename("pkg/util.py", "pkg/Util.py"));
+        Assert.Equal("pkg/Util.py", h.ListFolder("pkg").First(x => x.Path.EndsWith("til.py")).Path);
+        Assert.Equal(0, h.Rename("nothing.py", "else.py"));
+    }
 }

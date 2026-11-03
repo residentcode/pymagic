@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { read, startOf, parseEnv, formatEnv, uniqueName, blank, splitShared, compoundMembers, KINDS, parseMappings, formatMappings, portOf, firstConfiguration } from '../src/runconfig-model.js';
+import { read, startOf, parseEnv, formatEnv, uniqueName, blank, splitShared, compoundMembers, KINDS, parseMappings, formatMappings, portOf, firstConfiguration, beforeSteps } from '../src/runconfig-model.js';
 
 test('what is stored is read into well-formed configurations, the broken ones left out', () => {
     const { configurations, selected } = read({
@@ -142,4 +142,46 @@ test('a Django project opened for the first time gets a Django server, with its 
     assert.equal(firstConfiguration(null, { configurations: [] }, django), null);
     assert.equal(firstConfiguration(null, null, { found: false }), null);
     assert.equal(firstConfiguration(null, null, null), null);
+});
+
+test('Before launch: configurations (after their own tasks), manage.py commands and the browser, in order; the ones that cannot run left out', () => {
+    const list = [
+        { ...blank('migrate', 'django'), script: 'site/manage.py', args: 'migrate' },
+        { ...blank('seed'), script: 'seed.py', before: 'migrate' },
+        { ...blank('loop A'), script: 'a.py', before: 'loop B' },
+        { ...blank('loop B'), script: 'b.py', before: 'loop A' },
+        { ...blank('all', 'compound'), members: 'seed' },
+        { ...blank('tests', 'djangoTests') },
+    ];
+    const find = (name) => list.find((c) => c.name === name) ?? null;
+    const server = { ...blank('Server', 'django'), script: 'site/manage.py', before: 'seed\nmanage.py collectstatic --noinput\n# a note\nbrowser http://127.0.0.1:8000/\nnone\nall\ntests\nbrowser localhost' };
+    const { steps, skipped } = beforeSteps(server, find);
+    assert.deepEqual(steps.map((s) => s.label), ['migrate', 'seed', 'manage.py collectstatic --noinput', 'browser http://127.0.0.1:8000/']);
+    assert.deepEqual(steps[2], { manage: ['collectstatic', '--noinput'], file: 'site/manage.py', label: 'manage.py collectstatic --noinput' });
+    assert.equal(steps[0].config.name, 'migrate');
+    assert.deepEqual(skipped.map((k) => k.name), ['none', 'all', 'tests', 'browser localhost']);
+    // the field as it was: one name
+    assert.deepEqual(beforeSteps({ ...blank('x'), before: 'migrate' }, find).steps.map((s) => s.label), ['migrate']);
+    // a script's manage.py command is the project's manage.py; a configuration that comes back to itself is left out
+    assert.equal(beforeSteps({ ...blank('x'), before: 'manage.py check' }, find).steps[0].file, 'manage.py');
+    const loop = beforeSteps(find('loop A'), find);
+    assert.deepEqual(loop.steps.map((s) => s.label), ['loop B']);
+    assert.equal(loop.skipped[0].why, 'it would run itself again');
+    assert.deepEqual(beforeSteps(blank('nothing'), find), { steps: [], skipped: [] });
+});
+
+test('an HTTP request kept as a run configuration: the HTTP client is told its file, request and environment', () => {
+    assert.ok(KINDS.some(([k]) => k === 'http'));
+    const c = { ...blank('Get items', 'http'), script: 'api/items.http', request: 'list', environment: 'dev' };
+    assert.deepEqual(startOf(c).http, { file: 'api/items.http', request: 'list', environment: 'dev' });
+    const [kept] = read({ configurations: [c] }).configurations;
+    assert.equal(kept.kind, 'http');
+    assert.equal(kept.request, 'list');
+    assert.equal(kept.environment, 'dev');
+    // all the requests of the file when none is named; a compound sends it with the others; Before launch leaves it out
+    assert.equal(startOf({ ...c, request: '' }).http.request, '');
+    const server = { ...blank('Server', 'script'), script: 'app.py' };
+    const find = (n) => [c, server].find((x) => x.name === n) ?? null;
+    assert.deepEqual(compoundMembers({ name: 'All', kind: 'compound', members: 'Server\nGet items' }, find).members.map((m) => m.name), ['Server', 'Get items']);
+    assert.equal(beforeSteps({ ...server, before: 'Get items' }, find).skipped[0].why, 'an HTTP request runs in the HTTP tab');
 });

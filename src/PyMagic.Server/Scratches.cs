@@ -84,6 +84,19 @@ public static class Scratches
         return true;
     }
 
+    /// <summary>
+    /// Move to the project: the scratch becomes a file of the project at <paramref name="target"/> (a full path the caller has checked is in
+    /// the project), and is no longer a scratch. False when there is no such scratch or the target exists already.
+    /// </summary>
+    public static bool MoveTo(string name, string target)
+    {
+        string from = PathOf(name);
+        if (!File.Exists(from) || File.Exists(target) || Directory.Exists(target)) return false;
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.Move(from, target);
+        return true;
+    }
+
     /// <summary>Gives a scratch another name; false when there is no such scratch or the new name is taken.</summary>
     public static bool Rename(string from, string to)
     {

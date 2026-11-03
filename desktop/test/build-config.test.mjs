@@ -81,3 +81,17 @@ test('the app folder takes the shell and its icon, and leaves out the build tool
   assert.deepEqual(opts.extraResource.map(p => p.split(/[\\/]/).pop()), ['www', 'host', 'demo', 'typeshed', 'models']);
   assert.equal(opts.name, PRODUCT);
 });
+
+test('the wizard shows PyMagic\'s own pictures: 24-bit bitmaps of the sizes NSIS uses, drawn from their SVGs and left out of the app folder', () => {
+  const { nsis } = installerConfig();
+  for (const [key, w, h] of [['installerSidebar', 164, 314], ['uninstallerSidebar', 164, 314], ['installerHeader', 150, 57]]) {
+    const file = resolve(desktop, nsis[key]);
+    assert.ok(existsSync(file), `${nsis[key]} is missing (npm run wizard)`);
+    const b = readFileSync(file);
+    assert.equal(b.toString('ascii', 0, 2), 'BM');
+    assert.deepEqual([b.readInt32LE(18), b.readInt32LE(22), b.readUInt16LE(28)], [w, h, 24], key);
+    assert.ok(existsSync(file.replace(/\.bmp$/, '.svg')), `${nsis[key]} has no SVG it is drawn from`);
+    assert.ok(!kept('/' + nsis[key]), `${nsis[key]} is packaged`);
+  }
+  assert.ok(!kept('/icon/make-wizard.js'));
+});

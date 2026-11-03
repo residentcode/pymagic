@@ -24,18 +24,37 @@ public sealed partial class LanguageService
             }
             Visit(DocumentSymbols(uri), m.Name);
         }
-        // the files nobody has open come from the index (built in the background, kept up to date by the file watcher)
+        // the files nobody has open come from the index (built in the background, kept up to date by the file watcher); its columns count UTF-16 units
+        var indexed = new Dictionary<SymbolInformation, IndexedSymbol>(ReferenceEqualityComparer.Instance);
         if (_index != null)
         {
             var open = new HashSet<string>(_docs.Values.Where(d => d.Path != null).Select(d => System.IO.Path.GetFullPath(d.Path!)), StringComparer.OrdinalIgnoreCase);
             foreach (var (score, sym) in _index.Query(query, open))
             {
                 var at = new Position(sym.Line, sym.Character);
-                scored.Add((score, new SymbolInformation(sym.Name, sym.Kind, new Location(UriOfPath(sym.Path), new Range(at, new Position(sym.Line, sym.Character + sym.Name.Length))), sym.Container)));
+                var info = new SymbolInformation(sym.Name, sym.Kind, new Location(UriOfPath(sym.Path), new Range(at, new Position(sym.Line, sym.Character + sym.Name.Length))), sym.Container);
+                indexed[info] = sym;
+                scored.Add((score, info));
             }
         }
-        return scored.OrderBy(x => x.Score).ThenBy(x => x.Info.Name.Length).ThenBy(x => x.Info.Name, StringComparer.Ordinal)
+        var taken = scored.OrderBy(x => x.Score).ThenBy(x => x.Info.Name.Length).ThenBy(x => x.Info.Name, StringComparer.Ordinal)
             .Take(limit).Select(x => x.Info).ToList();
+        if (!LineMap.Utf8.Value || indexed.Count == 0) return taken;
+        // a client that counts UTF-8 bytes: the index's columns are converted with the files' own lines (read once per file)
+        var maps = new Dictionary<string, LineMap?>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < taken.Count; i++)
+        {
+            if (!indexed.TryGetValue(taken[i], out var sym)) continue;
+            if (!maps.TryGetValue(sym.Path, out var lines))
+            {
+                try { lines = new LineMap(System.IO.File.ReadAllText(sym.Path)); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { lines = null; }
+                maps[sym.Path] = lines;
+            }
+            if (lines == null) continue;
+            int start = lines.OffsetOfUtf16(sym.Line, sym.Character);
+            taken[i] = taken[i] with { Location = taken[i].Location with { Range = lines.RangeOf(start, start + sym.Name.Length) } };
+        }
+        return taken;
     }
 
     SymbolIndex? _index;

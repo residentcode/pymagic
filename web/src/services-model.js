@@ -8,3 +8,8 @@ export function elapsed(ms) {
     if (m < 60) return `${m} min`;
     return `${Math.floor(m / 60)} h ${m % 60} min`;
 }
+
+/** A service's own output with more text added: the colour codes of a terminal taken out, and only the last `limit` characters kept. */
+export function withOutput(kept, more, limit = 200000) {
+    return ((kept ?? '') + String(more ?? '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')).slice(-limit);
+}

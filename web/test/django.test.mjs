@@ -97,3 +97,11 @@ test('a ModelAdmin and a ModelSerializer made for a model, with its fields', () 
     assert.equal(d.addModelSerializer('', 'Book', ['title']),
         'from rest_framework import serializers\nfrom .models import Book\n\n\nclass BookSerializer(serializers.ModelSerializer):\n    class Meta:\n        model = Book\n        fields = ["id", "title"]\n');
 });
+
+test('manage.py test goes to the Tests panel: its labels, --failfast and --settings; other options stay plain text', () => {
+    assert.deepEqual(d.testRunOf(['test']), { ids: [], failfast: false, settings: undefined });
+    assert.deepEqual(d.testRunOf(['test', 'shop', '--failfast'], 'site_cfg.settings'), { ids: ['shop'], failfast: true, settings: 'site_cfg.settings' });
+    assert.deepEqual(d.testRunOf(['test', 'shop.tests.ItemTests', '--settings=site_cfg.ci', '--noinput']), { ids: ['shop.tests.ItemTests'], failfast: false, settings: 'site_cfg.ci' });
+    assert.equal(d.testRunOf(['test', '--parallel', '4']), null);
+    assert.equal(d.testRunOf(['migrate']), null);
+});

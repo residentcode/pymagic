@@ -123,6 +123,8 @@ string ResolveInRoot(string rel)
         throw new UnauthorizedAccessException("outside the workspace");
     return full;
 }
+// the file the debugger is told of: a scratch's is where it is kept, not in the project
+string DebugFile(string file) { try { return Scratches.IsScratchPath(file) ? Scratches.PathOf(file) : file; } catch (UnauthorizedAccessException) { return file; } }
 
 // Attach to Process: the Python programs running on this computer
 app.MapGet("/api/processes", () => Results.Json(RunSession.PythonProcesses()));
@@ -140,6 +142,23 @@ app.MapDelete("/api/scratches", (string name) =>
 {
     try { return Scratches.Delete(name) ? Results.NoContent() : Results.NotFound(); }
     catch (UnauthorizedAccessException) { return Results.BadRequest("That is not the name of a scratch file."); }
+});
+// Move to the project: {name, to} (a path in the project) makes the scratch a file of the project there
+app.MapPost("/api/scratches/move", async (HttpRequest req) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    string to = (body?["to"]?.GetValue<string>() ?? "").Trim().Replace('\\', '/').TrimStart('/');
+    if (to.Length == 0 || Scratches.IsScratchPath(to)) return Results.BadRequest("Give a path in the project.");
+    try
+    {
+        string full = ResolveInRoot(to);
+        if (IsInsideGit(full)) return Results.BadRequest("Not inside .git.");
+        return Scratches.MoveTo(body?["name"]?.GetValue<string>() ?? "", full)
+            ? Results.Json(new { path = Path.GetRelativePath(root, full).Replace('\\', '/') })
+            : Results.BadRequest("There is no such scratch, or the project has a file there already.");
+    }
+    catch (UnauthorizedAccessException) { return Results.BadRequest("That is not a path in the project."); }
+    catch (IOException e) { return Results.BadRequest(e.Message); }
 });
 app.MapPost("/api/scratches/rename", async (HttpRequest req) =>
 {
@@ -245,7 +264,7 @@ app.MapPut("/api/macros", async (HttpRequest req) =>
 });
 
 // Deployment: servers the project is uploaded to (a folder, FTP or SFTP), and upload, download, compare and sync
-object ServerJson(DeployServer sv) => new { id = sv.Id, name = sv.Name, type = sv.Type, host = sv.Host, port = sv.Port, user = sv.User, root = sv.Root, keyFile = sv.KeyFile, uploadOnSave = sv.UploadOnSave, mappings = sv.Mappings, excluded = sv.Excluded, hostKey = sv.HostKey, deleteOnDelete = sv.DeleteOnDelete, hasPassword = DeployStore.PasswordOf(root, sv.Id).Length > 0, hasPassphrase = DeployStore.PassphraseOf(root, sv.Id).Length > 0 };
+object ServerJson(DeployServer sv) => new { id = sv.Id, name = sv.Name, type = sv.Type, host = sv.Host, port = sv.Port, user = sv.User, root = sv.Root, keyFile = sv.KeyFile, uploadOnSave = sv.UploadOnSave, mappings = sv.Mappings, excluded = sv.Excluded, hostKey = sv.HostKey, deleteOnDelete = sv.DeleteOnDelete, implicitTls = sv.ImplicitTls, hasPassword = DeployStore.PasswordOf(root, sv.Id).Length > 0, hasPassphrase = DeployStore.PassphraseOf(root, sv.Id).Length > 0 };
 IResult DeployFail(Exception e) => Results.Json(new { error = e is ServiceException ? e.Message : e is System.Net.WebException we && we.Response is System.Net.FtpWebResponse fr ? fr.StatusDescription.Trim() : e.Message });
 string BrowsePath(DeployServer sv, string path) => sv.Type == "folder" ? path.Trim('/') : string.Join("/", new[] { sv.Root.Trim('/'), path.Trim('/') }.Where(x => x.Length > 0));
 var deployLog = new List<object>();
@@ -261,12 +280,15 @@ app.MapPost("/api/deploy/servers", async (HttpRequest req) =>
         var existing = body["id"]?.GetValue<string>() is { Length: > 0 } id ? DeployStore.Find(root, id) : null;
         var sv = DeployStore.Parse(body, existing?.Id);
         if (existing != null && existing.Host == sv.Host && existing.Port == sv.Port && existing.User == sv.User) sv = sv with { HostKey = body["forgetKey"]?.GetValue<bool>() == true ? "" : existing.HostKey };
+        // FTPS: the certificate the server shows now is trusted (a self-signed one), and remembered while testing
+        bool trustCertificate = sv.Type == "ftps" && body["trustCertificate"]?.GetValue<bool>() == true;
+        if (trustCertificate) sv = sv with { HostKey = "" };
         string? password = body["password"]?.GetValue<string>();
         string? passphrase = body["passphrase"]?.GetValue<string>();
         DeployStore.Save(root, sv, password, passphrase);           // kept first, so a host key learned while testing lands in the saved record
         if (body["test"]?.GetValue<bool>() != false)
         {
-            try { using var remote = Deployment.Open(root, DeployStore.Find(root, sv.Id)!); remote.List(BrowsePath(sv, "")); }
+            try { using var remote = Deployment.Open(root, DeployStore.Find(root, sv.Id)!, trustCertificate); remote.List(BrowsePath(sv, "")); }
             catch (Exception e) when (e is ServiceException or System.Net.WebException or Renci.SshNet.Common.SshException or IOException)
             {
                 if (existing == null) DeployStore.Remove(root, sv.Id);
@@ -389,6 +411,8 @@ app.MapGet("/api/info", () => new
 {
     root,
     rootUri = LanguageService.UriOfPath(root + Path.DirectorySeparatorChar),
+    // where the scratch files are kept: the debugger stops in them there, and the page shows them as .scratches/name
+    scratches = Scratches.Folder,
     typeshed,
     // when the engine's own file was written: a build that did not happen shows here as an old date
     engineBuiltAt = File.GetLastWriteTimeUtc(typeof(LanguageService).Assembly.Location).ToString("o"),
@@ -609,7 +633,15 @@ app.MapPost("/api/history/label", async (HttpRequest req) =>
     var body = await JsonNode.ParseAsync(req.Body);
     string name = body?["name"]?.GetValue<string>() ?? "";
     bool auto = body?["auto"]?.GetValue<bool>() ?? false;
-    return Results.Json(LabelJson(history.PutLabel(name, auto, TrackedFiles())));
+    // the files open with changes not saved yet ({path, text}) are kept as the editor has them, as PyCharm's label keeps them
+    var unsaved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var item in body?["unsaved"] as JsonArray ?? new JsonArray())
+    {
+        if (item?["path"]?.GetValue<string>() is not { } path || item["text"]?.GetValue<string>() is not { } text) continue;
+        try { unsaved[Path.GetRelativePath(root, ResolveInRoot(path)).Replace('\\', '/')] = text; }
+        catch (UnauthorizedAccessException) { /* not a file of the project */ }
+    }
+    return Results.Json(LabelJson(history.PutLabel(name, auto, LocalHistory.WithUnsaved(TrackedFiles(), unsaved))));
 });
 app.MapDelete("/api/history/label", (string id) => history.RemoveLabel(id) ? Results.NoContent() : Results.NotFound());
 // the text of the version before one (what that save changed is the difference); 404 when it was the first
@@ -714,6 +746,8 @@ app.MapPost("/api/fs", async (HttpRequest req) =>
                 if (Directory.Exists(from)) Directory.Move(from, to);
                 else if (File.Exists(from)) File.Move(from, to);
                 else return Results.NotFound();
+                // the local history goes with the file (or the files of the folder), under the new name
+                history.Rename(Path.GetRelativePath(root, from).Replace('\\', '/'), Path.GetRelativePath(root, to).Replace('\\', '/'));
                 return Results.NoContent();
             }
             case "copy":
@@ -794,10 +828,30 @@ app.MapPost("/api/http", async (HttpRequest req) =>
     var message = new HttpRequestMessage(new HttpMethod(method), url);
     string? body = b?["body"]?.GetValue<string>();
     if (!string.IsNullOrEmpty(body)) message.Content = new StringContent(body);
+    // a body of parts (an .http file's): its text and the files of its `< path` lines, as their bytes
+    if (fromFile && b?["parts"] is JsonArray parts)
+    {
+        try
+        {
+            message.Content = new ByteArrayContent(HttpBodies.Assemble(parts, ResolveInRoot));
+            // as a text body was sent before; a Content-Type of the request's replaces it
+            message.Content.Headers.TryAddWithoutValidation("Content-Type", parts.Any(p => p?["file"] != null) ? "application/octet-stream" : "text/plain; charset=utf-8");
+        }
+        catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
+        catch (UnauthorizedAccessException) { return Results.BadRequest(new { error = "a file of the body is outside the project" }); }
+    }
+    // `>> file` / `>>! file`: the response is kept in a file of the project
+    string? saveFull = null;
+    bool overwrite = b?["saveTo"]?["overwrite"]?.GetValue<bool>() == true;
+    if (fromFile && b?["saveTo"]?["file"]?.GetValue<string>() is { Length: > 0 } saveRel)
+    {
+        try { saveFull = ResolveInRoot(saveRel); }
+        catch (UnauthorizedAccessException) { return Results.BadRequest(new { error = $"{saveRel} is outside the project" }); }
+    }
     foreach (var (k, v) in b?["headers"] as JsonObject ?? new JsonObject())
     {
         string value = v?.GetValue<string>() ?? "";
-        if (k.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)) { if (message.Content != null) message.Content.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse(value); }
+        if (k.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)) { if (message.Content != null) { message.Content.Headers.Remove("Content-Type"); message.Content.Headers.TryAddWithoutValidation("Content-Type", value); } }
         else message.Headers.TryAddWithoutValidation(k, value);
     }
     var watch = System.Diagnostics.Stopwatch.StartNew();
@@ -808,8 +862,15 @@ app.MapPost("/api/http", async (HttpRequest req) =>
         var headers = new JsonObject();
         foreach (var h in res.Headers.Concat(res.Content.Headers)) headers[h.Key] = string.Join(", ", h.Value);
         const int max = 1024 * 1024;
+        string? savedTo = null;
+        if (saveFull != null)
+        {
+            try { savedTo = Path.GetRelativePath(root, HttpBodies.Save(saveFull, bytes, overwrite)).Replace('\\', '/'); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { savedTo = null; headers["X-PyMagic-Save-Error"] = e.Message; }
+        }
         return Results.Json(new
         {
+            savedTo,
             status = (int)res.StatusCode, reason = res.ReasonPhrase, headers, ms = watch.ElapsedMilliseconds,
             body = System.Text.Encoding.UTF8.GetString(bytes, 0, Math.Min(bytes.Length, max)), truncated = bytes.Length > max,
             size = bytes.Length, url = res.RequestMessage?.RequestUri?.ToString(),   // where it ended, after redirects
@@ -1411,7 +1472,8 @@ app.MapPost("/api/db/sources", async (HttpRequest req) =>
     catch (UnauthorizedAccessException) { return Results.BadRequest("The database has to be inside the project."); }
 });
 
-// a PostgreSQL or MySQL server: {kind, host, port, user, password, database, name}; it is connected to before it is kept
+// a PostgreSQL or MySQL server: {kind, host, port, user, password, database, name, sslMode, sslCa, sslCert, sslKey, sshHost, sshPort, sshUser,
+// sshKey, sshPassword}; it is connected to (through its SSH tunnel, when it has one) before it is kept
 app.MapPost("/api/db/servers", async (HttpRequest req) =>
 {
     if (await JsonNode.ParseAsync(req.Body) is not JsonObject body) return Results.BadRequest("unknown request");
@@ -1419,22 +1481,30 @@ app.MapPost("/api/db/servers", async (HttpRequest req) =>
     {
         var server = DbServers.Parse(body);
         string password = body["password"]?.GetValue<string>() ?? "";
-        var answer = Databases.Ask(DatabasePython(), new JsonObject { ["op"] = "test", ["server"] = DbServers.Describe(server, password) }, 30000, "pm_dbserver.py");
+        string sshPassword = body["sshPassword"]?.GetValue<string>() ?? "";
+        // the form changing a server it was opened for ({replaces: its id}): an empty password keeps the one kept
+        string? replaces = body["replaces"]?.GetValue<string>();
+        if (replaces != null && password.Length == 0) password = DbServers.StoredPassword(root, replaces);
+        if (replaces != null && sshPassword.Length == 0) sshPassword = DbServers.StoredPassword(root, replaces, ssh: true);
+        var answer = Databases.Ask(DatabasePython(), new JsonObject { ["op"] = "test", ["server"] = DbServers.Reach(root, server, password, sshPassword) }, 30000, "pm_dbserver.py");
         if (answer["error"] is { } error)
             return Results.Json(new { error = error.GetValue<string>(), missingDriver = answer["missingDriver"]?.GetValue<bool>() ?? false });
-        DbServers.Save(root, server, password);
+        if (replaces != null && replaces != server.Id) DbServers.Remove(root, replaces);
+        DbServers.Save(root, server, password, sshPassword);
         return Results.Json(new { path = DbServers.PathOf(server.Id), version = answer["version"]?.GetValue<string>() });
     }
     catch (ServiceException e) { return Results.Json(new { error = e.Message }); }
 });
 app.MapDelete("/api/db/servers", (string id) => { DbServers.Remove(root, id); return Results.Json(Databases.Find(root)); });
+// the servers' settings, for the form that changes one (never their passwords)
+app.MapGet("/api/db/servers", () => Results.Json(DbServers.Load(root)));
 
 app.MapDelete("/api/db/sources", (string path) => { Databases.RemoveSource(root, path); return Results.Json(Databases.Find(root)); });
 
 // one request on a data source: {op: schema | rows | apply | run, path (from the project root), ...}; the answer has "error" when SQLite refused
 app.MapPost("/api/db", async (HttpRequest req) =>
 {
-    if (await JsonNode.ParseAsync(req.Body) is not JsonObject body || body["op"]?.GetValue<string>() is not ("schema" or "rows" or "apply" or "run" or "import"))
+    if (await JsonNode.ParseAsync(req.Body) is not JsonObject body || body["op"]?.GetValue<string>() is not ("schema" or "rows" or "apply" or "run" or "import" or "databases"))
         return Results.BadRequest("unknown request");
     try
     {
@@ -1786,7 +1856,7 @@ app.Map("/run", async (HttpContext ctx) =>
                 var bps = new Dictionary<string, JsonArray>();
                 if (msg["breakpoints"] is JsonObject bo)
                     foreach (var (file, lines) in bo)
-                        bps[file] = lines is JsonArray arr ? (JsonArray)JsonNode.Parse(arr.ToJsonString())! : new JsonArray();
+                        bps[DebugFile(file)] = lines is JsonArray arr ? (JsonArray)JsonNode.Parse(arr.ToJsonString())! : new JsonArray();
                 var args = (msg["args"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
                 string? module = msg["module"]?.GetValue<string>();
                 string file0 = msg["file"]?.GetValue<string>() ?? "";
@@ -2032,7 +2102,12 @@ app.Map("/run", async (HttpContext ctx) =>
                 session.Python = target.Python; session.Target = target.Target;
                 session.StartModule(root, module, pipArgs);
             }
-            else session.Handle(msg);
+            else
+            {
+                // a breakpoint set, Run to Cursor or a jump in a scratch file names it where it is kept
+                if (msg["file"] is JsonValue fileValue && fileValue.TryGetValue<string>(out var named) && Scratches.IsScratchPath(named)) msg["file"] = DebugFile(named);
+                session.Handle(msg);
+            }
         }
     }
     catch (WebSocketException) { }

@@ -2,7 +2,7 @@
 import { splitArguments } from './django-model.js';
 
 /** The kinds of configuration, as PyCharm's: [kind, label]. */
-export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m)'], ['django', 'Django server'], ['djangoTests', 'Django tests'], ['fastapi', 'FastAPI (uvicorn)'], ['flask', 'Flask server'], ['pytest', 'pytest'], ['debugserver', 'Python Debug Server (a program connects back)'], ['compound', 'Compound (several together)']];
+export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m)'], ['django', 'Django server'], ['djangoTests', 'Django tests'], ['fastapi', 'FastAPI (uvicorn)'], ['flask', 'Flask server'], ['pytest', 'pytest'], ['debugserver', 'Python Debug Server (a program connects back)'], ['http', 'HTTP request (.http file)'], ['compound', 'Compound (several together)']];
 
 /** The settings beside name, script, args, cwd and env, with their defaults (strings and switches). */
 const DEFAULTS = {
@@ -15,6 +15,8 @@ const DEFAULTS = {
     members: '',
     // Python Debug Server: the address the program reaches this computer by (for the snippet), and the folder pairs `local=remote`, one per line
     connectHost: '', mappings: '',
+    // HTTP request: the request of the .http file (its script) by its name or its `METHOD url` line, '' for all of them in turn, and the environment
+    request: '', environment: '',
 };
 
 /** A configuration: { name, kind, script (a file of the project), module, app, host, port, target, reload, args (as typed), cwd (a folder of the project,
@@ -67,6 +69,51 @@ export function compoundMembers(c, find) {
     return { members, skipped };
 }
 
+/** The kinds of task of Before launch, as the lines of the box start: [prefix, label, placeholder]. A line with none of them names another configuration. */
+export const BEFORE_TASKS = [['', 'Run another configuration', 'migrate'], ['manage.py ', 'Run a manage.py command', 'manage.py collectstatic --noinput'], ['browser ', 'Launch the web browser', 'browser http://127.0.0.1:8000/']];
+
+/**
+ * What runs before a configuration, in order, from its Before launch lines: {steps, skipped}. A step is {config} (another configuration, after its own
+ * Before launch), {manage: [args]} (a command of the project's manage.py: the configuration's own for a Django server, else manage.py) or {browser: url}.
+ * A name that is no configuration, a configuration that would run itself again (directly or through another one), a compound, tests and a debug server
+ * are skipped with the reason. `find(name)` gives a configuration by name. One configuration's name alone (the field as it was) is one step.
+ */
+export function beforeSteps(c, find) {
+    const steps = [];
+    const skipped = [];
+    const manage = c?.kind === 'django' && c.script ? c.script : 'manage.py';
+    const walk = (of, path) => {
+        for (const raw of String(of?.before ?? '').split(/\r?\n/)) {
+            const line = raw.trim();
+            if (!line || line.startsWith('#')) continue;
+            const words = splitArguments(line);
+            if (/^manage\.py$/i.test(words[0] ?? '')) {
+                if (words.length > 1) steps.push({ manage: words.slice(1), file: manage, label: line });
+                continue;
+            }
+            if (/^browser$/i.test(words[0] ?? '') || /^https?:\/\//i.test(line)) {
+                const url = /^https?:\/\//i.test(line) ? line : words[1] ?? '';
+                if (/^https?:\/\/\S+$/i.test(url)) steps.push({ browser: url, label: `browser ${url}` });
+                else skipped.push({ name: line, why: 'the browser needs an http:// or https:// address' });
+                continue;
+            }
+            const m = find(line);
+            if (!m) skipped.push({ name: line, why: 'there is no such configuration' });
+            else if (path.includes(m.name)) skipped.push({ name: line, why: 'it would run itself again' });
+            else if (m.kind === 'compound') skipped.push({ name: line, why: 'a compound does not finish by itself' });
+            else if (m.kind === 'djangoTests') skipped.push({ name: line, why: 'tests run in the Tests panel' });
+            else if (m.kind === 'debugserver') skipped.push({ name: line, why: 'a debug server needs the debugger' });
+            else if (m.kind === 'http') skipped.push({ name: line, why: 'an HTTP request runs in the HTTP tab' });
+            else {
+                walk(m, [...path, m.name]);
+                steps.push({ config: m, label: m.name });
+            }
+        }
+    };
+    walk(c, [c?.name]);
+    return { steps, skipped };
+}
+
 /** The port of a debug server: a number from 0 (a free one) to 65535, 5678 when empty or not a number. */
 export function portOf(text) {
     const t = String(text ?? '').trim();
@@ -112,6 +159,7 @@ export function startOf(c) {
         case 'flask': start = { module: 'flask', args: ['--app', c.app || 'app', 'run', '--host', host, '--port', c.port || '5000', ...(c.reload !== false ? ['--debug'] : []), ...extra] }; break;
         case 'debugserver': start = { debugServer: { host, port: portOf(c.port), connectHost: (c.connectHost ?? '').trim(), mappings: parseMappings(c.mappings) } }; break;
         case 'pytest': start = { module: 'pytest', args: [...(c.target ? [c.target] : []), ...extra] }; break;
+        case 'http': start = { http: { file: c.script, request: c.request ?? '', environment: c.environment ?? '' } }; break;
         default: start = { file: c.script, args: extra };
     }
     const out = { ...start, env: { ...c.env, ...(c.settings && (c.kind === 'django' || c.kind === 'djangoTests') ? { DJANGO_SETTINGS_MODULE: c.settings } : {}) }, cwd: c.cwd };
