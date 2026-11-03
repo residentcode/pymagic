@@ -1,9 +1,10 @@
 // Takes screenshots of the running PyMagic page at a fixed window size, through the DevTools protocol of Microsoft Edge (Windows).
 // usage: node web/tools/shoot.mjs <url> <out dir> <prefix> [width] [height]   (the page is the host of a project that has checkout.py, e.g. examples/demo)
-import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTree } from './remove-tree.mjs';
 
 const [url, outDir, prefix, w = '1440', h = '900'] = process.argv.slice(2);
 mkdirSync(outDir, { recursive: true });
@@ -12,6 +13,11 @@ const profile = join(tmpdir(), 'pm_shoot_' + port);
 const edge = spawn('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--headless=new', `--window-size=${w},${h}`, '--hide-scrollbars', '--force-device-scale-factor=1', 'about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Edge and its helper processes (only the tree started here), then its profile (about 250 MB): kept, it filled the temp folder run after run
+function closeEdge() {
+  if (edge.exitCode === null) spawnSync('taskkill', ['/PID', String(edge.pid), '/T', '/F'], { stdio: 'ignore' });
+  removeTree(profile);
+}
 let targets;
 for (let i = 0; i < 50; i++) { try { targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); if (targets.length) break; } catch { /* not up yet */ } await sleep(200); }
 const page = targets.find(t => t.type === 'page');
@@ -35,7 +41,7 @@ const openFile = name => run(`(() => { const li = [...document.querySelectorAll(
 
 await openFile('checkout.py');
 await sleep(1500);
-if (process.env.PROBE) { console.log(await run(process.env.PROBE)); ws.close(); edge.kill(); process.exit(0); }
+if (process.env.PROBE) { console.log(await run(process.env.PROBE)); ws.close(); closeEdge(); process.exit(0); }
 await shot('1-editor');
 await click('#b-tests'); await sleep(800);
 await click('#t-problems'); await sleep(2500);
@@ -52,6 +58,5 @@ await click('#t-packages'); await sleep(2500);
 await shot('7-packages');
 await click('#t-insp'); await sleep(800);
 await shot('8-inspections');
-ws.close(); edge.kill();
-await sleep(500);
-try { rmSync(profile, { recursive: true, force: true }); } catch { /* still in use */ }
+ws.close();
+closeEdge();

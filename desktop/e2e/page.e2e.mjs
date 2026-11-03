@@ -135,10 +135,13 @@ async function clickMargin(line) {
 let echo;
 let forge;
 let altPython = '';
+// the folders this run makes besides its project (scratches, environments, remotes): removed when it ends, so the temp folder does not fill up
+const madeDirs = [];
+const tempDir = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); madeDirs.push(dir); return dir; };
 let projectRoot = '';
 before(async () => {
     // the scratch files of this run, not the user's own
-    process.env.PYMAGIC_SCRATCHES = mkdtempSync(join(tmpdir(), 'pymagic-e2e-scratches-'));
+    process.env.PYMAGIC_SCRATCHES = tempDir('pymagic-e2e-scratches-');
     const root = project(FILES);
     // an SQLite file for the Database panel, made with the standard sqlite3 module
     const made = spawnSync('python', ['-c', "import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.executescript(\"CREATE TABLE item (id INTEGER PRIMARY KEY, name TEXT, price REAL); INSERT INTO item (name, price) VALUES ('pen', 2), ('book', 12.5), ('cup', 4);\"); db.commit()", join(root, 'shop.sqlite3')]);
@@ -157,6 +160,7 @@ before(async () => {
     writeFileSync(join(root, 'http-client.private.env.json'), JSON.stringify({ dev: { token: 'secret' } }));
     // a second Python (a virtual environment made here) for the run configuration that names an interpreter of its own
     altPython = join(root, '..', 'pymagic-e2e-altenv-' + Date.now(), 'Scripts', 'python.exe');
+    madeDirs.push(join(altPython, '..', '..'));
     const venv = spawnSync('python', ['-m', 'venv', join(altPython, '..', '..')], { encoding: 'utf8' });
     assert.equal(venv.status, 0, String(venv.stderr));
     mkdirSync(join(root, '.pymagic'), { recursive: true });
@@ -176,7 +180,7 @@ before(async () => {
     forge = await startFakeForge();
     process.env.PYMAGIC_GITHUB_API = forge.base;
     // no Jupyter is installed for the checks: a package of this run's own called jupyter_server (on the app's PYTHONPATH) stands in for it
-    stubSite = mkdtempSync(join(tmpdir(), 'pymagic-e2e-jupyter-'));
+    stubSite = tempDir('pymagic-e2e-jupyter-');
     mkdirSync(join(stubSite, 'jupyter_server'));
     writeFileSync(join(stubSite, 'jupyter_server', '__init__.py'), '');
     writeFileSync(join(stubSite, 'jupyter_server', '__main__.py'), String.raw`import sys, os, json
@@ -209,7 +213,10 @@ HTTPServer(("127.0.0.1", port), H).serve_forever()
     app = await launch(root);
     page = app.page;
 });
-after(async () => { await app?.close(); echo?.close(); forge?.close(); });
+after(async () => {
+    await app?.close(); echo?.close(); forge?.close();
+    for (const dir of madeDirs) { try { removeTree(dir); } catch { /* still held by a closing process: the next run's temp folder is not the worse for one */ } }
+});
 // a test that failed half way leaves no program running for the next one
 afterEach(async () => {
     if (page && !(await page.evaluate(`${$('b-stop')}.disabled`))) {
@@ -270,7 +277,7 @@ describe('the editor and the language server', () => {
 });
 
 describe('Deployment', () => {
-    const share = mkdtempSync(join(tmpdir(), 'pymagic-e2e-share-'));
+    const share = tempDir('pymagic-e2e-share-');
     const fill = (id, value) => page.evaluate(`(() => { const e = document.getElementById(${JSON.stringify(id)}); e.value = ${JSON.stringify(value)}; e.dispatchEvent(new Event('change', { bubbles: true })); })()`);
 
     test('a folder server is added, a file uploaded, compared with the server\'s, and the list shows the mapping', async () => {
@@ -1329,7 +1336,7 @@ describe('a debug server a program started elsewhere connects back to', () => {
         await page.evaluate(`document.querySelector('#sigdialog button.primary').click()`);
 
         // the program, on its own: the snippet, then the project's file
-        const dir = mkdtempSync(join(tmpdir(), 'pymagic-e2e-remote-'));
+        const dir = tempDir('pymagic-e2e-remote-');
         writeFileSync(join(dir, 'launcher.py'), `import sys\nsys.path.insert(0, ${JSON.stringify(helper)})\n${snippet}\nimport runpy\nrunpy.run_path(${JSON.stringify(join(projectRoot, 'remote_job.py'))}, run_name='__main__')\n`);
         const program = spawn('python', ['-u', 'launcher.py'], { cwd: dir });
         let printed = '';
@@ -1537,7 +1544,7 @@ describe('packages: index settings, versions, installing from a path, the depend
     const wsRequest = (message) => page.evaluate(`new Promise((ok) => { const ws = new WebSocket(location.origin.replace('http', 'ws') + '/run'); const seen = []; ws.onopen = () => ws.send(${JSON.stringify(JSON.stringify(message))}); ws.onmessage = (e) => { const m = JSON.parse(e.data); seen.push(m); if (m.type === 'error' || m.type === 'exited') { ws.close(); ok(m); } }; setTimeout(() => ok({ type: 'timeout', seen }), 20000); })`);
 
     before(async () => {
-        wheels = mkdtempSync(join(tmpdir(), 'pymagic-e2e-wheels-'));
+        wheels = tempDir('pymagic-e2e-wheels-');
         writeFileSync(join(wheels, 'make_wheel.py'), MAKE_WHEEL);
         const make = (name, version, requires = '') => {
             const r = spawnSync('python', [join(wheels, 'make_wheel.py'), join(wheels, `${name}-${version}-py3-none-any.whl`), name, version, requires], { encoding: 'utf8' });
@@ -1564,7 +1571,7 @@ describe('packages: index settings, versions, installing from a path, the depend
         await new Promise((ok) => index.listen(0, '127.0.0.1', ok));
         indexUrl = `http://127.0.0.1:${index.address().port}/simple`;
         // a throwaway environment becomes the project's interpreter
-        const env = mkdtempSync(join(tmpdir(), 'pymagic-e2e-pkgenv-'));
+        const env = tempDir('pymagic-e2e-pkgenv-');
         const venv = spawnSync('python', ['-m', 'venv', env], { encoding: 'utf8' });
         assert.equal(venv.status, 0, String(venv.stderr));
         envPython = join(env, 'Scripts', 'python.exe');
@@ -1894,7 +1901,7 @@ describe('branches: comparing, rebasing onto another, and pushing tags', () => {
         writeFileSync(join(projectRoot, 'main_only.txt'), 'main\n');
         git('add', '-A');
         git('commit', '-q', '-m', 'only on main');
-        const remote = mkdtempSync(join(tmpdir(), 'pymagic-e2e-remote-git-'));
+        const remote = tempDir('pymagic-e2e-remote-git-');
         assert.equal(spawnSync('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: remote }).status, 0);
         git('remote', 'add', 'origin', remote);
         git('push', '-q', '-u', 'origin', 'main');

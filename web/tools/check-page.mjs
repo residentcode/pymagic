@@ -1,12 +1,14 @@
 // Loads the page, presses the rail, the dock tabs and the command bar, runs a file, and prints every error the page raised (usage: node web/tools/check-page.mjs <url>).
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTree } from './remove-tree.mjs';
 
 const url = process.argv[2];
 const port = 9900 + Math.floor(Math.random() * 90);
+const profile = join(tmpdir(), 'pm_check_' + port);
 const edge = spawn('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-  [`--remote-debugging-port=${port}`, `--user-data-dir=${join(tmpdir(), 'pm_check_' + port)}`, '--headless=new', '--window-size=1440,900', 'about:blank'], { stdio: 'ignore' });
+  [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--headless=new', '--window-size=1440,900', 'about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let targets;
 for (let i = 0; i < 50; i++) { try { targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); if (targets.length) break; } catch { /* not yet */ } await sleep(200); }
@@ -37,4 +39,7 @@ await sleep(2500);
 const state = await run(`JSON.stringify({ active: document.querySelector('#tabs button.active')?.id, sidebarHidden: document.getElementById('app').classList.contains('no-side'), debugLabel: document.querySelector('#b-debug .lbl').textContent, project: document.getElementById('project').textContent, branch: document.querySelector('#branch-chip span:last-child').textContent, problemsBadge: document.querySelector('#r-problems .badge').textContent, files: document.querySelectorAll('#files li').length })`);
 console.log(state);
 console.log(errors.length ? errors.join('\n') : 'no errors');
-ws.close(); edge.kill();
+ws.close();
+// Edge and its helper processes (only the tree started here), then its profile, which would otherwise stay in the temp folder
+if (edge.exitCode === null) spawnSync('taskkill', ['/PID', String(edge.pid), '/T', '/F'], { stdio: 'ignore' });
+removeTree(profile);

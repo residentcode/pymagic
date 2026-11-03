@@ -84,7 +84,15 @@ public class RemoteRunTests
 
         public JsonNode Type(string type) => Next(e => e["type"]?.GetValue<string>() == type);
         public string AllOutput() => string.Concat(Seen.Where(e => e["type"]?.GetValue<string>() == "output").Select(e => e["text"]!.GetValue<string>()));
-        public void Dispose() { Session.Dispose(); try { Directory.Delete(Root, true); } catch (IOException) { } }
+        public void Dispose() { Session.Dispose(); TestTemp.RemoveTree(Root); }
+    }
+
+    /// <summary>A test's own folder in the temp folder, removed when the test ends (each run used to leave one, a virtual environment of 17 MB among them).</summary>
+    sealed class TempFolder : IDisposable
+    {
+        public readonly string Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "pm_rr" + Guid.NewGuid().ToString("N"));
+        public TempFolder() => Directory.CreateDirectory(Path);
+        public void Dispose() => TestTemp.RemoveTree(Path);
     }
 
     static bool Same(string a, string b) => string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
@@ -148,8 +156,8 @@ public class RemoteRunTests
     [Fact]
     public void ANotebookKernelRunsThere() => Each((target, python, _) =>
     {
-        string root = Path.Combine(Path.GetTempPath(), "pm_rrk_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        using var folder = new TempFolder();
+        string root = folder.Path;
         if (target is DockerTarget d) d.Project = root;
         if (target is SshTarget sshTarget) sshTarget.Project = root;
         var events = new BlockingCollection<JsonNode>();
@@ -176,9 +184,8 @@ public class RemoteRunTests
     [Fact]
     public void AVirtualEnvironmentCanBeMadeThereAndUsed() => Each((target, python, _) =>
     {
-        string root = Path.Combine(Path.GetTempPath(), "pm_rrv_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        var manager = new InterpreterManager(root);
+        using var folder = new TempFolder();
+        var manager = new InterpreterManager(folder.Path);
         string spec;
         try { spec = manager.CreateVenv(target.Spec(python), ".venv", withPip: false); }
         catch (ServiceException e) when (e.Message.Contains("ensurepip") || e.Message.Contains("venv failed")) { return; }   // python3-venv is not installed in this system
@@ -192,10 +199,9 @@ public class RemoteRunTests
     [Fact]
     public void AnInterpreterIsInspectedAndItsLibrariesCanBeRead() => Each((target, python, _) =>
     {
-        string root = Path.Combine(Path.GetTempPath(), "pm_rri_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        DockerTarget.DefaultProject = root;
-        SshTarget.DefaultProject = root;
+        using var folder = new TempFolder();
+        DockerTarget.DefaultProject = folder.Path;
+        SshTarget.DefaultProject = folder.Path;
         var r = InterpreterInspector.Inspect(target.Spec(python));
         Assert.True(r.Interpreter != null, r.Error);
         var i = r.Interpreter!;
