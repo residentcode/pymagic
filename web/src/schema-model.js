@@ -1,12 +1,34 @@
 // A small JSON Schema validator for what SchemaStore's schemas use (draft-07 and later): type, enum, const, required, properties,
-// patternProperties, additionalProperties, items, minimum/maximum, lengths, pattern, $ref inside the schema, allOf, anyOf, oneOf.
-// A $ref to another document, `format`, and the keywords not listed are accepted. No DOM here: web/test/schema.test.mjs checks it.
+// patternProperties, additionalProperties, unevaluatedProperties, propertyNames, min/maxProperties, items, minimum/maximum, lengths,
+// pattern, $ref inside the schema (to a path or an $anchor), $dynamicRef to a $dynamicAnchor (OpenAPI 3.1's), allOf, anyOf, oneOf,
+// not, if/then/else and dependentSchemas. A $ref to another document, `format`, and the keywords not listed are accepted.
+// No DOM here: web/test/schema.test.mjs checks it.
 
 const typeOf = (v) => (v === null ? 'null' : Array.isArray(v) ? 'array' : Number.isInteger(v) ? 'integer' : typeof v);
 const isType = (v, t) => (t === 'number' ? typeof v === 'number' : t === 'integer' ? Number.isInteger(v) : typeOf(v) === t);
 
+/** The nodes of a schema with an $anchor or a $dynamicAnchor, by name (found once per schema). */
+const anchorsOf = new WeakMap();
+function anchors(root) {
+    if (anchorsOf.has(root)) return anchorsOf.get(root);
+    const found = new Map();
+    const visit = (node, depth) => {
+        if (!node || typeof node !== 'object' || depth > 60) return;
+        if (!Array.isArray(node)) {
+            if (typeof node.$anchor === 'string' && !found.has(node.$anchor)) found.set(node.$anchor, node);
+            if (typeof node.$dynamicAnchor === 'string' && !found.has(node.$dynamicAnchor)) found.set(node.$dynamicAnchor, node);
+        }
+        for (const v of Object.values(node)) visit(v, depth + 1);
+    };
+    visit(root, 0);
+    anchorsOf.set(root, found);
+    return found;
+}
+
 function resolve(root, ref) {
     if (!ref.startsWith('#')) return null;
+    // #name: an anchor ($anchor, or the $dynamicAnchor a $dynamicRef names: within one document it is that node)
+    if (ref.length > 1 && ref[1] !== '/') return typeof root === 'object' && root ? anchors(root).get(ref.slice(1)) ?? null : null;
     let node = root;
     for (const part of ref.slice(1).split('/').filter(Boolean)) {
         node = node?.[decodeURIComponent(part).replace(/~1/g, '/').replace(/~0/g, '~')];
@@ -25,9 +47,24 @@ export function validate(data, schema, limit = 200) {
         if (node === true || node == null || typeof node !== 'object' || depth > 40) return evaluated;
         if (node === false) { out.push({ path, message: 'Not allowed here' }); return evaluated; }
         const merge = (set) => { for (const k of set) evaluated.add(k); };
-        if (node.$ref) {
-            const target = resolve(schema, node.$ref);
+        for (const ref of [node.$ref, node.$dynamicRef]) {
+            if (typeof ref !== 'string') continue;
+            const target = resolve(schema, ref);
             if (target) merge(walk(value, target, path, depth + 1));
+        }
+        // not: the value must not fit; if/then/else: what fits `if` is held to `then`, the rest to `else`
+        if (node.not !== undefined && node.not !== false && problemsOf(value, node.not, path, depth + 1).length === 0) {
+            // `not` of properties that may not be given (Renovate's options of the global config): each one given is named
+            const forms = node.not && typeof node.not === 'object' ? [node.not, ...(node.not.anyOf ?? [])] : [];
+            const banned = forms.flatMap((f) => (Array.isArray(f.required) && Object.keys(f).every((k) => k === 'required') ? f.required : []));
+            const given = value && typeof value === 'object' && !Array.isArray(value) ? banned.filter((k) => k in value) : [];
+            if (given.length) for (const k of given) out.push({ path: [...path, k], message: `The property ${k} is not allowed here`, key: true });
+            else out.push({ path, message: 'Should not be of this form' });
+        }
+        if (node.if !== undefined) {
+            const passed = problemsOf(value, node.if, path, depth + 1);
+            if (passed.length === 0) { merge(passed.evaluated); if (node.then !== undefined) merge(walk(value, node.then, path, depth + 1)); }
+            else if (node.else !== undefined) merge(walk(value, node.else, path, depth + 1));
         }
         if (node.allOf) for (const sub of node.allOf) merge(walk(value, sub, path, depth + 1));
         if (node.anyOf || node.oneOf) {
@@ -78,6 +115,13 @@ export function validate(data, schema, limit = 200) {
         }
         if (value && typeof value === 'object' && !Array.isArray(value)) {
             for (const key of node.required ?? []) if (!(key in value)) out.push({ path, message: `The property ${key} is required`, missing: key });
+            const count = Object.keys(value).length;
+            if (node.minProperties !== undefined && count < node.minProperties) out.push({ path, message: `Should have at least ${node.minProperties} ${node.minProperties === 1 ? 'property' : 'properties'}` });
+            if (node.maxProperties !== undefined && count > node.maxProperties) out.push({ path, message: `Should have at most ${node.maxProperties} ${node.maxProperties === 1 ? 'property' : 'properties'}` });
+            if (node.propertyNames !== undefined)
+                for (const key of Object.keys(value))
+                    for (const p of problemsOf(key, node.propertyNames, [...path, key], depth + 1)) out.push({ ...p, message: `The name ${key}: ${p.message}`, key: true });
+            for (const [key, sub] of Object.entries(node.dependentSchemas ?? {})) if (key in value) merge(walk(value, sub, path, depth + 1));
             const patterns = Object.entries(node.patternProperties ?? {}).flatMap(([p, s]) => { try { return [[new RegExp(p, 'u'), s]]; } catch { return []; } });
             for (const [key, v] of Object.entries(value)) {
                 let matched = false;
@@ -152,8 +196,8 @@ export function locate(text, problem) {
     return found ?? { line: 1, start: 1, end: 2 };
 }
 
-/** Which schema checks a project file, by its path: 'package' | 'pyproject' | 'workflow' | 'compose' | 'gitlab' | 'precommit' | 'mkdocs' | 'dependabot' | 'codecov' | 'tox' | 'renovate' | 'openapi' | null.
- * 'openapi' is only the file's name: openapiSchemaOf says from the content which schema (3.0 or Swagger 2.0) applies, if any. */
+/** Which schema checks a project file, by its path: 'package' | 'pyproject' | 'workflow' | 'compose' | 'gitlab' | 'precommit' | 'mkdocs' | 'dependabot' | 'codecov' | 'tox' | 'renovate' | 'openapi' | 'kustomization' | null.
+ * 'openapi' is only the file's name: openapiSchemaOf says from the content which schema (3.1, 3.0 or Swagger 2.0) applies, if any. */
 export function schemaOf(rel) {
     const lower = rel.toLowerCase();
     const name = lower.split('/').pop();
@@ -167,12 +211,14 @@ export function schemaOf(rel) {
     if (name === 'tox.toml') return 'tox';
     if (name === 'renovate.json' || name === '.renovaterc' || name === '.renovaterc.json') return 'renovate';
     if (/^(openapi|swagger)(\.[^/.]+)?\.(ya?ml|json)$/.test(name)) return 'openapi';
+    if (/^kustomization\.ya?ml$/.test(name) || rel.split('/').pop() === 'Kustomization') return 'kustomization';
     return name === 'package.json' ? 'package' : name === 'pyproject.toml' ? 'pyproject' : null;
 }
 
-/** The schema of an OpenAPI / Swagger document, by its version: 'openapi' (3.0.x), 'swagger' (2.0), or null (3.1 uses $dynamicRef, which the validator cannot follow, so it is not checked). */
+/** The schema of an OpenAPI / Swagger document, by its version: 'openapi31' (3.1.x), 'openapi' (3.0.x), 'swagger' (2.0), or null. */
 export function openapiSchemaOf(data) {
     if (!data || typeof data !== 'object') return null;
+    if (typeof data.openapi === 'string' && /^3\.1(\.|$)/.test(data.openapi)) return 'openapi31';
     if (typeof data.openapi === 'string' && /^3\.0(\.|$)/.test(data.openapi)) return 'openapi';
     if (String(data.swagger) === '2.0' || String(data.swagger) === '2') return 'swagger';
     return null;
@@ -194,4 +240,29 @@ export function kubernetesSchemaOf(doc) {
     const version = second === undefined ? first : second;
     if (!/^[A-Za-z0-9]+$/.test(doc.kind) || !/^[a-z0-9]*$/.test(group) || !/^v\d+((alpha|beta)\d+)?$/.test(version)) return null;
     return ['k8s', doc.kind.toLowerCase(), group, version].filter(Boolean).join('-');
+}
+
+/**
+ * The schemas of the custom resources the project's CustomResourceDefinitions declare, by `group/version:Kind`: each version's
+ * openAPIV3Schema (apiextensions v1), or the definition's own (v1beta1's spec.validation). `docs` are the parsed YAML documents.
+ */
+export function crdSchemas(docs) {
+    const found = new Map();
+    for (const d of docs) {
+        if (!d || typeof d !== 'object' || d.kind !== 'CustomResourceDefinition' || typeof d.apiVersion !== 'string' || !d.apiVersion.startsWith('apiextensions.k8s.io/')) continue;
+        const group = d.spec?.group, kind = d.spec?.names?.kind;
+        if (typeof group !== 'string' || typeof kind !== 'string') continue;
+        const versions = Array.isArray(d.spec.versions) ? d.spec.versions : d.spec.version ? [{ name: d.spec.version }] : [];
+        for (const v of versions) {
+            const schema = v?.schema?.openAPIV3Schema ?? d.spec.validation?.openAPIV3Schema;
+            if (typeof v?.name === 'string' && schema && typeof schema === 'object') found.set(`${group}/${v.name}:${kind}`, schema);
+        }
+    }
+    return found;
+}
+
+/** The key of a manifest for crdSchemas: `group/version:Kind`, or null for a kind of the core group (no group, no CRD). */
+export function crdKeyOf(doc) {
+    if (!doc || typeof doc !== 'object' || typeof doc.apiVersion !== 'string' || typeof doc.kind !== 'string' || !doc.apiVersion.includes('/')) return null;
+    return `${doc.apiVersion}:${doc.kind}`;
 }

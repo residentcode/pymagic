@@ -183,7 +183,6 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Compared on 1 November 2026 (item 224; what was "Not compared yet"), PyMagic had none of these unless said:
   - Database tools and SQL (item 312): Not read: django-environ's `env.db()` and DATABASE_URL settings. Not checked: PostgreSQL's and MySQL's routines, a server's other databases, TLS and SSH tunnels against real servers (they need downloads).
   - HTTP client (item 313): Not built: PyCharm's newer extras: `jsonPath`, `client.global` kept across restarts, WebSocket, GraphQL and gRPC requests.
-  - Inspections beyond Python and Django (has: requirements files, item 196; HTML, CSS and JavaScript in templates, item 182): Then checked (item 233): regular expressions in f-strings, triple-quoted and escaped strings, and in a name set once at the top of the file; a link from one Markdown file to a heading of another; YAML against a schema for GitHub workflows (item 231). Not checked: a pattern joined at run time (`"a" + x`, `.format()`), YAML against other schemas than those of items 231, 234 and 235 (mkdocs, dependabot and codecov YAML and `tox.toml` are done too). Not done: OpenAPI 3.1 (needs `$dynamicRef`), CRDs and Kustomization files, and the `if`/`then`/`not` rules of the Renovate schema.
   - Run Anything and the Services window (item 314): one member of a compound at a time is debugged (the Run panel has one debug session; PyCharm opens a debugger tab per member).
   - Deployment (item 324): Not checked: implicit FTPS and a trusted self-signed certificate against a real FTPS server (checked with a small FTPS server of the tests).
   - Remote interpreters over SSH and Docker in depth (item 325): Not checked: a Compose service's libraries against a real Docker engine (checked with recorded docker answers).
@@ -207,4 +206,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 331 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 332 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

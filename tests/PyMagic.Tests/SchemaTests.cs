@@ -21,8 +21,8 @@ public class SchemaTests
     [Fact]
     public void EverySchemaIsBuiltIn()
     {
-        Assert.Equal(13, Schemas.Names.Count);
-        foreach (var name in new[] { "package", "pyproject", "workflow", "compose", "gitlab", "precommit", "mkdocs", "dependabot", "codecov", "tox", "renovate", "openapi", "swagger" })
+        Assert.Equal(15, Schemas.Names.Count);
+        foreach (var name in new[] { "package", "pyproject", "workflow", "compose", "gitlab", "precommit", "mkdocs", "dependabot", "codecov", "tox", "renovate", "openapi31", "openapi", "swagger", "kustomization" })
         {
             string text = Schemas.Builtin(name) ?? throw new AssertionException(name + " is not built in");
             Assert.True(System.Text.Json.Nodes.JsonNode.Parse(text) is System.Text.Json.Nodes.JsonObject, name);
@@ -72,5 +72,24 @@ public class SchemaTests
         Assert.Contains("\"n\": 3", json);
         Assert.Contains("1979-05-27", json);
         Assert.True(Schemas.TomlToJson(PythonExe, "[project\n") == null);
+    }
+
+    [Fact]
+    public void TheProjectsCustomResourceDefinitionsAreFound()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "pm_crd_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "deploy", "crds"));
+        Directory.CreateDirectory(Path.Combine(root, "node_modules", "x"));
+        try
+        {
+            string crd = "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nspec:\n  group: shop.example.com\n";
+            File.WriteAllText(Path.Combine(root, "deploy", "crds", "shelf.yaml"), crd);
+            File.WriteAllText(Path.Combine(root, "deploy", "app.yml"), "apiVersion: apps/v1\nkind: Deployment\n");
+            File.WriteAllText(Path.Combine(root, "node_modules", "x", "crd.yaml"), crd);   // a library's copy is not the project's
+            var found = Schemas.CustomResourceDefinitions(root);
+            Assert.Equal("deploy/crds/shelf.yaml", string.Join(",", found.Select(f => f.Path)));
+            Assert.Contains("shop.example.com", found[0].Text);
+        }
+        finally { Directory.Delete(root, true); }
     }
 }

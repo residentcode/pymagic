@@ -112,11 +112,31 @@ test('regular expression literals of every kind', () => {
     assert.deepEqual(pats('PATTERN = r"a|b"\ndef f():\n    return re.compile(PATTERN)\n'), ['a|b']);
     assert.deepEqual(pats('P = r"a"\nP = r"b"\nre.compile(P)\n'), []);              // set twice: not known
     assert.deepEqual(pats('def f(x):\n    P = r"a"\n    return re.compile(P)\n'), []);   // not at the top level
-    // joined to something else: not the pattern
+    // joined to something not known: not the pattern
     assert.deepEqual(pats('re.match("a" + x, s)'), []);
-    assert.deepEqual(pats('re.match("a" "b", s)'), []);
     assert.deepEqual(pats('re.match("a%s" % x, s)'), []);
+    assert.deepEqual(pats('re.match("{}b".format(x), s)'), []);
+    assert.deepEqual(pats('re.match("{:>3}".format("a"), s)'), []);          // a format spec
     assert.deepEqual(pats('re.match(x, s)'), []);
+    assert.deepEqual(pats('P = r"a"\nre.match(P(), s)\n'), []);               // a call of the name
+});
+
+test('a pattern joined at run time is read when every part is known', () => {
+    const pats = (text) => m.regexLiterals(text).map((l) => l.pattern);
+    // literals one after another, also over lines in the call's brackets
+    assert.deepEqual(pats('re.match("a" "b", s)'), ['ab']);
+    assert.deepEqual(pats('re.compile(r"\\d+"\n           r"[a-z]")'), ['\\d+[a-z]']);
+    // + between literals and names set once to one
+    assert.deepEqual(pats('SEP = r"[-_]"\nre.split(r"\\w+" + SEP + "x", s)\n'), ['\\w+[-_]x']);
+    // .format() with known arguments: {} in order, {0} by place, {name} by name; {{ }} are braces
+    assert.deepEqual(pats('re.match("{}-{}".format("a", r"\\d"), s)'), ['a-\\d']);
+    assert.deepEqual(pats('re.match("{1}{0}".format("x", "y"), s)'), ['yx']);
+    assert.deepEqual(pats('SEP = ","\nre.split("{s}\\\\s*".format(s=SEP), t)\n'), [',\\s*']);
+    assert.deepEqual(pats('re.match("a{{2}}{}".format("b"), s)'), ['a{2}b']);
+    // a problem of a part is put where that part is written
+    const at = (text) => m.pythonRegexProblems(text).map((p) => `${p.code}@${p.line}:${p.start}-${p.end}`);
+    assert.deepEqual(at('import re\nSEP = r"[aa]"\nre.compile(r"x" + SEP)\n'), ['re-class-repeat@2:11-12']);
+    assert.deepEqual(at('re.compile("{}".format(r"\\-"))\n'), ['re-escape@1:26-28']);
 });
 
 test('problems are put where they are in the source, whatever the kind of string', () => {

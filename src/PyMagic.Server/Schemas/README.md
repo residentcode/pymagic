@@ -16,6 +16,8 @@ The schemas PyMagic checks config files against, built into the app (no download
 | tox.json | https://raw.githubusercontent.com/tox-dev/tox/main/src/tox/tox.schema.json |
 | renovate.json | https://docs.renovatebot.com/renovate-schema.json |
 | openapi.json | https://spec.openapis.org/oas/3.0/schema/2021-09-28 |
+| openapi31.json | https://spec.openapis.org/oas/3.1/schema/2022-10-07 (fetched 2026-11-03) |
+| kustomization.json | https://json.schemastore.org/kustomization.json (fetched 2026-11-03) |
 | swagger.json | https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/_archive_/schemas/v2.0/schema.json |
 | k8s-definitions.json | https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/master/_definitions.json (every built-in Kubernetes kind; the schema of one kind is a $ref into it) |
 

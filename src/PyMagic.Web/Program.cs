@@ -1372,6 +1372,8 @@ app.MapGet("/api/tailwind", () =>
     return Results.Json(new { used = use.Used, path = use.Css, css, why = use.Why });
 });
 app.MapGet("/api/schemas/get", (string name) => Schemas.Of(root, name) is { } schema ? Results.Text(schema, "application/json") : Results.NotFound());
+// the project's CustomResourceDefinitions (the page checks a custom resource against the one that declares its kind)
+app.MapGet("/api/schemas/crds", () => Results.Json(Schemas.CustomResourceDefinitions(root).Select(c => new { path = c.Path, text = c.Text })));
 // a TOML text as JSON, for checking pyproject.toml against its schema
 app.MapPost("/api/toml", async (HttpRequest req) =>
 {

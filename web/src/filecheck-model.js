@@ -531,10 +531,101 @@ function stringConstants(text) {
     return found;
 }
 
+/** A literal at text[at], or a name the file sets once to one: {dec (decodeLiteral's), start, after}, or null. */
+function patternPart(text, at, constants) {
+    const lit = readLiteral(text, at);
+    if (lit) return { dec: decodeLiteral(text, lit), start: lit.start, after: lit.after };
+    const name = /^[A-Za-z_]\w*/.exec(text.slice(at, at + 80))?.[0];
+    // a name called or indexed is not the string itself
+    if (!name || !constants.has(name) || /^\s*[([]/.test(text.slice(at + name.length, at + name.length + 20))) return null;
+    const def = constants.get(name);
+    return { dec: decodeLiteral(text, def), start: def.start, after: at + name.length };
+}
+
+const joined = (a, b) => ({ pattern: a.pattern + b.pattern, from: [...a.from, ...b.from], to: [...a.to, ...b.to] });
+
+/**
+ * `.format(...)` of a known pattern (text[at] just after the parenthesis), when every argument is a literal or such a name: the
+ * pattern with `{}`, `{0}` and `{name}` filled in (their characters placed where the argument is written) and `{{` `}}` made one
+ * brace, and where the call ends; null for anything else (a format spec, an argument that is not known).
+ */
+function formatted(dec, text, at, constants) {
+    const positional = [], named = new Map();
+    let i = at;
+    for (;;) {
+        i += /^\s*/.exec(text.slice(i))[0].length;
+        if (text[i] === ')') break;
+        const key = /^([A-Za-z_]\w*)\s*=(?!=)\s*/.exec(text.slice(i, i + 100));
+        if (key) i += key[0].length;
+        const part = patternPart(text, i, constants);
+        if (!part) return null;
+        if (key) named.set(key[1], part.dec); else positional.push(part.dec);
+        i = part.after + /^\s*/.exec(text.slice(part.after))[0].length;
+        if (text[i] === ',') { i++; continue; }
+        if (text[i] !== ')') return null;
+    }
+    let out = { pattern: '', from: [], to: [] }, auto = 0;
+    const p = dec.pattern;
+    for (let k = 0; k < p.length;) {
+        if ((p[k] === '{' && p[k + 1] === '{') || (p[k] === '}' && p[k + 1] === '}')) {
+            out = joined(out, { pattern: p[k], from: [dec.from[k]], to: [dec.to[k + 1]] });
+            k += 2;
+            continue;
+        }
+        if (p[k] === '{') {
+            const close = p.indexOf('}', k);
+            if (close < 0) return null;
+            const field = p.slice(k + 1, close);
+            const arg = field === '' ? positional[auto++] : /^\d+$/.test(field) ? positional[Number(field)] : named.get(field);
+            if (!arg) return null;        // a format spec, an attribute or an argument that is not given
+            out = joined(out, arg);
+            k = close + 1;
+            continue;
+        }
+        out = joined(out, { pattern: p[k], from: [dec.from[k]], to: [dec.to[k]] });
+        k++;
+    }
+    return { dec: out, after: i + 1 };
+}
+
+/**
+ * The pattern at text[at]: a literal or such a name, joined as Python joins them when every part is known: literals written one
+ * after another ("a" "b"), `+` between them, and `.format()` with known arguments. Null when a part is not known (`"a" + x`).
+ */
+function patternAt(text, at, constants) {
+    const first = patternPart(text, at, constants);
+    if (!first) return null;
+    let { dec, after } = first;
+    for (;;) {
+        const p = after + /^\s*/.exec(text.slice(after))[0].length;
+        if (text[p] === '+') {
+            const next = patternPart(text, p + 1 + /^\s*/.exec(text.slice(p + 1))[0].length, constants);
+            if (!next) return null;
+            dec = joined(dec, next.dec);
+            after = next.after;
+            continue;
+        }
+        const lit = readLiteral(text, p);
+        if (lit) {
+            dec = joined(dec, decodeLiteral(text, lit));
+            after = lit.after;
+            continue;
+        }
+        if (text.startsWith('.format(', p)) {
+            const r = formatted(dec, text, p + '.format('.length, constants);
+            if (!r) return null;
+            ({ dec, after } = r);
+            continue;
+        }
+        return { dec, start: first.start, after };
+    }
+}
+
 /**
  * The regular expressions of `re.compile(...)`, `re.sub(r"...", ...)` and the like in a source text, each {pattern, from, to,
  * fullmatch, verbose}: a literal of any kind (raw, escaped, f-string, triple-quoted, on several lines) as the first argument, or a
- * name the file sets once to such a literal. A pattern joined to something else ("a" + x, "a" "b", .format()) is not looked at.
+ * name the file sets once to such a literal, or those joined when every part is known ("a" "b", "a" + NAME, "{}b".format("a")).
+ * A pattern with a part that is not known ("a" + x) is not looked at.
  */
 export function regexLiterals(text) {
     const out = [];
@@ -542,18 +633,12 @@ export function regexLiterals(text) {
     const re = new RegExp(`\\bre\\.(${RE_FUNCTIONS})\\(\\s*`, 'g');
     let m;
     while ((m = re.exec(text))) {
-        const at = m.index + m[0].length;
-        let lit = readLiteral(text, at);
-        let after = lit?.after ?? at;
-        if (!lit) {
-            const name = /^[A-Za-z_]\w*/.exec(text.slice(at, at + 80))?.[0];
-            if (!name || !constants.has(name)) continue;
-            lit = constants.get(name);
-            after = at + name.length;
-        }
+        const found = patternAt(text, m.index + m[0].length, constants);
+        if (!found) continue;
+        const { after } = found;
         if (!/^\s*[,)]/.test(text.slice(after, after + 60))) continue;
         const flags = text.slice(after, after + 200).split(')')[0];
-        out.push({ ...decodeLiteral(text, lit), at: lit.start, fullmatch: m[1] === 'fullmatch', verbose: /\bre\.(VERBOSE|X)\b/.test(flags) });
+        out.push({ ...found.dec, at: found.start, fullmatch: m[1] === 'fullmatch', verbose: /\bre\.(VERBOSE|X)\b/.test(flags) });
     }
     return out;
 }

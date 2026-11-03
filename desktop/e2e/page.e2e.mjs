@@ -3445,6 +3445,20 @@ describe('the Open work of 3 November: the HTTP client\'s scripts, Before launch
         await page.evaluate(`[...document.querySelectorAll('.dep-form button')].find((b) => b.textContent === 'Cancel').click()`);
     });
 
+    test('Inspections: a custom resource against its CRD, OpenAPI 3.1 against its schema, and a regular expression joined from known parts', async () => {
+        const marks = (rel, wanted) => page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); if (!m.uri.path.endsWith(${JSON.stringify(rel)})) return null; const f = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).map((x) => x.startLineNumber + ': ' + x.message); return f.some((x) => x.includes(${JSON.stringify(wanted)})) ? f : null; })()`, 30000, `${wanted} in ${rel}`);
+        put('k8s/crds/shelf.yaml', 'apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: shelves.shop.example.com\nspec:\n  group: shop.example.com\n  names:\n    kind: Shelf\n    plural: shelves\n  scope: Namespaced\n  versions:\n    - name: v1\n      served: true\n      storage: true\n      schema:\n        openAPIV3Schema:\n          type: object\n          properties:\n            spec:\n              type: object\n              properties:\n                size:\n                  type: integer\n                  minimum: 1\n');
+        put('k8s/shelf.yaml', 'apiVersion: shop.example.com/v1\nkind: Shelf\nmetadata:\n  name: top\nspec:\n  size: 0\n');
+        await open('k8s/shelf.yaml');
+        assert.ok((await marks('k8s/shelf.yaml', 'Should be at least 1')).some((x) => x.startsWith('6: ')));
+        put('openapi.yaml', 'openapi: 3.1.0\ninfo:\n  title: Shop\npaths: {}\n');
+        await open('openapi.yaml');
+        await marks('openapi.yaml', 'The property version is required');
+        put('joined_re.py', 'import re\n\nSEP = r"[aa]"\nWORD = re.compile(r"\\w+" + SEP)\n');
+        await open('joined_re.py');
+        await marks('joined_re.py', 'twice');
+    });
+
     test('Markdown: a Mermaid pie chart is drawn by the Mermaid library, which is loaded for it', async () => {
         put('pie.md', '# Pets\n\n```mermaid\npie title Pets\n    "Dogs" : 3\n    "Cats" : 2\n```\n');
         await open('pie.md');

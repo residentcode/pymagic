@@ -12,8 +12,8 @@ public static class Schemas
 {
     /// <summary>The fixed schemas, by the name the page asks for.</summary>
     public static readonly IReadOnlyList<string> Names = ["package", "pyproject", "workflow", "compose", "gitlab", "precommit", "mkdocs", "dependabot", "codecov", "tox", "renovate",
-        // OpenAPI 3.0 and Swagger 2.0 (3.1 needs $dynamicRef, which the validator does not follow: those files are not checked)
-        "openapi", "swagger"];
+        // OpenAPI 3.1 (its schema uses $dynamicRef), 3.0 and Swagger 2.0; Kustomize's kustomization.yaml
+        "openapi31", "openapi", "swagger", "kustomization"];
 
     // Kubernetes has one schema per kind (k8s-deployment-apps-v1, k8s-service-v1): a $ref into the definitions of every built-in kind
     static readonly System.Text.RegularExpressions.Regex KubernetesName = new("^k8s-[a-z0-9]+(-[a-z0-9]+){0,2}$");
@@ -60,6 +60,42 @@ public static class Schemas
     }
 
     public static string FolderOf(string root) => Path.Combine(root, ".pymagic", "schemas");
+
+    static readonly HashSet<string> Skipped = new(StringComparer.OrdinalIgnoreCase) { ".git", "node_modules", ".venv", "venv", "env", "__pycache__", ".pymagic", ".idea", ".tox", "dist", "build" };
+
+    /// <summary>
+    /// The project's YAML files that declare a CustomResourceDefinition (their custom resources are checked against them): {path from the
+    /// root, text}. At most 5,000 files are looked at, each under 2 MB, leaving out environments, node_modules and build output.
+    /// </summary>
+    public static List<(string Path, string Text)> CustomResourceDefinitions(string root)
+    {
+        var found = new List<(string, string)>();
+        var pending = new Stack<string>();
+        pending.Push(root);
+        int seen = 0;
+        while (pending.Count > 0 && seen < 5000)
+        {
+            string dir = pending.Pop();
+            string[] files, dirs;
+            try { files = Directory.GetFiles(dir); dirs = Directory.GetDirectories(dir); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            foreach (string f in files)
+            {
+                if (++seen > 5000) break;
+                if (!f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) && !f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)) continue;
+                try
+                {
+                    if (new FileInfo(f).Length > 2 * 1024 * 1024) continue;
+                    string text = File.ReadAllText(f);
+                    if (text.Contains("CustomResourceDefinition") && text.Contains("apiextensions.k8s.io"))
+                        found.Add((Path.GetRelativePath(root, f).Replace('\\', '/'), text));
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+            foreach (string d in dirs) if (!Skipped.Contains(Path.GetFileName(d))) pending.Push(d);
+        }
+        return found;
+    }
 
     public static string PathOf(string root, string name) => Path.Combine(FolderOf(root), name + ".json");
 

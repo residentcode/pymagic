@@ -1,9 +1,10 @@
-// package.json, pyproject.toml, GitHub workflows, docker-compose, GitLab CI, pre-commit, mkdocs, dependabot, codecov, tox, Renovate, OpenAPI 3.0 / Swagger 2.0 and Kubernetes manifests checked against their JSON Schema.
+// package.json, pyproject.toml, GitHub workflows, docker-compose, GitLab CI, pre-commit, mkdocs, dependabot, codecov, tox, Renovate, OpenAPI 3.1 / 3.0 / Swagger 2.0,
+// Kustomization and Kubernetes manifests checked against their JSON Schema; a custom resource against the CustomResourceDefinition of the project that declares it.
 // The schemas are built into PyMagic (a project's own copy in .pymagic/schemas is used instead): nothing is downloaded and nothing is asked (schema-model.js validates).
 // A Kubernetes manifest is any YAML file with an apiVersion and a kind (several documents in one file are each checked); its schema is the one of that kind.
 import * as monaco from 'monaco-editor';
 import { parse as parseYaml, parseAllDocuments } from 'yaml';
-import { validate, locate, schemaOf, openapiSchemaOf, looksKubernetes, kubernetesSchemaOf } from './schema-model';
+import { validate, locate, schemaOf, openapiSchemaOf, looksKubernetes, kubernetesSchemaOf, crdSchemas, crdKeyOf } from './schema-model';
 
 export { schemaOf };
 
@@ -12,6 +13,23 @@ const OWNER = 'pymagic-schema';
 export function setupSchemaCheck(deps) {
     const kept = new Map();               // name -> parsed schema, or null when PyMagic has none of that name (a kind Kubernetes does not have)
     const timers = new Map();
+
+    // the custom resources' schemas, from the CustomResourceDefinitions in the project's YAML files (read again after a save)
+    let crds = null;
+    async function crdSchemaFor(data) {
+        const key = crdKeyOf(data);
+        if (!key) return null;
+        crds ??= fetch('/api/schemas/crds').then((r) => (r.ok ? r.json() : [])).catch(() => []).then((files) => {
+            const docs = [];
+            for (const f of files) {
+                try { for (const d of parseAllDocuments(f.text, { prettyErrors: false })) if (!d.errors.length) docs.push(d.toJS()); }
+                catch { /* a file that does not parse */ }
+            }
+            return crdSchemas(docs);
+        });
+        return (await crds).get(key) ?? null;
+    }
+    window.addEventListener('pymagic:saved', () => { crds = null; });
 
     async function schemaFor(name) {
         if (kept.has(name)) return kept.get(name);
@@ -54,7 +72,7 @@ export function setupSchemaCheck(deps) {
             const name = kubernetesSchemaOf(data);
             if (!name) continue;
             const [from, to] = doc.range;
-            targets.push({ name, data, text: text.slice(from, to), line: text.slice(0, from).split('\n').length - 1 });
+            targets.push({ name, data, text: text.slice(from, to), line: text.slice(0, from).split('\n').length - 1, manifest: true });
         }
         return targets;
     }
@@ -68,7 +86,8 @@ export function setupSchemaCheck(deps) {
         const markers = [];
         let checked = false;
         for (const target of targets) {
-            const schema = await schemaFor(target.name);
+            // a kind Kubernetes does not have: the project's CustomResourceDefinition of it, if there is one
+            const schema = (await schemaFor(target.name)) ?? (target.manifest ? await crdSchemaFor(target.data) : null);
             if (!schema || model.isDisposed()) continue;
             checked = true;
             if (target.data === undefined) continue;

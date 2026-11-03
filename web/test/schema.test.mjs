@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/schema-model.js', import.meta.url), 'utf8');
-const { validate, locate, schemaOf, openapiSchemaOf, looksKubernetes, kubernetesSchemaOf } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { validate, locate, schemaOf, openapiSchemaOf, looksKubernetes, kubernetesSchemaOf, crdSchemas, crdKeyOf } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 const msgs = (data, schema) => validate(data, schema).map((p) => `${p.path.join('.')}: ${p.message}`);
 
 const schema = {
@@ -94,7 +94,7 @@ test('Renovate, OpenAPI and Swagger files are told by their names, the schema of
     assert.equal(schemaOf('api/spec.yaml'), null);
     assert.equal(schemaOf('package.json'), 'package');
     assert.equal(openapiSchemaOf({ openapi: '3.0.3' }), 'openapi');
-    assert.equal(openapiSchemaOf({ openapi: '3.1.0' }), null, '3.1 uses $dynamicRef: not checked');
+    assert.equal(openapiSchemaOf({ openapi: '3.1.0' }), 'openapi31');
     assert.equal(openapiSchemaOf({ swagger: '2.0' }), 'swagger');
     assert.equal(openapiSchemaOf({ swagger: 2 }), 'swagger');
     assert.equal(openapiSchemaOf({ info: {} }), null);
@@ -167,4 +167,80 @@ test('an OpenAPI 3.0 shaped schema: required info.version, responses and a wrong
         'paths./a.get: The property responses is required',
         'paths.bad: The property bad is not allowed here',
     ]);
+});
+
+const bundled = (name) => JSON.parse(readFileSync(new URL(`../../src/PyMagic.Server/Schemas/${name}.json`, import.meta.url), 'utf8'));
+
+test('not, if/then/else, $anchor and $dynamicRef, dependentSchemas, propertyNames and the counts of properties', () => {
+    const s = {
+        $defs: { name: { $anchor: 'nm', type: 'string', minLength: 2 }, any: { $dynamicAnchor: 'meta', type: ['object', 'boolean'] } },
+        type: 'object',
+        properties: { n: { $ref: '#nm' }, schema: { $dynamicRef: '#meta' }, kind: { type: 'string' } },
+        if: { properties: { kind: { const: 'job' } }, required: ['kind'] }, then: { required: ['cmd'] }, else: { not: { required: ['cmd'] } },
+        dependentSchemas: { cert: { required: ['key'] } },
+        propertyNames: { pattern: '^[a-z]+$' },
+        maxProperties: 4,
+    };
+    assert.deepEqual(msgs({ n: 'ab', kind: 'job', cmd: 'x' }, s), []);
+    assert.deepEqual(msgs({ n: 'a' }, s), ['n: Should have at least 2 characters']);                 // through an $anchor
+    assert.deepEqual(msgs({ schema: 3 }, s), ['schema: Should be object or boolean, not integer']);     // through a $dynamicRef
+    assert.deepEqual(msgs({ kind: 'job' }, s), [': The property cmd is required']);                     // if/then
+    assert.deepEqual(msgs({ kind: 'web', cmd: 'x' }, s), ['cmd: The property cmd is not allowed here']);   // else: not
+    assert.deepEqual(msgs({ cert: 'c' }, s), [': The property key is required']);                       // dependentSchemas
+    assert.deepEqual(msgs({ Bad: 1 }, s), ['Bad: The name Bad: Should match ^[a-z]+$']);
+    assert.deepEqual(msgs({ a: 1, b: 2, c: 3, d: 4, e: 5 }, s), [': Should have at most 4 properties']);
+});
+
+test('OpenAPI 3.1 is checked against its own schema (its $dynamicRef followed)', () => {
+    const s = bundled('openapi31');
+    const ok = { openapi: '3.1.0', info: { title: 'Shop', version: '1' }, paths: { '/items': { get: { responses: { 200: { description: 'ok' } } } } } };
+    assert.deepEqual(msgs(ok, s), []);
+    // the version is required, a path's key starts with /, and a response needs its description
+    const bad = msgs({ openapi: '3.1.0', info: { title: 'Shop' }, paths: { items: {}, '/a': { get: { responses: { 200: {} } } } } }, s);
+    assert.ok(bad.some((m) => /info: The property version is required/.test(m)), bad.join(' | '));
+    assert.ok(bad.some((m) => /paths\.items/.test(m)), bad.join(' | '));
+    assert.ok(bad.some((m) => /description is required/.test(m)), bad.join(' | '));
+});
+
+test('Kustomization files and Renovate\'s if/then and global-only options', () => {
+    for (const f of ['kustomization.yaml', 'overlays/prod/kustomization.yml', 'base/Kustomization']) assert.equal(schemaOf(f), 'kustomization', f);
+    const k = bundled('kustomization');
+    assert.deepEqual(msgs({ apiVersion: 'kustomize.config.k8s.io/v1beta1', kind: 'Kustomization', resources: ['a.yaml'], namePrefix: 'dev-' }, k), []);
+    assert.ok(msgs({ resources: 'a.yaml' }, k).some((m) => /^resources: Should be array/.test(m)), msgs({ resources: 'a.yaml' }, k).join(' | '));
+    const r = bundled('renovate');
+    // a jsonata custom manager needs its fileFormat (if/then)
+    const manager = { customType: 'jsonata', managerFilePatterns: ['/x/'], matchStrings: ['a'] };
+    assert.ok(msgs({ customManagers: [manager] }, r).some((m) => /fileFormat is required/.test(m)), msgs({ customManagers: [manager] }, r).join(' | '));
+    // an option of the global config is not allowed in a repository's file (not of required)
+    assert.deepEqual(msgs({ allowedHeaders: ['X-*'] }, r), ['allowedHeaders: The property allowedHeaders is not allowed here']);
+    assert.deepEqual(msgs({ extends: ['config:recommended'] }, r), []);
+});
+
+test('a custom resource is checked against the CustomResourceDefinition that declares its kind', () => {
+    const crd = {
+        apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition',
+        spec: { group: 'shop.example.com', names: { kind: 'Shelf' }, versions: [{ name: 'v1', schema: { openAPIV3Schema: { type: 'object', properties: { spec: { type: 'object', required: ['size'], properties: { size: { type: 'integer', minimum: 1 } } } } } } }] },
+    };
+    const found = crdSchemas([crd, { kind: 'Deployment' }, null]);
+    assert.deepEqual([...found.keys()], ['shop.example.com/v1:Shelf']);
+    const doc = { apiVersion: 'shop.example.com/v1', kind: 'Shelf', spec: { size: 0 } };
+    assert.equal(crdKeyOf(doc), 'shop.example.com/v1:Shelf');
+    assert.deepEqual(msgs(doc, found.get(crdKeyOf(doc))), ['spec.size: Should be at least 1']);
+    assert.equal(crdKeyOf({ apiVersion: 'v1', kind: 'Pod' }), null);   // the core group has no definitions of its own
+});
+
+test('YAML against the other bundled schemas: a small good file passes, a broken one is marked', () => {
+    const cases = [
+        ['compose', { services: { web: { image: 'nginx', ports: ['80:80'] } } }, { services: { web: { imagee: 'nginx' } } }],
+        ['gitlab', { test: { script: ['pytest'] } }, { test: { script: ['pytest'], when: 'later' } }],
+        ['precommit', { repos: [{ repo: 'local', hooks: [{ id: 'a', name: 'a', entry: 'a', language: 'system' }] }] }, { repos: 'all' }],
+        ['mkdocs', { site_name: 'Docs', nav: [{ Home: 'index.md' }] }, { site_name: 3 }],
+        ['dependabot', { version: 2, updates: [{ 'package-ecosystem': 'pip', directory: '/', schedule: { interval: 'weekly' } }] }, { version: 2, updates: [{ 'package-ecosystem': 'pip', directory: '/', schedule: { interval: 'hourly' } }] }],
+        ['codecov', { coverage: { precision: 2 } }, { coverage: { precision: 'two' } }],
+    ];
+    for (const [name, good, broken] of cases) {
+        const s = bundled(name);
+        assert.deepEqual(msgs(good, s), [], name + ' (good)');
+        assert.ok(msgs(broken, s).length > 0, name + ' (broken) is not marked');
+    }
 });
