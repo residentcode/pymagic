@@ -3587,6 +3587,36 @@ describe('the type engine leftovers: BDD go to and completion, Gherkin languages
     });
 });
 
+describe('Incorrect type: arguments of the wrong type, unions, # type: ignore', () => {
+    const put = (rel, text) => { mkdirSync(dirname(join(app.root, rel)), { recursive: true }); writeFileSync(join(app.root, rel), text); };
+    const markers = () => page.evaluate(`(() => { const m = window.pymagic.editor.getModel(); return window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).map((x) => x.startLineNumber + ': ' + x.message); })()`);
+    const until = (test, what) => page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); const f = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).map((x) => x.startLineNumber + ': ' + x.message); return (${test})(f) ? f : null; })()`, 30000, what);
+    const src = 'def need(x: str) -> None: ...\n\n\ndef g(s: str | None, n: int):\n    need(n)\n    need(s)\n    need(n)  # type: ignore\n    if s is None:\n        return\n    need(s)\n';
+
+    test('A wrong argument is marked; a str | None is too (every member of a union), not after the None is ruled out; # type: ignore silences its line', async () => {
+        put('wrongtypes.py', src);
+        await open('wrongtypes.py');
+        const found = await until((f) => f.some((x) => x.startsWith('5: ')) && f.some((x) => x.startsWith('6: ')), 'the two reports');
+        assert.ok(found.some((x) => x === "5: Expected type 'str', got 'int' instead"), found.join(' | '));
+        assert.ok(found.some((x) => x === "6: Expected type 'str', got 'str | None' instead"), found.join(' | '));
+        assert.ok(!found.some((x) => x.startsWith('7: ') || x.startsWith('10: ')), found.join(' | '));
+    });
+
+    test('Settings: with "Check every member of a union" off, a str | None goes where a str is wanted (PyCharm before 2026.1)', async () => {
+        await open('wrongtypes.py');
+        await until((f) => f.some((x) => x.startsWith('6: ')), 'the union report');
+        try {
+            await page.evaluate(`window.pymagic.changeSetting({ strictUnions: false })`);
+            const found = await until((f) => f.some((x) => x.startsWith('5: ')) && !f.some((x) => x.startsWith('6: ')), 'the union report gone');
+            assert.ok(found.some((x) => x.startsWith("5: Expected type 'str', got 'int'")), found.join(' | '));
+        }
+        finally {
+            await page.evaluate(`window.pymagic.changeSetting({ strictUnions: true })`);
+        }
+        await until((f) => f.some((x) => x.startsWith('6: ')), 'the union report back');
+    });
+});
+
 describe('Settings > Plugins', () => {
     const openPlugins = async () => {
         await page.evaluate(`${$('b-gear')}.click()`);

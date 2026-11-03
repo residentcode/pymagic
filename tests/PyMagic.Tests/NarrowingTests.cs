@@ -100,8 +100,8 @@ public class NarrowingTests
         const string cls = "class A:\n    v: Optional[int]\n    w: Optional[str]\n";
         Assert.Equal("int", T(cls + "    def m(self):\n        if self.v is not None:\n            self.v"));
         Assert.Equal("int", T(cls + "    def m(self):\n        if self.v is None:\n            return\n        self.v"));
-        // assigning to the member forgets what we knew
-        Same("int | None", T(cls + "    def m(self):\n        if self.v is not None:\n            self.v = g()\n            self.v").Replace("Unknown", "None"));
+        // assigning to the member forgets what we knew: it is what was assigned, here a call nothing is known about (as for a name)
+        Assert.Equal("Unknown", T(cls + "    def m(self):\n        if self.v is not None:\n            self.v = g()\n            self.v"));
         // other members are unaffected
         Same("str | None", T(cls + "    def m(self):\n        if self.v is not None:\n            self.w"));
         // a member of a narrowed value

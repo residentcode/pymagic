@@ -56,6 +56,32 @@ public class TypedDictMethodTests
         Assert.True(Last(Head + "def f(m: Meta, k: str):\n    m.setdefault(k, Item())\n") != "Item");
     }
 
+    const string Union = "from typing import TypedDict, Literal, Required\n\n\nclass A(TypedDict, total=False):\n    type: Required[Literal['a']]\n    ret: str\n\n\nclass B(TypedDict, total=False):\n    type: Required[Literal['b']]\n    ret: int\n\n\nclass C(TypedDict, total=False):\n    type: Required[Literal['c']]\n\n\n";
+
+    [Fact]
+    public void GetOnAUnionOfTypedDictsGivesEachKeysType()
+    {
+        // pydantic's json_schema.py: `schema.get('return_schema')` on a union of core schemas was the stubs' object
+        Assert.Equal("str | None | int", Last(Union + "def f(s: A | B):\n    s.get('ret')\n"));
+        // one without the key may hold it anyway: its value is not known, and nothing is reported
+        Assert.Equal("str | None | Unknown", Last(Union + "def f(s: A | C):\n    s.get('ret')\n"));
+        Assert.Equal(0, Found(Union + "def need(x: str) -> None: ...\n\n\ndef f(s: A | C) -> None:\n    if (r := s.get('ret')) is not None:\n        need(r)\n").Count);
+        // a key none of them has is left to the stubs
+        Assert.True(Last(Union + "def f(s: A | B):\n    s.get('nothing')\n").Contains("object"));
+    }
+
+    [Fact]
+    public void AComparedLiteralKeyNarrowsAUnionOfTypedDicts()
+    {
+        Assert.Equal("A", Last(Union + "def f(s: A | B | C):\n    if s['type'] == 'a':\n        s\n"));
+        Assert.Equal("B | C", Last(Union + "def f(s: A | B | C):\n    if s['type'] != 'a':\n        s\n"));
+        Assert.Equal("B", Last(Union + "def f(s: A | B):\n    if 'a' == s['type']:\n        return\n    s\n"));
+        // pydantic's types.py: `if s['type'] != 'union': s = union_schema(...)`, then s is the one kind
+        Assert.Equal("A", Last(Union + "def f(s: A | B | C):\n    if s['type'] != 'a':\n        s = A(type='a')\n    s\n"));
+        // a key whose type is not a literal says nothing
+        Assert.Equal("A | B", Last(Union + "def f(s: A | B):\n    if s['ret'] == 'x':\n        s\n"));
+    }
+
     [Fact]
     public void GetIsUnchanged()
     {

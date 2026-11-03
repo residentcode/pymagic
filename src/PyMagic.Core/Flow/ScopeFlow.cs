@@ -52,6 +52,7 @@ public sealed class ScopeFlow
     readonly Dictionary<NameExpr, List<Instruction>> _allReads = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<CompExpr, List<Instruction>> _markers = new(ReferenceEqualityComparer.Instance);
     readonly HashSet<(Symbol, string)> _assertionKeys = new();
+    readonly HashSet<(Symbol, string)> _memberWriteKeys = new();
     readonly Dictionary<Symbol, int> _unboundId = new();
     readonly Dictionary<Symbol, Bits> _symbolMask = new();
     readonly List<(Symbol Sym, Declaration? Decl)> _defs = new(); // index = def id; Decl null = unbound
@@ -101,6 +102,7 @@ public sealed class ScopeFlow
                 ms.Add(ins);
             }
             if (ins.Kind == InstrKind.Assert && ins.Symbol != null) _assertionKeys.Add((ins.Symbol, ins.Path));
+            if (ins.Kind == InstrKind.Write && ins.Symbol != null && ins.Path.Length > 0) _memberWriteKeys.Add((ins.Symbol, ins.Path));
             if (ins.Kind is not (InstrKind.Read or InstrKind.Write or InstrKind.Delete) || !Owned(ins.Symbol) || ins.Path.Length > 0) continue;
             var s = ins.Symbol!;
             if (!_unboundId.ContainsKey(s))
@@ -173,6 +175,9 @@ public sealed class ScopeFlow
 
     /// <summary>Whether a condition somewhere in this scope narrows the given reference (symbol and member path).</summary>
     public bool HasAssertions(Symbol sym, string path) => _assertionKeys.Contains((sym, path));
+
+    /// <summary>Whether this scope assigns the member itself (`self.x = ...` for the path "x"), which gives it the value's type after.</summary>
+    public bool HasMemberWrites(Symbol sym, string path) => _memberWriteKeys.Contains((sym, path));
 
     /// <summary>Reaching definitions for a read of a name in this scope; null if the name is not owned by this scope.</summary>
     public ReachingResult? ReachingFor(NameExpr use)

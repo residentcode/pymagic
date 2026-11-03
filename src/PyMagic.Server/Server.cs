@@ -360,6 +360,14 @@ public sealed class Server
                 _service.ResetInspections();
                 RepublishAll();
                 return null;
+            case "pymagic/setTypeOptions":
+                // Settings, "Check every member of a union": PyCharm 2026.1's strict unions, or its earlier lenient rule
+                if (p?["strictUnions"]?.GetValue<bool>() is { } strict && _service.LenientUnions == strict)
+                {
+                    _service.LenientUnions = !strict;
+                    RepublishAll();
+                }
+                return null;
             case "pymagic/setFormatDefaults":
                 // the page's quote setting: the quotes strings get when the project's configuration does not name them
                 _service.DefaultQuotes = p?["quotes"]?.GetValue<string>() switch { "single" => Formatting.QuoteStyle.Single, "preserve" => Formatting.QuoteStyle.Preserve, "double" => Formatting.QuoteStyle.Double, _ => null };

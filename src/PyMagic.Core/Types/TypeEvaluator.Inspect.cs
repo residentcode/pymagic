@@ -31,8 +31,17 @@ public sealed partial class TypeEvaluator
                     break;
             }
         }
+        diags.RemoveAll(d => SilencedByTypeIgnore(d.Message) && TypeIgnored(m.Source, d.Start));
         return diags;
     }
+
+    /// <summary>The findings a `# type: ignore` silences, as PyCharm's unresolved references, argument list, type checker, Final and TypedDict inspections.</summary>
+    static bool SilencedByTypeIgnore(string message) =>
+        message.StartsWith("Cannot find reference") || message.StartsWith("Unresolved")
+        || message.StartsWith("Expected type '") || message.StartsWith("Unexpected type(s)")
+        || message.StartsWith("Unexpected argument") || message.StartsWith("Multiple values for parameter") || message.EndsWith(" unfilled")
+        || message.StartsWith("No overload of") || message.EndsWith("takes no arguments")
+        || message.StartsWith("Cannot assign to final") || message.StartsWith("Key '");
 
     void InspectCall(ModuleInfo m, CallExpr call, bool includeTypes, List<Diagnostic> diags)
     {
@@ -50,8 +59,38 @@ public sealed partial class TypeEvaluator
             var at = p.At ?? call;
             int start = at.Start, len = Math.Max(at.End - at.Start, 1);
             if (ReferenceEquals(at, call)) { start = call.Func.Start; len = Math.Max(call.Func.End - call.Func.Start, 1); }
+            if (p.Kind == CallProblemKind.Type && TypeIgnored(m.Source, start)) continue;
             diags.Add(new Diagnostic(start, len, p.Message));
         }
+    }
+
+    static readonly System.Text.RegularExpressions.Regex TypeIgnore = new(@"#\s*type:\s*ignore\b", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// A `# type: ignore` comment on the line (`# type: ignore[arg-type]` too: as in PyCharm, the codes do not narrow it), or one at the top of
+    /// the file before any code: PyCharm's type checker reports nothing there.
+    /// </summary>
+    public static bool TypeIgnored(string text, int offset)
+    {
+        offset = Math.Clamp(offset, 0, text.Length);
+        int ls = offset;
+        while (ls > 0 && text[ls - 1] != '\n' && text[ls - 1] != '\r') ls--;
+        int le = offset;
+        while (le < text.Length && text[le] != '\n' && text[le] != '\r') le++;
+        int hash = text.IndexOf('#', ls, le - ls);
+        if (hash >= 0 && TypeIgnore.Match(text, hash) is { Success: true } onLine && onLine.Index < le) return true;
+        // the top of the file: blank lines and comments before the first statement
+        int i = 0;
+        while (i < text.Length)
+        {
+            int e = i;
+            while (e < text.Length && text[e] != '\n') e++;
+            var line = text[i..e].Trim();
+            if (line.Length > 0 && line[0] != '#') return false;
+            if (TypeIgnore.Match(line) is { Success: true, Index: 0 }) return true;
+            i = e + 1;
+        }
+        return false;
     }
 
     void InspectAttribute(ModuleInfo m, AttributeExpr attr, List<Diagnostic> diags, bool includeNone)

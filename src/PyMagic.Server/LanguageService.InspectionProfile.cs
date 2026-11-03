@@ -14,7 +14,7 @@ public sealed partial class LanguageService
         ("missing-attribute", "Python", "Unresolved attribute reference", "An attribute the type of the value does not have.", "warning"),
         ("unbound-local", "Python", "Local variable referenced before assignment", "A local that may not be assigned yet when it is read.", "warning"),
         ("call-arguments", "Python", "Wrong arguments in a call", "Too many or too few arguments, an unknown keyword, a parameter given twice.", "warning"),
-        ("argument-type", "Python", "Argument of the wrong type", "An argument the parameter's annotation does not accept (needs the type mismatch option).", "warning"),
+        ("argument-type", "Python", "Incorrect type", "An argument the parameter's annotation does not accept (\"Expected type 'int', got 'str' instead\"); a `# type: ignore` on the line silences it.", "weak"),
         ("not-callable", "Python", "Object is not callable", "A call of a module or of an instance that has no __call__.", "warning"),
         ("unreachable", "Python", "Unreachable code", "Statements no path of the program reaches.", "hint"),
         ("unresolved-import", "Python", "Unresolved import", "A module that cannot be found.", "warning"),

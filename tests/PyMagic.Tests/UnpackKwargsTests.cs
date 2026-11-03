@@ -31,6 +31,20 @@ public class UnpackKwargsTests
     }
 
     [Fact]
+    public void InTheBodyKwargsIsTheTypedDict()
+    {
+        // requests: `kwargs.setdefault("allow_redirects", False)` in `def head(url, **kwargs: Unpack[RequestKwargs])` was "Expected type 'RequestKwargs', got 'bool'"
+        var src = Head + "def h(**kwargs: Unpack[Opts]) -> None:\n    kwargs.setdefault('repr', False)\n    kwargs.get('le')\n";
+        Assert.Equal(0, Found(src).Count);
+        var ws = new Workspace();
+        var m = ws.AddModule("main", src);
+        var last = PyMagic.Core.Syntax.AstChildren.Descendants(m.Ast).OfType<PyMagic.Core.Syntax.ExprStmt>().Last();
+        Assert.Equal("int | None", ws.Evaluator.TypeOf(m, last.Value).ToString());
+        // the name itself is the TypedDict, not dict[str, Opts]
+        Assert.Equal("Opts", ws.Evaluator.TypeOf(m, PyMagic.Core.Syntax.AstChildren.Descendants(m.Ast).OfType<PyMagic.Core.Syntax.NameExpr>().Last(n => n.Name == "kwargs")).ToString());
+    }
+
+    [Fact]
     public void RequiredKeysMustBeGiven()
     {
         var f = Found(Head + "g(1)\ng(1, name='n')\ng(1, name='n', size=2)\n");

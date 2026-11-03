@@ -529,7 +529,7 @@ public sealed partial class TypeEvaluator
         if (receiver is ClassType modelReceiver && DjangoBoundMember(hit, modelReceiver, receiverIsInstance) is { } fromDjango) return fromDjango;
         PyType? classLevel = hit.ClassSymbol != null ? TypeOfSymbol(hit.ClassSymbol) : null;
         if (classLevel != null && hit.ClassSymbol != null && IsStrongSymbol(hit.Owner.Info.Module, hit.ClassSymbol))
-            return BindMember(classLevel, hit.Owner, receiver, receiverIsInstance);
+            return ThroughDescriptor(BindMember(classLevel, hit.Owner, receiver, receiverIsInstance), hit.ClassSymbol, receiver, receiverIsInstance);
 
         // `self.x: T = ...` declares the attribute: other assignments are checked against T, not unioned into it
         var annotated = hit.InstanceAttrs.Where(ia => ia.Module.ParentOf(ia.Target) is AnnAssignStmt an && ReferenceEquals(an.Target, ia.Target)).ToList();
@@ -537,10 +537,25 @@ public sealed partial class TypeEvaluator
             return PyType.Union(annotated.Select(ia => BindMember(TypeOfTarget(ia.Module, ia.Target), hit.Owner, receiver, receiverIsInstance, bindFunctions: false)).ToList());
 
         var parts = new List<PyType>();
-        if (classLevel != null) parts.Add(BindMember(classLevel, hit.Owner, receiver, receiverIsInstance));
+        if (classLevel != null) parts.Add(ThroughDescriptor(BindMember(classLevel, hit.Owner, receiver, receiverIsInstance), hit.ClassSymbol!, receiver, receiverIsInstance));
         foreach (var ia in hit.InstanceAttrs)
             parts.Add(BindMember(TypeOfTarget(ia.Module, ia.Target), hit.Owner, receiver, receiverIsInstance, bindFunctions: false));
         return parts.Count == 0 ? PyType.Unknown : PyType.Union(parts);
+    }
+
+    /// <summary>
+    /// A class attribute whose value is a descriptor (a `ctypes` field, an ORM column): reading it through the class or an instance gives what its
+    /// `__get__` returns for that access (`instance` the receiver, or None through the class), as in PyCharm. Only variables of the class body count:
+    /// functions, properties and nested classes are bound as before.
+    /// </summary>
+    PyType ThroughDescriptor(PyType value, Symbol symbol, PyType receiver, bool receiverIsInstance)
+    {
+        if (receiver is not ClassType rc || !symbol.Declarations.All(d => d.Kind == DeclKind.Variable)) return value;
+        if (!value.Members.Any(v => v is ClassType { IsInstance: true } vc && !IsNone(vc) && FindMember(vc, "__get__", true, null, out _) != null)) return value;
+        var args = new PyType[] { receiverIsInstance ? rc : NoneInstance, rc.AsClassObject() };
+        return MapMembers(value, v => v is ClassType { IsInstance: true } vc && !IsNone(vc) && FindMember(vc, "__get__", true, null, out _) != null
+            ? CallMethod(vc, "__get__", args, out _) ?? v
+            : v);
     }
 
     /// <summary>An overload whose first parameter has no annotation, or one the receiver is assignable to.</summary>

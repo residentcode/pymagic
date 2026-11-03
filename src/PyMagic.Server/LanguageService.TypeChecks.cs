@@ -28,7 +28,8 @@ public sealed partial class LanguageService
                 _ => Array.Empty<Finding>(),
             };
             foreach (var f in findings)
-                if (!Suppressed(m.Source, f)) yield return AsDiag(f);
+                // a returned or assigned value of the wrong type is PyCharm's type checker too, which `# type: ignore` silences
+                if (!Suppressed(m.Source, f) && !(f.Code is "return-type" or "assignment-type" && TypeEvaluator.TypeIgnored(m.Source, f.Start))) yield return AsDiag(f);
         }
     }
 

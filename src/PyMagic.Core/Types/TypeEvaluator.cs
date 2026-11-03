@@ -286,7 +286,8 @@ public sealed partial class TypeEvaluator
             case LambdaExpr l: return new FunctionType(LambdaOf(m, l), false);
             case IfExpr i: return PyType.Union(TypeOf(m, i.Body), TypeOf(m, i.Orelse));
 
-            case BinaryExpr { Op: "and" } b: return PyType.Union(TypeOf(m, b.Left), TypeOf(m, b.Right));
+            // `a and b` is a where a is falsy, else b: `flag and x` with a bool flag is False or x
+            case BinaryExpr { Op: "and" } b: return PyType.Union(Truthiness(TypeOf(m, b.Left), false), TypeOf(m, b.Right));
             case BinaryExpr { Op: "or" } b: return PyType.Union(WithoutNone(TypeOf(m, b.Left)), TypeOf(m, b.Right));
             case BinaryExpr b: return BinaryOp(TypeOf(m, b.Left), b.Op, TypeOf(m, b.Right));
 
@@ -538,10 +539,15 @@ public sealed partial class TypeEvaluator
             // `*args: *Ts` is the tuple of the types Ts stands for
             ParamKind.VarArgs when t is TypeVarTupleType && BuiltinClass("tuple") is { } tuple => TupleOf(tuple, new[] { t }),
             ParamKind.VarArgs => TupleHomogeneous(p.Annotation != null ? t : PyType.Unknown),
+            // `**kwargs: Unpack[Options]` is the TypedDict itself in the body (its keys are the keywords), not a dict of them
+            ParamKind.KwArgs when IsUnpackAnnotation(p.Annotation) && t is ClassType { Info: var td } && TypedDictFieldsOf(td) != null => t,
             ParamKind.KwArgs => Inst("dict", Inst("str"), p.Annotation != null ? t : PyType.Unknown),
             _ => t,
         };
     }
+
+    static bool IsUnpackAnnotation(Expr? annotation) =>
+        annotation is SubscriptExpr { Value: NameExpr { Name: "Unpack" } or AttributeExpr { Attr: "Unpack" } };
 
     static bool IsReceiverName(string name) =>
         name is "self" or "cls" or "mcs" or "mcls" or "metacls" or "klass" or "meta" or "this" or "_self" or "_cls";
@@ -583,7 +589,9 @@ public sealed partial class TypeEvaluator
                     return ConstantLiteral(an.Value) ?? TypeOf(m, an.Value);
                 // `M: TypeAlias = Literal["r", "w"]` is the alias of its value, as `M = Literal["r", "w"]` is
                 if (an.Value != null && an.Annotation is NameExpr { Name: "TypeAlias" } or AttributeExpr { Attr: "TypeAlias" })
-                    return an.Value is BinaryExpr { Op: "|" } ? AnnotationToValue(Annotation(m, an.Value, null)) : TypeOf(m, an.Value);
+                    // a quoted value (`SerSchema: TypeAlias = 'A | B'`, as pydantic_core spells its unions) is read as the annotation it spells
+                    return an.Value is BinaryExpr { Op: "|" } or ConstExpr { Kind: ConstKind.Str, IsFString: false }
+                        ? AnnotationToValue(Annotation(m, an.Value, null)) : TypeOf(m, an.Value);
                 return AnnotationType(m, an.Annotation);
 
             case ForStmt f when ReferenceEquals(f.Target, child):

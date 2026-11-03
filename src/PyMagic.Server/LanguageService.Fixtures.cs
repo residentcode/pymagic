@@ -170,6 +170,7 @@ public sealed partial class LanguageService
     {
         var fixtures = new FixtureContext(SourceRoots, PytestPluginModules);
         var ws = new Workspace(WorkspaceOptionsNow((w, m, p) => p.Default == null ? fixtures.Resolver.TypeOfParameter(w, m, p) ?? AdminParameterType(w, m, p) ?? SerializerParameterType(w, m, p) : DependencyParameterType(w, m, p)), _cache);
+        ws.Evaluator.LenientUnions = LenientUnions;
         _fixtureContexts.Add(ws, fixtures);
         return (ws, fixtures);
     }

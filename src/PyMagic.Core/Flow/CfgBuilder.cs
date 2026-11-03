@@ -167,8 +167,9 @@ internal sealed class CfgBuilder
                     reference = Referent(tc.Args[0].Value);
                     return true;
                 }
-                // x[0] == "a", "a" != x[-1]: a union of tuples narrowed by one item
-                if ((left is ConstExpr ? right : left) is SubscriptExpr { Index: ConstExpr { Kind: ConstKind.Int } or UnaryExpr { Op: "-", Operand: ConstExpr { Kind: ConstKind.Int } } } item
+                // x[0] == "a", "a" != x[-1]: a union of tuples narrowed by one item; x["type"] == "a": a union of TypedDicts by a key
+                if ((left is ConstExpr ? right : left) is SubscriptExpr { Index: ConstExpr { Kind: ConstKind.Int } or ConstExpr { Kind: ConstKind.Str, IsFString: false }
+                        or UnaryExpr { Op: "-", Operand: ConstExpr { Kind: ConstKind.Int } } } item
                     && IsChain(item.Value))
                 {
                     reference = Referent(item.Value);

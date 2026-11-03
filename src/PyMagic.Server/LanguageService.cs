@@ -113,8 +113,20 @@ public sealed partial class LanguageService
         Environment = interpreter == null ? PythonEnvironment.Default : new PythonEnvironment(interpreter.Major, interpreter.Minor, interpreter.Platform);
         Invalidate();
     }
-    /// <summary>Report argument-type mismatches too (noisier than the default arity/keyword checks).</summary>
-    public bool ReportTypeMismatches { get; set; }
+    /// <summary>Report a call's arguments of the wrong type (PyCharm's *Incorrect type*, on by default there too); Settings > Inspections can turn it off.</summary>
+    public bool ReportTypeMismatches { get; set; } = true;
+
+    bool _lenientUnions;
+
+    /// <summary>
+    /// PyCharm's union rule before 2026.1 (Settings, "Check every member of a union" off): a union goes where one of its members does.
+    /// The evaluator keeps the types it worked out, so a change builds the analysis again.
+    /// </summary>
+    public bool LenientUnions
+    {
+        get => _lenientUnions;
+        set { if (_lenientUnions != value) { _lenientUnions = value; Invalidate(); } }
+    }
 
     public IEnumerable<string> OpenUris => _docs.Keys;
     public int? VersionOf(string uri) => _docs.TryGetValue(uri, out var d) ? d.Version : _templateDocs.TryGetValue(uri, out var t) ? t.Version : _featureDocs.TryGetValue(uri, out var g) ? g.Version : null;
@@ -421,7 +433,7 @@ public sealed partial class LanguageService
         : message.StartsWith("Cannot assign to final") ? "final-reassignment"
         : message.StartsWith("Exceptions must derive") ? "exception-inherit"
         : message.StartsWith("Property '") && message.EndsWith("cannot be set") ? "property-access"
-        : message.StartsWith("Expected type '") ? "argument-type"
+        : message.StartsWith("Expected type '") || message.StartsWith("Unexpected type(s): ") ? "argument-type"
         : message.Contains("is not callable") ? "not-callable"
         : message.StartsWith("Unexpected argument") || message.StartsWith("Multiple values for parameter") || message.EndsWith(" unfilled")
           || message.StartsWith("No overload of") || message.EndsWith("takes no arguments") ? "call-arguments"
@@ -448,8 +460,19 @@ public sealed partial class LanguageService
             r.Add(new Diag(new Diagnostic(u.Start, Math.Max(u.End - u.Start, 1), $"Unused import '{u.Name}'"),
                 Severity.Hint, new[] { DiagnosticTag.Unnecessary }, "unused-import"));
         r.AddRange(InspectionDiagnostics(m, ev));
+        r.RemoveAll(x => x.Code != null && TypeIgnoreSilences.Contains(x.Code) && TypeEvaluator.TypeIgnored(m.Source, x.D.Start));
         return ApplyProfile(r);
     }
+
+    /// <summary>
+    /// What a `# type: ignore` silences on its line (or in the whole file, at its top), as in PyCharm: its unresolved references, argument
+    /// lists, type checker, redeclarations, Final, TypedDict and type hint inspections; style and other checks still report.
+    /// </summary>
+    static readonly HashSet<string> TypeIgnoreSilences = new(StringComparer.Ordinal)
+    {
+        "unresolved-reference", "missing-attribute", "unresolved-import", "unresolved-import-name", "call-arguments", "argument-type",
+        "return-type", "assignment-type", "unsupported-operand", "redeclared", "final-misuse", "final-reassignment", "typeddict-keys", "type-hints",
+    };
 
     // ------------------------------------------------------------ node lookup
 

@@ -41,6 +41,13 @@ public sealed partial class TypeEvaluator
         public bool Exhausted => _steps > Budget;
         const int Budget = 30_000;
 
+        /// <summary>
+        /// Starts a new question to the walker (the reads of one reference): the budget is for each, not for the walker's life, so a
+        /// long function's later reads are narrowed too (yaml's emitter: `if self.encoding:` worked for the first few uses only).
+        /// A question asked from inside a walk of this walker goes on with the steps already taken.
+        /// </summary>
+        public void NewQuestion() { if (_active.Count == 0) _steps = 0; }
+
         public FlowWalker(TypeEvaluator ev, ModuleInfo m, ScopeFlow flow, Symbol sym, string path, PyType entry, bool enclosed)
         {
             _ev = ev; _m = m; _flow = flow; _sym = sym; _path = path;
@@ -78,14 +85,18 @@ public sealed partial class TypeEvaluator
                     {
                         if (p.Declaration == null) return _declared ?? PyType.Unknown;
                         if (_declared == null) return _ev.TypeOfDeclaration(_symModule, p.Declaration);
+                        // `value: Any = text` asks for no checks on the name: it stays Any whatever is assigned (as in mypy)
+                        if (_declared is UnknownType { Explicit: true }) return _declared;
                         // a declared variable takes the type of the value assigned to it, if that fits and is fully known
                         var assigned = _ev.AssignedType(_symModule, p.Declaration);
                         // a value nothing is known about (an unresolved call) says nothing against the declaration: no reports from it
                         if (assigned is UnknownType { Explicit: false, FromCycle: false }) return assigned;
                         // a container of unknown items (`args = [value, *args]`) is still that container, with the declared items
                         if (assigned != null && ContainsDynamic(assigned)) assigned = _ev.WithDeclaredArgs(assigned, _declared);
-                        return assigned != null && _ev.IsAssignable(_declared, assigned) ? assigned : _declared;
+                        return assigned != null && _ev.IsAssignableEachMember(_declared, assigned) ? assigned : _declared;
                     }
+                    // `self.x = value` for the member itself takes the value's type, as a name does (PyCharm narrows `self.x` so too)
+                    if (p.Path == _path && MemberAssigned(p) is { } value) return value;
                     return _entry; // the member (or its owner) was reassigned: back to the unnarrowed type
                 case InstrKind.Delete:
                     return _path.Length == 0 ? PyType.Never : _entry;
@@ -93,6 +104,33 @@ public sealed partial class TypeEvaluator
                     return _ev.Narrow(_m, p, Before(p));
                 default: return Before(p);
             }
+        }
+
+        /// <summary>
+        /// The type a plain assignment to the member gives it (`self.x = value`, `self.x: T = value`), when it fits the member's
+        /// unnarrowed type; null for anything else (a tuple target, `+=`, a value that does not fit), which leaves the unnarrowed type.
+        /// </summary>
+        PyType? MemberAssigned(Instruction p)
+        {
+            if (p.Element is not AttributeExpr target) return null;
+            var value = _m.ParentOf(target) switch
+            {
+                AssignStmt a when a.Targets.Any(t => ReferenceEquals(t, target)) => a.Value,
+                AnnAssignStmt an when ReferenceEquals(an.Target, target) => an.Value,
+                _ => null,
+            };
+            if (value == null) return null;
+            var assigned = _ev.TypeOf(_m, value);
+            // a value nothing is known about (an unresolved call, a def without annotations) says nothing against the member, as
+            // for a name: no reports from it (yaml's `self.prepared_anchor = self.prepare_anchor(...)` after `is None`)
+            if (assigned is UnknownType { Explicit: false, FromCycle: false }) return assigned;
+            if (ContainsDynamic(assigned))
+            {
+                // an Any or a value of unknown shape says nothing about the member: its unnarrowed type stays
+                if (_ev.WithDeclaredArgs(assigned, _entry) is not { } solved) return null;
+                assigned = solved;
+            }
+            return _ev.IsAssignableEachMember(_entry, assigned) ? assigned : null;
         }
 
         /// <summary>
@@ -118,6 +156,8 @@ public sealed partial class TypeEvaluator
         {
             var cur = Skip(at);
             if (_memo.TryGetValue(cur, out var hit)) return hit;
+            if (_active.Count == 0) _cutMemo.Clear();
+            else if (_cutMemo.TryGetValue(cur, out var cutHit)) return cutHit;
             if (cur.Kind == InstrKind.Entry) return _entry;
             if (++_steps > Budget) return _entry;
 
@@ -134,8 +174,14 @@ public sealed partial class TypeEvaluator
 
             // results computed while a cycle was cut (here or in the evaluator) are incomplete: do not remember them
             if (_open.Count == 0 && _ev._open.Count == 0) _memo[cur] = result;
+            // they are kept for the rest of this one walk, though: the same cut is met again from every path, and walking a loop
+            // with many ifs path by path took exponentially long (yaml's emitter ran out of budget for each `if self.encoding:`)
+            else _cutMemo[cur] = result;
             return result;
         }
+
+        /// <summary>Results computed while a cycle was cut, for the walk from one read only (cleared when the next one starts).</summary>
+        readonly Dictionary<Instruction, PyType> _cutMemo = new();
 
         readonly Dictionary<Instruction, Instruction> _skip = new();
 
@@ -175,10 +221,14 @@ public sealed partial class TypeEvaluator
 
     /// <summary>
     /// An instance of a generic class whose arguments are partly unknown, with those arguments solved from a declaration
-    /// it is assigned to (list[Unknown] declared Sequence[str] is list[str]); null for any other dynamic type.
+    /// it is assigned to (list[Unknown] declared Sequence[str] is list[str]); null for any other dynamic type. A union is taken
+    /// member by member, and its Any members stay (`context or {}` is the context's dict or a dict of the declared items,
+    /// `sys.stdin` is `TextIO | MaybeNone`).
     /// </summary>
     PyType? WithDeclaredArgs(PyType assigned, PyType declared)
     {
+        if (assigned is UnionType u)
+            return PyType.Union(u.MemberList.Select(x => ContainsDynamic(x) ? WithDeclaredArgs(x, declared) ?? x : x));
         if (assigned is not ClassType { IsInstance: true, TupleItems: null, Args.Count: > 0 } c || IsClassOfAny(c)) return null;
         var ps = ClassDataOf(c.Info).TypeParams;
         if (ps.Count != c.Args.Count) return null;
@@ -231,6 +281,9 @@ public sealed partial class TypeEvaluator
         // Literal[""] and Literal[0] are always falsy, other literals always truthy
         if (t.Members.Any(x => x is ClassType { IsInstance: true, LiteralValue: not null }))
             t = PyType.Union(t.Members.Where(x => x is not ClassType { IsInstance: true, LiteralValue: { } v } || IsTruthyLiteral(v) == truthy));
+        // a bool is True where it is truthy and False where it is falsy (`flag: bool | str`, `if not flag: return` leaves a str or True)
+        if (t.Members.Any(IsPlainBool))
+            t = PyType.Union(t.Members.Select(x => IsPlainBool(x) ? ((ClassType)x) with { LiteralValue = truthy } : x));
         if (truthy) return WithoutNone(t);
         // a falsy value: None, or an instance of a class that can be falsy (defines __bool__ or __len__)
         return PyType.Union(t.Members.Where(x => x switch
@@ -240,6 +293,8 @@ public sealed partial class TypeEvaluator
             _ => false,   // class objects, functions and modules are always truthy
         }));
     }
+
+    static bool IsPlainBool(PyType t) => t is ClassType { IsInstance: true, LiteralValue: null, Info: { Name: "bool", Module.Name: "builtins" } };
 
     bool CanBeFalsy(ClassType c)
     {
@@ -340,6 +395,7 @@ public sealed partial class TypeEvaluator
         bool owned = ReferenceEquals(sym.Scope, r.UseScope);
         var entry = owned ? PyType.Never : outer ?? TypeOfSymbol(sym);
         var w = Walker(m, flow, sym, "", entry, !owned && outer != null);
+        w.NewQuestion();
         var t = PyType.Union(reads.Select(w.Before));
         if (w.Exhausted) return null;   // too tangled to follow: use the plain reaching-definitions answer
         return t is NeverType ? PyType.Unknown : t;
@@ -354,11 +410,12 @@ public sealed partial class TypeEvaluator
         var flow = m.Flow.For(r.UseScope);
         if (flow == null) return baseline;
         var outer = EnclosingEntry(m, r.UseScope, r.Symbol, path, baseline, false);
-        if (outer == null && !flow.HasAssertions(r.Symbol, path)) return baseline;
+        if (outer == null && !flow.HasAssertions(r.Symbol, path) && !flow.HasMemberWrites(r.Symbol, path)) return baseline;
         var reads = flow.ReadInstructions(root);
         if (reads == null || reads.Count == 0) return baseline;
 
         var w = Walker(m, flow, r.Symbol, path, outer ?? baseline);
+        w.NewQuestion();
         var t = PyType.Union(reads.Select(w.Before));
         if (w.Exhausted) return baseline;
         // nothing left (`isinstance(self.reason, bytes)` on a `str` attribute): unknown, as for names, not the declared type
@@ -385,6 +442,7 @@ public sealed partial class TypeEvaluator
         bool owned = path.Length == 0 && ReferenceEquals(sym.Scope, scope.Parent);
         var entry = owned ? PyType.Never : outer ?? baseline ?? TypeOfSymbol(sym);
         var w = Walker(m, flow, sym, path, entry, !owned && outer != null);
+        w.NewQuestion();
         var t = PyType.Union(markers.Select(w.Before));
         return w.Exhausted ? outer : t;
     }

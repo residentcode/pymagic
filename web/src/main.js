@@ -1312,6 +1312,16 @@ async function main() {
     };
     sendQuotes();
     onSettings(sendQuotes);
+    // how a union argument is checked (Settings, Code vision and hints: Check every member of a union)
+    let strictSent = null;
+    const sendTypeOptions = () => {
+        if (settings().strictUnions === strictSent)
+            return;
+        strictSent = settings().strictUnions;
+        void lsp.request('pymagic/setTypeOptions', { strictUnions: strictSent });
+    };
+    sendTypeOptions();
+    onSettings(sendTypeOptions);
     registerProviders();
     void refreshFormatters();
     const files = await (await fetch('/api/files')).json();

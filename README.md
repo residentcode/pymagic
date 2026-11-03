@@ -162,7 +162,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Not seen on screen: the sidebar picture (item 331), shown only on the finish page after an install and in the uninstaller; the folder page's refusal of a folder that is not PyMagic's (only its rule's tests and the silent installs ran).
 
 **Type engine** (ibnbolbna's area until 31 October 2026, ours from then on; what ibnbolbna did and left is in [docs/ibnbolbna-work.md](docs/ibnbolbna-work.md))
-- Found by item 344: an argument of the wrong type in a call (PyCharm's *Incorrect type*, on by default there) is never reported in the app: the server checks it only with its ReportTypeMismatches option, which the page never sets (it has been off since the first language server). Turned on, the library scan gives 94 more reports (PM_TYPE_MISMATCHES=1 in the harness), many of them false (an Optional not narrowed, a union of functions for a callable, ctypes fields), so the argument types have to be made right before it can be on.
+- Left by items 349 to 353 (arguments of the wrong type): with the check on, three of the library scan's reports are not sure: pydantic's json_schema.py:1521 (`len(d['k'])` after `isinstance(d['k'], list)`: a subscript with a constant key is not narrowed) and yaml's representer.py:324 and 330 (items of `(list(reduce) + [None] * 5)[:5]`). Overloads written in a .py file (not a stub) are not checked against their calls. A class's keyword arguments (`class A(B, flag=1)`) are not silenced by `# type: ignore`. A mapping pattern (`case {'type': 'a'}:`) does not narrow a union of TypedDicts, and `td.setdefault('k', value)` does not check the value against the key's type. The comment is found by text, so a string holding `# type: ignore` earlier on the line silences it too.
 - Left by item 348: PyCharm's *Method Series.to_list() is recommended* also checks polars; PyMagic checks pandas only (polars is not installed here to test against).
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
@@ -199,4 +199,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 348 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 353 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

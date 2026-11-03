@@ -63,6 +63,7 @@ const PAGES = [
         { key: 'grammar', label: 'Grammar check', type: 'bool', hint: "The sentences of comments, docstrings, Markdown and the commit message, checked by LanguageTool: a Java program that runs on this computer only. Turning it on offers to download it once (about 250 MB) and needs Java." },
         { key: 'grammarLanguage', label: 'Grammar language', type: 'choice', options: [['en-US', 'English (US)'], ['en-GB', 'English (UK)'], ['de-DE', 'German'], ['fr', 'French'], ['es', 'Spanish'], ['it', 'Italian'], ['pt-PT', 'Portuguese'], ['nl', 'Dutch']], hint: 'The language of the sentences.' },
         { key: 'spelling', label: 'Spell check', type: 'bool', hint: "Typos in comments, strings and names of Python files and in Markdown and text, checked by the spell checker of Windows; Alt+Enter on one suggests the word or saves it to the project's dictionary." },
+        { key: 'strictUnions', label: 'Check every member of a union', type: 'bool', hint: "As PyCharm 2026.1: a `str | None` passed where a str is wanted is reported unless something before it rules out None. Off: PyCharm's earlier rule, where a union goes when one of its members fits." },
         { key: 'hintTypes', label: 'Inferred types', type: 'bool', hint: 'The return type of a function without one, the type of a variable when its value does not show it, and each call of a method chain.' },
     ]],
     ['tabs', 'Editor tabs', [

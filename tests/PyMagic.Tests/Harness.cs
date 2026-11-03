@@ -139,7 +139,8 @@ public static class Program
                 string code = d.Code ?? "(none)";
                 counts[code] = counts.GetValueOrDefault(code) + 1;
                 if (!samples.TryGetValue(code, out var l)) samples[code] = l = new();
-                if (l.Count < 12) l.Add($"{name}.py:{d.Range.Start.Line + 1}  {d.Message}");
+                // PM_SAMPLE_ALL=1 keeps every one, to compare the lists before and after a change
+                if (l.Count < 12 || System.Environment.GetEnvironmentVariable("PM_SAMPLE_ALL") != null) l.Add($"{name}.py:{d.Range.Start.Line + 1}  {d.Message}");
             }
         foreach (var kv in counts.OrderByDescending(k => k.Value))
         {
@@ -162,6 +163,8 @@ public static class Program
             // PM_PLATFORM=linux checks Unix-only code the way it would run there (default: this machine)
             Environment = new PyMagic.Core.Semantics.PythonEnvironment(3, 13, System.Environment.GetEnvironmentVariable("PM_PLATFORM") ?? "win32"),
         });
+        // PM_LENIENT_UNIONS=1 takes a union where one of its members fits (PyCharm before 2026.1, TypeEvaluator.LenientUnions)
+        ws.Evaluator.LenientUnions = System.Environment.GetEnvironmentVariable("PM_LENIENT_UNIONS") != null;
         var counts = new Dictionary<string, int>();
         var raw = new Dictionary<string, int>();
         var samples = new Dictionary<string, List<string>>();

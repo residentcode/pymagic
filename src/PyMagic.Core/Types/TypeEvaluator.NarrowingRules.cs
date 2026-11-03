@@ -46,6 +46,9 @@ public sealed partial class TypeEvaluator
         // x[0] == "a", x[1] is None: the tuples whose item cannot be that go
         if (c.Left is SubscriptExpr ls && IsReferenceSide(m, ls.Value, assertion) && ConstIndex(ls.Index) is int li) return NarrowByItem(m, t, li, right, equal, op);
         if (right is SubscriptExpr rs && IsReferenceSide(m, rs.Value, assertion) && ConstIndex(rs.Index) is int ri) return NarrowByItem(m, t, ri, c.Left, equal, op);
+        // x["type"] == "union" on a union of TypedDicts: those whose key cannot be that go
+        if (c.Left is SubscriptExpr lk && IsReferenceSide(m, lk.Value, assertion) && StringValue(lk.Index) is string lkey) return NarrowByTypedDictKey(t, lkey, right, equal);
+        if (right is SubscriptExpr rk && IsReferenceSide(m, rk.Value, assertion) && StringValue(rk.Index) is string rkey) return NarrowByTypedDictKey(t, rkey, c.Left, equal);
 
         Expr other;
         if (IsReferenceSide(m, c.Left, assertion)) other = right;
@@ -87,6 +90,24 @@ public sealed partial class TypeEvaluator
             kept.Add(x);
         }
         return kept.Count == 0 ? PyType.Never : PyType.Union(kept);
+    }
+
+    /// <summary>
+    /// `x["type"] == "union"`, `x["type"] != "union"` on a union of TypedDicts that tell themselves apart by a literal key (pydantic's core schemas,
+    /// as mypy and pyright narrow them): a TypedDict whose declared key cannot be the literal on this branch goes; the others, and anything else, stay.
+    /// </summary>
+    PyType NarrowByTypedDictKey(PyType t, string key, Expr other, bool equal)
+    {
+        if (LiteralOf(other) is not { } literal || t is not UnionType) return t;
+        var kept = new List<PyType>();
+        foreach (var x in t.Members)
+        {
+            if (x is ClassType { IsInstance: true } c && TypedDictFieldsOf(c.Info) is { } fields
+                && fields.FirstOrDefault(f => f.Field.Name == key) is { Field: { } field, Required: true }
+                && field.Type is ClassType { LiteralValue: not null } or UnionType && NarrowLiteral(field.Type, literal, equal) is NeverType) continue;
+            kept.Add(x);
+        }
+        return kept.Count == 0 ? t : PyType.Union(kept);
     }
 
     static string Flipped(string op) => op switch { "<" => ">", "<=" => ">=", ">" => "<", ">=" => "<=", _ => op };

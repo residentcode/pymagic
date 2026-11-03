@@ -288,14 +288,40 @@ public sealed partial class TypeEvaluator
         if (call.Func is not AttributeExpr { Attr: "get" or "setdefault" or "pop" } ga || call.Args.Count is < 1 or > 2) return null;
         if (ga.Attr == "setdefault" && call.Args.Count != 2) return null;
         if (call.Args[0] is not { Name: null, Stars: 0, Value: var keyExpr } || StringValue(keyExpr) is not string key) return null;
-        if (TypeOf(m, ga.Value) is not ClassType { IsInstance: true } rc) return null;
+        var receiver = TypeOf(m, ga.Value);
+        if (receiver is UnionType ru) return TypedDictUnionGet(m, call, ga.Attr, key, ru);
+        if (receiver is not ClassType { IsInstance: true } rc) return null;
         var fields = TypedDictFieldsOf(rc.Info);
         var field = fields?.FirstOrDefault(f => f.Field.Name == key);
         if (field == null || field.Value.Field == null) return null;
-        var fieldType = field.Value.Field.Type;
-        if (ga.Attr == "setdefault") return fieldType;
+        return TypedDictKeyResult(m, call, ga.Attr, field.Value.Field.Type);
+    }
+
+    PyType TypedDictKeyResult(ModuleInfo m, CallExpr call, string method, PyType fieldType)
+    {
+        if (method == "setdefault") return fieldType;
         if (call.Args.Count == 2) return PyType.Union(fieldType, TypeOf(m, call.Args[1].Value));
-        return ga.Attr == "pop" ? fieldType : PyType.Union(fieldType, NoneInstance);
+        return method == "pop" ? fieldType : PyType.Union(fieldType, NoneInstance);
+    }
+
+    /// <summary>
+    /// The same on a union of TypedDicts (pydantic's CoreSchema) where some of them have the key: each one that has it gives its field's type, and
+    /// one that does not gives Unknown (a TypedDict may hold keys it does not list, so their value is not known: as pyright, and PyCharm does not report it).
+    /// Null when a member is not a TypedDict, or none has the key: the stubs' Mapping methods then answer.
+    /// </summary>
+    PyType? TypedDictUnionGet(ModuleInfo m, CallExpr call, string method, string key, UnionType receiver)
+    {
+        var parts = new List<PyType>();
+        bool anyHas = false;
+        foreach (var member in receiver.MemberList)
+        {
+            if (member is not ClassType { IsInstance: true } mc || TypedDictFieldsOf(mc.Info) is not { } fields) return null;
+            var field = fields.FirstOrDefault(f => f.Field.Name == key);
+            if (field.Field == null) { parts.Add(PyType.Unknown); continue; }
+            anyHas = true;
+            parts.Add(TypedDictKeyResult(m, call, method, field.Field.Type));
+        }
+        return anyHas ? PyType.Union(parts) : null;
     }
 
     /// <summary>TypeVar('T', str, bytes) or TypeVar('T', bound=X): the variable with its constraints or bound, read as types (where they stand: TypeVar runs).</summary>
@@ -669,11 +695,29 @@ public sealed partial class TypeEvaluator
         if (pick != null) pick = AmbiguousThroughUnknown(o, args, callNode, targets.Count, pick);
         // a union argument no overload takes as a whole: each member goes to the overload that takes it (os.path.basename(str | PathLike[str]))
         pick ??= SplitUnionArgument(o, args, callNode)
-                 ?? targets.FirstOrDefault(t => t.Problems.Count == 0)
-                 ?? targets.FirstOrDefault(t => t.Problems.All(p => p.Kind != CallProblemKind.Arity));
+                 ?? targets.FirstOrDefault(t => t.Problems.Count == 0);
         if (pick != null) return pick;
+        var typed = targets.Where(t => t.Problems.All(p => p.Kind != CallProblemKind.Arity)).ToList();
+        if (typed.Count >= 2) return UnexpectedTypes(typed, args, callNode);
+        if (typed.Count == 1) return typed[0];
         return new CallTarget(o, PyType.Unknown, Array.Empty<ArgumentMapping>(),
             new[] { new CallProblem(CallProblemKind.Arity, callNode, $"No overload of '{o.Overloads[0].Info.Name}' matches these arguments") });
+    }
+
+    /// <summary>
+    /// Two or more overloads take the arguments' count but none their types: as PyCharm, one report on the call with the arguments'
+    /// types and what each of those overloads wants ("Unexpected type(s): (str | None, list[int]) Possible type(s): (str, None)
+    /// (str, Any)"), not the first overload's own mismatches (which would say a `[]` given for `default` should be None). The call
+    /// still returns what the first of them does.
+    /// </summary>
+    static CallTarget UnexpectedTypes(List<CallTarget> typed, IReadOnlyList<ArgInfo> args, Node? callNode)
+    {
+        var given = args.Where(a => a.Node != null).ToList();
+        string Wanted(CallTarget t) => "(" + string.Join(", ", given.Select(a =>
+            t.Mappings.FirstOrDefault(x => ReferenceEquals(x.Arg, a.Node))?.Param?.Type.ToString() ?? "Any")) + ")";
+        string message = $"Unexpected type(s): ({string.Join(", ", given.Select(a => a.Type().ToString()))}) Possible type(s): "
+            + string.Join(" ", typed.Select(Wanted).Distinct());
+        return typed[0] with { Problems = new[] { new CallProblem(CallProblemKind.Type, callNode, message) } };
     }
 
     /// <summary>
@@ -1327,7 +1371,8 @@ public sealed partial class TypeEvaluator
         if (dest is TypeVarType or ParamSpecType or TypeVarTupleType || src is TypeVarType or ParamSpecType or TypeVarTupleType) return true;
         if (src is ClassType anyClass && IsClassOfAny(anyClass)) return true;   // type[Any] may be whichever class is wanted
         // (loops of their own, not lambdas: a lambda here would make every call allocate the parameters it captures)
-        if (src is UnionType su) return EachAssignable(dest, MergeInstancesOfOneClass(su.MemberList), fresh);
+        if (src is UnionType su && LenientUnions && _strictUnions == 0 && !su.MemberList.Any(x => x is ClassType { LiteralValue: not null } or ClassType { EnumMember: not null })) return LenientUnionAssignable(dest, su, fresh);
+        if (src is UnionType su2) return EachAssignable(dest, MergeInstancesOfOneClass(su2.MemberList), fresh);
         if (dest is UnionType du) return AnyAssignable(du.MemberList, src, fresh);
 
         switch (dest)
@@ -1401,6 +1446,35 @@ public sealed partial class TypeEvaluator
             }
             default: return true;
         }
+    }
+
+    /// <summary>
+    /// PyCharm's union rule before 2026.1, which its Advanced Settings still offer ("python.typing.strict.unions" off): a union goes
+    /// where one of its members does (`str | None` where a str is wanted). PyCharm 2026.1 and later want every member to fit, as
+    /// mypy does, and so does PyMagic unless this is set; a union with a literal member is checked member by member either way,
+    /// as in PyCharm (PyTypeChecker's "checking strictly separately until PY-24834"). Set it before the evaluator is used: types it
+    /// has worked out stay cached.
+    /// </summary>
+    public bool LenientUnions { get; set; }
+
+    int _strictUnions;
+
+    /// <summary>
+    /// <see cref="IsAssignable"/> with every member of a union checked whatever <see cref="LenientUnions"/> says: for the narrowing
+    /// of a declared name to what is assigned to it, where a list[None] must not pass for a list[Expr | None].
+    /// </summary>
+    internal bool IsAssignableEachMember(PyType dest, PyType src)
+    {
+        _strictUnions++;
+        try { return IsAssignable(dest, src); }
+        finally { _strictUnions--; }
+    }
+
+    bool LenientUnionAssignable(PyType dest, UnionType src, bool fresh)
+    {
+        foreach (var m in src.MemberList)
+            if (IsAssignable(dest, m, fresh)) return true;
+        return false;
     }
 
     bool EachAssignable(PyType dest, IEnumerable<PyType> sources, bool fresh)
@@ -1510,12 +1584,21 @@ public sealed partial class TypeEvaluator
                 if (kv.Value.Declarations.Count == 0) continue;
                 if (NotProtocolMember.Contains(kv.Key)) continue;
                 var hit = FindMember(src, kv.Key, true, null, out bool unk);
+                // the decorator gives a dataclass its __dataclass_fields__ (what typeshed's DataclassInstance asks for)
+                if (hit == null && kv.Key == "__dataclass_fields__" && HasDataclassFields(src.Info)) continue;
                 if (hit == null) { if (!unk) return false; continue; }
                 if (hit.InstanceAttrs.Count == 0 && !MethodFits(kv.Value, hit.ClassSymbol)) return false;
             }
         }
         return true;
     }
+
+    /// <summary>
+    /// A class made by @dataclass (dataclasses' or pydantic's, `@dataclass(...)` and `@dataclasses.dataclass` too), or derived from one: it has
+    /// __dataclass_fields__. attrs classes and dataclass_transform ones (a pydantic model) do not.
+    /// </summary>
+    bool HasDataclassFields(ClassInfo c) => Mro(c).Any(e => e is ClassType ec && DataclassOf(ec.Info) is { Attrs: false }
+        && ec.Info.Node.Decorators.Any(d => (d is CallExpr call ? call.Func : d) is NameExpr { Name: "dataclass" } or AttributeExpr { Attr: "dataclass" }));
 
     /// <summary>A method of the source fits the protocol's when a call written for the protocol's signature works on it (plain defs only).</summary>
     bool MethodFits(Symbol proto, Symbol? src)

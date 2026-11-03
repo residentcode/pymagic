@@ -139,10 +139,28 @@ public sealed partial class TypeEvaluator
                     if (c.Info.Name == "tuple" && c.Info.Module.Name == "builtins") return TupleAnnotation(m, args, lookup, deferred);
                     if (c.Info.Name == "type" && c.Info.Module.Name == "builtins" && args.Count == 1)
                         return TypeOfClassObject(Annotation(m, args[0], lookup, deferred));
+                    if (GenericAliasSubscript(c, args.Select(a => Annotation(m, a, lookup, deferred)).ToList()) is { } specialized) return specialized;
                     return new ClassType(c.Info, args.Select(a => Annotation(m, a, lookup, deferred)).ToList(), true);
                 default: return PyType.Unknown;
             }
         });
+    }
+
+    /// <summary>
+    /// A generic alias subscripted (`_CIntLikeField: TypeAlias = _CField[_T, int, _T | int]`, then `_CIntLikeField[c_short]`): the alias's
+    /// own type variables, in the order they first appear, take the arguments, so the class keeps all of its arguments
+    /// (`_CField[c_short, int, c_short | int]`). Null when the class object is not such an alias (a plain class, or one whose arguments are its own parameters).
+    /// </summary>
+    ClassType? GenericAliasSubscript(ClassType alias, IReadOnlyList<PyType> args)
+    {
+        if (alias.Args.Count == 0) return null;
+        var vars = new List<PyType>();
+        foreach (var a in alias.Args) CollectTypeVars(a, vars);
+        if (vars.Count == 0 || vars.Count != args.Count || vars.Any(v => v is not TypeVarType)) return null;
+        if (vars.SequenceEqual(ClassTypeParamsAsArgs(alias.Info))) return null;
+        var map = new Dictionary<string, PyType>();
+        for (int i = 0; i < vars.Count; i++) map[TypeParamName(vars[i])] = args[i];
+        return Substitute(alias, map) is ClassType done ? done.AsInstance() : null;
     }
 
     PyType TypeOfClassObject(PyType instance) => MapMembers(instance, t => t switch
