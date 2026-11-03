@@ -7,6 +7,8 @@ import { openSettings } from './settings-ui';
 import { openNewProject } from './newproject';
 import { defineCommand } from './commands.js';
 import { projectDesktop } from './openproject.js';
+import { recentProjectItems } from './recentprojects-model.js';
+import { askChoice } from './ask.js';
 
 const $ = (id) => document.getElementById(id);
 const press = (id) => () => $(id).click();
@@ -39,7 +41,20 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
     // the desktop app lets the page open another folder (preload.js); in a browser the engine is started with its folder and these stay dim
     const desktop = projectDesktop();
     let recentProjects = [];
-    desktop?.recentProjects().then((list) => { recentProjects = list; }).catch(() => { /* none shown */ });
+    // read again whenever a menu that shows them opens and when the window is back in front (another window may have opened or removed one)
+    const loadRecent = () => (desktop?.recentProjects() ?? Promise.resolve([])).then((list) => { recentProjects = list; }).catch(() => { /* none shown */ });
+    void loadRecent();
+    window.addEventListener('focus', () => void loadRecent());
+    // the recent projects and, under them, Remove from recent projects (one) and Clear recent projects (asked first)
+    const forget = async (folder) => { recentProjects = await desktop.forgetRecentProject(folder); };
+    const recentItems = (none) => recentProjectItems(recentProjects, {
+        open: (p) => void desktop.openProject(p),
+        remove: (p) => void forget(p),
+        clear: async () => {
+            const answer = await askChoice('Clear recent projects', 'The projects open in a window stay in the list. The projects themselves are not touched.', [['Clear', 'clear'], ['Cancel', 'cancel']]);
+            if (answer === 'clear') await forget(null);
+        },
+    }, none);
     const act = (id) => () => { editor.focus(); editor.trigger('menu', id, null); };
     const dock = (id) => () => $(`t-${id}`).click();
 
@@ -61,7 +76,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 { label: 'New file…', run: press('ex-new-file') },
                 { label: 'New folder…', run: press('ex-new-folder') },
                 { label: 'Open folder…', key: 'Ctrl+Shift+O', run: () => void desktop.openFolder(), disabled: !desktop },
-                { label: 'Recent projects', disabled: !desktop, submenu: recentProjects.length ? recentProjects.map((p) => ({ label: p, run: () => void desktop.openProject(p) })) : [{ label: 'No recent projects', disabled: true }] },
+                { label: 'Recent projects', disabled: !desktop, submenu: desktop ? recentItems('No recent projects') : [] },
                 { label: 'Open the demo project', run: () => void desktop.openDemo(), disabled: !desktop },
                 { label: 'Recent files', submenu: files.length ? files.map((rel) => ({ label: rel, run: () => void openFile(rel) })) : [{ label: 'No recent files', disabled: true }] },
                 '-',
@@ -275,13 +290,13 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
 
     if (desktop) {
         $('project').classList.add('clickable');
-        $('project').onclick = () => openMenu($('project'), [
+        $('project').onclick = async () => { await loadRecent(); openMenu($('project'), [
             { label: 'Open folder…', key: 'Ctrl+Shift+O', run: () => void desktop.openFolder() },
             '-',
-            ...(recentProjects.length ? recentProjects.map((p) => ({ label: p, run: () => void desktop.openProject(p) })) : [{ label: 'No other recent projects', disabled: true }]),
+            ...recentItems('No other recent projects'),
             '-',
             { label: 'Open the demo project', run: () => void desktop.openDemo() },
-        ]);
+        ]); };
     }
     // the branch next to the project: the branches to switch to, and the Git commands people reach for first
     $('branch-chip').onclick = () => {
@@ -376,6 +391,6 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
     }
     defineCommand({ id: 'pymagic.window.findAction', label: 'Find action (any command)', group: 'Window', keys: ['Ctrl+Shift+A'], everywhere: true, run: () => findAction() });
     findActionOpen = findAction;
-    $('brand').querySelector('.mark').onclick = () => openMenu($('brand'), items());
+    $('brand').querySelector('.mark').onclick = async () => { await loadRecent(); openMenu($('brand'), items()); };
     $('brand').querySelector('.mark').title = 'Main menu';
 }

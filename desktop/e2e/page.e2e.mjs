@@ -3040,6 +3040,42 @@ describe('New Project: the other kinds', () => {
         await page.evaluate(`window.pymagic.changeSetting({ openProjectIn: 'ask' })`);
     });
 
+    test('Recent projects: one removed from the list, and Clear recent projects asked first (the open project stays)', async () => {
+        // the Open Project test opened another folder, so the list has it
+        const list = () => page.evaluate('window.pymagicDesktop.recentProjects()');
+        const before = await list();
+        assert.ok(before.length >= 1, 'a recent project to remove');
+        const rowsOf = `[...document.querySelectorAll('.ctx-menu .ctx-item')]`;
+        const click = (label) => page.evaluate(`(() => { const r = ${rowsOf}.find((x) => x.querySelector('.ctx-label').textContent === ${JSON.stringify(label)}); if (!r) return false; r.click(); return true; })()`);
+        const menu = async () => {
+            await page.evaluate(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+            await page.evaluate(`document.getElementById('project').click()`);
+            return page.waitFor(`${rowsOf}.map((r) => r.textContent).join('|')`, 10000, 'the project menu');
+        };
+        // the project name's menu: each project, then the two new rows
+        const shown = await menu();
+        assert.match(shown, /Remove from recent projects/);
+        assert.match(shown, /Clear recent projects/);
+        // Clear asks first; Cancel keeps the list
+        assert.ok(await click('Clear recent projects'));
+        assert.equal(await page.waitFor(`document.querySelector('.ask-box') && [...document.querySelectorAll('.ask-box .ask-buttons button')].map((b) => b.textContent).join('|')`, 10000, 'the Clear dialog'), 'Clear|Cancel');
+        await page.evaluate(`document.querySelector('.ask-box button[data-value="cancel"]').click()`);
+        await sleep(300);
+        assert.deepEqual(await list(), before);
+        // Remove from recent projects > the folder: gone from the list and from the menu
+        await menu();
+        assert.ok(await click('Remove from recent projects'));
+        await page.waitFor(`document.querySelectorAll('.ctx-menu').length > 1`, 5000, 'the submenu');
+        // the row of the submenu (the list above has the same label, which opens the project)
+        assert.ok(await page.evaluate(`(() => { const box = [...document.querySelectorAll('.ctx-menu')].pop(); const r = [...box.querySelectorAll('.ctx-item')].find((x) => x.querySelector('.ctx-label').textContent === ${JSON.stringify(before[0])}); if (!r) return false; r.click(); return true; })()`));
+        await page.waitFor(`window.pymagicDesktop.recentProjects().then((l) => !l.includes(${JSON.stringify(before[0])}))`, 5000, 'the project removed');
+        // the rest cleared: the open project stays in the list it is kept in (shown nowhere while it is open)
+        if (before.length > 1) await page.evaluate('window.pymagicDesktop.forgetRecentProject(null)');
+        assert.deepEqual(await list(), []);
+        assert.match(await menu(), /No other recent projects/);
+        await page.evaluate(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    });
+
     test('Tailwind CSS: its classes completed in a class attribute, with the variants typed and the project\'s own @theme colours', async () => {
         assert.ok(await page.evaluate('window.pymagicTailwindReady.then((t) => t?.classes())'), 'Tailwind was not found in the project (tw/input.css imports it)');
         // the caret after the class being typed, the suggestion chosen by its label, the line read back and put back

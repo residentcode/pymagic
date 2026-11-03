@@ -27,3 +27,11 @@ test('the list shown has the folders that are still there, without the open one'
   assert.deepEqual(existing(['C:/a', 'C:/b', 'C:/c'], (p) => there.has(p), 'c:/C'), ['C:/a']);
   assert.deepEqual(existing(undefined, () => true), []);
 });
+
+test('a project removed from the list, and the list cleared but for the projects open in a window', () => {
+  const { forget } = require(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'recent-projects.js'));
+  assert.deepEqual(forget(['C:/a', 'C:/b', 'C:/c'], 'c:/B/'), ['C:/a', 'C:/c']);
+  assert.deepEqual(forget(['C:/a', 'C:/b', 'C:/c'], null, ['c:/c', undefined]), ['C:/c']);
+  assert.deepEqual(forget(['C:/a', 7], null), []);
+  assert.deepEqual(forget(undefined, 'C:/a'), []);
+});

@@ -7,7 +7,7 @@ const path = require('node:path');
 const http = require('node:http');
 const os = require('node:os');
 const { hostEnvironment } = require('./host-env');
-const { remember, existing } = require('./recent-projects');
+const { remember, existing, forget } = require('./recent-projects');
 const { missingWebPackages } = require('./web-packages');
 
 const repo = path.resolve(__dirname, '..');
@@ -230,6 +230,13 @@ app.whenReady().then(async () => {
     return r.canceled ? null : r.filePaths[0] ?? null;
   });
   ipcMain.handle('pymagic:recent', (e) => existing(readSettings().recent, fs.existsSync, windowOf(e.sender).project));
+  // Remove from recent projects (a folder) and Clear recent projects (none): the folders open in a window stay
+  ipcMain.handle('pymagic:recent-forget', (e, folder) => {
+    const s = readSettings();
+    s.recent = forget(s.recent, typeof folder === 'string' ? folder : null, [...windows].map((w) => w.project));
+    writeSettings(s);
+    return existing(s.recent, fs.existsSync, windowOf(e.sender).project);
+  });
   // Open In > Explorer: a file or folder of the open project, selected in a window of Explorer
   ipcMain.handle('pymagic:reveal', (e, rel) => {
     const project = windowOf(e.sender).project;
