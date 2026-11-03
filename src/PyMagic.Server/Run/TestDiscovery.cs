@@ -3,7 +3,9 @@ using PyMagic.Core.Syntax;
 namespace PyMagic.Server;
 
 /// <summary>A file, class, function or method that can be run. Ids are what the runner understands: <c>rel/path.py::Class::method</c>.</summary>
-public sealed record TestNode(string Id, string Name, string Kind, string File, int Line, int EndLine, List<TestNode> Children);
+/// <param name="WrittenIn">For a test method inherited from a base class of another file: that file and the method's line there (going to the test opens it);
+/// the node itself stays in its class (its File and Line are the class's).</param>
+public sealed record TestNode(string Id, string Name, string Kind, string File, int Line, int EndLine, List<TestNode> Children, string? WrittenIn = null, int WrittenAt = 0);
 
 /// <summary>
 /// Finds tests without importing anything: parses the candidate files and applies pytest's and unittest's naming rules
@@ -67,12 +69,13 @@ public static class TestDiscovery
     sealed class FileClasses
     {
         public required string Rel;
+        public required LineMap Lines;
         public required Dictionary<string, ClassDef> Classes;
         public required Dictionary<string, (string? Module, int Level, string Name)> FromImports;   // local name -> where it comes from
         public required Dictionary<string, string> ModuleImports;                                  // local name -> dotted module
     }
 
-    static FileClasses ModuleOf(string rel, Module parsed)
+    static FileClasses ModuleOf(string rel, Module parsed, string text)
     {
         var from = new Dictionary<string, (string?, int, string)>(StringComparer.Ordinal);
         var imports = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -85,7 +88,7 @@ public static class TestDiscovery
         }
         return new FileClasses
         {
-            Rel = rel, FromImports = from, ModuleImports = imports,
+            Rel = rel, Lines = new LineMap(text), FromImports = from, ModuleImports = imports,
             Classes = parsed.Body.OfType<ClassDef>().GroupBy(c => c.Name).ToDictionary(g => g.Key, g => g.Last()),
         };
     }
@@ -115,14 +118,14 @@ public static class TestDiscovery
         var parsed = Parser.Parse(text);
         var lines = new LineMap(text);
         int LineOf(int offset) => lines.PositionOf(offset).Line + 1;
-        var own = ModuleOf(rel, parsed.Module);
+        var own = ModuleOf(rel, parsed.Module, text);
         modules[rel] = own;
 
         FileClasses? Load(string file)
         {
             if (modules.TryGetValue(file, out var known)) return known;
             modules[file] = null;   // while it is read: an import cycle finds nothing
-            return read?.Invoke(file) is { } t ? modules[file] = ModuleOf(file, Parser.Parse(t).Module) : null;
+            return read?.Invoke(file) is { } t ? modules[file] = ModuleOf(file, Parser.Parse(t).Module, t) : null;
         }
 
         // the class a base expression names: one of the same file, one imported by name, or `module.Class` of an imported module
@@ -191,13 +194,15 @@ public static class TestDiscovery
                     break;
                 case ClassDef c when IsCase(own, c) || (c.Name.StartsWith("Test", StringComparison.Ordinal) && !HasInit(c)):
                 {
-                    // a method written in another file (an imported base class) is placed on the class's own line, after those of this file
+                    // a method written in another file (an imported base class) is placed on the class's own line, after those of this file,
+                    // and says where it is written (going to it opens that file at the method)
                     var methods = MethodsOf(own, c).Where(m => m.Method.Name.StartsWith("test", StringComparison.Ordinal))
                         .OrderBy(m => m.Where == own ? 0 : 1).ThenBy(m => m.Where == own ? m.Method.NameStart : 0).ToList();
                     if (methods.Count == 0) break;
                     var kids = methods.Select(m => m.Where == own
                         ? new TestNode($"{rel}::{c.Name}::{m.Method.Name}", m.Method.Name, "method", rel, LineOf(m.Method.NameStart), LineOf(m.Method.End), new())
-                        : new TestNode($"{rel}::{c.Name}::{m.Method.Name}", m.Method.Name, "method", rel, LineOf(c.NameStart), LineOf(c.NameStart), new())).ToList();
+                        : new TestNode($"{rel}::{c.Name}::{m.Method.Name}", m.Method.Name, "method", rel, LineOf(c.NameStart), LineOf(c.NameStart), new(),
+                            m.Where.Rel, m.Where.Lines.PositionOf(m.Method.NameStart).Line + 1)).ToList();
                     children.Add(new TestNode($"{rel}::{c.Name}", c.Name, "class", rel, LineOf(c.NameStart), LineOf(c.End), kids));
                     break;
                 }

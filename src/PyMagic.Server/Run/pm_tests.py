@@ -96,6 +96,11 @@ def run_pytest(channel, root, ids):
         def pytest_runtest_logreport(self, report):
             st = self.state.setdefault(report.nodeid, {
                 "outcome": "passed", "duration": 0.0, "message": "", "traceback": "", "output": [], "file": None, "line": None})
+            # a subtest (pytest 9's subtests and unittest's subTest, or the pytest-subtests plugin): a node of its own under its test
+            context = getattr(report, "context", None)
+            if report.when == "call" and context is not None and hasattr(context, "kwargs"):
+                self.subtest(report, context, st)
+                return
             st["duration"] += getattr(report, "duration", 0.0) or 0.0
             for title, content in getattr(report, "sections", []):
                 if content and ("Captured" in title):
@@ -124,6 +129,26 @@ def run_pytest(channel, root, ids):
                 channel.send({"type": "testResult", "id": report.nodeid, "outcome": st["outcome"],
                               "duration": st["duration"], "message": st["message"], "traceback": st["traceback"],
                               "output": "\n".join(st["output"]), "file": st["file"], "line": st["line"]})
+
+        def subtest(self, report, context, parent):
+            """Reports a subtest as test_id[message k=v], as the unittest runner names them; a failing one fails its test too."""
+            # pytest's own reports carry the values as their repr already; the plugin's carry the values
+            shown = str if type(report).__module__.startswith("_pytest") else repr
+            parts = ([str(context.msg)] if getattr(context, "msg", None) is not None else []) + \
+                ["%s=%s" % (k, shown(v)) for k, v in dict(context.kwargs).items()]
+            label = (" ".join(parts) or "subtest").replace("[", "(").replace("]", ")")
+            sub = {"outcome": "passed", "message": "", "traceback": "", "file": None, "line": None}
+            if report.failed:
+                sub["outcome"] = "failed"
+            elif report.skipped:
+                sub["outcome"] = "skipped"
+            if report.failed or report.skipped:
+                self.describe_failure(report, sub)
+            if report.failed and parent["outcome"] in ("passed", "skipped"):
+                parent.update(outcome="failed", message=sub["message"], traceback=sub["traceback"], file=sub["file"], line=sub["line"])
+            channel.send({"type": "testResult", "id": "%s[%s]" % (report.nodeid, label), "outcome": sub["outcome"],
+                          "duration": getattr(report, "duration", 0.0) or 0.0, "message": sub["message"], "traceback": sub["traceback"],
+                          "output": "", "file": sub["file"], "line": sub["line"]})
 
         def describe_failure(self, report, st):
             longrepr = report.longrepr

@@ -31,6 +31,8 @@ export function setupTests(deps) {
         const old = byId.get(raw.id);
         const node = {
             id: raw.id, name: raw.name, kind: raw.kind, file: raw.file, line: raw.line, endLine: raw.endLine,
+            // a method inherited from a base class of another file: where it is written
+            writtenIn: raw.writtenIn ?? null, writtenAt: raw.writtenAt ?? 0,
             children: [], parent, status: old?.status ?? 'idle', result: old?.result, open: old?.open ?? raw.kind === 'file',
         };
         byId.set(node.id, node);
@@ -145,7 +147,13 @@ export function setupTests(deps) {
         n.row?.classList.add('sel');
         showDetail(n);
     }
-    async function goTo(n, line = n.line) {
+    async function goTo(n, line) {
+        // an inherited test goes to the method in its base class's file
+        if (line === undefined && n.writtenIn) {
+            await deps.openFile(n.writtenIn, new monaco.Range(n.writtenAt, 1, n.writtenAt, 1));
+            return;
+        }
+        line ??= n.line;
         await deps.openFile(n.file, new monaco.Range(line, 1, line, 1));
     }
     function showDetail(n) {
@@ -603,7 +611,8 @@ export function setupTests(deps) {
     // ------------------------------------------------------------ run marks in the gutter: each test and test class, with its last result
     const runMarks = editor.createDecorationsCollection();
     function markedNodes(rel) {
-        return [...byId.values()].filter((n) => n.file === rel && n.line && n.kind !== 'file' && n.kind !== 'case');
+        // an inherited test has no mark of its own: its class's mark runs it
+        return [...byId.values()].filter((n) => n.file === rel && n.line && n.kind !== 'file' && n.kind !== 'case' && !n.writtenIn);
     }
     function paintRunMarks() {
         const model = editor.getModel();

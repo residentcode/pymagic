@@ -158,7 +158,6 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Positions the engine writes without its line map, if any are left, still count UTF-16 units.
 
 **Run, debug and tests**
-- Under pytest the subtests of a test are not split (pytest reports the test once); a test inherited from another file is placed on its class's line.
 
 **Installer**
 - Still open: PyMagic's own pictures in the wizard (66); the wizard's two new pages were not looked at on screen (only the silent installs were run)
@@ -220,4 +219,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 310 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 311 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

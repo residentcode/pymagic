@@ -3046,6 +3046,30 @@ describe('New Project: the other kinds', () => {
         assert.ok(!tree.files.some((f) => f.path.startsWith('node_modules/')));
     });
 
+    test('Tests: a test inherited from a base class in another file goes to its method there, and has no gutter mark of its own', async () => {
+        const proj = project({
+            'tests/__init__.py': '',
+            'tests/base.py': 'import unittest\n\n\nclass ApiCase(unittest.TestCase):\n    def test_status(self):\n        pass\n',
+            'tests/test_child.py': 'from .base import ApiCase\n\n\nclass UserApi(ApiCase):\n    def test_user(self):\n        pass\n',
+        });
+        const other = await launch(proj);
+        const q = other.page;
+        try {
+            await q.evaluate(`document.getElementById('t-tests').click()`);
+            // every node opened, then the inherited test double-clicked
+            const row = `[...document.querySelectorAll('#tests-tree .trow')].find((r) => r.querySelector('.tname').textContent === 'test_status' && r.closest('li').parentElement.closest('li')?.querySelector('.tname').textContent === 'UserApi')`;
+            await q.waitFor(`(() => { [...document.querySelectorAll('#tests-tree .trow .caret')].find((c) => c.textContent === '▸')?.click(); return !!${row}; })()`, 30000, 'the inherited test in the tree');
+            await q.evaluate(`${row}.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            const at = await q.waitFor(`(() => { const e = window.pymagic.editor; return e.getModel().uri.path === '/tests/base.py' && e.getPosition().lineNumber; })()`, 15000, 'tests/base.py opened');
+            assert.equal(at, 5);
+            // in the subclass's file: the class and its own test have marks, the inherited one none
+            await q.evaluate(`window.pymagic.openFile('tests/test_child.py')`);
+            const marks = await q.waitFor(`(() => { const m = window.pymagic.editor.getModel(); return m.uri.path === '/tests/test_child.py' && m.getAllDecorations().filter((d) => d.options.glyphMarginClassName?.startsWith('test-run')).map((d) => d.range.startLineNumber).sort().join(','); })()`, 15000, 'the gutter marks');
+            assert.equal(marks, '4,5');
+        }
+        finally { await other.close(); }
+    });
+
     test('a Django project opened for the first time has a Django server to run, chosen in the toolbar', async () => {
         const dj = project({
             'manage.py': "import os\nimport sys\n\nif __name__ == '__main__':\n    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'shop.settings')\n    from django.core.management import execute_from_command_line\n    execute_from_command_line(sys.argv)\n",

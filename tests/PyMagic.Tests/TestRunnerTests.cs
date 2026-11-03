@@ -370,6 +370,14 @@ public class TestRunnerTests
             var inherited = file.Children.Single(c => c.Name == "UserApi").Children[1];
             Assert.Equal("tests/test_api.py::UserApi::test_status", inherited.Id);
             Assert.Equal(4, inherited.Line);   // placed on its class's line: it is written in another file
+            // which it names, with the method's line there (going to the test opens it)
+            Assert.Equal("tests/base.py", inherited.WrittenIn);
+            Assert.Equal(3, inherited.WrittenAt);
+            var shape = file.Children.Single(c => c.Name == "TestShapes").Children[1];
+            Assert.Equal("tests/shared/checks.py", shape.WrittenIn);
+            Assert.Equal(2, shape.WrittenAt);
+            // a test written in the file names no other
+            Assert.True(file.Children.Single(c => c.Name == "UserApi").Children[0].WrittenIn == null);
         }
         finally { Directory.Delete(root, true); }
     }
@@ -392,6 +400,30 @@ public class TestRunnerTests
         Assert.Equal(6, r[id + "[i=1]"]["line"]!.GetValue<int>());
         Assert.Contains("1 != 0", r[id + "[i=1]"]["message"]!.GetValue<string>());
         Assert.Equal("passed", Outcome(r, "test_sub.py::Numbers::test_named[first n=1]"));
+    }
+
+    [Fact]
+    public void PytestSubtestsAreReportedOneByOne()
+    {
+        // pytest 9's subtests (the subtests fixture, and unittest's subTest run by pytest)
+        if (!HavePytest || !CanRun("-c \"import _pytest.subtests\"")) return;
+        using var p = new Project();
+        p.File("test_psub.py",
+            "import unittest\n\n\ndef test_even(subtests):\n    for i in range(3):\n        with subtests.test(i=i):\n            assert i % 2 == 0\n\n\n" +
+            "def test_named(subtests):\n    with subtests.test('first', n=1):\n        pass\n\n\n" +
+            "class Numbers(unittest.TestCase):\n    def test_odd(self):\n        for i in range(2):\n            with self.subTest(i=i):\n                self.assertEqual(i % 2, 1)\n");
+        var r = Results(p.Run("pytest", "test_psub.py"));
+        const string id = "test_psub.py::test_even";
+        Assert.Equal("passed", Outcome(r, id + "[i=0]"));
+        Assert.Equal("failed", Outcome(r, id + "[i=1]"));
+        Assert.Equal("passed", Outcome(r, id + "[i=2]"));
+        Assert.Equal("failed", Outcome(r, id));   // the test fails with its subtest
+        Assert.Equal(7, r[id + "[i=1]"]["line"]!.GetValue<int>());
+        Assert.Equal("passed", Outcome(r, "test_psub.py::test_named[first n=1]"));
+        Assert.Equal("passed", Outcome(r, "test_psub.py::test_named"));
+        Assert.Equal("failed", Outcome(r, "test_psub.py::Numbers::test_odd[i=0]"));
+        Assert.Equal("passed", Outcome(r, "test_psub.py::Numbers::test_odd[i=1]"));
+        Assert.Equal("failed", Outcome(r, "test_psub.py::Numbers::test_odd"));
     }
 
     [Fact]
