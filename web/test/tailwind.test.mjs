@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classAt, splitVariants, suggestions, themeColors, colorOf, toHex } from '../src/tailwind-model.js';
+import { classAt, splitVariants, suggestions, themeColors, colorOf, toHex, tailwindOffered } from '../src/tailwind-model.js';
+import { merged } from '../src/settings.js';
 import { PLUGINS } from '../src/plugin-model.js';
 
 test('the class being typed, in class attributes and class helpers only', () => {
@@ -46,4 +47,13 @@ test('colour classes have their colour, oklch converted', () => {
 
 test('Tailwind CSS is a plugin', () => {
     assert.ok(PLUGINS.some((p) => p.id === 'tailwind' && p.name === 'Tailwind CSS'));
+});
+
+test('its classes are offered in a project that uses Tailwind, or in every project when the setting says so', () => {
+    assert.equal(merged({}).tailwindIn, 'project');
+    assert.ok(tailwindOffered({ used: true }, 'project'));
+    assert.ok(!tailwindOffered({ used: false }, 'project'));
+    // the engine not answering is a project without it
+    assert.ok(!tailwindOffered(null, 'project'));
+    assert.ok(tailwindOffered({ used: false }, 'all'));
 });

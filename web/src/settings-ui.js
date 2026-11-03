@@ -53,6 +53,7 @@ const PAGES = [
         { key: 'cursorStyle', label: 'Cursor', type: 'choice', options: [['line', 'Line'], ['block', 'Block'], ['underline', 'Underline']] },
         { key: 'cursorBlinking', label: 'Cursor blinking', type: 'choice', options: [['blink', 'Blink'], ['smooth', 'Smooth'], ['phase', 'Phase'], ['expand', 'Expand'], ['solid', 'None']] },
         { key: 'callParens', label: 'Add parentheses when completing a function', type: 'bool', hint: 'Choosing `area` writes `area()`, with the cursor inside when it takes arguments. Off: only the name.' },
+        { key: 'tailwindIn', label: 'Tailwind CSS classes', type: 'choice', options: [['project', 'In projects that use Tailwind'], ['all', 'In every project']], hint: 'Where the Tailwind CSS plugin completes its classes in class="", className="", clsx() and cn(). A project uses Tailwind when its package.json, a tailwind.config file, a stylesheet (@import "tailwindcss") or a page (its CDN script) says so; that is checked again after each save.' },
         { key: 'quotes', label: 'String quotes', type: 'choice', options: [['single', "Single: 'text'"], ['double', 'Double: "text" (black)'], ['preserve', 'As written']], hint: 'What Format gives strings when the project\'s pyproject.toml, ruff.toml or .editorconfig does not say (their quote-style wins). black has no single quotes: with it, quotes are kept as written.' },
     ]],
     ['hints', 'Code vision and hints', [

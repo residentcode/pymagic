@@ -52,7 +52,7 @@ const FILES = {
     'tags/page.html': '<h1>{{ title }}</h1>\n<p>Welcome to {{ title }}</p>\n',
     'fullline/config.py': 'import json\n\n\ndef load_config(path):\n    with open(path) as f:\n        config = \n    return config\n',
     'tw/input.css': '@import "tailwindcss";\n@theme { --color-brand: #3366ff; }\n',
-    'tw/page.html': '<div class="md:flex items-center">\n    <div class="ml-au"></div>\n    <p class="bg-bra"></p>\n</div>\n',
+    'tw/page.html': '<div class="md:flex items-center">\n    <div class="ml-au"></div>\n    <p class="bg-bra"></p>\n    <p class="bg-acc"></p>\n</div>\n',
     'tags/App.jsx': 'export const App = () => (\n  <section className="a"><Item key={1} /></section>\n);\n',
     'emmet/App.vue': 'ul>li*2\n',
     'emmet/App.jsx': 'export const App = () => (\n  div.card>h2\n);\n',
@@ -3041,7 +3041,7 @@ describe('New Project: the other kinds', () => {
     });
 
     test('Tailwind CSS: its classes completed in a class attribute, with the variants typed and the project\'s own @theme colours', async () => {
-        assert.ok(await page.evaluate('window.pymagicTailwindReady'), 'Tailwind was not found in the project (tw/input.css imports it)');
+        assert.ok(await page.evaluate('window.pymagicTailwindReady.then((t) => t?.classes())'), 'Tailwind was not found in the project (tw/input.css imports it)');
         // the caret after the class being typed, the suggestion chosen by its label, the line read back and put back
         const complete = async (line, column, label) => {
             await open('tw/page.html');
@@ -3070,6 +3070,30 @@ describe('New Project: the other kinds', () => {
             return '';
         })()`, 15000, 'the hover');
         assert.match(hover, /display: flex/);
+        // typed as a person types it (no trigger asked for): the list opens on the quote and the dash
+        await open('tw/page.html');
+        const before = await page.evaluate('window.pymagic.editor.getModel().getValue()');
+        await page.evaluate(`window.pymagic.editor.getModel().setValue('<div class=>\\n</div>\\n')`);
+        await page.evaluate(`(() => { const e = window.pymagic.editor; e.setPosition({ lineNumber: 1, column: 12 }); e.focus(); })()`);
+        for (const ch of '"ml-au') {
+            await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, text: ch });
+            await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
+            await sleep(150);
+        }
+        await page.waitFor(`document.querySelector('.suggest-widget.visible .monaco-list-row.focused')?.getAttribute('aria-label')?.startsWith('ml-auto')`, 15000, 'ml-auto offered while typing');
+        await page.evaluate(`window.pymagic.editor.trigger('test', 'hideSuggestWidget', {})`);
+        // a colour added to the stylesheet's @theme and saved is offered at once (the engine is asked again after each save)
+        await page.evaluate(`window.pymagic.editor.getModel().setValue(${JSON.stringify(before)})`);
+        const css = await page.evaluate(`fetch('/api/file?path=tw/input.css').then((r) => r.text())`);
+        const count = await page.evaluate('window.pymagicTailwindReady.then((t) => t.classes())');
+        await page.evaluate(`fetch('/api/file?path=tw/input.css', { method: 'PUT', body: ${JSON.stringify(css)} + '@theme { --color-accent: #ff8800; }\\n' }).then(() => window.dispatchEvent(new Event('pymagic:saved')))`);
+        try {
+            await page.waitFor(`window.pymagicTailwindReady.then((t) => t.classes() > ${count})`, 15000, 'the design system loaded again after the save');
+            assert.equal(await complete(4, 21, 'bg-accent'), '    <p class="bg-accent"></p>');
+        }
+        finally {
+            await page.evaluate(`fetch('/api/file?path=tw/input.css', { method: 'PUT', body: ${JSON.stringify(css)} }).then(() => window.dispatchEvent(new Event('pymagic:saved')))`);
+        }
     });
 
     test('Full line completion: the rest of the line in grey, written by the bundled model, taken with Tab', async () => {

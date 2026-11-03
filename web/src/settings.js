@@ -21,6 +21,7 @@ export const DEFAULTS = {
     stickyScroll: false,
     ruler: 0,                 // the column of a vertical guide, 0 for none
     autoSave: 'off',          // off | blur (when the window is left) | delay (a second after the last change)
+    tailwindIn: 'project',    // project (one that uses Tailwind) | all: where the Tailwind CSS plugin completes its classes
     openProjectIn: 'ask',     // ask | this (replaces the project of the window) | new (a window of its own): the desktop app's Open Project
     confirmGit: true,         // the bar's update and push ask first
     terminalShell: 'auto',    // the id of the shell new terminals start (/api/shells), auto for PowerShell 7 or Windows PowerShell

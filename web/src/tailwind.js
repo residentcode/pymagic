@@ -1,9 +1,9 @@
-// Tailwind CSS (a plugin of Settings > Plugins, as PyCharm's Tailwind CSS plugin is): in a project that uses Tailwind (the engine looks, /api/tailwind),
+// Tailwind CSS (a plugin of Settings > Plugins, as PyCharm's Tailwind CSS plugin is): in a project that uses Tailwind (the engine looks, /api/tailwind), or in every project when Settings > Editor says so,
 // the classes are completed where they are typed (class="", className="", Vue's :class, clsx() and cn()), with their variants (md:, hover:, dark:),
 // a swatch for each colour class and the CSS each class makes; hovering a class shows its CSS. Tailwind's own design system lists them
 // (dist/tailwind.js, loaded only then), from its default theme and the project's stylesheet that imports it (its @theme).
 import * as monaco from 'monaco-editor';
-import { classAt, suggestions, themeColors, colorOf, TAILWIND_LANGUAGES } from './tailwind-model.js';
+import { classAt, suggestions, themeColors, colorOf, tailwindOffered, TAILWIND_LANGUAGES } from './tailwind-model.js';
 import { isJsxFile } from './emmet-model.js';
 
 /** Loads dist/tailwind.js once. */
@@ -18,11 +18,30 @@ function loadScript() {
     });
 }
 
-export async function setupTailwind() {
-    const use = await fetch('/api/tailwind').then((r) => r.json()).catch(() => null);
-    if (!use?.used) return null;
-    const tw = await (await loadScript()).load(use.css);
-    const colors = themeColors(tw.theme);
+/**
+ * Registers the providers; they offer nothing until the project is found to use Tailwind or Settings > Editor offers its classes in every
+ * project. The engine is asked again after each save, so a page given the CDN script or a stylesheet given @import "tailwindcss" turns it on,
+ * and a change to the stylesheet's @theme is seen, without opening the project again.
+ */
+export async function setupTailwind({ settings, onSettings }) {
+    let tw = null, colors = new Map(), known = null;
+    const refresh = async () => {
+        const use = await fetch('/api/tailwind').then((r) => r.json()).catch(() => null);
+        const css = use?.used ? use.css ?? '' : '';
+        if (!tailwindOffered(use, settings().tailwindIn)) tw = null;
+        else if (!tw || css !== known) {
+            tw = await (await loadScript()).load(css);
+            colors = themeColors(tw.theme);
+        }
+        known = css;
+        return tw;
+    };
+    let pending = null;
+    const again = () => { clearTimeout(pending); pending = setTimeout(() => void refresh().catch(() => null), 300); };
+    window.addEventListener('pymagic:saved', again);
+    let where = settings().tailwindIn;
+    onSettings((s) => { if (s.tailwindIn !== where) { where = s.tailwindIn; again(); } });
+    await refresh();
     const markup = (model) => {
         const language = model.getLanguageId();
         return (language !== 'javascript' && language !== 'typescript') || isJsxFile(model.uri.path, model.getValue());
@@ -31,7 +50,7 @@ export async function setupTailwind() {
     const completion = {
         triggerCharacters: ['"', "'", '`', ' ', ':', '-'],
         provideCompletionItems(model, position) {
-            if (!markup(model)) return { suggestions: [] };
+            if (!tw || !markup(model)) return { suggestions: [] };
             const word = classAt(before(model, position));
             if (word === null) return { suggestions: [] };
             const range = new monaco.Range(position.lineNumber, position.column - word.length, position.lineNumber, position.column);
@@ -52,7 +71,7 @@ export async function setupTailwind() {
             return { suggestions: items, incomplete: false };
         },
         resolveCompletionItem(item) {
-            if (item.kind === monaco.languages.CompletionItemKind.Keyword) return item;
+            if (!tw || item.kind === monaco.languages.CompletionItemKind.Keyword) return item;
             const css = tw.css(item.label);
             if (css) item.detail = css.split('\n').filter((l) => l.includes(':') && !l.trim().startsWith('@')).map((l) => l.trim()).join(' ');
             if (css && item.kind !== monaco.languages.CompletionItemKind.Color) item.documentation = { value: '```css\n' + css + '\n```' };
@@ -61,7 +80,7 @@ export async function setupTailwind() {
     };
     const hover = {
         provideHover(model, position) {
-            if (!markup(model)) return null;
+            if (!tw || !markup(model)) return null;
             const line = model.getLineContent(position.lineNumber);
             // the class under the mouse: the run of class characters around it, inside a class attribute
             let start = position.column - 1, end = start;
@@ -78,5 +97,5 @@ export async function setupTailwind() {
         monaco.languages.registerCompletionItemProvider(language, completion),
         monaco.languages.registerHoverProvider(language, hover),
     ]);
-    return { classes: tw.classes.length, dispose: () => off.forEach((d) => d.dispose()) };
+    return { classes: () => tw?.classes.length ?? 0, refresh, dispose: () => off.forEach((d) => d.dispose()) };
 }

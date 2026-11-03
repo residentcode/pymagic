@@ -1174,7 +1174,7 @@ async function main() {
     if (plugin('fullline'))
         setupFullLine();
     if (plugin('tailwind'))
-        window.pymagicTailwindReady = setupTailwind().catch(() => null);
+        window.pymagicTailwindReady = setupTailwind({ settings, onSettings }).catch(() => null);
     if (plugin('profiler'))
         setupProfiler({ ...common, askText: (...a) => explorer.askText(...a) });
     if (plugin('httpclient'))
