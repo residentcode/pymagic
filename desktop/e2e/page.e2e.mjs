@@ -2999,6 +2999,26 @@ describe('New Project: the other kinds', () => {
             assert.ok(tokens.includes(want), want + ' in ' + tokens.join(' '));
     });
 
+    test('Run configurations: a switch is a small box at the start of its row, not stretched across the dialog', async () => {
+        await page.evaluate(`document.getElementById('run-config').click()`);
+        const rows = `[...document.querySelectorAll('.ctx-menu .ctx-item')]`;
+        await page.waitFor(`${rows}.some((r) => r.textContent.includes('Edit configurations'))`, 10000, 'the run configuration menu');
+        await page.evaluate(`${rows}.find((r) => r.textContent.includes('Edit configurations')).click()`);
+        await page.waitFor(`!!document.querySelector('.runcfg')`, 10000, 'the dialog');
+        // a Python script configuration: its switches (content roots, sources roots, ...)
+        await page.evaluate(`[...document.querySelectorAll('.runcfg-tools button')].find((b) => b.textContent.includes('Add')).click()`);
+        await page.waitFor(`${rows}.some((r) => r.textContent === 'Python script')`, 5000, 'the kinds');
+        await page.evaluate(`${rows}.find((r) => r.textContent === 'Python script').click()`);
+        const boxes = await page.waitFor(`(() => { const b = [...document.querySelectorAll('.runcfg .set-control input[type=checkbox]')]; return b.length ? b.map((x) => { const r = x.getBoundingClientRect(), c = x.parentElement.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.left - c.left)]; }) : null; })()`, 10000, 'the switches');
+        for (const [width, left] of boxes) {
+            assert.ok(width <= 20, `a switch ${width}px wide`);
+            assert.ok(left <= 2, `a switch ${left}px from the start of its column`);
+        }
+        // the dialog closed without keeping the new configuration
+        await page.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+        await page.waitFor(`!document.querySelector('.runcfg')`, 5000, 'the dialog closed');
+    });
+
     test('node_modules is shown in the project tree, excluded and read when it is opened', async () => {
         const row = await page.waitFor(`(() => { const li = document.querySelector('li[data-path="node_modules"]'); return li ? li.className + ' | ' + li.title : ''; })()`, 15000, 'node_modules in the tree');
         assert.match(row, /mark-excluded/);
@@ -3082,7 +3102,7 @@ describe('New Project: the other kinds', () => {
         const menu = async () => {
             await page.evaluate(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
             await page.evaluate(`document.getElementById('project').click()`);
-            return page.waitFor(`${rowsOf}.map((r) => r.textContent).join('|')`, 10000, 'the project menu');
+            return page.waitFor(`document.querySelectorAll('.ctx-menu').length === 1 && ${rowsOf}.some((r) => r.textContent.includes('Open folder')) && ${rowsOf}.map((r) => r.textContent).join('|')`, 10000, 'the project menu');
         };
         // the project name's menu: each project, then the two new rows
         const shown = await menu();
@@ -3096,8 +3116,8 @@ describe('New Project: the other kinds', () => {
         assert.deepEqual(await list(), before);
         // Remove from recent projects > the folder: gone from the list and from the menu
         await menu();
-        assert.ok(await click('Remove from recent projects'));
-        await page.waitFor(`document.querySelectorAll('.ctx-menu').length > 1`, 5000, 'the submenu');
+        // (the menu reads the list before it opens: the row is clicked again until its submenu is there)
+        await page.waitFor(`(() => { if (document.querySelectorAll('.ctx-menu').length > 1) return true; const r = ${rowsOf}.find((x) => x.querySelector('.ctx-label').textContent === 'Remove from recent projects'); r?.click(); return false; })()`, 10000, 'the submenu');
         // the row of the submenu (the list above has the same label, which opens the project)
         assert.ok(await page.evaluate(`(() => { const box = [...document.querySelectorAll('.ctx-menu')].pop(); const r = [...box.querySelectorAll('.ctx-item')].find((x) => x.querySelector('.ctx-label').textContent === ${JSON.stringify(before[0])}); if (!r) return false; r.click(); return true; })()`));
         await page.waitFor(`window.pymagicDesktop.recentProjects().then((l) => !l.includes(${JSON.stringify(before[0])}))`, 5000, 'the project removed');

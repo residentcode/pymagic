@@ -274,7 +274,7 @@ li.in-excluded { opacity: .55; }
 .ask-box { background: var(--raised); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); padding: 18px 20px; width: 400px; box-shadow: var(--shadow); }
 .ask-title { font-weight: 600; font-size: 14px; margin-bottom: 10px; }
 .ask-hint { color: var(--dim); font-size: 12px; margin: 8px 0 4px; }
-.ask-box select, .ask-box input { width: 100%; }
+.ask-box select, .ask-box input:not([type=checkbox]):not([type=radio]) { width: 100%; }
 .ask-buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .ask-check { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 12px; cursor: pointer; }
 .ask-buttons .spacer { flex: 1; }
@@ -497,7 +497,9 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 .runcfg .settings-foot { justify-content: flex-end; }
 .runcfg .set-row { grid-template-columns: 150px minmax(0, 1fr); }
 .runcfg .set-control { justify-content: stretch; }
-.runcfg .set-control input, .runcfg .set-control select, .runcfg .set-control textarea { width: 100%; }
+.runcfg .set-control input:not([type=checkbox]):not([type=radio]), .runcfg .set-control select, .runcfg .set-control textarea { width: 100%; }
+/* a switch of a configuration stays a box, at the start of its column */
+.runcfg .set-control:has(> input[type=checkbox]) { justify-content: flex-start; align-items: center; }
 .runcfg textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; }
 #project.clickable { cursor: pointer; padding: 3px 6px; margin: 0 -6px; border-radius: 6px; }
 #project.clickable:hover { background: var(--hover2); }
