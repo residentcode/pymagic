@@ -1,4 +1,6 @@
-import * as monaco from 'monaco-editor';
+import * as monaco from 'monaco-editor';
+import { libraryModel, showLibraryFile } from './libview.js';
+import { LIB_SCHEME, libraryPathOf, pathOfLibraryUri } from './libview-model.js';
 import { LspClient } from './lsp';
 import { setupRun } from './run';
 import { setupTests } from './tests';
@@ -464,8 +466,15 @@ function registerProviders() {
                     continue;
                 }
                 const target = await modelForUri(l.uri);
-                if (target)
+                if (target) {
                     result.push({ uri: target.uri, range: toRange(l.range) });
+                    continue;
+                }
+                // a library (the standard library, site-packages, typeshed): a read-only model, which peek shows and opening shows in the library window
+                const libPath = libraryPathOf(l.uri, rootUri);
+                const lib = libPath ? await libraryModel(libPath) : null;
+                if (lib)
+                    result.push({ uri: lib.uri, range: toRange(l.range) });
             }
             return result;
         },
@@ -1250,6 +1259,11 @@ async function main() {
             const sel = !selectionOrPosition ? undefined
                 : 'startLineNumber' in selectionOrPosition ? selectionOrPosition
                     : new monaco.Range(selectionOrPosition.lineNumber, selectionOrPosition.column, selectionOrPosition.lineNumber, selectionOrPosition.column);
+            // a library file opens read only in its window, at the definition
+            if (resource.scheme === LIB_SCHEME) {
+                void showLibraryFile(pathOfLibraryUri(resource.path), (sel?.startLineNumber ?? 1) - 1, (sel?.startColumn ?? 1) - 1, editor);
+                return true;
+            }
             // from a side of the split, the definition opens on that side
             if (split?.editors().includes(source))
                 void split.openIn(source, rel, sel);

@@ -3019,6 +3019,22 @@ describe('New Project: the other kinds', () => {
         await page.waitFor(`!document.querySelector('.runcfg')`, 5000, 'the dialog closed');
     });
 
+    test('Go to definition into a library: F12 on json.dumps opens json read only at dumps, Escape closes it', async () => {
+        await open('calc.py');
+        // print(json.dumps(...)): the caret on dumps
+        await page.evaluate(`(() => { const e = window.pymagic.editor; e.setPosition({ lineNumber: 9, column: 14 }); e.focus(); e.trigger('test', 'editor.action.revealDefinition', {}); })()`);
+        const title = await page.waitFor(`document.querySelector('.fs-libview h2')?.textContent ?? ''`, 20000, 'the library window');
+        assert.match(title, /json\/__init__\.pyi?$/);
+        // the line under the caret is the definition, and the file cannot be changed
+        const shown = await page.evaluate(`(() => { const ed = window.pymagic.monaco.editor.getEditors().find((x) => x.getContainerDomNode().closest('.fs-libview')); const at = ed.getPosition(); return { line: ed.getModel().getLineContent(at.lineNumber), readOnly: ed.getOption(window.pymagic.monaco.editor.EditorOption.readOnly) }; })()`);
+        assert.match(shown.line, /def dumps\(/);
+        assert.equal(shown.readOnly, true);
+        await page.evaluate(`document.querySelector('#sigdialog').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+        await page.waitFor(`!document.querySelector('.fs-libview')`, 5000, 'the window closed');
+        // the project's file stays in the editor
+        assert.equal(await page.evaluate('window.pymagic.editor.getModel().uri.path'), '/calc.py');
+    });
+
     test('node_modules is shown in the project tree, excluded and read when it is opened', async () => {
         const row = await page.waitFor(`(() => { const li = document.querySelector('li[data-path="node_modules"]'); return li ? li.className + ' | ' + li.title : ''; })()`, 15000, 'node_modules in the tree');
         assert.match(row, /mark-excluded/);

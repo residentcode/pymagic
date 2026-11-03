@@ -913,12 +913,15 @@ app.MapPost("/api/regex", async (HttpRequest req) =>
 // site-packages and standard library, and the folders given with --lib
 List<string> SearchLibraryRoots() => libs.Concat(interpreters.Current?.LibraryRoots(includeStdlib: true) ?? Array.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
+// a library file read only (Find in files, and go to definition into a library): from those folders and typeshed's stubs, nothing else
 app.MapGet("/api/library-file", (string path) =>
 {
     try
     {
         string full = Path.GetFullPath(path);
-        bool inside = SearchLibraryRoots().Any(r => full.StartsWith(Path.GetFullPath(r).TrimEnd('\\', '/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+        var roots = SearchLibraryRoots();
+        if (typeshed != null) roots.Add(typeshed);
+        bool inside = roots.Any(r => full.StartsWith(Path.GetFullPath(r).TrimEnd('\\', '/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
         if (!inside || Path.GetExtension(full) is not (".py" or ".pyi") || !File.Exists(full)) return Results.NotFound();
         if (new FileInfo(full).Length > 5 * 1024 * 1024) return Results.StatusCode(413);
         return Results.Text(File.ReadAllText(full), "text/plain; charset=utf-8");

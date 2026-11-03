@@ -1,5 +1,6 @@
 // Find in files (the Search tab of the bottom panel, Ctrl+Shift+F), replace in files, and go to symbol in the workspace.
-import * as monaco from 'monaco-editor';
+import * as monaco from 'monaco-editor';
+import { showLibraryFile as showLibrary } from './libview.js';
 import { showTab } from './panel';
 import { fileScore } from './filescore';
 import { openMenu } from './menu';
@@ -291,34 +292,8 @@ export function setupSearch(deps) {
         box.onchange = () => void search();
     /** A library's file, read only, in a window over the page at the line of a result (the editor opens only the project's files). */
     async function showLibraryFile(path, line, column) {
-        const res = await fetch('/api/library-file?path=' + encodeURIComponent(path)).catch(() => null);
-        if (!res?.ok) {
+        if (!(await showLibrary(path, line, column, editor)))
             summary.textContent = `${path} cannot be read here.`;
-            return;
-        }
-        const text = await res.text();
-        const overlay = document.createElement('div');
-        overlay.id = 'sigdialog';
-        const box = document.createElement('div');
-        box.className = 'box fs-libview';
-        const title = document.createElement('h2');
-        title.textContent = path.split('/').slice(-3).join('/');
-        title.title = path + ' (read only)';
-        const host = document.createElement('div');
-        host.className = 'fs-libview-editor';
-        box.append(title, host);
-        overlay.appendChild(box);
-        document.body.appendChild(overlay);
-        const model = monaco.editor.createModel(text, 'python');
-        const view = monaco.editor.create(host, { model, readOnly: true, minimap: { enabled: false }, scrollBeyondLastLine: false, automaticLayout: true, fontSize: editor.getOption(monaco.editor.EditorOption.fontSize) });
-        const at = new monaco.Range(line + 1, column + 1, line + 1, column + 1);
-        view.setSelection(at);
-        view.revealLineInCenter(line + 1);
-        view.focus();
-        const close = () => { view.dispose(); model.dispose(); overlay.remove(); editor.focus(); };
-        overlay.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
-        overlay.onmousedown = (e) => { if (e.target === overlay)
-            close(); };
     }
     const structural_ = () => {
         const on = structBox.checked;
