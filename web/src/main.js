@@ -35,6 +35,7 @@ import './ejs-language';
 import { languageFor as languageForFile } from './file-language';
 import { setupEmmet } from './emmet';
 import { setupTagPairs } from './tag-pairs';
+import { setupFullLine } from './fullline';
 import { setupNotebook } from './notebook';
 import { buildInfo, buildLabel } from './build-info.js';
 import { setupGitSync } from './git-sync';
@@ -1168,6 +1169,8 @@ async function main() {
         setupEmmet();
     if (plugin('tagpairs'))
         setupTagPairs();
+    if (plugin('fullline'))
+        setupFullLine();
     if (plugin('profiler'))
         setupProfiler({ ...common, askText: (...a) => explorer.askText(...a) });
     if (plugin('httpclient'))

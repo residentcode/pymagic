@@ -9,3 +9,5 @@ web/dist/
 .pymagic/
 desktop/out/
 desktop/stage/
+models/*.gguf
+models/*.part

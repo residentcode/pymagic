@@ -7,7 +7,7 @@ The editor is Monaco (the editor of VS Code), in an Electron window.
 What it does, in short:
 
 - **Editing**: completion, hover, go to definition, find usages, rename and the other refactorings, inspections with quick fixes (PyCharm's
-  Python inspections and PyMagic's own), Emmet in HTML, templates, stylesheets and JSX, tag pairs renamed together, code vision and inlay hints, formatting (black and ruff style), VS Code's colours for code, a keymap you can change.
+  Python inspections and PyMagic's own), Emmet in HTML, templates, stylesheets and JSX, tag pairs renamed together, full line completion by a small code model that runs on your computer, code vision and inlay hints, formatting (black and ruff style), VS Code's colours for code, a keymap you can change.
 - **Frameworks**: Django (models, URLs, templates, settings, REST framework, New Project through Django's own `startproject`), Flask, FastAPI,
   Jinja, pytest. New Project also makes the other kinds PyCharm has: HTML5 Boilerplate, Bootstrap, Vite, React Native, Next.js, Node.js and
   Express, each by its own generator (Node.js needed).
@@ -71,8 +71,9 @@ dotnet run --project src/PyMagic.Web -- --root examples/demo
 node desktop/package.mjs
 ```
 
-It needs internet the first time, for Electron, the .NET runtime package and the installer tools. It builds
-`desktop\out\PyMagic-win32-x64\PyMagic.exe` (about 470 MB, with Electron and the .NET runtime inside) and the installer
+It needs internet the first time, for Electron, the .NET runtime package, the installer tools and the model of full line completion
+(Qwen2.5-Coder 0.5B, 531 MB, fetched once into `models/` by `models/fetch.mjs` and checked against its SHA-256; it is not in git). It builds
+`desktop\out\PyMagic-win32-x64\PyMagic.exe` (about 1.1 GB, with Electron, the .NET runtime and the model inside) and the installer
 `desktop\out\PyMagic-Setup-0.1.0.exe` (about 150 MB). `--no-installer` builds the folder only. Close any PyMagic.exe started from
 `desktop\out` first: Windows keeps that folder locked while it runs.
 
@@ -82,7 +83,8 @@ It needs internet the first time, for Electron, the .NET runtime package and the
 dotnet run --project tests/PyMagic.Tests -c Release
 ```
 
-The engine's tests run in a plain console runner. `PYMAGIC_TEST_ONLY=SchemaTests` runs one class.
+The engine's tests run in a plain console runner. `PYMAGIC_TEST_ONLY=SchemaTests` runs one class. `PYMAGIC_TEST_FULLLINE=1` also runs the
+model of full line completion (fetch it first with `node models/fetch.mjs`).
 
 ```bash
 cd web && node --test test/*.test.mjs
@@ -114,7 +116,7 @@ Visual Studio Code works too: open the folder, and use `dotnet build` and `node`
 
 ## Plugins
 
-The optional parts of PyMagic are built-in plugins, switched on and off in **Settings > Plugins**: Django, Flask, FastAPI, JavaScript projects, Emmet, HTML tag pairs, Jupyter Notebooks,
+The optional parts of PyMagic are built-in plugins, switched on and off in **Settings > Plugins**: Django, Flask, FastAPI, JavaScript projects, Full line completion, Emmet, HTML tag pairs, Jupyter Notebooks,
 Docker, WSL, SSH, Git, JSON Schema, HTTP Client, Database Tools and SQL, Coverage, Diagrams, Profiler, Pull Requests, Deployment, Markdown and
 Macros. How to make one is in [docs/plugins.md](docs/plugins.md).
 
@@ -220,4 +222,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 298 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 299 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

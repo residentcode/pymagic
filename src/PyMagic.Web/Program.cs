@@ -402,8 +402,25 @@ app.MapGet("/api/settings", () => Results.Text(userSettings.Read(), "application
 app.MapPut("/api/settings", async (HttpRequest req) =>
 {
     using var reader = new StreamReader(req.Body, Encoding.UTF8);
-    try { string text = await reader.ReadToEndAsync(); userSettings.Write(text); Plugins.Load(text); return Results.NoContent(); }
+    try
+    {
+        string text = await reader.ReadToEndAsync();
+        userSettings.Write(text);
+        Plugins.Load(text);
+        if (!Plugins.On("fullline")) FullLine.Unload();   // its model's memory given back at once
+        return Results.NoContent();
+    }
     catch (ServiceException e) { return Results.BadRequest(e.Message); }
+});
+// full line completion: the rest of the line at the caret, written by the bundled model (a request the page drops is cancelled)
+app.MapGet("/api/fullline", () => Results.Json(FullLine.Status()));
+app.MapPost("/api/fullline", async (HttpRequest req, HttpContext ctx) =>
+{
+    var body = await JsonNode.ParseAsync(req.Body);
+    string text = body?["text"]?.GetValue<string>() ?? "";
+    int offset = body?["offset"]?.GetValue<int>() ?? text.Length;
+    var s = await FullLine.SuggestAsync(text, offset, body?["language"]?.GetValue<string>() ?? "", ctx.RequestAborted);
+    return Results.Json(new { text = s.Text, ms = s.Ms, error = s.Error });
 });
 
 app.MapGet("/api/files", () =>

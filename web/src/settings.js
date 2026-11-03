@@ -126,6 +126,7 @@ export function editorOptions(s = current) {
         codeLens: s.codeVision || s.codeVisionAuthor,
         inlayHints: { enabled: s.hintParams || s.hintTypes ? 'on' : 'off' },
         linkedEditing: true,   // a tag's two names renamed together (the HTML tag pairs plugin gives the pairs; without it there are none)
+        inlineSuggest: { enabled: true },   // the rest of a line in grey (the full line completion plugin writes it; without it there is none)
     };
 }
 

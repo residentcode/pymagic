@@ -50,6 +50,7 @@ const FILES = {
     'emmet/site.css': 'a {\n  m10\n}\n',
     'emmet/page.hjs': 'ul>li*2\n',
     'tags/page.html': '<h1>{{ title }}</h1>\n<p>Welcome to {{ title }}</p>\n',
+    'fullline/config.py': 'import json\n\n\ndef load_config(path):\n    with open(path) as f:\n        config = \n    return config\n',
     'tags/App.jsx': 'export const App = () => (\n  <section className="a"><Item key={1} /></section>\n);\n',
     'emmet/App.vue': 'ul>li*2\n',
     'emmet/App.jsx': 'export const App = () => (\n  div.card>h2\n);\n',
@@ -2984,6 +2985,19 @@ describe('New Project: the other kinds', () => {
         const tokens = await page.evaluate(`window.pymagic.monaco.editor.tokenize(window.pymagic.editor.getModel().getValue(), 'ejs').flat().map((t) => t.type)`);
         for (const want of ['tag.html', 'attribute.name.html', 'delimiter.html', 'identifier.js', 'comment.html'])
             assert.ok(tokens.includes(want), want + ' in ' + tokens.join(' '));
+    });
+
+    test('Full line completion: the rest of the line in grey, written by the bundled model, taken with Tab', async () => {
+        await open('fullline/config.py');
+        const before = await page.evaluate('window.pymagic.editor.getModel().getValue()');
+        // the caret after "config = ": typing pauses, the model writes the line, it is shown in grey
+        await page.evaluate(`(() => { const e = window.pymagic.editor; e.setPosition({ lineNumber: 6, column: 18 }); e.focus(); e.trigger('test', 'editor.action.inlineSuggest.trigger', {}); })()`);
+        const ghost = await page.waitFor(`(() => { const g = document.querySelector('.monaco-editor .ghost-text-decoration, .monaco-editor .ghost-text'); return g ? g.textContent : ''; })()`, 30000, 'the grey line');
+        assert.match(ghost, /json\.load/);
+        await page.evaluate(`window.pymagic.editor.trigger('keyboard', 'editor.action.inlineSuggest.commit', {})`);
+        const line = await page.evaluate('window.pymagic.editor.getModel().getLineContent(6)');
+        await page.evaluate(`window.pymagic.editor.getModel().setValue(${JSON.stringify(before)})`);
+        assert.match(line, /^        config = json\.load/);
     });
 
     test('HTML tag pairs: renaming an opening tag renames its closing tag, and back, in a template and in JSX', async () => {

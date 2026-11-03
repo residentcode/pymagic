@@ -3,6 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import { cpSync, rmSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { packager } from '@electron/packager';
 import { Arch, Platform, build } from 'electron-builder';
 import { installerConfig, packagerOptions } from './build-config.mjs';
@@ -35,6 +36,15 @@ sh('dotnet', ['publish', `"${resolve(repo, 'src', 'PyMagic.Web', 'PyMagic.Web.cs
 cpSync(resolve(repo, 'examples', 'demo'), resolve(stage, 'demo'), { recursive: true });
 // the standard library's and third-party packages' stubs, so the type checks do not depend on PyCharm being installed
 cpSync(resolve(repo, 'typeshed'), resolve(stage, 'typeshed'), { recursive: true });
+// the model of full line completion (531 MB, not in git): fetched once into models/, checked against its SHA-256, and carried by the app
+const { fetchModel, MODEL } = await import(pathToFileURL(resolve(repo, 'models', 'fetch.mjs')).href);
+await fetchModel(resolve(repo, 'models'));
+mkdirSync(resolve(stage, 'models'), { recursive: true });
+cpSync(resolve(repo, 'models', MODEL.file), resolve(stage, 'models', MODEL.file));
+cpSync(resolve(repo, 'models', 'NOTICE.md'), resolve(stage, 'models', 'NOTICE.md'));
+// llama.cpp's builds for other systems, which a Windows app never loads
+for (const other of ['win-arm64', 'linux-x64', 'linux-arm64', 'linux-musl-x64', 'osx-x64', 'osx-arm64'])
+  rmSync(resolve(stage, 'host', 'runtimes', other), { recursive: true, force: true });
 
 console.log('== app');
 const paths = await packager(packagerOptions(desktop, stage));
