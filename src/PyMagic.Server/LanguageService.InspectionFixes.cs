@@ -13,7 +13,7 @@ public sealed partial class LanguageService
     IEnumerable<Diag> InspectionDiagnostics(ModuleInfo m, TypeEvaluator ev)
     {
         bool django = Plugins.On("django");   // Settings > Plugins: Django (and REST framework) inspections only with the plugin
-        foreach (var f in CodeInspections.Run(m))
+        foreach (var f in CodeInspections.Run(m, ev))
             if (!Suppressed(m.Source, f) && !(f.Code == "shadowing-names" && AsksForFixture(m, f.Start))) yield return AsDiag(f);
         foreach (var d in ClassDiagnostics(m, ev)) yield return d;
         foreach (var d in MoreTypedDiagnostics(m, ev)) yield return d;
@@ -29,6 +29,7 @@ public sealed partial class LanguageService
         foreach (var d in PyCharmShapeDiagnostics(m, ev)) yield return d;
         foreach (var d in PyCharmTypeDiagnostics(m, ev)) yield return d;
         foreach (var d in PytestDiagnostics(m, ev)) yield return d;
+        foreach (var d in ToolDiagnostics(m, ev)) yield return d;
         foreach (var d in PyCharmClassDiagnostics(m, ev)) yield return d;
         foreach (var d in CompatibilityDiagnostics(m, ev)) yield return d;
         foreach (var d in StarImportDiagnostics(m, ev)) yield return d;
@@ -199,7 +200,7 @@ public sealed partial class LanguageService
                 break;
             }
             default:
-                if (!MoreFix(code, m, uri, start, end, add, actions)) StyleFix(code, m, start, end, add);
+                if (!ToolFix(snap, code, m, uri, start, end, add) && !MoreFix(code, m, uri, start, end, add, actions)) StyleFix(code, m, start, end, add);
                 break;
         }
     }

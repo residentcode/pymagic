@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 using PyMagic.Core.Syntax;
 using PyMagic.Core.Types;
 using PyMagic.Server.Pytest;
@@ -14,9 +13,11 @@ namespace PyMagic.Server;
 /// <c>import xml</c>), the conftest.py files and plugins of a test module, the modules the type evaluator asks for by name whatever a file imports
 /// (builtins, typing, ...) with what they import, and the settings. The modules the analyses looked up by name beyond the project (libraries, stubs, names
 /// that were not found) are remembered too and checked again first: when one of them is no longer what it was, nothing is remembered any more. A file whose
-/// findings can rest on project files it does not import is always worked out again: one whose own checks read the whole project (Django's URL names,
-/// settings, admin and templates, the routes of the web frameworks; models are judged against their migrations), and one that imports Django or a web
-/// framework, even through other files (their classes are typed from the whole project).
+/// findings can rest on project files it does not import is always worked out again: one that imports Django or a web framework, even through other
+/// files (their classes are typed from the whole project, and the checks of URL names, templates, the admin and routes read it), a settings module
+/// (its apps and dotted paths lead anywhere in the project) and the models of an app (judged against its migrations); a file that only mentions a
+/// framework in its text is remembered like any other. A name that nothing was found for counts with whether an extension module (.pyd / .so) of
+/// that name is on disk, so that one built during the session is seen.
 /// </summary>
 public sealed partial class LanguageService
 {
@@ -54,6 +55,49 @@ public sealed partial class LanguageService
         return new StrongBox<ulong>(h.A ^ h.B << 1 | 1);
     }).Value;
 
+    /// <summary>
+    /// What a name looked up beyond the project stands for now: the module found (<see cref="IdentityOf"/>), or, when none was, whether an extension
+    /// module (.pyd / .so) of that name is on disk (2; 0 for nothing), which the import checks count as found.
+    /// </summary>
+    static ulong OutsideIdentityOf(string name, ModuleInfo? m, CompiledOnDisk compiled) => m != null ? IdentityOf(m) : compiled.Has(name) ? 2UL : 0UL;
+
+    /// <summary>
+    /// The extension modules in the folders of the search roots, each folder listed once per run (as <see cref="CompiledModuleExists"/> finds them:
+    /// `name.pyd`, `name.cp314-win_amd64.pyd`, `name.cpython-314-x86_64-linux-gnu.so`).
+    /// </summary>
+    sealed class CompiledOnDisk(IEnumerable<string> roots)
+    {
+        readonly string[] _roots = roots.ToArray();
+        readonly Dictionary<string, HashSet<string>> _folders = new(StringComparer.OrdinalIgnoreCase);
+
+        public bool Has(string name)
+        {
+            var parts = name.Split('.');
+            foreach (var root in _roots)
+                if (In(Path.Combine(new[] { root }.Concat(parts.Take(parts.Length - 1)).ToArray())).Contains(parts[^1])) return true;
+            return false;
+        }
+
+        HashSet<string> In(string folder)
+        {
+            if (_folders.TryGetValue(folder, out var names)) return names;
+            names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (Directory.Exists(folder))
+                    foreach (var file in Directory.EnumerateFiles(folder))
+                    {
+                        string ext = Path.GetExtension(file);
+                        if (ext.Equals(".pyd", StringComparison.OrdinalIgnoreCase) || ext.Equals(".so", StringComparison.OrdinalIgnoreCase))
+                            names.Add(Path.GetFileName(file).Split('.')[0]);
+                    }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return _folders[folder] = names;
+        }
+    }
+
     static readonly ConditionalWeakTable<ModuleInfo, string[]> AttributeNames = new();
 
     /// <summary>The names a module's code reads as attributes (<c>x.name</c>): where the value is a package, the name can be one of its submodules.</summary>
@@ -63,14 +107,24 @@ public sealed partial class LanguageService
     /// <summary>Modules the type evaluator asks for by name, whatever a file imports.</summary>
     static readonly string[] ImplicitModules = { "builtins", "typing", "typing_extensions", "types", "abc", "collections", "collections.abc", "_typeshed" };
 
-    /// <summary>Text on which a file's own checks look at the whole project: Django (settings, URL names, templates, the admin, migrations) and the web frameworks (routes).</summary>
-    static readonly Regex ReadsTheWholeProject = new(@"django|rest_framework|\b(?:fastapi|starlette|flask|quart|jinja2)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
+    /// <summary>
+    /// The module's own checks read more than its imports without importing a framework: the models of an app (their migrations) and a settings module
+    /// (INSTALLED_APPS and the `*_APPS` lists, the other dotted paths, CONSTANCE_CONFIG), told by what it assigns, not by the words in its text.
+    /// </summary>
     static bool BeyondItsImports(ModuleInfo m) =>
-        ReadsTheWholeProject.IsMatch(m.Source) || AppOfModels(m.Name) != null && m.Source.Contains("models", StringComparison.Ordinal);
+        AppOfModels(m.Name) != null && m.Source.Contains("models", StringComparison.Ordinal)
+        || AstChildren.Descendants(m.Ast).Any(s => s switch
+        {
+            AssignStmt { Targets: [NameExpr t] } => IsDjangoSetting(t.Name),
+            AugAssignStmt { Target: NameExpr t } => IsDjangoSetting(t.Name),
+            _ => false,
+        });
 
-    /// <summary>Packages whose classes the evaluator types from the whole project (models, settings, dependencies): whatever imports them, even through other files, is worked out again.</summary>
-    static readonly HashSet<string> WholeProjectPackages = new(StringComparer.Ordinal) { "django", "rest_framework", "fastapi", "starlette", "flask", "quart", "jinja2" };
+    static bool IsDjangoSetting(string name) =>
+        SettingsPathKinds.ContainsKey(name) || name == "CONSTANCE_CONFIG" || name.EndsWith("APPS", StringComparison.Ordinal);
+
+    /// <summary>Packages whose classes the evaluator types from the whole project (models, settings, dependencies), or whose checks read it: whatever imports them, even through other files, is worked out again.</summary>
+    static readonly HashSet<string> WholeProjectPackages = new(StringComparer.Ordinal) { "django", "rest_framework", "fastapi", "starlette", "flask", "quart", "jinja2", "constance" };
 
     static bool IsWholeProjectPackage(string importedName) => WholeProjectPackages.Contains(importedName.Split('.')[0]);
 
@@ -111,11 +165,12 @@ public sealed partial class LanguageService
     {
         var ws = snap.Workspace;
         var fromOutside = new Dictionary<string, ModuleInfo?>(StringComparer.Ordinal);
+        var compiled = new CompiledOnDisk(SearchRoots());
         lock (_problemMemory.Gate)
             foreach (var (name, identity) in _problemMemory.Resolved)
             {
                 var now = ws.GetModule(name);
-                if (IdentityOf(now) != identity) { _problemMemory.Forget(); fromOutside.Clear(); break; }
+                if (OutsideIdentityOf(name, now, compiled) != identity) { _problemMemory.Forget(); fromOutside.Clear(); break; }
                 fromOutside[name] = now;
             }
         return fromOutside;
@@ -268,12 +323,13 @@ public sealed partial class LanguageService
         IEnumerable<(string Name, ModuleInfo? Module)> resolved)
     {
         var project = new HashSet<ModuleInfo>(snap.Project, ReferenceEqualityComparer.Instance);
+        var compiled = new CompiledOnDisk(SearchRoots());
         lock (_problemMemory.Gate)
         {
             foreach (var (name, module) in resolved)
             {
                 if (module != null && project.Contains(module)) continue;
-                ulong identity = IdentityOf(module);
+                ulong identity = OutsideIdentityOf(name, module, compiled);
                 if (_problemMemory.Resolved.TryGetValue(name, out ulong known) && known != identity) { _problemMemory.Forget(); return; }   // it changed during the run
                 _problemMemory.Resolved[name] = identity;
                 fromOutside[name] = module;

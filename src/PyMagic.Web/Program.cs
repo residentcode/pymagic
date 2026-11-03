@@ -32,6 +32,8 @@ root = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
 www ??= FindWww();
 // without --typeshed or PYMAGIC_TYPESHED: the typeshed shipped with PyMagic (the repo's typeshed/ when run from Visual Studio)
 typeshed ??= FindTypeshed();
+// the syntax trees of typeshed's stubs and the libraries, kept between starts (PYMAGIC_PARSED_CACHE elsewhere)
+PyMagic.Core.Syntax.ParsedFileCache.Folder ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PyMagic", "parsed");
 
 // ---- the project's interpreter ---------------------------------------------------------------------------------
 

@@ -3496,6 +3496,41 @@ describe('the Open work of 3 November: the HTTP client\'s scripts, Before launch
     });
 });
 
+describe('the type engine of 3 November: BDD steps, mock.patch, tuple assignment balance', () => {
+    const put = (rel, text) => { mkdirSync(dirname(join(app.root, rel)), { recursive: true }); writeFileSync(join(app.root, rel), text); };
+    const marks = (rel, wanted) => page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); if (!m.uri.path.endsWith(${JSON.stringify(rel)})) return null; const f = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).map((x) => x.startLineNumber + ': ' + x.message); return f.some((x) => x.includes(${JSON.stringify(wanted)})) ? f : null; })()`, 30000, `${wanted} in ${rel}`);
+    const markers = () => page.evaluate(`(() => { const m = window.pymagic.editor.getModel(); return window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).map((x) => x.startLineNumber + ': ' + x.message); })()`);
+
+    test('BDD: a .feature file has Gherkin colours, and a step no definition matches is marked', async () => {
+        put('features/steps/steps.py', "from behave import given\n\n\n@given('a shop')\ndef step_impl(context):\n    pass\n");
+        put('features/shop.feature', 'Feature: F\n  Scenario: S\n    Given a shop\n    When I pay\n');
+        await open('features/shop.feature');
+        assert.equal(await page.evaluate('window.pymagic.editor.getModel().getLanguageId()'), 'gherkin');
+        const found = await marks('features/shop.feature', "Undefined step reference: 'I pay'");
+        assert.ok(found.some((x) => x.startsWith('4: ')), found.join(' | '));
+        assert.ok(!found.some((x) => x.includes("'a shop'")), 'the defined step is not marked');
+    });
+
+    test('mock.patch as a decorator hands the mock to its parameter; a target that does not exist is marked', async () => {
+        put('app/__init__.py', '');
+        put('app/services.py', 'def notify():\n    pass\n');
+        put('test_patched.py', "from unittest.mock import patch\n\n\n@patch('app.services.notify')\ndef test_a(m):\n    m.assert_called_once()\n\n\n@patch('app.services.notfy')\ndef test_b(m):\n    pass\n\n\ntest_a()\n");
+        await open('test_patched.py');
+        const found = await marks('test_patched.py', 'notfy');
+        assert.ok(!found.some((x) => x.includes("Parameter 'm' unfilled")), found.join(' | '));
+    });
+
+    test('Tuple assignment balance: too many and too few values are marked, a starred target takes the rest', async () => {
+        put('unpack.py', 'a, b = 1, 2, 3\nc, d, e = (1, 2)\nf, *g = 1, 2, 3\nprint(a, b, c, d, e, f, g)\n');
+        await open('unpack.py');
+        await marks('unpack.py', 'Too many values to unpack');
+        const found = await markers();
+        assert.ok(found.some((x) => x.startsWith('1: ') && x.includes('Too many values to unpack')), found.join(' | '));
+        assert.ok(found.some((x) => x.startsWith('2: ') && x.includes('Need more values to unpack')), found.join(' | '));
+        assert.ok(!found.some((x) => x.startsWith('3: ') && /values to unpack/.test(x)), found.join(' | '));
+    });
+});
+
 describe('Settings > Plugins', () => {
     const openPlugins = async () => {
         await page.evaluate(`${$('b-gear')}.click()`);

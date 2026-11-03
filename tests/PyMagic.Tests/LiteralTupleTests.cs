@@ -105,4 +105,30 @@ public class LiteralTupleTests
         Same("tuple[int, str]", T("def f(y: tuple[int, str] | tuple[None, bytes]):\n    if y[0] is not None:\n        y\n"));
         Same("tuple[Color, int]", T("def f(z: tuple[Color, int] | tuple[Literal[Color.RED], str]):\n    if z[0] is Color.BLUE:\n        z\n"));
     }
+
+    [Fact]
+    public void ATuplePutInAVariableFirstIsCheckedByItsLiterals()
+    {
+        var found = Mismatches(OpenPair + "def g():\n    bad = (\"x\", 1)\n    good = (\"r\", 1)\n    open_pair(bad)\n    open_pair(good)\n");
+        Assert.Equal(1, found.Count);
+        Assert.True(found[0].Contains("got 'tuple[Literal['x'], int]'"), found[0]);
+        // the assignments that reach the call count: a later one that is no literal, or one in a branch that is not, leave it unchecked
+        Assert.Equal(0, Mismatches(OpenPair + "def g(mode: str):\n    pair = (\"x\", 1)\n    pair = (mode, 1)\n    open_pair(pair)\n").Count);
+        Assert.Equal(0, Mismatches(OpenPair + "def g(c: bool, other: tuple[Literal[\"r\"], int]):\n    pair = (\"x\", 1)\n    if c:\n        pair = other\n    open_pair(pair)\n").Count);
+        // a nested tuple, from a name of the module used in a function
+        Assert.Equal(1, Mismatches("def nested(p: tuple[tuple[Literal[\"a\"], int], str]) -> None: ...\n\n\nINNER = (\"b\", 1)\n\n\ndef g():\n    nested((INNER, \"s\"))\n").Count);
+    }
+
+    [Fact]
+    public void AListPutInAVariableIsNotItsLiterals()
+    {
+        // a list can change after it was made (append), so its first items say nothing for sure
+        Assert.Equal(0, Mismatches("def modes(ms: list[Literal[\"r\", \"w\"]]) -> None: ...\n\n\ndef g():\n    ms = [\"r\"]\n    modes(ms)\n").Count);
+    }
+
+    [Fact]
+    public void ATupleThatNeedsItselfIsNoLiteral()
+    {
+        Assert.Equal(0, Mismatches(OpenPair + "def g():\n    pair = (\"r\", 1)\n    for _ in range(3):\n        pair = (pair[0], 2)\n    open_pair(pair)\n").Count);
+    }
 }

@@ -62,8 +62,14 @@ public sealed class ModuleInfo
     internal ModuleInfo(string name, string? path, string source, bool isStub, bool isPackage, ResolutionKind kind, PythonEnvironment env)
     {
         Name = name; Path = path; Source = source; IsStub = isStub; IsPackage = isPackage; Kind = kind;
-        var r = Parser.Parse(source);
-        Ast = r.Module; SyntaxErrors = r.Diagnostics;
+        // a library's file (typeshed, stubs, installed packages) is parsed once for all starts; the user's own code is parsed as it is now
+        if (path != null && kind is ResolutionKind.Typeshed or ResolutionKind.StubPackage or ResolutionKind.InlinePackage or ResolutionKind.LibrarySource)
+            (Ast, SyntaxErrors) = ParsedFileCache.Parse(source);
+        else
+        {
+            var r = Parser.Parse(source);
+            Ast = r.Module; SyntaxErrors = r.Diagnostics;
+        }
         Semantics = SemanticModel.Build(Ast, env);
         Flow = new FlowModel(Semantics);
     }

@@ -538,7 +538,7 @@ public sealed class Server
         var edited = _dirty.Where(u => _service.VersionOf(u) != null).ToList();
         _dirty.Clear();
         var affected = new List<string>(edited);
-        foreach (var d in _service.DependentsOf(edited))
+        foreach (var d in _service.DependentsOf(edited).Concat(_service.BddDependentsOf(edited)))
             if (!affected.Contains(d)) affected.Add(d);
 
         foreach (var uri in affected)

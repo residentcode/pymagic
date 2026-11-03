@@ -99,6 +99,23 @@ public sealed partial class LanguageService
         return result;
     }
 
+    /// <summary>
+    /// As PyCharm's super method search: going down the MRO, each method of this name whose class is not a base of one already found, so with multiple
+    /// inheritance every line of bases that defines it counts (`class C(Base, Mixin)` overrides both `Base.save` and `Mixin.save`), nearest first.
+    /// </summary>
+    static List<(ModuleInfo Module, ClassDef Class, FunctionDef Method, bool InProject)> SuperMethodsPerBase(Snapshot snap, List<(ModuleInfo Module, ClassDef Class, bool InProject)> mro, string name)
+    {
+        var result = new List<(ModuleInfo, ClassDef, FunctionDef, bool)>();
+        var covered = new HashSet<ClassDef>(ReferenceEqualityComparer.Instance);
+        foreach (var (m, c, inProject) in mro)
+        {
+            if (covered.Contains(c) || MethodIn(m, c, name) is not { } f) continue;
+            result.Add((m, c, f, inProject));
+            foreach (var above in MroClasses(snap, m, c)) covered.Add(above.Class);
+        }
+        return result;
+    }
+
     /// <summary>The classes a class derives from, nearest first, object included; InProject is false for a library's class.</summary>
     static List<(ModuleInfo Module, ClassDef Class, bool InProject)> MroClasses(Snapshot snap, ModuleInfo module, ClassDef cd)
     {
@@ -278,8 +295,9 @@ public sealed partial class LanguageService
                 int line = lines.PositionOf(f.NameStart).Line;
                 bool abstractMethod = IsAbstractDef(f);
 
-                // the nearest method above; a library's (typeshed, site-packages, object's own) is named with its module and points into its file when it has one
-                if (SuperMethods(ancestors, f.Name).FirstOrDefault() is ({ } am, { } ac, { } above, var inProject))
+                // the nearest method above on each line of bases (one mark each); a library's (typeshed, site-packages, object's own) is named with its
+                // module and points into its file when it has one (the page shows a library file read only)
+                foreach (var (am, ac, above, inProject) in SuperMethodsPerBase(snap, ancestors, f.Name))
                 {
                     string kind = IsAbstractDef(above) ? "implements" : "overrides";
                     if (inProject && Where(am, above) is { } where)

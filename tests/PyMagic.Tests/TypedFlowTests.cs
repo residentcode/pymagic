@@ -56,11 +56,59 @@ public class TypedFlowTests
     }
 
     [Fact]
-    public void AFunctionThatOnlyRaisesIsNotTakenAsTheEndWithoutAnAnnotation()
+    public void AFunctionThatOnlyRaisesIsTheEndWithoutAnAnnotation()
     {
-        Assert.Equal("", Flow("def boom():\n    raise ValueError()\n\ndef f():\n    boom()\n    print('after')\n"));
-        // an async def annotated NoReturn only makes a coroutine when called
+        // as pyright infers it: every path of the body raises
+        Assert.Equal("6: Unreachable code", Flow("def boom():\n    raise ValueError()\n\ndef f():\n    boom()\n    print('after')\n"));
+        Assert.Equal("int", T("def boom(m):\n    raise ValueError(m)\n\ndef f(x: int | None):\n    if x is None:\n        boom('no')\n    x\n"));
+        Assert.Equal("9: Unreachable code", Flow("class C:\n    def stop(self):\n        if self:\n            raise ValueError()\n        raise KeyError()\n\n"
+            + "def f(c: C):\n    c.stop()\n    print('after')\n"));
+    }
+
+    [Fact]
+    public void AFunctionThatRaisesNotImplementedOrIsAbstractIsNotTheEnd()
+    {
+        Assert.Equal("", Flow("def todo():\n    raise NotImplementedError\n\ndef f():\n    todo()\n    print('after')\n"));
+        Assert.Equal("", Flow("from abc import ABC, abstractmethod\n\nclass B(ABC):\n    @abstractmethod\n    def run(self):\n        raise ValueError()\n\n"
+            + "def f(b: B):\n    b.run()\n    print('after')\n"));
+        // a function that may return, and a generator, are not the end either
+        Assert.Equal("", Flow("def maybe(x):\n    if x:\n        return 1\n    raise ValueError()\n\ndef f():\n    maybe(1)\n    print('after')\n"));
+        Assert.Equal("", Flow("def gen():\n    raise ValueError()\n    yield 1\n\ndef f():\n    gen()\n    print('after')\n").Replace("3: Unreachable code", ""));
+        // an async def annotated NoReturn, or one that only raises, only makes a coroutine when called
         Assert.Equal("", Flow("from typing import NoReturn\n\nasync def stop() -> NoReturn: ...\n\ndef f():\n    stop()\n    print('after')\n"));
+        Assert.Equal("", Flow("async def stop():\n    raise ValueError()\n\ndef f():\n    stop()\n    print('after')\n"));
+    }
+
+    [Fact]
+    public void ANameWithoutAConditionTakesOnlyTheAssignmentsThatPassCallsThatNeverReturn()
+    {
+        // no condition narrows x: what reaches the use is worked out on the flow the types decide
+        Assert.Equal("int", T(Fail + "def f(a):\n    x = None\n    if a:\n        x = 1\n    else:\n        fail('no')\n    x\n"));
+        Assert.Equal("int", T("def boom():\n    raise ValueError()\n\ndef f(a):\n    x = 'a'\n    if a:\n        x = 1\n    else:\n        boom()\n    x\n"));
+    }
+
+    [Fact]
+    public void AModuleLevelReadBeforeTheModuleRebindsABuiltinIsTheBuiltin()
+    {
+        // requests/compat.py: `builtin_str = str` and two lines later `str = str`
+        Assert.Equal("type[str]", T("builtin_str = str\nstr = str\nbuiltin_str\n"));
+        var ws = new Workspace();
+        ws.AddModule("compat", "builtin_str = str\nstr = str\n");
+        var u = ws.AddModule("u", "from compat import builtin_str\n\ndef f(s: str | bytes) -> str:\n    if isinstance(s, builtin_str):\n        out = s\n    else:\n        out = s.decode()\n    return out\n");
+        Assert.Equal(0, ws.Evaluator.Inspect(u).Count(d => d.Message.Contains("decode")));
+        // a name the module never binds before, and that is no builtin, stays unknown
+        Assert.Equal("Unknown", T("x = undefined_thing\nundefined_thing = 1\nx\n"));
+    }
+
+    [Fact]
+    public void TheEndOfAFunctionFollowsTheTypedFlow()
+    {
+        var (ws, m) = Load(Fail + "def a(x):\n    if x:\n        return 1\n    fail('no')\n\ndef b(x):\n    if x:\n        return 1\n    print(x)\n\n"
+            + "def c():\n    try:\n        return 1\n    finally:\n        return 2\n    print('dead')\n");
+        var defs = AstChildren.Descendants(m.Ast).OfType<FunctionDef>().ToDictionary(f => f.Name);
+        Assert.True(!ws.Evaluator.EndReachable(m, defs["a"]), "a ends in a NoReturn call");
+        Assert.True(ws.Evaluator.EndReachable(m, defs["b"]), "b can run off its end");
+        Assert.True(!ws.Evaluator.EndReachable(m, defs["c"]), "c returns in its finally block");
     }
 
     [Fact]

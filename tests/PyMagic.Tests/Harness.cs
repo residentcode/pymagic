@@ -155,7 +155,9 @@ public static class Program
         // the files under test are user code; their imports resolve like a real project (typeshed first, then the library directory)
         var ws = new PyMagic.Core.Types.Workspace(new PyMagic.Core.Types.WorkspaceOptions
         {
-            LibraryRoots = new[] { dir },
+            // the folder the package is in (site-packages), so that the package's own modules do not hide the standard library's
+            // (pydantic/warnings.py is pydantic.warnings, not the warnings that `import warnings` means)
+            LibraryRoots = new[] { Path.GetDirectoryName(Path.GetFullPath(dir).TrimEnd('\\', '/')) ?? dir },
             TypeshedPath = PyMagic.Core.Types.Workspace.DefaultTypeshedPath,
             // PM_PLATFORM=linux checks Unix-only code the way it would run there (default: this machine)
             Environment = new PyMagic.Core.Semantics.PythonEnvironment(3, 13, System.Environment.GetEnvironmentVariable("PM_PLATFORM") ?? "win32"),
@@ -168,16 +170,27 @@ public static class Program
         bool trace = System.Environment.GetEnvironmentVariable("PM_TRACE") != null;
         string? match = System.Environment.GetEnvironmentVariable("PM_MATCH");   // print every diagnostic containing this text
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        // every file is added under its own dotted name in its package (an __init__ is the package itself) before any is inspected, so
+        // its relative imports resolve and a module that imports another meets the same module, not a second copy read from the library
+        string package = Path.GetFileName(Path.GetFullPath(dir).TrimEnd('\\', '/'));
+        var added = new Dictionary<string, PyMagic.Core.Types.ModuleInfo?>();
+        var swAdd = System.Diagnostics.Stopwatch.StartNew();
         foreach (var f in Directory.EnumerateFiles(dir, "*.py", SearchOption.TopDirectoryOnly).Take(limit))
+        {
+            string name = Path.GetFileNameWithoutExtension(f);
+            bool isInit = name == "__init__";
+            try { added[f] = ws.AddFile(isInit ? package : package + "." + name, f, isPackage: isInit); }
+            catch (Exception e) { crashes++; added[f] = null; Console.WriteLine($"CRASH {name}: {e.GetType().Name}: {e.Message}"); }
+        }
+        loadMs = swAdd.ElapsedMilliseconds;
+        foreach (var f in added.Keys)
         {
             string name = Path.GetFileNameWithoutExtension(f);
             try
             {
                 if (trace) Console.WriteLine($"-> {name}");
                 var swFile = System.Diagnostics.Stopwatch.StartNew();
-                var swLoad = System.Diagnostics.Stopwatch.StartNew();
-                var m = ws.AddFile("corpus_" + name, f);
-                loadMs += swLoad.ElapsedMilliseconds;
+                var m = added[f];
                 if (m == null) continue;
                 files++;
                 var swInsp = System.Diagnostics.Stopwatch.StartNew();

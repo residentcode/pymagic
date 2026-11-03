@@ -18,7 +18,8 @@ public sealed record CallTarget(PyType Callee, PyType Returns, IReadOnlyList<Arg
 public sealed record CallResolution(PyType Returns, IReadOnlyList<CallTarget> Targets);
 
 /// <summary>One argument of a call. Type is evaluated lazily, only when a parameter actually needs it.</summary>
-sealed record ArgInfo(Argument? Node, string? Name, int Stars, Func<PyType> Type, Func<PyType?>? Literal = null, Func<bool>? Fresh = null);
+/// <param name="Form">The type the argument spells as a type expression, for a `TypeForm[T]` parameter.</param>
+sealed record ArgInfo(Argument? Node, string? Name, int Stars, Func<PyType> Type, Func<PyType?>? Literal = null, Func<bool>? Fresh = null, Func<PyType>? Form = null);
 
 public sealed partial class TypeEvaluator
 {
@@ -120,7 +121,9 @@ public sealed partial class TypeEvaluator
         return Substitute(ret, f.Subst);
     }
 
-    PyType InferReturn(FunctionInfo info) => Memo(info, () =>
+    PyType InferReturn(FunctionInfo info) => _cache.TryGetValue(info, out var known) ? known : InferReturnMemo(info);
+
+    PyType InferReturnMemo(FunctionInfo info) => Memo(info, () =>
     {
         // a function's body is where long work spends its time: a cancelled request stops here
         RequestCancellation.Check();
@@ -234,7 +237,7 @@ public sealed partial class TypeEvaluator
     public CallResolution ResolveCall(ModuleInfo m, CallExpr call)
     {
         var callee = TypeOf(m, call.Func);
-        var args = call.Args.Select(a => new ArgInfo(a, a.Name, a.Stars, () => TypeOf(m, a.Value), () => ArgumentLiteral(m, a.Value), () => IsFreshValue(m, a.Value))).ToList();
+        var args = call.Args.Select(a => new ArgInfo(a, a.Name, a.Stars, () => TypeOf(m, a.Value), () => ArgumentLiteral(m, a.Value), () => IsFreshValue(m, a.Value), () => TypeFormOf(m, a.Value))).ToList();
 
         // super() needs the enclosing method, not just the callee's type
         // super is a function in the bundled stub and a class in typeshed
@@ -390,13 +393,15 @@ public sealed partial class TypeEvaluator
     /// The literal an argument is: a written constant, a name every assignment of which is a literal (`mode = "r"`, then `mode = "rb"`:
     /// Literal['r', 'rb']), or arithmetic of literals (`1 << 3`, `"r" + "b"`). Null when any part is not known as a literal.
     /// </summary>
-    PyType? ArgumentLiteral(ModuleInfo m, Expr e)
+    PyType? ArgumentLiteral(ModuleInfo m, Expr e) => ArgumentLiteral(m, e, new HashSet<Declaration>());
+
+    PyType? ArgumentLiteral(ModuleInfo m, Expr e, HashSet<Declaration> path)
     {
         // ("r", 1), ["a", "b"]: the display with its constants as literals (and its other items as they are)
         var items = e switch { TupleExpr t => t.Items, ListExpr l => l.Items, _ => null };
-        if (items == null) return LiteralOf(m, e, new HashSet<Declaration>());
+        if (items == null) return LiteralOf(m, e, path);
         if (items.Count == 0 || items.Any(i => i is StarExpr)) return null;
-        var literals = items.Select(i => ArgumentLiteral(m, i)).ToList();
+        var literals = items.Select(i => ArgumentLiteral(m, i, path)).ToList();
         if (literals.All(l => l == null)) return null;
         var types = literals.Select((l, i) => l ?? TypeOf(m, items[i])).ToList();
         return e is TupleExpr ? TupleOf(types) : Inst("list", PyType.Union(types));
@@ -457,7 +462,8 @@ public sealed partial class TypeEvaluator
                     };
                     // `x = x + 1` in a loop is no literal: a value that needs itself is not known
                     if (value == null || !path.Add(d)) return null;
-                    var lit = LiteralOf(m, value, path);
+                    // `pair = ("x", 1)` and then `open_pair(pair)`: a tuple cannot change, so its constants are the literals it was given (a list can)
+                    var lit = value is TupleExpr ? ArgumentLiteral(m, value, path) : LiteralOf(m, value, path);
                     path.Remove(d);
                     if (lit == null) return null;
                     parts.Add(lit);
@@ -570,7 +576,9 @@ public sealed partial class TypeEvaluator
             if (param == null || arg.Stars != 0 || ReferenceEquals(param, variadic)) continue;
             var at = arg.Type();
             evaluated.Add((arg, param, at));
-            Unify(param.Type, at, solved);
+            // TypeForm[T]: T is the type the argument spells (`list[int]`, `int | None`, `"Model"`), not the type of its value
+            if (IsTypeForm(param.Type, out var formOf) && arg.Form != null) Unify(new TypeVarType(formOf), arg.Form(), solved);
+            else Unify(param.Type, at, solved);
         }
         // what a callable argument solved a Ts to counts when no *args or tuple did; those are checked against it below
         var exact = new HashSet<string>(solved.Keys);
@@ -586,6 +594,7 @@ public sealed partial class TypeEvaluator
         foreach (var (arg, param, at0) in evaluated)
         {
             var at = at0;
+            if (IsTypeForm(param.Type, out _)) continue;   // any type expression is a TypeForm
             if (CheckVariadicCallback(param.Type, at, arg, solved, exact, variadic, variadicArgs) is { } callbackProblems)
             {
                 problems.AddRange(callbackProblems);
@@ -657,6 +666,7 @@ public sealed partial class TypeEvaluator
     CallTarget CallOverloaded(OverloadedType o, IReadOnlyList<ArgInfo> args, Node? callNode)
     {
         var targets = PickOverload(o, args, callNode, out var pick);
+        if (pick != null) pick = AmbiguousThroughUnknown(o, args, callNode, targets.Count, pick);
         // a union argument no overload takes as a whole: each member goes to the overload that takes it (os.path.basename(str | PathLike[str]))
         pick ??= SplitUnionArgument(o, args, callNode)
                  ?? targets.FirstOrDefault(t => t.Problems.Count == 0)
@@ -665,6 +675,31 @@ public sealed partial class TypeEvaluator
         return new CallTarget(o, PyType.Unknown, Array.Empty<ArgumentMapping>(),
             new[] { new CallProblem(CallProblemKind.Arity, callNode, $"No overload of '{o.Overloads[0].Info.Name}' matches these arguments") });
     }
+
+    /// <summary>
+    /// An argument whose type is unknown, or has unknown parts (`sum(s.area() for s in shapes)` with unknown shapes), may fit
+    /// the first overload only because nothing is known about it: when a later overload takes the arguments too and returns
+    /// something else, the call returns Unknown, as in pyright and mypy. The pick still maps and checks the arguments.
+    /// </summary>
+    CallTarget AmbiguousThroughUnknown(OverloadedType o, IReadOnlyList<ArgInfo> args, Node? callNode, int tried, CallTarget pick)
+    {
+        if (tried >= o.Overloads.Count || pick.Returns is UnknownType || !args.Any(a => PartlyUnknown(a.Type(), 0))) return pick;
+        foreach (var f in o.Overloads.Skip(tried))
+        {
+            var loose = new List<CallProblem>();
+            var t = CallFunction(f, args, callNode, loose);
+            if (t.Problems.Count == 0 && loose.Count == 0 && !t.Returns.Equals(pick.Returns)) return pick with { Returns = PyType.Unknown };
+        }
+        return pick;
+    }
+
+    static bool PartlyUnknown(PyType t, int depth) => depth < 4 && t switch
+    {
+        UnknownType => true,
+        UnionType u => u.MemberList.Any(x => PartlyUnknown(x, depth + 1)),
+        ClassType c => c.Args.Any(x => PartlyUnknown(x, depth + 1)) || (c.TupleItems?.Any(x => PartlyUnknown(x, depth + 1)) ?? false),
+        _ => false,
+    };
 
     /// <summary>
     /// Calls every overload; <paramref name="pick"/> is the first that takes the arguments as they are. A plain str or bool
@@ -772,8 +807,11 @@ public sealed partial class TypeEvaluator
 
         var init = FindMember(receiver, "__init__", true, null, out bool unkInit);
         var @new = FindMember(receiver, "__new__", true, null, out bool unkNew);
-        bool userInit = synthesized == null && init != null && init.Owner.Info.QualifiedName != "builtins.object";
-        bool userNew = synthesized == null && @new != null && @new.Owner.Info.QualifiedName != "builtins.object";
+        // a base that is not known, before the __init__ found, may have its own: the call is not checked against the later one
+        // (class D(httpx.Response, Base) where httpx is not installed: D(status_code=1) is not Base's to judge)
+        bool initHidden = init != null && UnknownBaseBefore(cls.Info, init.Owner.Info);
+        bool userInit = synthesized == null && init != null && init.Owner.Info.QualifiedName != "builtins.object" && !initHidden;
+        bool userNew = synthesized == null && @new != null && @new.Owner.Info.QualifiedName != "builtins.object" && !initHidden && !UnknownBaseBefore(cls.Info, @new.Owner.Info);
 
         CallTarget? inner = null;
         if (synthesized != null)
@@ -820,6 +858,24 @@ public sealed partial class TypeEvaluator
     }
 
     bool HasUnknownAncestor(ClassInfo c) => Mro(c).Any(e => e is UnknownType);
+
+    /// <summary>
+    /// Whether a base that is not known comes before <paramref name="owner"/> in the order Python looks members up in (the bases in
+    /// their order, depth first as the MRO goes): a member found in owner may be the unknown base's instead. The MRO itself keeps
+    /// unknown bases at its end, so it cannot say.
+    /// </summary>
+    bool UnknownBaseBefore(ClassInfo c, ClassInfo owner, int depth = 0)
+    {
+        if (ReferenceEquals(c, owner) || depth > 20) return false;
+        foreach (var b in ClassDataOf(c).Bases)
+        {
+            if (b is UnknownType) return true;
+            if (b is not ClassType bc) continue;   // Generic[P], Protocol and the like: no members of their own to hide anything
+            if (ReferenceEquals(bc.Info, owner) || Mro(bc.Info).Any(e => e is ClassType ec && ReferenceEquals(ec.Info, owner)))
+                return UnknownBaseBefore(bc.Info, owner, depth + 1);
+        }
+        return false;
+    }
 
     static CallTarget? Pick(List<CallTarget> targets) => targets.Count == 0 ? null : targets[0];
 
@@ -989,6 +1045,21 @@ public sealed partial class TypeEvaluator
         });
     }
 
+    /// <summary>A parameter written `TypeForm[T]` (PEP 747), with the name of its variable.</summary>
+    static bool IsTypeForm(PyType t, out string variable)
+    {
+        variable = t is TypeVarType { Name: var n } && n.StartsWith("TypeForm[", StringComparison.Ordinal) ? n[9..^1] : "";
+        return variable.Length > 0;
+    }
+
+    /// <summary>The type an argument spells as a type expression (`list[int]` is a list of ints); for a value that is not one, the instance of the class it holds.</summary>
+    PyType TypeFormOf(ModuleInfo m, Expr e)
+    {
+        var form = AnnotationType(m, e);
+        if (!form.IsDynamic) return form;
+        return MapMembers(TypeOf(m, e), t => t is ClassType { IsInstance: false } c ? c.AsInstance() : PyType.Unknown);
+    }
+
     static int? ConstIndex(Expr e) => e switch
     {
         ConstExpr { Kind: ConstKind.Int } c when int.TryParse(c.Text.Replace("_", ""), out var v) => v,
@@ -1007,6 +1078,12 @@ public sealed partial class TypeEvaluator
                 // a parameter written type[T]: the class an argument is gives T its instance
                 foreach (var a in arg.Members)
                     if (a is ClassType { IsInstance: false } cls) Unify(new TypeVarType(wrapped[5..^1]), cls with { IsInstance = true }, solved);
+                return;
+
+            case var _ when IsTypeForm(param, out var formOf):
+                // TypeForm[T] matched with a value, the expression unknown: a class gives T its instance, as type[T] does
+                foreach (var a in arg.Members)
+                    if (a is ClassType { IsInstance: false } cls) Unify(new TypeVarType(formOf), cls with { IsInstance = true }, solved);
                 return;
 
             case TypeVarType tv:
@@ -1176,6 +1253,7 @@ public sealed partial class TypeEvaluator
         var receiver = new ClassType(cls.Info, cls.Args.Count > 0 ? cls.Args : ClassTypeParamsAsArgs(cls.Info), true);
         if (SynthesizedInit(receiver) is { } synthesized) return synthesized.Params;
         var init = FindMember(receiver, "__init__", true, null, out bool unkInit);
+        if (init != null && UnknownBaseBefore(cls.Info, init.Owner.Info)) return null;   // a base that is not known comes first: its __init__ is not known either
         if (init != null && init.Owner.Info.QualifiedName != "builtins.object")
             return BoundMember(init, receiver, true) is FunctionType i ? CallableParameters(i) : null;
         var @new = FindMember(receiver, "__new__", true, null, out bool unkNew);
@@ -1248,8 +1326,9 @@ public sealed partial class TypeEvaluator
         if (dest is UnknownType || src is UnknownType || src is NeverType) return true;
         if (dest is TypeVarType or ParamSpecType or TypeVarTupleType || src is TypeVarType or ParamSpecType or TypeVarTupleType) return true;
         if (src is ClassType anyClass && IsClassOfAny(anyClass)) return true;   // type[Any] may be whichever class is wanted
-        if (src is UnionType su) return MergeInstancesOfOneClass(su.MemberList).All(m => IsAssignable(dest, m, fresh));
-        if (dest is UnionType du) return du.MemberList.Any(m => IsAssignable(m, src, fresh));
+        // (loops of their own, not lambdas: a lambda here would make every call allocate the parameters it captures)
+        if (src is UnionType su) return EachAssignable(dest, MergeInstancesOfOneClass(su.MemberList), fresh);
+        if (dest is UnionType du) return AnyAssignable(du.MemberList, src, fresh);
 
         switch (dest)
         {
@@ -1287,6 +1366,8 @@ public sealed partial class TypeEvaluator
                 // a dict literal where a TypedDict is expected: its keys are not checked here
                 if (s.Info.QualifiedName == "builtins.dict" && TypedDictFieldsOf(dc.Info) != null) return true;
 
+                if (TupleLengthsDiffer(dc, s)) return false;
+
                 var spec = SpecializeAs(s, dc.Info);
                 if (spec != null)
                 {
@@ -1319,6 +1400,33 @@ public sealed partial class TypeEvaluator
             }
             default: return true;
         }
+    }
+
+    bool EachAssignable(PyType dest, IEnumerable<PyType> sources, bool fresh)
+    {
+        foreach (var m in sources)
+            if (!IsAssignable(dest, m, fresh)) return false;
+        return true;
+    }
+
+    bool AnyAssignable(IReadOnlyList<PyType> dests, PyType src, bool fresh)
+    {
+        foreach (var m in dests)
+            if (IsAssignable(m, src, fresh)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// A tuple whose length is known where a tuple of another fixed length is wanted (`tuple[int, int, int]` for `tuple[int, int]`, as PyCharm
+    /// reports it), or one of "at least n" items (item 188: `tuple[int, int, *tuple[int, ...]]` after `len(t) >= 2`) where fewer are wanted.
+    /// A tuple of any length (`tuple[int, ...]`) may have the length wanted, as in PyCharm.
+    /// </summary>
+    static bool TupleLengthsDiffer(ClassType dest, ClassType src)
+    {
+        if (dest.TupleItems is not { } want || src.TupleItems is not { } have || !IsBuiltinSequence(dest, "tuple") || !IsBuiltinSequence(src, "tuple")) return false;
+        if (want.Any(w => w is TypeVarTupleType or UnboundedItemsType) || have.Any(h => h is TypeVarTupleType)) return false;
+        int least = have.Count(h => h is not UnboundedItemsType);
+        return have.Any(h => h is UnboundedItemsType) ? least > want.Count : least != want.Count;
     }
 
     /// <summary>

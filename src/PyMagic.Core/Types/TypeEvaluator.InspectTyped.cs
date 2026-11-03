@@ -22,6 +22,7 @@ public sealed partial class TypeEvaluator
                     FinalReassignment(m, target, diags);
                 }
                 if (assign.Targets is [NameExpr] && assign.Value is CallExpr call) NoneFunction(m, call, diags);
+                TupleAssignmentBalance(m, assign, diags);
                 break;
             case AugAssignStmt aug:
                 if (aug.Target is AttributeExpr augTarget) FrozenAssignment(m, augTarget, diags);
@@ -76,6 +77,48 @@ public sealed partial class TypeEvaluator
             outside = true;
         }
         if (outside) diags.Add(new Diagnostic(sub.Index.Start, Math.Max(sub.Index.End - sub.Index.Start, 1), "Tuple index out of range"));
+    }
+
+    /// <summary>
+    /// `a, b = 1, 2, 3` and `a, b, c = t` where t is a tuple of two (PyCharm's tuple assignment balance): the number of
+    /// targets, less one starred target, against the number of values when it is known, from a tuple display without
+    /// starred items or from a value whose type is a tuple of known length in every member of a union.
+    /// </summary>
+    void TupleAssignmentBalance(ModuleInfo m, AssignStmt assign, List<Diagnostic> diags)
+    {
+        foreach (var target in assign.Targets)
+        {
+            var targets = target switch { TupleExpr t => t.Items, ListExpr l => l.Items, _ => null };
+            if (targets == null || targets.Count == 0) continue;
+            int stars = targets.Count(t => t is StarExpr);
+            if (stars > 1) continue;   // a syntax error of its own
+            int needed = targets.Count - stars;
+            bool tooMany = false, tooFew = false;
+            if (assign.Value is TupleExpr values)
+            {
+                if (values.Items.Any(v => v is StarExpr)) continue;
+                tooMany = stars == 0 && values.Items.Count > needed;
+                tooFew = values.Items.Count < needed;
+            }
+            else
+            {
+                var members = TypeOf(m, assign.Value).Members.ToList();
+                if (members.Count == 0) continue;
+                bool all = true;
+                foreach (var member in members)
+                {
+                    if (member is not ClassType { IsInstance: true } c || TupleItemsOf(c) is not { } items) { all = false; break; }
+                    if (stars == 0 && items.Count > needed) tooMany = true;
+                    else if (items.Count < needed) tooFew = true;
+                    else { all = false; break; }
+                }
+                // a union reports only when every member is wrong, and all of them the same way
+                if (!all || tooMany && tooFew) continue;
+            }
+            if (tooMany || tooFew)
+                diags.Add(new Diagnostic(assign.Value.Start, Math.Max(assign.Value.End - assign.Value.Start, 1),
+                    tooMany ? "Too many values to unpack" : "Need more values to unpack"));
+        }
     }
 
     /// <summary>`del td["k"]` and `td.pop("k")` on a key the TypedDict requires (in every member of a union), as PyCharm reports them.</summary>

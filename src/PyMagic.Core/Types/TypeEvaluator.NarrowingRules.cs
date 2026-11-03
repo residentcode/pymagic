@@ -478,7 +478,8 @@ public sealed partial class TypeEvaluator
 
     /// <summary>
     /// The type of a name a pattern binds (a capture, `as`, `*rest`, `**rest`): the part of the subject it matches, after
-    /// the narrowing of the earlier cases and of the pattern itself. A subject nothing is known about binds Unknown.
+    /// the narrowing of the earlier cases and of the pattern itself. A subject nothing is known about binds Unknown, except where the
+    /// pattern says what it is: as in pyright, `case Point(x=a) as p` makes `p` a Point and `a` its `x`.
     /// </summary>
     PyType PatternBindingType(ModuleInfo m, Declaration d)
     {
@@ -492,7 +493,6 @@ public sealed partial class TypeEvaluator
             // a case with a guard can fail after its pattern matched
             if (earlier.Guard == null) t = NarrowPattern(m, earlier.Pattern, t, false);
         }
-        if (t.IsDynamic) return PyType.Unknown;
         if (t is NeverType) return t;    // the earlier cases leave nothing for this one
         return BoundType(m, mc.Pattern, t, d.Name) ?? PyType.Unknown;
     }
@@ -644,7 +644,8 @@ public sealed partial class TypeEvaluator
             foreach (var d in sym.Declarations)
                 if (d.Node is Expr target && hit.Owner.Info.Module.ParentOf(target) is AssignStmt { Value: TupleExpr tuple } && tuple.Items.All(i => StringValue(i) != null))
                     return tuple.Items.Select(i => StringValue(i)!).ToList();
-            return null;
+            // typeshed's NamedTuple only declares it (`__match_args__: ClassVar[tuple[str, ...]]`): the fields below say what it is
+            if (!hit.Owner.Info.Module.IsStub) return null;
         }
         if (NamedTupleFieldsOf(c.Info) is { } tupleFields) return tupleFields.Select(f => f.Name).ToList();
         if (IsDataclass(c.Info)) return DataclassFields(c).Where(f => f.InInit && !f.KwOnly).Select(f => f.Name).ToList();

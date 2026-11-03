@@ -240,10 +240,9 @@ public sealed partial class TypeEvaluator
     public ClassType? SpecializeAs(ClassType t, ClassInfo target)
     {
         if (ReferenceEquals(t.Info, target)) return t;
-        var map = TypeParamMap(t.Info, t.Args);
         foreach (var e in Mro(t.Info))
             if (e is ClassType ec && ReferenceEquals(ec.Info, target))
-                return ((ClassType)Substitute(ec, map)) with { IsInstance = t.IsInstance };
+                return ((ClassType)Substitute(ec, TypeParamMap(t.Info, t.Args))) with { IsInstance = t.IsInstance };   // the map only once the ancestor is found
         return null;
     }
 
@@ -502,7 +501,8 @@ public sealed partial class TypeEvaluator
     MemberHit? FindMember(ClassType cls, string name, bool instanceAccess, ClassInfo? startAfter, out bool unknownBase)
     {
         unknownBase = false;
-        var map = TypeParamMap(cls.Info, cls.Args);
+        // a class without type parameters has nothing to substitute (its MRO's entries carry their arguments already): no map is made
+        var map = ClassDataOf(cls.Info).TypeParams.Count == 0 ? null : TypeParamMap(cls.Info, cls.Args);
         bool skipping = startAfter != null;
         foreach (var e in Mro(cls.Info))
         {

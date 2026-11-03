@@ -6,6 +6,7 @@
 /** Extensions Monaco has no language of, and the language that shows them best. */
 export const EXTRA_EXTENSIONS = {
     '.ejs': 'ejs', '.eta': 'ejs',                                   // HTML with JavaScript in <% %> (PyMagic's own language, ejs-language.js)
+    '.feature': 'gherkin',                                          // behave's and pytest-bdd's scenarios (PyMagic's own language, gherkin-language.js)
     '.hjs': 'handlebars', '.mustache': 'handlebars',                 // Hogan.js and Mustache: Handlebars' {{ }} without its helpers
     '.vash': 'razor',                                               // Vash is Razor's @ syntax for Node
     '.njk': 'twig', '.nunjucks': 'twig',                            // Nunjucks is Jinja's syntax, as Twig's

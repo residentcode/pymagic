@@ -26,6 +26,7 @@ export const PLUGINS = [
     { id: 'prs', name: 'Pull Requests', about: "The pull requests (GitHub) or merge requests (GitLab) of the project's remote, reviewed and merged here.", tab: 'prs', requires: 'git' },
     { id: 'deployment', name: 'Deployment', about: 'The servers the project goes to (a folder, FTP, SFTP): upload, download, compare and sync.', tab: 'deployment' },
     { id: 'markdown', name: 'Markdown', about: 'The preview of Markdown and reStructuredText files beside the editor (Ctrl+Shift+V), its HTML export, and the Markdown editing tools.' },
+    { id: 'bdd', name: 'BDD (behave, pytest-bdd)', about: "Gherkin .feature files checked against the project's behave and pytest-bdd step definitions: undefined steps (with Create step definition), unused step definitions, outlines without Examples, Examples columns and broken tables." },
     { id: 'macros', name: 'Macros', about: 'Record the keys typed in the editor and play them back.' },
 ];
 

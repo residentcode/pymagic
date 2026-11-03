@@ -15,9 +15,10 @@ public static class StyleInspections
     /// <summary>The line length PyCharm's PEP 8 inspection allows.</summary>
     public const int MaxLineLength = 120;
 
-    public static void Run(ModuleInfo m, List<Finding> found)
+    /// <param name="ev">When given, the ends of functions are taken from the flow its types decide (calls that never return end a path).</param>
+    public static void Run(ModuleInfo m, List<Finding> found, TypeEvaluator? ev = null)
     {
-        var ctx = new Context(m);
+        var ctx = new Context(m) { Ev = ev };
         Walk(ctx, found);
         Classes(ctx, found);
         Functions(ctx, found);
@@ -33,6 +34,7 @@ public static class StyleInspections
         public readonly ModuleInfo M;
         public readonly string Src;
         public readonly int[] LineStarts;
+        public TypeEvaluator? Ev;
         List<Token>? _tokens;
         HashSet<int>? _insideString;
 
@@ -320,7 +322,7 @@ public static class StyleInspections
     static void Functions(Context c, List<Finding> found)
     {
         foreach (var f in AstChildren.Descendants(c.M.Ast).OfType<FunctionDef>())
-            InconsistentReturns(f, found);
+            InconsistentReturns(c, f, found);
         foreach (var loop in AstChildren.Descendants(c.M.Ast))
         {
             string? name = loop switch { ForStmt { Target: NameExpr t } => t.Name, _ => null };
@@ -332,7 +334,7 @@ public static class StyleInspections
         }
     }
 
-    static void InconsistentReturns(FunctionDef f, List<Finding> found)
+    static void InconsistentReturns(Context c, FunctionDef f, List<Finding> found)
     {
         var shallow = Shallow(f.Body).ToList();
         if (shallow.Any(n => n is YieldExpr)) return;
@@ -341,8 +343,19 @@ public static class StyleInspections
         if (valued == 0) return;
         foreach (var r in returns.Where(r => r.Value == null))
             Add(found, r.Start, r.End - r.Start, "Inconsistent return statements: some return a value, this one does not", "inconsistent-returns");
-        if (!Terminates(f.Body) && !IsStub(f.Body))
+        if (EndReachable(c, f) && !Terminates(f.Body) && !IsStub(f.Body))
             Add(found, f.NameStart, f.Name.Length, "Inconsistent return statements: the end of the function returns nothing while other paths return a value", "inconsistent-returns");
+    }
+
+    /// <summary>
+    /// Whether the flow graph lets the body run off its end: dead code after a return, a return in a finally block and a
+    /// loop that is only left by return do not. With an evaluator, calls that never return end their paths too.
+    /// </summary>
+    static bool EndReachable(Context c, FunctionDef f)
+    {
+        if (c.M.Semantics.ScopeOf(f) is not { } scope) return true;
+        var flow = c.Ev != null ? c.Ev.TypedFlow(c.M, scope) : c.M.Flow.For(scope);
+        return flow?.EndReachable ?? true;
     }
 
     /// <summary>True when control cannot run off the end of the statements.</summary>

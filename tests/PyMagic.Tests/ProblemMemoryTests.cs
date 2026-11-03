@@ -119,4 +119,45 @@ public class ProblemMemoryTests
         }
         finally { Directory.Delete(root, true); }
     }
+
+    [Fact]
+    public void AFrameworkIsToldByWhatAFileImportsAndASettingsModuleByWhatItAssigns()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "pm_mem_" + Guid.NewGuid().ToString("N"));
+        Write(root, "app/notes.py", "\"\"\"Works like Django's and Flask's helpers, without either.\"\"\"\n\n# from flask import Flask\ndef f():\n    return 'jinja2'\n");
+        Write(root, "app/conf.py", "INSTALLED_APPS = ['app']\n");
+        Write(root, "app/helpers.py", "from flask import Flask\n\napp = Flask(__name__)\n");
+        Write(root, "app/routes.py", "from app.helpers import app\n\n@app.route('/')\ndef index():\n    return 'x'\n");
+        try
+        {
+            var service = new LanguageService();
+            service.SourceRoots.Add(root);
+            service.ForkForAnalysis().Problems(4, 100000);
+            var again = service.ForkForAnalysis();
+            again.Problems(4, 100000);
+            Assert.Equal(3, again.ProblemsWorkedOut);   // the settings module, the file that imports Flask and the one that imports it through the other
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void AnExtensionModuleBuiltDuringTheSessionMakesItsImportResolve()
+    {
+        if (ImportTests.RealPython == null) return;   // imports are checked against an interpreter
+        string root = Path.Combine(Path.GetTempPath(), "pm_mem_" + Guid.NewGuid().ToString("N"));
+        Write(root, "app/main.py", "import fastpart\n\nfastpart.run()\n");
+        try
+        {
+            var service = new LanguageService();
+            service.SourceRoots.Add(root);
+            service.ConfigureInterpreter(InterpreterInspector.Inspect(ImportTests.RealPython, "system", "test").Interpreter!);
+            string Run() => string.Join("\n", service.ForkForAnalysis().Problems(4, 100000).Select(Key));
+            Assert.True(Run().Contains("fastpart"), "the import is reported while there is no such module");
+            Write(root, "fastpart.cp314-win_amd64.pyd", "");
+            Assert.True(!Run().Contains("fastpart"), "and no longer once the extension module is built");
+            File.Delete(Path.Combine(root, "fastpart.cp314-win_amd64.pyd"));
+            Assert.True(Run().Contains("fastpart"), "and again once it is removed");
+        }
+        finally { Directory.Delete(root, true); }
+    }
 }

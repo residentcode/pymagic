@@ -3,6 +3,8 @@ using PyMagic.Server;
 // pymagic-server [--typeshed <dir>] [--root <dir>]... [--lib <dir>]...
 // Speaks LSP over stdin/stdout. Everything else (logging) goes to stderr.
 var service = new LanguageService();
+// the syntax trees of typeshed's stubs and the libraries, kept between starts (PYMAGIC_PARSED_CACHE elsewhere)
+PyMagic.Core.Syntax.ParsedFileCache.Folder ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PyMagic", "parsed");
 for (int i = 0; i < args.Length - 1; i++)
 {
     switch (args[i])

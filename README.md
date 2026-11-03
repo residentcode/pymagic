@@ -162,22 +162,15 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Not seen on screen: the sidebar picture (item 331), shown only on the finish page after an install and in the uninstaller; the folder page's refusal of a folder that is not PyMagic's (only its rule's tests and the silent installs ran).
 
 **Type engine** (ibnbolbna's area until 31 October 2026, ours from then on; what ibnbolbna did and left is in [docs/ibnbolbna-work.md](docs/ibnbolbna-work.md))
-- The PyCharm inspections that need full types (47, 77; issue #48): Still open: tuple assignment balance; pandas' two inspections. PyCharm Professional's own (Spark, BDD, mock, notebooks) are a choice still to make.
-- Left by item 186: `try: return 1` / `finally: return 2` followed by dead code still gets "Inconsistent return statements" (the syntactic `Terminates()` in `StyleInspections.cs`; `ScopeFlow.EndReachable` has the right answer); the Server's missing-return check has its own exit test, which `NoReturn` calls do not reach; a function that only raises, without the annotation, is not taken as `NoReturn`; names with no narrowing condition still take their types from reaching definitions computed without types.
-- Left by item 187: with multiple inheritance only one chain counts as the base method's; marks for library methods from the bundled stubs (no file) have no target.
-- Left by item 188: a subject of unknown type binds Unknown where pyright gives the pattern's class; an "at least n" tuple passed where a fixed-length tuple is wanted is not reported; a tuple put in a variable first is not checked by its literals.
-- Left by item 190: compiled modules (`.pyd` / `.so`) that appear on disk during a session are not in the key of the remembered Problems; Django and the web frameworks are recognised by a file's text; the remaining allocations are mostly in the type lists and closures around `Memo`.
-- `TypeForm[T]` (PEP 747), which pydantic 2.14's `TypeAdapter` uses.
-- `mock.patch` used as a decorator: the parameters it injects are reported as not given, since decorators that are instances are skipped.
-- The library scan's remaining reports (issue #8), about 600 over click, rich, jinja2, httpx, requests, urllib3, h11, pydantic, attrs, PyYAML and starlette; root causes 17 and 22 and `rich/traceback.py:349` were judged to match PyCharm.
-- A cache of parsed stubs on disk (7): each start parses typeshed's builtins and the stubs a project uses again (the cache is in memory only).
+- Left by items 333 to 342 (the type engine's Open work, done 3 November 2026): module and class bodies still take their names' reaching definitions from the plain flow (the typed one gave false reports in PyYAML's constructor); the library scan's `inspect` counts inconsistent returns without the evaluator; two tuples of the same length with different item types (`tuple[int, str]` for `tuple[int, int]`) are not reported.
+- BDD (item 341): going to a step's definition from a .feature file and completing steps there, Gherkin's keywords in other languages than English. The notebook check reads the cells from the top, not by their run counts. The names of the mock, notebook and Spark inspections were not compared with PyCharm's own list (its install folder was not read).
+- The parsed-file cache (item 339): the current build's folder only grows until the next build removes it.
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
 
 **Django compared with PyCharm** (from PyCharm's Django help pages and its 17 Django inspections, checked against the code on 30 October 2026)
 
 **Compared with PyCharm's help, area by area** (from its help contents of about 1,000 pages and its 103 Python inspections, checked against the code on 30 October 2026; areas not compared yet are at the end)
-- Code vision and inlay hints: Found while checking it: `def total(shapes): return sum(s.area() for s in shapes)` is inferred as `-> int` when the items are unknown (`sum` of unknown values gives `int`, not an unknown); a type engine point, so the hint says what the engine says.
 - Python console: Not built: Attach Debugger with an interpreter elsewhere than this computer (WSL, Docker, SSH); the history list is kept while PyMagic runs, not across restarts (item 317).
 - Notebooks: Not checked: Debug Cell on a Jupyter server on another computer against a real ipykernel (item 326 was checked with a small Jupyter server of the tests).
 - Compared on 1 November 2026 (item 224; what was "Not compared yet"), PyMagic had none of these unless said:
@@ -206,4 +199,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 332 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 342 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

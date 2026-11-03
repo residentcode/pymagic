@@ -16,7 +16,8 @@ public sealed record Finding(int Start, int Length, string Message, string Code,
 /// </summary>
 public static class CodeInspections
 {
-    public static List<Finding> Run(ModuleInfo m)
+    /// <param name="ev">When given, inspections that ask the flow graph take what types decide about it (see StyleInspections.Run).</param>
+    public static List<Finding> Run(ModuleInfo m, TypeEvaluator? ev = null)
     {
         var found = new List<Finding>();
         if (m.IsStub) return found;
@@ -57,7 +58,7 @@ public static class CodeInspections
             Shadowing(m, scope, found);
             Naming(m, scope, found);
         }
-        StyleInspections.Run(m, found);
+        StyleInspections.Run(m, found, ev);
         TypeHintInspections.Run(m, found);
         MoreInspections.Run(m, found);
         return found;

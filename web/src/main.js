@@ -34,6 +34,7 @@ import { setupProfiler } from './profiler';
 import { setupDatabase } from './database';
 import { setupHttpClient } from './http';
 import './ejs-language';
+import './gherkin-language';
 import { languageFor as languageForFile } from './file-language';
 import { setupEmmet } from './emmet';
 import { setupTagPairs } from './tag-pairs';
@@ -194,6 +195,18 @@ async function loadModel(rel, key) {
                 refreshDirty();
                 clearTimeout(templateTimer);
                 templateTimer = window.setTimeout(() => lsp.notify('textDocument/didChange', {
+                    textDocument: { uri, version: plain.getVersionId() },
+                    contentChanges: [{ text: plain.getValue() }],
+                }), 120);
+            });
+        }
+        else if (rel.toLowerCase().endsWith('.feature') && pluginOn(pluginsAtStart(), 'bdd')) {
+            // Gherkin: the language server checks its steps against the project's behave / pytest-bdd step definitions
+            lsp.notify('textDocument/didOpen', { textDocument: { uri, languageId: 'gherkin', version: plain.getVersionId(), text } });
+            let featureTimer;
+            plain.onDidChangeContent(() => {
+                clearTimeout(featureTimer);
+                featureTimer = window.setTimeout(() => lsp.notify('textDocument/didChange', {
                     textDocument: { uri, version: plain.getVersionId() },
                     contentChanges: [{ text: plain.getValue() }],
                 }), 120);
@@ -591,7 +604,7 @@ function registerProviders() {
             }
         },
     });
-    monaco.languages.registerCodeActionProvider('python', {
+    monaco.languages.registerCodeActionProvider(['python', 'gherkin'], {
         async provideCodeActions(model, range) {
             const from = notebook?.targetOf(model, { lineNumber: range.startLineNumber, column: range.startColumn });
             const to = from && notebook.targetOf(model, { lineNumber: range.endLineNumber, column: range.endColumn });

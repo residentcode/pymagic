@@ -19,6 +19,10 @@ public sealed partial class TypeEvaluator
     /// <summary>Unreachable code and locals read before assignment, knowing which calls never return and which with blocks swallow exceptions.</summary>
     public IReadOnlyList<Diagnostic> FlowDiagnostics(ModuleInfo m) => m.Flow.Analyse(s => TypedFlow(m, s));
 
+    /// <summary>Whether a function can run off the end of its body, knowing which calls never return and which with blocks swallow exceptions.</summary>
+    public bool EndReachable(ModuleInfo m, FunctionDef f) =>
+        m.Semantics.ScopeOf(f) is not { } scope || (TypedFlow(m, scope)?.EndReachable ?? true);
+
     /// <summary>
     /// The flow of a scope with every gate it reaches decided by types; the plain flow when none differs from what the
     /// graph assumes without types, or while this scope's gates are being decided.
@@ -72,9 +76,10 @@ public sealed partial class TypeEvaluator
     }
 
     /// <summary>
-    /// A callee that is declared to return NoReturn / Never in every form it can have (sys.exit, os._exit, typing.assert_never,
-    /// a def annotated so, an object whose __call__ is). Only declarations count: a def that happens to raise on every path may
-    /// be overridden or replaced, so a call of it is not taken as the end.
+    /// A callee that returns NoReturn / Never in every form it can have (sys.exit, os._exit, typing.assert_never, a def annotated
+    /// so, an object whose __call__ is), or a project def without a return annotation whose every path raises, as pyright infers
+    /// it. A def that raises NotImplementedError, an abstract method or an overload stands for an implementation elsewhere, and
+    /// does not count.
     /// </summary>
     bool NeverReturns(PyType callee, int depth)
     {
@@ -83,7 +88,7 @@ public sealed partial class TypeEvaluator
         {
             bool never = c switch
             {
-                FunctionType f => DeclaredReturn(f.Info) is NeverType,
+                FunctionType f => (DeclaredReturn(f.Info) ?? InferredNoReturn(f.Info)) is NeverType,
                 OverloadedType o => o.Overloads.All(f => DeclaredReturn(f.Info) is NeverType),
                 ClassType { IsInstance: true } inst => NeverReturns(AttributeType(inst, "__call__").Type, depth + 1),
                 _ => false,
@@ -91,6 +96,15 @@ public sealed partial class TypeEvaluator
             if (!never) return false;
         }
         return true;
+    }
+
+    /// <summary>What an unannotated def's body gives when it may be taken as never returning: Never when it only raises; null otherwise.</summary>
+    PyType? InferredNoReturn(FunctionInfo info)
+    {
+        if (info.Node is not FunctionDef { Returns: null } || info.Module.IsStub) return null;
+        if ((info.Flags & (FuncFlags.Abstract | FuncFlags.Overload | FuncFlags.Async | FuncFlags.Generator | FuncFlags.Property)) != 0) return null;
+        // InferReturn leaves a body that raises NotImplementedError unknown
+        return InferReturn(info);
     }
 
     /// <summary>

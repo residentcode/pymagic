@@ -17,7 +17,10 @@ public sealed class ClassInfo
         Name = name; Module = module; Node = node; Scope = scope;
     }
 
-    public string QualifiedName => $"{Module.Name}.{Name}";
+    string? _qualifiedName;
+
+    /// <summary>`module.Class`, made once: the evaluator compares it on every call and assignment it checks.</summary>
+    public string QualifiedName => _qualifiedName ??= $"{Module.Name}.{Name}";
     public override string ToString() => QualifiedName;
 }
 

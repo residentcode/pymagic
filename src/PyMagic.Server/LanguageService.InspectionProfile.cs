@@ -93,6 +93,7 @@ public sealed partial class LanguageService
         ("protected-member", "Python", "Access to a protected member", "x._name used on an object or module from outside its class.", "weak"),
         ("tuple-item-assignment", "Python", "Tuple item assignment", "t[0] = 1 where t is a tuple.", "warning"),
         ("tuple-index", "Python", "Tuple index out of range", "A constant index past either end of a tuple whose length is known.", "warning"),
+        ("tuple-assignment-balance", "Python", "Tuple assignment balance is incorrect", "a, b = 1, 2, 3 or a, b, c = t where t is a pair: more or fewer values than targets.", "warning"),
         ("none-function-assignment", "Python", "Function returns nothing", "x = f() where f has no return value.", "weak"),
         ("except-clauses-order", "Python", "Exception clause already handled", "An except clause for a class an earlier clause already catches.", "warning"),
         ("exception-inherit", "Python", "Not an exception class", "raise or except of something that does not derive from BaseException.", "warning"),
@@ -136,6 +137,17 @@ public sealed partial class LanguageService
         ("fixture-unused", "pytest", "Fixture not requested", "A fixture no test or fixture asks for (by parameter, usefixtures or getfixturevalue); autouse fixtures aside.", "weak"),
         ("parametrize-arguments", "pytest", "Wrong arguments in parametrize", "A name the test does not take (and no fixture has), a name given twice, a row with another number of values than names.", "error"),
         ("patch-arguments", "pytest", "Parameters for @patch", "A function that takes fewer parameters than the mocks its @patch / @patch.object decorators hand it.", "error"),
+        ("mock-patch-target", "pytest", "Patch target that does not exist", "patch('pkg.mod.name') or patch.object(Class, 'name') for a name the module or class does not have (without create=True): patch raises AttributeError.", "warning"),
+        ("mock-attribute", "pytest", "Attribute a mock does not have", "An attribute the spec of a mock lacks (Mock(spec=...), create_autospec, patch(..., autospec=True)), or an assert_ method mock does not know: both raise AttributeError.", "warning"),
+        ("bdd-undefined-step", "BDD", "Undefined step", "A step of a .feature file that no behave or pytest-bdd step definition of the project matches (fix: Create step definition).", "warning"),
+        ("bdd-unused-step", "BDD", "Unused step definition", "A behave or pytest-bdd step definition that no step of the project's .feature files uses.", "weak"),
+        ("bdd-outline-examples", "BDD", "Scenario Outline without Examples", "A Scenario Outline with no Examples, or Examples without rows: it runs no scenario.", "warning"),
+        ("bdd-examples-column", "BDD", "Outline parameter and Examples column", "A <parameter> of an outline's steps with no Examples column, or a column no step uses.", "warning"),
+        ("bdd-table", "BDD", "Broken table", "A row of a Gherkin table with another number of cells than the first row.", "error"),
+        ("notebook-cell-order", "Jupyter notebooks", "Name defined in a later cell", "A name a cell reads that only a later cell defines: run from the top, the notebook stops with NameError.", "warning"),
+        ("spark-column", "PySpark", "Column the DataFrame does not have", "A column name (df[\"x\"], df.x, select(\"x\"), col(\"x\")) not among the columns the code gives the DataFrame (createDataFrame's schema, withColumn, withColumnRenamed, drop, select): Spark raises AnalysisException.", "warning"),
+        ("pandas-series-to-list", "pandas", "Method Series.to_list() is recommended", "s.values.tolist() or s.to_numpy().tolist() on a Series, which s.to_list() says directly.", "weak"),
+        ("pandas-truth-value", "pandas", "Truth value of a pandas object is ambiguous", "A DataFrame, Series or Index used as a condition, with not, and or or: pandas raises ValueError.", "warning"),
         ("fixture-scope", "pytest", "Fixture scope pytest refuses", "A scope pytest does not know (collecting stops), and a fixture that asks for one of a narrower scope: a session fixture asking for tmp_path fails with ScopeMismatch.", "error"),
         ("django-field", "Django", "Unknown field in a query", "A keyword or string that is not a field of the model.", "warning"),
         ("django-meta-field", "Django", "Unknown field in Meta, form, serializer or admin", "A name in fields, ordering, list_display, search_fields and the like that the model does not have.", "warning"),
@@ -241,7 +253,7 @@ public sealed partial class LanguageService
     }
 
     /// <summary>The URIs of every open document, Python and templates.</summary>
-    public IEnumerable<string> AllOpenUris => _docs.Keys.Concat(_templateDocs.Keys);
+    public IEnumerable<string> AllOpenUris => _docs.Keys.Concat(_templateDocs.Keys).Concat(_featureDocs.Keys);
 
     /// <summary>The inspections a project turns on itself (as in PyCharm: missing docstrings, missing type hints).</summary>
     static readonly HashSet<string> OffByDefault = InspectionCatalog.Where(i => i.Default == "off").Select(i => i.Code).ToHashSet(StringComparer.Ordinal);

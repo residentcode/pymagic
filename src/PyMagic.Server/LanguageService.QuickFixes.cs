@@ -27,6 +27,7 @@ public sealed partial class LanguageService
     public IReadOnlyList<CodeAction> CodeActions(string uri, Range range)
     {
         if (_templateDocs.ContainsKey(uri)) return CreateTemplateActions(uri, range).ToList();
+        if (_featureDocs.ContainsKey(uri)) return FeatureActions(uri, range);
         var snap = Full();
         if (!snap.ByUri.TryGetValue(uri, out var m)) return Array.Empty<CodeAction>();
         var lines = Lines(m);

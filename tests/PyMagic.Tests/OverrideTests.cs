@@ -249,6 +249,52 @@ public class OverrideTests
         Assert.True(thread.Uri.EndsWith("/threading.pyi"), thread.Uri);
     }
 
+    [Fact]
+    public void TheMarkOfATypeshedMethodGoesToItsLineInTheStub()
+    {
+        if (PyMagic.Core.Types.Workspace.DefaultTypeshedPath == null) return;   // the bundled stubs have no file
+        string src = "import threading\n\n\nclass Worker(threading.Thread):\n    def run(self) -> None:\n        pass\n";
+        var target = Service((Other, src)).InheritanceMarkers(Other).Single(m => m.Line == 4).Targets.Single();
+        string path = Uri.UnescapeDataString(new Uri(target.Uri).LocalPath);
+        Assert.True(File.Exists(path), path);
+        string line = File.ReadAllLines(path)[target.Range.Start.Line];
+        Assert.Contains("def run", line);
+        Assert.Equal(line.IndexOf("run", StringComparison.Ordinal), target.Range.Start.Character);
+    }
+
+    // ------------------------------------------------------------ multiple inheritance
+
+    const string Mixins =
+        "class Base:\n    def save(self):\n        pass\n\n\n" +                         // 0-4
+        "class Logged:\n    def save(self):\n        pass\n\n\n" +                       // 5-9
+        "class Model(Base, Logged):\n    def save(self):\n        pass\n\n\n" +          // 10-14
+        "class Child(Base):\n    def save(self):\n        pass\n\n\n" +                  // 15-19
+        "class Deep(Child, Logged):\n    def save(self):\n        pass\n";               // 20-22
+
+    [Fact]
+    public void WithMultipleInheritanceEveryBaseThatDefinesTheMethodIsMarked()
+    {
+        var marks = Service((Shapes, Mixins)).InheritanceMarkers(Shapes);
+        var model = marks.Where(m => m.Line == 11).ToList();
+        Assert.Equal("Overrides Base.save|Overrides Logged.save", string.Join("|", model.Select(m => m.Label)));
+        Assert.Equal("1|6", string.Join("|", model.Select(m => m.Targets.Single().Range.Start.Line)));
+        // Base is above Child, so Deep overrides Child's and Logged's, not Base's as well
+        Assert.Equal("Overrides Child.save|Overrides Logged.save", string.Join("|", marks.Where(m => m.Line == 21).Select(m => m.Label)));
+        // and both bases are overridden by Model (and Deep)
+        Assert.Equal("Overridden in 2 classes", marks.Single(m => m.Line == 6 && m.Kind == "overridden").Label);
+    }
+
+    [Fact]
+    public void AMixinThatDefinesItOverObjectsCountsOnce()
+    {
+        // object's __eq__ is above both, so it is not a third mark
+        string src = "class A:\n    def __eq__(self, o):\n        return True\n\n\nclass B:\n    def __eq__(self, o):\n        return True\n\n\n" +
+                     "class C(A, B):\n    def __eq__(self, o):\n        return True\n";
+        var marks = Service((Shapes, src)).InheritanceMarkers(Shapes);
+        Assert.Equal("Overrides A.__eq__|Overrides B.__eq__", string.Join("|", marks.Where(m => m.Line == 11).Select(m => m.Label)));
+        Assert.Equal("Overrides method in object (builtins)", marks.Single(m => m.Line == 1 && m.Kind == "overrides").Label);
+    }
+
     // ------------------------------------------------------------ change signature
 
     const string Scaled =

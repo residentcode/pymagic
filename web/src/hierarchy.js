@@ -4,6 +4,8 @@ import * as monaco from 'monaco-editor';
 import { showTab } from './panel';
 import { toast } from './toast';
 import { filePathOf } from './uripath';
+import { libraryPathOf } from './libview-model.js';
+import { showLibraryFile } from './libview.js';
 const $ = (id) => document.getElementById(id);
 const toRange = (r) => ({
     startLineNumber: r.start.line + 1, startColumn: r.start.character + 1, endLineNumber: r.end.line + 1, endColumn: r.end.character + 1,
@@ -23,8 +25,10 @@ export function setupHierarchy(deps) {
     async function goTo(uri, range, from) {
         const rel = deps.relOfUri(uri);
         if (!rel) {
-            // a library's file (typeshed, site-packages): the editor does not open those, so say where it is
-            toast(`That is in a library, which the editor does not open: ${filePathOf(uri)}:${range.start.line + 1}`, true);
+            // a library's file (typeshed, site-packages): read only in its window, at the line; where it cannot be read, say where it is
+            const path = libraryPathOf(uri, '');
+            if (!path || !(await showLibraryFile(path, range.start.line, range.start.character, editor)))
+                toast(`That is in a library, which the editor cannot read: ${filePathOf(uri)}:${range.start.line + 1}`, true);
             return;
         }
         if (from && from !== editor && deps.openIn) {
@@ -190,14 +194,15 @@ export function setupHierarchy(deps) {
             list = (await lsp.request('pymagic/inheritance', { textDocument: { uri } })) ?? [];
         }
         catch { /* none */ }
-        // the nearest definition above the cursor (or on its line) that has something above it
-        const up = list.filter((m) => isUp(m) && m.line <= pos.lineNumber - 1).sort((a, b) => b.line - a.line)[0];
-        if (!up) {
+        // the nearest definition above the cursor (or on its line) that has something above it; with multiple inheritance it has a mark per base
+        const nearest = list.filter((m) => isUp(m) && m.line <= pos.lineNumber - 1).sort((a, b) => b.line - a.line)[0];
+        if (!nearest) {
             toast('Nothing above this: it overrides no method and has no base class in the project.', true);
             return;
         }
+        const ups = list.filter((m) => isUp(m) && m.line === nearest.line);
         const box = editor.getDomNode()?.getBoundingClientRect(), at = editor.getScrolledVisiblePosition(pos);
-        pick(editor, up.targets.map((loc) => ({ label: up.label, loc })), (box?.left ?? 0) + (at?.left ?? 0), (box?.top ?? 0) + (at?.top ?? 0) + (at?.height ?? 0), [up.label]);
+        pick(editor, ups.flatMap((up) => up.targets.map((loc) => ({ label: up.label, loc }))), (box?.left ?? 0) + (at?.left ?? 0), (box?.top ?? 0) + (at?.top ?? 0) + (at?.height ?? 0), ups.map((up) => up.label));
     }
     // ---------------------------------------------------------------- go to implementations
     monaco.languages.registerImplementationProvider('python', {

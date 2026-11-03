@@ -168,16 +168,30 @@ public sealed partial class TypeEvaluator
             if (name != null && FlagDecorators.Contains(name)) continue;
             var decType = TypeOf(m, dec);
             if (decType.IsDynamic || !(decType.Members.All(x => x is FunctionType { Info: var fi } && DeclaredReturn(fi) != null
-                                                              || x is OverloadedType || x is ClassType { IsInstance: false } || x is SignatureType)))
+                                                              || x is OverloadedType || x is ClassType { IsInstance: false } || x is SignatureType
+                                                              || x is ClassType { IsInstance: true } inst && TypedCall(inst))))
                 continue;
             var arg = current;
             var targets = CallValue(decType, new[] { new ArgInfo(null, null, 0, () => arg) }, null);
             if (targets.Count == 0 || targets.Any(t => t.Problems.Count > 0)) continue;
             var result = PyType.Union(targets.Select(t => t.Returns));
             if (result.IsDynamic || result.Members.Any(x => x.IsDynamic)) continue;
+            // an instance decorator counts when it gives a function or a callable (mock.patch); one that gives another object, as functools.wraps
+            // gives a `_Wrapped` whose `__call__` takes `*args: P.args`, leaves the function as written, whose parameters say more
+            if (decType.Members.Any(x => x is ClassType { IsInstance: true }) && result.Members.Any(x => x is not (FunctionType or OverloadedType or SignatureType))) continue;
             current = result;
         }
         return current;
+    }
+
+    /// <summary>
+    /// An instance used as a decorator whose `__call__` says what it returns (`@patch("os.getcwd")`, whose `_patch_pass_arg.__call__` gives a
+    /// `Callable[..., R]`, as the mock it passes in is one more argument).
+    /// </summary>
+    bool TypedCall(ClassType inst)
+    {
+        var call = AttributeType(inst, "__call__").Type;
+        return !call.IsDynamic && call.Members.All(c => c is FunctionType { Info: var fi } && DeclaredReturn(fi) != null || c is OverloadedType || c is SignatureType);
     }
 
     static FuncFlags DecoratorFlags(ModuleInfo m, FunctionDef f)
@@ -216,7 +230,10 @@ public sealed partial class TypeEvaluator
     // ------------------------------------------------------------ expressions
 
     /// <summary>The type of an expression.</summary>
-    public PyType TypeOf(ModuleInfo m, Expr e) => Memo(e, () => Compute(m, e));
+    /// <remarks>A known answer is returned before any closure is made (a lambda would be allocated on every call, found or not).</remarks>
+    public PyType TypeOf(ModuleInfo m, Expr e) => _cache.TryGetValue(e, out var known) ? known : ComputeMemo(m, e);
+
+    PyType ComputeMemo(ModuleInfo m, Expr e) => Memo(e, () => Compute(m, e));
 
     PyType Compute(ModuleInfo m, Expr e)
     {
@@ -348,10 +365,16 @@ public sealed partial class TypeEvaluator
         var declared = DeclaredType(symModule, sym);
         if (declared != null) return declared;
 
-        // locals: only the assignments that can reach this use
+        // locals: only the assignments that can reach this use, past calls that never return. Only in functions: in a module or
+        // class body the gates are its many top-level calls (`SafeConstructor.add_constructor(...)` dozens of times), and deciding
+        // them from every read there runs into the classes being built
         if ((r.Access & Access.Read) != 0 && ReferenceEquals(sym.Scope, r.UseScope))
         {
-            var reach = m.Flow.ReachingDefinitions(n);
+            var reach = r.UseScope is { Kind: ScopeKind.Function or ScopeKind.Lambda } ? TypedFlow(m, r.UseScope)?.ReachingFor(n) : m.Flow.ReachingDefinitions(n);
+            // a module-level read before the module binds the name (`builtin_str = str` and later `str = str`) still finds the builtin
+            if (reach is { Definitions.Count: 0, Reachable: true, MaybeUnbound: true } && r.UseScope?.Kind == ScopeKind.Module
+                && _ws.Builtins.Semantics.ModuleScope.Symbols.ContainsKey(n.Name))
+                return BuiltinNameType(n.Name);
             if (reach != null)
                 return reach.Definitions.Count == 0 ? PyType.Unknown : WholeOverloads(PyType.Union(reach.Definitions.Select(d => TypeOfDeclaration(symModule, d))), sym);
         }
@@ -371,7 +394,12 @@ public sealed partial class TypeEvaluator
     /// <summary>Type of a symbol seen from outside its own flow: an annotation if there is one, else all its declarations.</summary>
     public PyType TypeOfSymbol(Symbol sym)
     {
-        var s = sym.Redirect ?? sym;
+        var key = sym.Redirect ?? sym;
+        return _cache.TryGetValue(key, out var known) ? known : SymbolTypeMemo(key);
+    }
+
+    PyType SymbolTypeMemo(Symbol s)
+    {
         return Memo(s, () =>
         {
             var m = _ws.ModuleOf(s);
@@ -406,7 +434,7 @@ public sealed partial class TypeEvaluator
         "Any", "Union", "Optional", "Callable", "Literal", "ClassVar", "Final", "Annotated", "Type", "Tuple",
         "List", "Dict", "Set", "FrozenSet", "DefaultDict", "Counter", "Deque", "ChainMap", "OrderedDict",
         "Generic", "Protocol", "NoReturn", "Never", "Self", "LiteralString", "TypeAlias", "Concatenate",
-        "TypeGuard", "TypeIs", "Unpack", "Required", "NotRequired", "ReadOnly", "TypedDict",
+        "TypeGuard", "TypeIs", "Unpack", "Required", "NotRequired", "ReadOnly", "TypedDict", "TypeForm",
     };
 
     PyType? DeclaredType(ModuleInfo m, Symbol sym)
@@ -430,7 +458,9 @@ public sealed partial class TypeEvaluator
         return null;
     }
 
-    PyType TypeOfDeclaration(ModuleInfo m, Declaration d) => Memo(d, () =>
+    PyType TypeOfDeclaration(ModuleInfo m, Declaration d) => _cache.TryGetValue(d, out var known) ? known : DeclarationTypeMemo(m, d);
+
+    PyType DeclarationTypeMemo(ModuleInfo m, Declaration d) => Memo(d, () =>
     {
         if (_declOverride.TryGetValue(d, out var overridden)) return overridden;
         switch (d.Kind)

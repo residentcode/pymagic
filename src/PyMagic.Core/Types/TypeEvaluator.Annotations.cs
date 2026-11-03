@@ -196,6 +196,9 @@ public sealed partial class TypeEvaluator
             case "ReadOnly": case "Unpack":
                 return A(0);
             case "TypeGuard": case "TypeIs": return Inst("bool");
+            // TypeForm[T] (PEP 747): the argument is a type expression, and T is solved from the type it spells (see TypeFormOf); with no variable
+            // any type expression goes, as an object
+            case "TypeForm": return A(0) is TypeVarType tv ? new TypeVarType($"TypeForm[{tv.Name}]", tv.Bound, tv.Constraints) : Inst("object");
             case "Type": return TypeOfClassObject(A(0));
             case "Tuple": return TupleAnnotation(m, args, lookup, deferred);
             case "List": return Inst("list", A(0));

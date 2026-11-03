@@ -321,6 +321,17 @@ public class TypeTests
     }
 
     [Fact]
+    public void AnUnknownBaseBeforeTheInitFoundLeavesTheCallUnchecked()
+    {
+        // starlette's WebSocketDenialResponse(httpx.Response, WebSocketDisconnect) with httpx not found: Response may have its own __init__
+        const string src = "from missing_module import Response\nclass Base:\n    def __init__(self, code: int = 1000) -> None: ...\n" +
+                           "class D(Response, Base): pass\nD(status_code=1, content=b'')";
+        Assert.Equal("", string.Join(";", Problems(src)));
+        // an unknown base after the class that has the __init__ does not hide it
+        Assert.Equal("Unexpected argument 'nope'", string.Join(";", Problems("from missing_module import Mixin\nclass Base:\n    def __init__(self, code: int = 1000) -> None: ...\nclass D(Base, Mixin): pass\nD(nope=1)")));
+    }
+
+    [Fact]
     public void MethodAndConstructorMapping()
     {
         Assert.Equal("Parameter 'x' unfilled", string.Join(";", Problems("class A:\n    def __init__(self, x): ...\nA()")));

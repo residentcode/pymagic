@@ -117,7 +117,7 @@ public sealed partial class LanguageService
     public bool ReportTypeMismatches { get; set; }
 
     public IEnumerable<string> OpenUris => _docs.Keys;
-    public int? VersionOf(string uri) => _docs.TryGetValue(uri, out var d) ? d.Version : _templateDocs.TryGetValue(uri, out var t) ? t.Version : null;
+    public int? VersionOf(string uri) => _docs.TryGetValue(uri, out var d) ? d.Version : _templateDocs.TryGetValue(uri, out var t) ? t.Version : _featureDocs.TryGetValue(uri, out var g) ? g.Version : null;
 
     // ------------------------------------------------------------ documents
 
@@ -125,7 +125,7 @@ public sealed partial class LanguageService
     public void Change(string uri, string text, int version) => Set(uri, text, version);
     public void Close(string uri)
     {
-        if (_templateDocs.Remove(uri)) return;
+        if (_templateDocs.Remove(uri) || _featureDocs.Remove(uri)) return;
         if (_docs.Remove(uri)) Invalidate();
     }
 
@@ -133,6 +133,7 @@ public sealed partial class LanguageService
     {
         // a template file is read by the template features and never reaches the Python analysis
         if (IsTemplateUri(uri)) { _templateDocs[uri] = (text, version); return; }
+        if (IsFeatureUri(uri)) { _featureDocs[uri] = (text, version); return; }   // a Gherkin file: read by the BDD checks (LanguageService.Bdd.cs)
         string? path = PathOfUri(uri);
         var (name, isPackage) = ModuleNameOf(path);
         _docs[uri] = new Doc(uri, path, name, isPackage, text, version);
@@ -391,6 +392,7 @@ public sealed partial class LanguageService
     public IReadOnlyList<LspDiagnostic> Diagnostics(string uri)
     {
         if (_templateDocs.ContainsKey(uri)) return DjangoTemplateOff(uri) ? Array.Empty<LspDiagnostic>() : TemplateDiagnostics(uri);
+        if (_featureDocs.ContainsKey(uri)) return FeatureDiagnostics(uri);
         var m = ModuleFor(uri);
         if (m == null) return Array.Empty<LspDiagnostic>();
         var lines = Lines(m);
@@ -410,6 +412,7 @@ public sealed partial class LanguageService
         : message.StartsWith("Access to a protected member") ? "protected-member"
         : message.EndsWith("does not support item assignment") ? "tuple-item-assignment"
         : message == "Tuple index out of range" ? "tuple-index"
+        : message is "Too many values to unpack" or "Need more values to unpack" ? "tuple-assignment-balance"
         : message.StartsWith("Key '") && message.EndsWith("cannot be deleted") ? "typeddict-keys"
         : message.EndsWith("doesn't return anything") ? "none-function-assignment"
         : message.Contains("is already handled by an earlier clause") ? "except-clauses-order"

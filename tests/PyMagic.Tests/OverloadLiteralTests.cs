@@ -90,10 +90,13 @@ public class OverloadLiteralTests
     }
 
     [Fact]
-    public void AnUnknownArgumentKeepsPickingTheFirstOverloadThatFits()
+    public void AnUnknownArgumentThatFitsOverloadsWithDifferentReturnsIsUnknown()
     {
-        Assert.Equal("int", Last(Open + "def f(m):\n    op(m)\n"));
-        Assert.Equal("int", Last(Pick + "def f(a):\n    pick(a)\n"));
+        // as in pyright: the first overload fits only because nothing is known about the argument (OverloadUnknownTests)
+        Assert.Equal("Unknown", Last(Open + "def f(m):\n    op(m)\n"));
+        Assert.Equal("Unknown", Last(Pick + "def f(a):\n    pick(a)\n"));
+        // no argument at all: the default picks the first
+        Assert.Equal("int", Last(Open + "def f():\n    op()\n"));
     }
 
     [Fact]

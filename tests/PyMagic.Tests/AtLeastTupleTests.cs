@@ -105,4 +105,36 @@ public class AtLeastTupleTests
         var m = ws.AddModule("main", "def take(x: tuple[int, ...]) -> None: ...\n\n\ndef f(t: tuple[int, ...]):\n    if len(t) >= 2:\n        take(t)\n");
         Assert.Equal(0, ws.Evaluator.Inspect(m, true).Count());
     }
+
+    static List<string> Reports(string src)
+    {
+        var ws = new Workspace();
+        var m = ws.AddModule("main", src);
+        Assert.True(m.SyntaxErrors.Count == 0, "syntax errors: " + string.Join("; ", m.SyntaxErrors.Select(d => d.Message)));
+        return ws.Evaluator.Inspect(m, true).Select(d => d.Message).ToList();
+    }
+
+    const string Want2 = "def want2(p: tuple[int, int]) -> None: ...\n\n\n";
+
+    [Fact]
+    public void AtLeastMoreItemsThanAFixedTupleWantsIsReported()
+    {
+        var found = Reports(Want2 + "def f(t: tuple[int, ...], s: tuple[int, int, int, *tuple[int, ...]]):\n    want2(s)\n    if len(t) >= 3:\n        want2(t)\n");
+        Assert.Equal(2, found.Count);
+        Assert.True(found.All(r => r.Contains("Expected type 'tuple[int, int]', got 'tuple[int, int, int, *tuple[int, ...]]'")), string.Join(" | ", found));
+    }
+
+    [Fact]
+    public void AtLeastAsManyOrATupleOfAnyLengthMayFit()
+    {
+        // as PyCharm, which takes a tuple[int, ...] where a tuple[int, int] is wanted; "at least 2" may be exactly 2
+        Assert.Equal(0, Reports(Want2 + "def f(t: tuple[int, ...], s: tuple[int, *tuple[int, ...]]):\n    want2(t)\n    want2(s)\n    if len(t) >= 2:\n        want2(t)\n    if len(t) == 2:\n        want2(t)\n").Count);
+    }
+
+    [Fact]
+    public void AFixedTupleOfAnotherLengthIsReported()
+    {
+        var found = Reports(Want2 + "def f(u: tuple[int, int, int], one: tuple[int], ok: tuple[int, int]):\n    want2(u)\n    want2(one)\n    want2(ok)\n    want2((1, 2, 3))\n");
+        Assert.Equal("tuple[int, int, int]|tuple[int]|tuple[int, int, int]", string.Join("|", found.Select(r => r[(r.IndexOf("got '") + 5)..r.LastIndexOf("'")])));
+    }
 }

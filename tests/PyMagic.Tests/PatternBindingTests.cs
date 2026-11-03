@@ -130,9 +130,26 @@ public class PatternBindingTests
     }
 
     [Fact]
-    public void ASubjectNothingIsKnownAboutBindsUnknown()
+    public void ASubjectNothingIsKnownAboutBindsThePatternsClassAsInPyright()
     {
-        Same("Unknown", T("def f(v):\n    match v:\n        case int() as n:\n            n\n"));
+        const string Unknown = "def f(v):\n    match v:\n";
+        Same("int", T(Unknown + "        case int() as n:\n            n\n"));
+        Same("str", T(Unknown + "        case str(s):\n            s\n"));
+        Same("int", T(Unknown + "        case Point(x=a):\n            a\n"));
+        Same("bytes", T(Unknown + "        case Pair(_, right):\n            right\n"));
+        Same("Point", T(Unknown + "        case Point() | None as p:\n            pass\n        case Point() as q:\n            q\n"));
+        // what the pattern does not say stays Unknown
+        Same("Unknown", T(Unknown + "        case x:\n            x\n"));
+        Same("Unknown", T(Unknown + "        case [a, b]:\n            a\n"));
+        Same("Unknown", T(Unknown + "        case {\"k\": value}:\n            value\n"));
+    }
+
+    [Fact]
+    public void AnUnknownSubjectsBindingsAreUsedInTheCaseBody()
+    {
+        // the class pattern's `as` name is a Point; the capture of the next case says nothing, so nothing is reported on it
+        var found = Reports("def f(v):\n    match v:\n        case Point(x=a) as p:\n            p.missing\n        case other:\n            other.anything\n");
+        Assert.True(found.Count == 1 && found[0].Contains("'missing'") && found[0].Contains("Point"), string.Join(" | ", found));
     }
 
     [Fact]

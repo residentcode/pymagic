@@ -182,6 +182,11 @@ public class StyleInspectionTests
         Assert.Equal(0, Count("def f(a):\n    while True:\n        if a:\n            return 1\n", "inconsistent-returns"));
         Assert.Equal(0, Count("def f(a):\n    print(a)\n    return\n", "inconsistent-returns"));
         Assert.Equal(0, Count("def f(a):\n    if a:\n        return 1\n    yield 2\n", "inconsistent-returns"));
+        // the flow graph decides where the end is: dead code after a return, a return in finally, a loop left only by return
+        Assert.Equal(0, Count("def f():\n    try:\n        return 1\n    finally:\n        return 2\n    print('dead')\n", "inconsistent-returns"));
+        Assert.Equal(0, Count("def f(a):\n    if a:\n        return 1\n    return 2\n    print('dead')\n", "inconsistent-returns"));
+        Assert.Equal(0, Count("def f(a):\n    for x in a:\n        return x\n    else:\n        return 0\n    a.pop()\n", "inconsistent-returns"));
+        Assert.Equal(1, Count("def f(a):\n    try:\n        return 1\n    except ValueError:\n        pass\n    print('end')\n", "inconsistent-returns"));
     }
 
     // ------------------------------------------------------------ PEP 8

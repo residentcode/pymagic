@@ -81,6 +81,10 @@ public class TypeCheckTests
         Assert.Equal(0, Found(Src("def e() -> int:", "    ..."), "missing-return").Count);
         Assert.Equal(0, Found(Src("def g() -> None:", "    pass"), "missing-return").Count);
         Assert.Equal(0, Found(Src("def h() -> int:", "    yield 1"), "missing-return").Count);
+        // the typed flow: a call that never returns ends the path, a return in finally ends the function
+        Assert.Equal(0, Found(Src("from typing import NoReturn", "def fail() -> NoReturn:", "    raise ValueError()", "def i(x) -> int:", "    if x:", "        return 1", "    fail()"), "missing-return").Count);
+        Assert.Equal(0, Found(Src("def boom():", "    raise ValueError()", "def j(x) -> int:", "    if x:", "        return 1", "    boom()"), "missing-return").Count);
+        Assert.Equal(0, Found(Src("def k() -> int:", "    try:", "        pass", "    finally:", "        return 2", "    print('dead')"), "missing-return").Count);
     }
 
     [Fact]
