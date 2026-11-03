@@ -60,7 +60,9 @@ test('the installed app uses the same app id as the shortcuts (a run from the re
   assert.equal(installerConfig().appId, APP_ID);
   assert.ok(main.includes(`if (process.platform === 'win32' && packaged) app.setAppUserModelId('${APP_ID}');`), 'main.js sets another app id, or sets it for a run from the repo too');
   assert.match(main, /path\.join\(__dirname, 'icon', 'pymagic\.ico'\)/);
-  assert.match(main, /new BrowserWindow\(\{[^}]*\bicon\b/);
+  // every window (each has a project) takes the options with the icon
+  assert.match(main, /const windowOptions = [^\n]*\bicon\b/);
+  assert.match(main, /new BrowserWindow\(windowOptions\(/);
 });
 
 test('package.mjs builds the installer from the packaged folder, and the tools are pinned', () => {

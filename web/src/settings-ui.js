@@ -3,6 +3,7 @@
 // the interpreter, the Git switches), which the page mirrors and presses.
 import { change, resetAll, settings, pluginsAtStart } from './settings';
 import { PLUGINS, pluginOn, switchPlugin, findPlugins, requiredName } from './plugin-model.js';
+import { OPEN_PROJECT_IN } from './openproject-model.js';
 import { buildLabel, shortTime } from './build-info.js';
 import { keymapCommands, defineCommand } from './commands.js';
 import { keyFromEvent, effectiveKeys, clashes, withKey } from './keymap-model.js';
@@ -67,6 +68,9 @@ const PAGES = [
         { key: 'tabLimit', label: 'Tab limit', type: 'number', min: 0, max: 100, unit: '0 for none', hint: 'Past it, the tabs used longest ago close; pinned tabs and those with unsaved changes stay.' },
         { key: 'tabClose', label: 'A close button on each tab', type: 'bool', hint: 'Without it a tab closes with a middle click or its menu.' },
         { key: 'previewTab', label: 'Preview tab', type: 'bool', hint: 'A file opened with one click in the project tree replaces the one opened so before (its name in italics) until it is edited or double-clicked.' },
+    ]],
+    ['system', 'System', [
+        { key: 'openProjectIn', label: 'Open project in', type: 'choice', options: OPEN_PROJECT_IN, hint: 'Where a project opened from the menu, the recent projects or New Project goes. Ask shows the Open Project dialog, whose "Don\'t ask again" sets this.' },
     ]],
     ['files', 'Files', [
         { key: 'autoSave', label: 'Save files automatically', type: 'choice', options: [['off', 'Never'], ['blur', 'When the window is left'], ['delay', 'A second after the last change']], hint: 'Saving also formats the file when "format on save" is on.' },

@@ -20,10 +20,8 @@ const www = packaged ? path.join(process.resourcesPath, 'www') : path.join(repo,
 const demo = packaged ? path.join(process.resourcesPath, 'demo') : path.join(repo, 'examples', 'demo');
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 
-let host = null;
-let port = 0;
-let win = null;
-let project = null;
+// one window per open project, each with its engine (the C# host) on a port of its own: { win, host, port, project }
+const windows = new Set();
 
 function readSettings() {
   try { return JSON.parse(fs.readFileSync(settingsFile(), 'utf8')); } catch { return {}; }
@@ -102,47 +100,105 @@ function waitFor(url, tries = 100) {
   });
 }
 
-function stopHost() {
-  if (host) { try { host.kill(); } catch { /* already gone */ } host = null; }
+function stopHost(w) {
+  if (w.host) { try { w.host.kill(); } catch { /* already gone */ } w.host = null; }
 }
 
-async function startHost(dll, folder) {
-  stopHost();
-  port = await freePort(5180);
+async function startHost(w, dll, folder) {
+  stopHost(w);
+  // a port no other window's engine has taken while starting
+  let port = await freePort(5180);
+  while ([...windows].some(o => o !== w && o.port === port)) port = await freePort(port + 1);
+  w.port = port;
   const args = [dll, '--root', folder, '--www', www, '--port', String(port)];
   const ts = typeshed();
   if (ts) args.push('--typeshed', ts);
   const env = hostEnvironment(os.cpus().length);
-  host = packaged
+  const host = packaged
     ? spawn(dll, args.slice(1), { cwd: path.dirname(dll), windowsHide: true, env })
     : spawn('dotnet', args, { cwd: repo, windowsHide: true, env });
-  host.on('exit', () => { host = null; });
+  w.host = host;
+  host.on('exit', () => { if (w.host === host) w.host = null; });
   await waitFor(`http://127.0.0.1:${port}/api/info`);
 }
 
 let hostDll = null;
 
-async function openProject(folder) {
-  project = folder;
+const samePath = (a, b) => !!a && !!b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+
+/** Opens a folder in a window: its engine is started on it and the page loaded. */
+async function openProject(w, folder) {
+  w.project = folder;
   const s = readSettings();
   s.last = folder;
   s.recent = remember(s.recent, folder);
   writeSettings(s);
-  win.setTitle(`PyMagic - ${folder}`);
-  await startHost(hostDll, folder);
-  await win.loadURL(`http://127.0.0.1:${port}/`);
+  w.win.setTitle(`PyMagic - ${folder}`);
+  await startHost(w, hostDll, folder);
+  await w.win.loadURL(`http://127.0.0.1:${w.port}/`);
 }
 
-async function chooseFolder() {
-  const r = await dialog.showOpenDialog(win, { title: 'Open a Python project', properties: ['openDirectory'], defaultPath: project || readSettings().last });
-  if (!r.canceled && r.filePaths[0]) await openProject(r.filePaths[0]);
+/** The Open Project dialog's answer: a project open in a window already brings that one to the front; 'new' opens a window of its own. */
+async function openProjectIn(w, folder, where) {
+  const open = [...windows].find(o => samePath(o.project, folder));
+  if (open) {
+    if (open.win.isMinimized()) open.win.restore();
+    open.win.focus();
+    return;
+  }
+  if (where === 'new') {
+    const other = createWindow();
+    await splash(other, 'Opening ' + folder + '...');
+    await openProject(other, folder);
+    return;
+  }
+  await openProject(w, folder);
+}
+
+async function chooseFolder(w) {
+  const r = await dialog.showOpenDialog(w.win, { title: 'Open a Python project', properties: ['openDirectory'], defaultPath: w.project || readSettings().last });
+  return r.canceled ? null : r.filePaths[0] ?? null;
+}
+
+/** The window a request of a page came from (a tab opened in a window of its own belongs to the window whose engine it uses). */
+function windowOf(sender) {
+  const own = [...windows].find(w => w.win.webContents === sender);
+  if (own) return own;
+  let port = 0;
+  try { port = Number(new URL(sender.getURL()).port); } catch { /* not an address */ }
+  return [...windows].find(w => w.port === port) ?? [...windows][0];
+}
+
+/** Runs a command of the page's own in the window in front (the menu's Open Folder asks there how to open it). */
+function inPage(code) {
+  const w = [...windows].find(o => o.win.isFocused()) ?? [...windows][0];
+  w?.win.webContents.executeJavaScript(code).catch(() => {});
+}
+
+const windowOptions = (width, height) => ({ width, height, backgroundColor: '#0f111a', title: 'PyMagic', icon, autoHideMenuBar: true, webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.js') } });
+
+function createWindow() {
+  // the page has its own menu (the mark at the left of its command bar); the app's menu stays for its keys and shows with Alt
+  const w = { win: new BrowserWindow(windowOptions(1400, 900)), host: null, port: 0, project: null };
+  windows.add(w);
+  // Open Tab in New Window: the page opens itself again (?open=<file>) in a window of PyMagic; any other address goes to the browser
+  w.win.webContents.setWindowOpenHandler(({ url }) => {
+    let own = false;
+    try { const u = new URL(url); own = (u.hostname === '127.0.0.1' || u.hostname === 'localhost') && Number(u.port) === w.port && u.searchParams.has('open'); } catch { /* not an address */ }
+    if (own) return { action: 'allow', overrideBrowserWindowOptions: windowOptions(1100, 800) };
+    shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  // its engine ends with it
+  w.win.on('closed', () => { stopHost(w); windows.delete(w); });
+  return w;
 }
 
 function menu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: 'File', submenu: [
-      { label: 'Open Folder...', accelerator: 'CmdOrCtrl+Shift+O', click: () => chooseFolder() },
-      { label: 'Open the demo project', click: () => openProject(demo) },
+      { label: 'Open Folder...', accelerator: 'CmdOrCtrl+Shift+O', click: () => inPage('window.pymagic?.projectDesktop()?.openFolder()') },
+      { label: 'Open the demo project', click: () => inPage('window.pymagic?.projectDesktop()?.openDemo()') },
       { type: 'separator' },
       { role: 'quit' },
     ] },
@@ -154,25 +210,29 @@ function menu() {
   ]));
 }
 
-function splash(text) {
-  const html = `<body style="margin:0;background:#0f111a;color:#bcc1d6;font:15px Segoe UI;display:flex;align-items:center;justify-content:center;height:100vh"><div id=t>${text}</div></body>`;
-  return win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+function splash(w, text) {
+  const html = `<body style="margin:0;background:#0f111a;color:#bcc1d6;font:15px Segoe UI;display:flex;align-items:center;justify-content:center;height:100vh"><div id=t></div></body>`;
+  return w.win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+    .then(() => w.win.webContents.executeJavaScript(`document.getElementById('t').textContent = ${JSON.stringify(text)}`));
 }
 
 app.whenReady().then(async () => {
-  // the page has its own menu (the mark at the left of its command bar); this one stays for its keys and shows with Alt
-  win = new BrowserWindow({ width: 1400, height: 900, backgroundColor: '#0f111a', title: 'PyMagic', icon, autoHideMenuBar: true, webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.js') } });
-  ipcMain.handle('pymagic:open-folder', () => chooseFolder());
-  ipcMain.handle('pymagic:open-project', async (_e, folder) => { if (typeof folder === 'string' && fs.existsSync(folder) && fs.statSync(folder).isDirectory()) await openProject(path.resolve(folder)); });
-  ipcMain.handle('pymagic:open-demo', () => openProject(demo));
+  const first = createWindow();
+  ipcMain.handle('pymagic:choose-folder', (e) => chooseFolder(windowOf(e.sender)));
+  ipcMain.handle('pymagic:open-project', async (e, folder, where) => {
+    if (typeof folder === 'string' && fs.existsSync(folder) && fs.statSync(folder).isDirectory())
+      await openProjectIn(windowOf(e.sender), path.resolve(folder), where === 'new' ? 'new' : 'this');
+  });
+  ipcMain.handle('pymagic:demo-folder', () => demo);
   // the New Project dialog's Browse: a folder's path, which the page sends back to the engine to make the project in
-  ipcMain.handle('pymagic:pick-folder', async (_e, start) => {
-    const r = await dialog.showOpenDialog(win, { title: 'Where the new project goes', properties: ['openDirectory', 'createDirectory', 'promptToCreate'], defaultPath: typeof start === 'string' && start ? start : undefined });
+  ipcMain.handle('pymagic:pick-folder', async (e, start) => {
+    const r = await dialog.showOpenDialog(windowOf(e.sender).win, { title: 'Where the new project goes', properties: ['openDirectory', 'createDirectory', 'promptToCreate'], defaultPath: typeof start === 'string' && start ? start : undefined });
     return r.canceled ? null : r.filePaths[0] ?? null;
   });
-  ipcMain.handle('pymagic:recent', () => existing(readSettings().recent, fs.existsSync, project));
+  ipcMain.handle('pymagic:recent', (e) => existing(readSettings().recent, fs.existsSync, windowOf(e.sender).project));
   // Open In > Explorer: a file or folder of the open project, selected in a window of Explorer
-  ipcMain.handle('pymagic:reveal', (_e, rel) => {
+  ipcMain.handle('pymagic:reveal', (e, rel) => {
+    const project = windowOf(e.sender).project;
     if (!project || typeof rel !== 'string') return false;
     const base = path.resolve(project), full = path.resolve(base, rel);
     if (full !== base && !full.startsWith(base + path.sep)) return false;
@@ -180,25 +240,17 @@ app.whenReady().then(async () => {
     shell.showItemInFolder(full);
     return true;
   });
-  // Open Tab in New Window: the page opens itself again (?open=<file>) in a window of PyMagic; any other address goes to the browser
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    let own = false;
-    try { const u = new URL(url); own = (u.hostname === '127.0.0.1' || u.hostname === 'localhost') && Number(u.port) === port && u.searchParams.has('open'); } catch { /* not an address */ }
-    if (own) return { action: 'allow', overrideBrowserWindowOptions: { width: 1100, height: 800, backgroundColor: '#0f111a', title: 'PyMagic', icon, autoHideMenuBar: true, webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.js') } } };
-    shell.openExternal(url);
-    return { action: 'deny' };
-  });
   menu();
-  const report = t => win.webContents.executeJavaScript(`document.getElementById('t') && (document.getElementById('t').textContent = ${JSON.stringify(t)})`).catch(() => {});
+  const report = t => first.win.webContents.executeJavaScript(`document.getElementById('t') && (document.getElementById('t').textContent = ${JSON.stringify(t)})`).catch(() => {});
   try {
-    await splash('Starting PyMagic...');
+    await splash(first, 'Starting PyMagic...');
     hostDll = await new Promise((resolve, reject) => setImmediate(() => { try { resolve(prepare(report)); } catch (e) { reject(e); } }));
     let folder = process.argv.slice(packaged ? 1 : 2).find(a => !a.startsWith('--') && fs.existsSync(a));
     if (!folder) {
       const last = readSettings().last;
       folder = last && fs.existsSync(last) ? last : demo;
     }
-    await openProject(path.resolve(folder));
+    await openProject(first, path.resolve(folder));
   } catch (e) {
     dialog.showErrorBox('PyMagic could not start', String(e.message || e));
     app.quit();
@@ -206,5 +258,6 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', stopHost);
-process.on('exit', stopHost);
+const stopAll = () => { for (const w of windows) stopHost(w); };
+app.on('before-quit', stopAll);
+process.on('exit', stopAll);

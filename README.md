@@ -178,6 +178,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - A cache of parsed stubs on disk (7): each start parses typeshed's builtins and the stubs a project uses again (the cache is in memory only).
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
+- Open Project: Attach (a second project folder in the same window, as PyCharm attaches one) is not there yet: the engine has one project folder per window (301).
 - Run configurations: Not tried yet: the three servers and uv with those packages installed.
 
 **Django compared with PyCharm** (from PyCharm's Django help pages and its 17 Django inspections, checked against the code on 30 October 2026)
@@ -222,4 +223,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 300 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 301 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

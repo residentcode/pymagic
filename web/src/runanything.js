@@ -3,6 +3,7 @@
 // debugs (where that makes sense), Tab completes the one chosen. runanything-model.js says what a line means and suggests.
 import { doubleTap, parseCommand, suggest } from './runanything-model';
 import { toast } from './toast';
+import { projectDesktop } from './openproject.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -47,8 +48,9 @@ export function setupRunAnything({ runConfigs, runHooks, editor }) {
             }
             case 'project': {
                 const hit = ctx.recents.find((p) => p.name.toLowerCase() === cmd.name.toLowerCase()) ?? ctx.recents.find((p) => p.name.toLowerCase().includes(cmd.name.toLowerCase()));
-                if (!hit || !window.pymagicDesktop?.openProject) { toast(`No recent project named ${cmd.name}.`, true); return false; }
-                await window.pymagicDesktop.openProject(hit.path);
+                const desktop = projectDesktop();
+                if (!hit || !desktop) { toast(`No recent project named ${cmd.name}.`, true); return false; }
+                await desktop.openProject(hit.path);
                 return true;
             }
             default: {

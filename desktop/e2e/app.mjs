@@ -107,7 +107,7 @@ export async function launch(root) {
     await page.send('Emulation.setFocusEmulationEnabled', { enabled: true });
     await page.waitFor('!!(window.pymagic && window.pymagic.openFile && window.pymagic.editor.getModel())', 60000, 'the editor');
     return {
-        page, root,
+        page, root, port,   // the DevTools port: every window of this PyMagic is listed there
         async close() {
             ws.close();
             stop(child, profile);

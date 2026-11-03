@@ -36,6 +36,7 @@ import { languageFor as languageForFile } from './file-language';
 import { setupEmmet } from './emmet';
 import { setupTagPairs } from './tag-pairs';
 import { setupFullLine } from './fullline';
+import { projectDesktop } from './openproject.js';
 import { setupNotebook } from './notebook';
 import { buildInfo, buildLabel } from './build-info.js';
 import { setupGitSync } from './git-sync';
@@ -991,7 +992,7 @@ async function main() {
     applySettings(monaco, themeName, editor);
     $('build').textContent = buildLabel();
     notebook = !plugin('notebooks') ? null : setupNotebook({ monaco, area: $('editor-area'), editorEl: $('editor'), save, lsp, formatEngine: () => formatOptions().pymagicEngine, rootUri: () => rootUri, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
-    window.pymagic = { editor, monaco, openFile, notebook, changeSetting };
+    window.pymagic = { editor, monaco, openFile, notebook, changeSetting, projectDesktop };
     const common = {
         editor,
         modelFor: ensureModel,

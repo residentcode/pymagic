@@ -2994,6 +2994,50 @@ describe('New Project: the other kinds', () => {
             assert.ok(tokens.includes(want), want + ' in ' + tokens.join(' '));
     });
 
+    test('Open Project: asked whether it replaces this window\'s project or opens in a new window, with Don\'t ask again', async () => {
+        const other = tempDir('pymagic-e2e-other-');
+        writeFileSync(join(other, 'other.py'), 'print("other")\n');
+        const pages = async () => (await (await fetch(`http://127.0.0.1:${app.port}/json`)).json()).filter((t) => t.type === 'page' && /^http:\/\/127\.0\.0\.1:\d+\/$/.test(t.url));
+        const ask = (folder) => page.evaluate(`(window.pymagic.projectDesktop().openProject(${JSON.stringify(folder)}), true)`);
+        const buttons = `[...document.querySelectorAll('.ask-box .ask-buttons button')].map((b) => b.textContent).join('|')`;
+        const ownPort = await page.evaluate('location.port');
+        // the dialog: its three answers and the box to tick; Cancel opens nothing
+        await ask(other);
+        assert.equal(await page.waitFor(`document.querySelector('.ask-box') && ${buttons}`, 10000, 'the Open Project dialog'), 'This Window|New Window|Cancel');
+        assert.match(await page.evaluate(`document.querySelector('.ask-box .ask-check').textContent`), /Don't ask again/);
+        await page.evaluate(`document.querySelector('.ask-box button[data-value="cancel"]').click()`);
+        await sleep(500);
+        assert.equal((await pages()).length, 1);
+        // New Window, with Don't ask again: a second window with an engine of its own, and the answer kept as the setting
+        await ask(other);
+        await page.waitFor(`!!document.querySelector('.ask-box')`, 10000, 'the dialog again');
+        await page.evaluate(`(() => { document.querySelector('.ask-box .ask-check input').checked = true; document.querySelector('.ask-box button[data-value="new"]').click(); })()`);
+        let second = null;
+        for (let i = 0; i < 120 && !second; i++) {
+            await sleep(500);
+            second = (await pages()).find((t) => new URL(t.url).port !== ownPort);
+        }
+        assert.ok(second, 'a second window');
+        assert.equal((await pages()).length, 2);
+        assert.equal(await page.evaluate(`fetch('/api/settings').then((r) => r.json()).then((s) => s.openProjectIn)`), 'new');
+        // its engine has the other folder
+        const info = await (await fetch(new URL('/api/files', second.url))).text();
+        assert.match(info, /other\.py/);
+        // the same project again: no dialog (the setting says new), no third window (the open one comes to the front)
+        await ask(other);
+        await sleep(1500);
+        assert.equal((await pages()).length, 2);
+        // the second window closed, its engine with it; the setting put back
+        const ws = new WebSocket(second.webSocketDebuggerUrl);
+        await new Promise((ok) => ws.addEventListener('open', ok));
+        ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: 'window.close()' } }));
+        await sleep(1500);
+        ws.close();
+        assert.equal((await pages()).length, 1);
+        assert.equal(await fetch(new URL('/api/info', second.url)).then(() => 'up', () => 'down'), 'down');
+        await page.evaluate(`window.pymagic.changeSetting({ openProjectIn: 'ask' })`);
+    });
+
     test('Full line completion: the rest of the line in grey, written by the bundled model, taken with Tab', async () => {
         await open('fullline/config.py');
         const before = await page.evaluate('window.pymagic.editor.getModel().getValue()');

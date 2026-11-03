@@ -6,6 +6,7 @@ import { toolOff, pluginOn, remoteKindsLeft } from './plugin-model';
 import { openSettings } from './settings-ui';
 import { openNewProject } from './newproject';
 import { defineCommand } from './commands.js';
+import { projectDesktop } from './openproject.js';
 
 const $ = (id) => document.getElementById(id);
 const press = (id) => () => $(id).click();
@@ -36,7 +37,7 @@ export function refactorMenu(editor, refactor) {
 
 export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, split, currentFile, search, refactor, breakpoints, debug, nav, recent, chrome, bookmarks, runConfigs }) {
     // the desktop app lets the page open another folder (preload.js); in a browser the engine is started with its folder and these stay dim
-    const desktop = window.pymagicDesktop;
+    const desktop = projectDesktop();
     let recentProjects = [];
     desktop?.recentProjects().then((list) => { recentProjects = list; }).catch(() => { /* none shown */ });
     const act = (id) => () => { editor.focus(); editor.trigger('menu', id, null); };

@@ -5,6 +5,7 @@
 import { toast } from './toast';
 import { pluginsAtStart } from './settings';
 import { kindsOff, pluginOn } from './plugin-model.js';
+import { projectDesktop } from './openproject.js';
 
 const KINDS = [
     ['python', 'Pure Python', 'A folder with a welcome script, if you want one.'],
@@ -38,7 +39,7 @@ export const suggestedLocation = (root, name = 'untitled') => {
 };
 
 export async function openNewProject() {
-    const desktop = window.pymagicDesktop;
+    const desktop = projectDesktop();
     const info = await fetch('/api/info').then((r) => r.json()).catch(() => ({}));
     const interpreters = await fetch('/api/interpreters').then((r) => r.json()).catch(() => []);
     const local = interpreters.filter((i) => !i.target || i.target === 'local');
