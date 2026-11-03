@@ -25,7 +25,7 @@ public static class ExternalFormatter
 
     /// <summary>The text formatted by the tool.</summary>
     /// <param name="filePath">Where the text lives, so that the tool finds the project's pyproject.toml.</param>
-    /// <param name="lines">1-based first and last line to format (black only); null for the whole text.</param>
+    /// <param name="lines">1-based first and last line to format (black 23.11 and ruff 0.2 or newer); null for the whole text.</param>
     /// <exception cref="ServiceException">The tool is not installed, rejects the text, or takes too long.</exception>
     /// <param name="quotes">Single or Preserve: the quotes to keep when the project does not say (ruff's quote-style; black only preserves, -S).</param>
     public static string Format(string python, string tool, string source, string filePath, (int First, int Last)? lines = null, ExecutionTarget? target = null, QuoteStyle? quotes = null)
@@ -52,6 +52,16 @@ public static class ExternalFormatter
         {
             args.Add("format");
             if (quotes != null) { args.Add("--config"); args.Add($"format.quote-style = \"{(quotes == QuoteStyle.Single ? "single" : "preserve")}\""); }
+            if (lines != null)
+            {
+                // --range arrived in 0.2
+                var info = Probe(python, "ruff", target);
+                if (!info.Available) throw NotInstalled(python, tool);
+                var v = Regex.Match(info.Version ?? "", @"^(\d+)\.(\d+)");
+                if (!v.Success || int.Parse(v.Groups[1].Value) * 1000 + int.Parse(v.Groups[2].Value) < 2)
+                    throw new ServiceException($"This ruff ({info.Version}) cannot format a selection; ruff 0.2 or newer can.");
+                args.Add($"--range={lines.Value.First}-{lines.Value.Last}");
+            }
             args.Add("--stdin-filename"); args.Add(filePath);
             args.Add("-");
         }

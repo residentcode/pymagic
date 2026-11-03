@@ -30,7 +30,8 @@ if "--version" in args:
     print("ruff 0.5.0")
     sys.exit(0)
 data = sys.stdin.read()
-sys.stdout.write("# ruff " + " ".join(args[:1]) + chr(10) + data)
+ranges = [a for a in args if a.startswith("--range=")]
+sys.stdout.write("# ruff " + " ".join(args[:1]) + (" " + ranges[0] if ranges else "") + chr(10) + data)
 """;
 
     /// <summary>Runs the body with the stand-in tools importable by the interpreter.</summary>
@@ -158,9 +159,53 @@ sys.stdout.write("# ruff " + " ".join(args[:1]) + chr(10) + data)
             // a selection that ends at the start of a line leaves that line out
             var upToLine3 = new PyMagic.Server.Range(new PyMagic.Server.Position(0, 0), new PyMagic.Server.Position(2, 0));
             Assert.Contains("--line-ranges=1-2", Apply(text, svc.FormatRange(Doc, upToLine3, "black")));
-            // ruff has no ranges here: the built-in formatter does it
-            Assert.Equal(Src("x=1", "y = 2", "z=3"), Apply(text, svc.FormatRange(Doc, new PyMagic.Server.Range(new PyMagic.Server.Position(1, 0), new PyMagic.Server.Position(1, 3)), "ruff")));
+            // ruff is told the lines too (--range); the built-in formatter does it when neither is chosen
+            Assert.Equal("# ruff format --range=2-2\n" + text, Apply(text, svc.FormatRange(Doc, new PyMagic.Server.Range(new PyMagic.Server.Position(1, 0), new PyMagic.Server.Position(1, 3)), "ruff")));
+            Assert.Equal(Src("x=1", "y = 2", "z=3"), Apply(text, svc.FormatRange(Doc, new PyMagic.Server.Range(new PyMagic.Server.Position(1, 0), new PyMagic.Server.Position(1, 3)), "builtin")));
         });
+    }
+
+    [Fact]
+    public void ASelectionOfANotebookCellGoesToTheChosenTool()
+    {
+        WithFakeTools(_ =>
+        {
+            var svc = new LanguageService();
+            // a cell: its %magic line is set aside while the tool works, and the lines keep their numbers
+            string cell = "a=1\nb=2\n%time c=3\nd=4";
+            var range = new PyMagic.Server.Range(new PyMagic.Server.Position(1, 0), new PyMagic.Server.Position(1, 3));
+            string black = svc.FormatText(cell, Doc, "black", range), ruff = svc.FormatText(cell, Doc, "ruff", range);
+            Assert.True(black.StartsWith("# black file=main.py --line-ranges=2-2\n"), black);
+            Assert.True(ruff.StartsWith("# ruff format --range=2-2\n"), ruff);
+            Assert.Contains("%time c=3", svc.FormatText(cell, Doc, "ruff", range));
+            // the built-in formatter when it is chosen: only the selected line is laid out
+            Assert.Equal("a=1\nb = 2\n%time c=3\nd=4", svc.FormatText(cell, Doc, "builtin", range));
+        });
+    }
+
+    [Fact]
+    public void AnOldRuffCannotFormatASelection()
+    {
+        string? python = RefactorBehaviourTests.Python;
+        if (python == null) return;
+        string dir = Path.Combine(Path.GetTempPath(), "pm_tools_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "ruff"));
+        File.WriteAllText(Path.Combine(dir, "ruff", "__init__.py"), "");
+        File.WriteAllText(Path.Combine(dir, "ruff", "__main__.py"), "import sys\nif '--version' in sys.argv:\n    print('ruff 0.1.15')\n    sys.exit(0)\nsys.stdout.write(sys.stdin.read())\n");
+        string? old = Environment.GetEnvironmentVariable("PYTHONPATH");
+        Environment.SetEnvironmentVariable("PYTHONPATH", dir);
+        try
+        {
+            string? message = null;
+            try { ExternalFormatter.Format(python, "ruff", "x=1\n", "m.py", (1, 1)); }
+            catch (ServiceException e) { message = e.Message; }
+            Assert.Contains("ruff 0.2 or newer", message ?? "(no error)");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PYTHONPATH", old);
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
     }
 
     [Fact]

@@ -155,7 +155,6 @@ The test project is a plain console runner because this machine's NuGet only has
 Everything that is known to be left, in one place, gathered on 30 October 2026 from the "Not done" and "Still open" notes of items 2 to 154 (the item a line comes from is in brackets), and from PyCharm's own dialogs and menus (what PyMagic's notes never named). **How it is kept:** when an item does one of these, the line goes from here to [work_done.md](work_done.md#done-from-the-open-work-list) and the item says so; a new item's own "Not done" note is added here too. Code signing, auto-update and anything else for selling PyMagic are left out on purpose.
 
 **Editor**
-- A cell's selection is laid out by the built-in formatter whichever is chosen in the toolbar.
 - A request already being worked out is not stopped (its answer is dropped); positions the engine writes without its line map, if any are left, still count UTF-16 units.
 
 **Run, debug and tests**
@@ -222,4 +221,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 307 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 308 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

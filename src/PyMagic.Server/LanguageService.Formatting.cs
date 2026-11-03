@@ -112,11 +112,17 @@ public sealed partial class LanguageService
         string formatted;
         if (range is { } r)
         {
-            // only the lines the selection touches (the placeholders keep the lines where they were, so the range still fits)
-            var lm = new LineMap(code);
-            int start = lm.OffsetOf(new Position(r.Start.Line, 0)), end = lm.OffsetOf(r.End);
-            formatted = PythonFormatter.FormatRange(code, start, end, FormatConfigOf(uri))
-                ?? throw new ServiceException("This selection cannot be formatted on its own (it has `fmt: off`, or formatting it would change the code): select whole statements, or format the cell.");
+            // only the lines the selection touches (the placeholders keep the lines where they were, so the range still fits), by the tool
+            // chosen in the toolbar when it is black or ruff
+            if (engine is "black" or "ruff")
+                formatted = RunExternal(engine, code, uri, SelectedLines(r));
+            else
+            {
+                var lm = new LineMap(code);
+                int start = lm.OffsetOf(new Position(r.Start.Line, 0)), end = lm.OffsetOf(r.End);
+                formatted = PythonFormatter.FormatRange(code, start, end, FormatConfigOf(uri))
+                    ?? throw new ServiceException("This selection cannot be formatted on its own (it has `fmt: off`, or formatting it would change the code): select whole statements, or format the cell.");
+            }
         }
         else
             formatted = engine is "builtin" or ""
@@ -126,7 +132,14 @@ public sealed partial class LanguageService
         return text.EndsWith('\n') ? formatted : formatted.TrimEnd('\n');
     }
 
-    /// <summary>Formats the lines the range touches. black formats them itself (23.11 or newer); everything else uses the built-in formatter.</summary>
+    /// <summary>The 1-based first and last line of a selection; one that ends at the start of a line does not include that line.</summary>
+    static (int First, int Last) SelectedLines(Range range)
+    {
+        int last = range.End.Line + 1 - (range.End.Character == 0 && range.End.Line > range.Start.Line ? 1 : 0);
+        return (range.Start.Line + 1, Math.Max(last, range.Start.Line + 1));
+    }
+
+    /// <summary>Formats the lines the range touches. black (23.11 or newer) and ruff (0.2 or newer) format them themselves; the built-in formatter otherwise.</summary>
     /// <exception cref="ServiceException">The selection cannot be formatted on its own.</exception>
     public IReadOnlyList<TextEdit> FormatRange(string uri, Range range, string engine = "builtin")
     {
@@ -137,12 +150,8 @@ public sealed partial class LanguageService
         int start = lm.OffsetOf(range.Start), end = lm.OffsetOf(range.End);
 
         string formatted;
-        if (engine == "black")
-        {
-            // a selection that ends at the start of a line does not include that line
-            int last = range.End.Line + 1 - (range.End.Character == 0 && range.End.Line > range.Start.Line ? 1 : 0);
-            formatted = RunExternal("black", m.Source, uri, (range.Start.Line + 1, Math.Max(last, range.Start.Line + 1)));
-        }
+        if (engine is "black" or "ruff")
+            formatted = RunExternal(engine, m.Source, uri, SelectedLines(range));
         else
             formatted = PythonFormatter.FormatRange(m.Source, start, end, FormatConfigOf(uri))
                 ?? throw new ServiceException("This selection cannot be formatted on its own (it has `fmt: off`, or formatting it would change the code): select whole statements, or format the file.");
