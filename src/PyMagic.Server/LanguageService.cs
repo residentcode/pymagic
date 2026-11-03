@@ -19,10 +19,30 @@ public sealed partial class LanguageService
         public required Workspace Workspace { get; init; }
         public required Dictionary<string, ModuleInfo> ByUri { get; init; }
         public required Dictionary<ModuleInfo, string> UriOf { get; init; }
-        public required List<ModuleInfo> Project { get; init; }
+        public required ProjectModules Project { get; init; }
         public required FixtureContext Fixtures { get; init; }
         /// <summary>The project's classes by the class they derive from (built on first use, see SubclassIndex).</summary>
         public Dictionary<ClassDef, List<(ModuleInfo Module, ClassDef Class)>>? Subclasses { get; set; }
+    }
+
+    /// <summary>
+    /// The project's modules. Going through them with foreach checks the cancellation of the request between modules (most long requests,
+    /// references, renames, the problems, go through them all), so a request the client cancelled while it runs stops at the next module.
+    /// </summary>
+    internal sealed class ProjectModules : List<ModuleInfo>, IEnumerable<ModuleInfo>
+    {
+        public ProjectModules(IEnumerable<ModuleInfo> modules) : base(modules) { }
+
+        public new IEnumerator<ModuleInfo> GetEnumerator()
+        {
+            for (int i = 0; i < Count; i++)
+            {
+                PyMagic.Core.RequestCancellation.Check();
+                yield return this[i];
+            }
+        }
+
+        IEnumerator<ModuleInfo> IEnumerable<ModuleInfo>.GetEnumerator() => GetEnumerator();
     }
 
     readonly Dictionary<string, Doc> _docs = new();
@@ -324,7 +344,7 @@ public sealed partial class LanguageService
             uriOf[m] = d.Uri;
             fixtures.Register(m, d.Uri, d.Path);
         }
-        var project = new List<ModuleInfo>(byUri.Values);
+        var project = new ProjectModules(byUri.Values);
         if (includeProject)
         {
             var openPaths = new HashSet<string>(_docs.Values.Where(d => d.Path != null).Select(d => System.IO.Path.GetFullPath(d.Path!)),
@@ -336,6 +356,7 @@ public sealed partial class LanguageService
             ws.Preload(named.Select(n => (n.Name.Name, n.Path, n.Name.IsPackage)).ToList());
             foreach (var (path, (name, isPackage)) in named)
             {
+                PyMagic.Core.RequestCancellation.Check();
                 ModuleInfo m;
                 try { m = ws.AddDiskModule(name, path, isPackage); } catch (IOException) { continue; }
                 uriOf[m] = UriOfPath(path);

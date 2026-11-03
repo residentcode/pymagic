@@ -58,6 +58,52 @@ public class LspProtocolTests
     }
 
     [Fact]
+    public void ARequestCancelledWhileItRunsStops()
+    {
+        var (server, sent) = Start(utf8: false);
+        // references of a function used in many modules: long enough to be cancelled while it goes through them
+        server.Handle(Msg("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///c:/proj/target.py\",\"languageId\":\"python\",\"version\":1,\"text\":\"def target(x):\\n    return x\\n\"}}}"));
+        for (int i = 0; i < 1500; i++)
+        {
+            // each module calls it in many functions, whose types are worked out to find the calls
+            string text = "from target import target\\n" + string.Concat(Enumerable.Range(0, 20).Select(f =>
+                "\\n\\ndef use" + f + "(a):\\n    b = [target(a), target(a + 1)]\\n    if a:\\n        return target(b[0]) + use" + f + "(a - 1)\\n    return {k: target(k) for k in b}\\n"));
+            server.Handle(Msg("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///c:/proj/m" + i + ".py\",\"languageId\":\"python\",\"version\":1,\"text\":\"" + text + "\"}}}"));
+        }
+        string References(int id) => "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"file:///c:/proj/target.py\"},\"position\":{\"line\":0,\"character\":5},\"context\":{\"includeDeclaration\":true}}}";
+        // an edit of target.py: the next request works everything out again
+        int version = 1;
+        void Edit() => server.Handle(Msg("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///c:/proj/target.py\",\"version\":" + ++version + "},\"contentChanges\":[{\"text\":\"def target(x):\\n    return x  # " + version + "\\n\"}]}}"));
+        // the whole run, for comparison
+        server.Handle(Msg(References(40)));
+        Edit();
+        var whole = System.Diagnostics.Stopwatch.StartNew();
+        server.Handle(Msg(References(41)));
+        whole.Stop();
+        lock (sent) Assert.True(sent.Single(m => m["id"]?.GetValue<int>() == 41)["result"]!.AsArray().Count > 1500 * 20);
+        Edit();
+        var worker = new Thread(() => server.Handle(Msg(References(42))), 256 * 1024 * 1024);
+        worker.Start();
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        while (server.RunningRequest != "42" && worker.IsAlive && waited.ElapsedMilliseconds < 10000) Thread.SpinWait(50);
+        Assert.True(server.RunningRequest == "42", "the request was not seen running");
+        var stopping = System.Diagnostics.Stopwatch.StartNew();
+        server.NoteCancel(Msg("{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\",\"params\":{\"id\":42}}"));
+        Assert.True(worker.Join(10000), "the cancelled request did not stop");
+        stopping.Stop();
+        // it stopped at the next module, long before the whole run would have ended
+        Assert.True(stopping.ElapsedMilliseconds * 3 < whole.ElapsedMilliseconds, $"stopped after {stopping.ElapsedMilliseconds} ms; the whole run takes {whole.ElapsedMilliseconds} ms");
+        JsonNode answer;
+        lock (sent) answer = sent.Single(m => m["id"]?.GetValue<int>() == 42);
+        Assert.Equal(-32800, answer["error"]!["code"]!.GetValue<int>());
+        Assert.True(server.RunningRequest == null);
+        Assert.True(PyMagic.Core.RequestCancellation.Current == default);   // nothing is left set on this thread
+        // the next request is worked out as usual
+        server.Handle(Msg("{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///c:/proj/target.py\"},\"position\":{\"line\":0,\"character\":5}}}"));
+        lock (sent) Assert.True(sent.Single(m => m["id"]?.GetValue<int>() == 43)["result"] != null);
+    }
+
+    [Fact]
     public void ACancelledRequestIsAnsweredAsCancelled()
     {
         var (server, sent) = Start(utf8: false);

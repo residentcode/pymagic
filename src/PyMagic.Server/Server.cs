@@ -173,6 +173,9 @@ public sealed class Server
 
         bool was = LineMap.Utf8.Value;
         LineMap.Utf8.Value = _utf8;
+        // a cancel that arrives while the request runs trips its token (NoteCancel), and the long work checks it
+        using var cancel = new CancellationTokenSource();
+        if (id != null) { Volatile.Write(ref _running, new Running(id.ToJsonString(), cancel)); PyMagic.Core.RequestCancellation.Current = cancel.Token; }
         try
         {
             if (id != null)
@@ -184,14 +187,26 @@ public sealed class Server
             }
             else Notify(method, args);
         }
+        catch (OperationCanceledException) when (id != null && cancel.IsCancellationRequested) { _cancelled.TryRemove(id.ToJsonString(), out _); Fail(id, RequestCancelled, "the request was cancelled"); }
         catch (RpcException e) when (id != null) { Fail(id, e.Code, e.Message); }
         catch (ServiceException e) when (id != null) { Fail(id, -32803, e.Message); }
         catch (Exception e) when (id != null) { Fail(id, -32603, e.Message); }
         catch (Exception e) { Log($"error in {method}: {e}"); }
-        finally { LineMap.Utf8.Value = was; }
+        finally
+        {
+            LineMap.Utf8.Value = was;
+            if (id != null) { Volatile.Write(ref _running, null); PyMagic.Core.RequestCancellation.Current = default; }
+        }
     }
 
     const int RequestCancelled = -32800;
+
+    /// <summary>The request being worked out, by its id, with the source that stops it.</summary>
+    Running? _running;
+    sealed record Running(string Id, CancellationTokenSource Cancel);
+
+    /// <summary>The id of the request being worked out (as JSON: 7 or "s9"), or null between requests.</summary>
+    public string? RunningRequest => Volatile.Read(ref _running)?.Id;
 
     /// <summary>The ids of requests the client cancelled (`$/cancelRequest`) that have not been answered yet.</summary>
     readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _cancelled = new();
@@ -200,14 +215,19 @@ public sealed class Server
     bool _utf8;
 
     /// <summary>
-    /// Notes a `$/cancelRequest` as soon as it arrives (the readers call this before queueing), so that a request still waiting behind others is dropped.
+    /// Notes a `$/cancelRequest` as soon as it arrives (the readers call this before queueing), so that a request still waiting behind others is dropped,
+    /// and the one being worked out stops at the next module or function it reaches.
     /// A cancel of a request that was answered already stays until the set is cleared.
     /// </summary>
     public void NoteCancel(JsonNode? message)
     {
         if (message?["method"]?.GetValue<string>() != "$/cancelRequest" || message["params"]?["id"] is not { } id) return;
         if (_cancelled.Count > 1000) _cancelled.Clear();
-        _cancelled[id.ToJsonString()] = true;
+        string key = id.ToJsonString();
+        _cancelled[key] = true;
+        // the request running now is stopped at its next check
+        if (Volatile.Read(ref _running) is { } running && running.Id == key)
+            try { running.Cancel.Cancel(); } catch (ObjectDisposedException) { /* it ended just now */ }
     }
 
     int _problemsTicket;

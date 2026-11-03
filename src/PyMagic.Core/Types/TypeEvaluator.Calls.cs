@@ -122,6 +122,8 @@ public sealed partial class TypeEvaluator
 
     PyType InferReturn(FunctionInfo info) => Memo(info, () =>
     {
+        // a function's body is where long work spends its time: a cancelled request stops here
+        RequestCancellation.Check();
         var m = info.Module;
         if (info.Node is LambdaExpr l) return TypeOf(m, l.Body);
         if (info.Node is not FunctionDef fd || m.IsStub) return PyType.Unknown;
