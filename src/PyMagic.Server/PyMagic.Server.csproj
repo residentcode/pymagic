@@ -25,6 +25,9 @@
     <EmbeddedResource Include="Run\pm_jdebug.py" LogicalName="pm_jdebug.py" />
     <EmbeddedResource Include="Run\shells.json" LogicalName="shells.json" />
     <EmbeddedResource Include="Schemas\*.json" LogicalName="schema-%(Filename).json" />
+    <!-- Gherkin's keywords in its languages, from Cucumber (MIT License): the licence goes with the app, in the host folder's Gherkin\ -->
+    <EmbeddedResource Include="Gherkin\gherkin-languages.json" LogicalName="gherkin-languages.json" />
+    <None Include="Gherkin\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

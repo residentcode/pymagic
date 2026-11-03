@@ -81,6 +81,60 @@ public class ParsedFileCacheTests
     }
 
     [Fact]
+    public void OverTheLimitTheTreesUsedLeastRecentlyGo()
+    {
+        string folder = Fresh();
+        var (before, limit) = (ParsedFileCache.Folder, ParsedFileCache.Limit);
+        try
+        {
+            ParsedFileCache.Folder = folder;
+            var texts = Enumerable.Range(0, 8).Select(i => string.Concat(Enumerable.Range(0, 40).Select(k => $"name_{i}_{k} = f({k}, 'text {i}')\n"))).ToList();
+            foreach (var t in texts) ParsedFileCache.Parse(t);
+            var trees = Directory.EnumerateFiles(folder, "*.ast", SearchOption.AllDirectories).ToList();
+            Assert.Equal(8, trees.Count);
+            long size = trees.Sum(f => new FileInfo(f).Length);
+            // under the limit nothing goes
+            ParsedFileCache.Limit = size;
+            Assert.Equal(0, ParsedFileCache.Trim());
+
+            // the trees written an hour apart, the first one oldest; the oldest is then read again, so it is the most recently used
+            var hashes = new Dictionary<string, string>();
+            var start = DateTime.UtcNow.AddDays(-1);
+            for (int i = 0; i < texts.Count; i++)
+            {
+                string tree = Directory.EnumerateFiles(folder, "*.ast", SearchOption.AllDirectories).Single(f => Matches(f, texts[i]));
+                hashes[texts[i]] = tree;
+                File.SetLastWriteTimeUtc(tree, start.AddHours(i));
+            }
+            int read = ParsedFileCache.Read;
+            ParsedFileCache.Parse(texts[0]);
+            Assert.Equal(read + 1, ParsedFileCache.Read);
+
+            // half the size: trimmed to three quarters of that, the trees of texts 1, 2, ... going first
+            ParsedFileCache.Limit = size / 2;
+            Assert.Equal(5, ParsedFileCache.Trim());   // eight trees of about the same size, three quarters of half of them left: three
+            var left = Directory.EnumerateFiles(folder, "*.ast", SearchOption.AllDirectories).ToList();
+            Assert.True(left.Sum(f => new FileInfo(f).Length) <= size / 2 * 3 / 4, "down to three quarters of the limit");
+            Assert.True(left.Contains(hashes[texts[0]]), "the tree read just now stays");
+            Assert.True(left.Contains(hashes[texts[7]]), "the tree used last before it stays");
+            Assert.True(!left.Contains(hashes[texts[1]]), "the least recently used tree is gone");
+            // a removed tree is parsed and written again
+            int written = ParsedFileCache.Written;
+            ParsedFileCache.Parse(texts[1]);
+            Assert.Equal(written + 1, ParsedFileCache.Written);
+        }
+        finally
+        {
+            ParsedFileCache.Folder = before;
+            ParsedFileCache.Limit = limit;
+            Directory.Delete(folder, true);
+        }
+    }
+
+    /// <summary>The tree in this file is the one of this text (its strings hold the text's names).</summary>
+    static bool Matches(string file, string text) => Encoding.UTF8.GetString(File.ReadAllBytes(file)).Contains(text[..text.IndexOf(' ')]);
+
+    [Fact]
     public void EveryTypeshedStubComesBackTheSame()
     {
         if (Workspace.DefaultTypeshedPath is not { } typeshed || !Directory.Exists(Path.Combine(typeshed, "stdlib"))) return;
@@ -99,8 +153,7 @@ public class ParsedFileCacheTests
                 if (Dump(parsed.Module) != Dump(back.Module) || Dump(parsed.Diagnostics) != Dump(back.Diagnostics)) Assert.Equal(path, "the same tree");
                 files++;
             }
-            Assert.True(files > 1000, files + " stubs");
-        }
+            Assert.True(files > 1000, files + " stubs");        }
         finally
         {
             ParsedFileCache.Folder = before;

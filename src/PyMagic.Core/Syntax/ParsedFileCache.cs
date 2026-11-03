@@ -20,6 +20,19 @@ public static class ParsedFileCache
     static int _read, _written;
     static int _cleaned;
 
+    /// <summary>
+    /// The most the build's folder may hold, in bytes; over it the trees used least recently go (down to three quarters of it, so that it is
+    /// not trimmed again at every write). 256 MB: typeshed's 5,300 stubs make about 14 MB of trees and a large environment (pandas, numpy,
+    /// pydantic and the scan's libraries, about 180 MB of library code) at most about 100 MB, so a few projects' environments stay whole,
+    /// while the folder no longer grows without end until the next build removes it.
+    /// </summary>
+    public static long Limit { get; set; } = 256L << 20;
+
+    /// <summary>The trees read in this run, waiting for the trim to mark them used now (their last write time is the time of their last use).</summary>
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _used = new(StringComparer.OrdinalIgnoreCase);
+    static long _sinceTrim;     // bytes written since the last trim
+    static int _trimming;       // a trim is waiting or running
+
     const int Magic = 0x31545350;   // "PST1"
 
     static readonly string Build = typeof(ParsedFileCache).Assembly.ManifestModule.ModuleVersionId.ToString("N");
@@ -31,7 +44,11 @@ public static class ParsedFileCache
         if (folder == null) return Plain(source);
         string dir = Path.Combine(folder, Build);
         string file = Path.Combine(dir, Convert.ToHexString(SHA256.HashData(MemoryMarshal.AsBytes(source.AsSpan())), 0, 16) + ".ast");
-        if (Interlocked.Exchange(ref _cleaned, 1) == 0) Task.Run(() => RemoveOtherBuilds(folder));
+        if (Interlocked.Exchange(ref _cleaned, 1) == 0)
+        {
+            Task.Run(() => RemoveOtherBuilds(folder));
+            TrimSoon(dir, 20_000);   // once the start's parsing is over
+        }
         try
         {
             if (File.Exists(file))
@@ -40,6 +57,7 @@ public static class ParsedFileCache
                 if (tree != null)
                 {
                     Interlocked.Increment(ref _read);
+                    _used.TryAdd(file, 0);
                     return tree.Value;
                 }
             }
@@ -51,9 +69,16 @@ public static class ParsedFileCache
         {
             Directory.CreateDirectory(dir);
             string temp = file + "." + Environment.ProcessId + "." + Environment.CurrentManagedThreadId + ".tmp";
-            File.WriteAllBytes(temp, Writer.Write(parsed.Module, parsed.Diagnostics, source.Length));
+            var bytes = Writer.Write(parsed.Module, parsed.Diagnostics, source.Length);
+            File.WriteAllBytes(temp, bytes);
             File.Move(temp, file, true);
             Interlocked.Increment(ref _written);
+            // a session that keeps writing (a new environment, a large library opened) is trimmed after each eighth of the limit
+            if (Interlocked.Add(ref _sinceTrim, bytes.Length) >= Limit / 8)
+            {
+                Interlocked.Exchange(ref _sinceTrim, 0);
+                TrimSoon(dir, 5_000);
+            }
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         return parsed;
@@ -63,6 +88,64 @@ public static class ParsedFileCache
     {
         var r = Parser.Parse(source);
         return (r.Module, r.Diagnostics);
+    }
+
+    /// <summary>
+    /// Trims the folder on a thread of its own, at a low priority and after a pause: listing and removing files never holds up the parsing
+    /// a keystroke waits for. One trim at a time; a request while one waits is covered by it.
+    /// </summary>
+    static void TrimSoon(string dir, int delay)
+    {
+        if (Interlocked.Exchange(ref _trimming, 1) != 0) return;
+        var thread = new Thread(() =>
+        {
+            try { Thread.Sleep(delay); Trim(dir, Limit); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            finally { Volatile.Write(ref _trimming, 0); }
+        }) { IsBackground = true, Priority = ThreadPriority.BelowNormal, Name = "parsed-file cache trim" };
+        thread.Start();
+    }
+
+    /// <summary>Trims this build's folder now (what the background trim does); the number of trees removed.</summary>
+    public static int Trim() => Folder is { } folder ? Trim(Path.Combine(folder, Build), Limit) : 0;
+
+    /// <summary>
+    /// Marks the trees read since the last trim as used now, then, when the folder holds more than <paramref name="limit"/> bytes, removes the
+    /// trees used least recently until it holds three quarters of it. Leftover .tmp files of a write that did not finish go too.
+    /// </summary>
+    static int Trim(string dir, long limit)
+    {
+        var now = DateTime.UtcNow;
+        foreach (var used in _used.Keys)
+        {
+            _used.TryRemove(used, out _);
+            try { File.SetLastWriteTimeUtc(used, now); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }   // removed meanwhile, or another start reads it
+        }
+        if (!Directory.Exists(dir)) return 0;
+        var files = new List<FileInfo>();
+        long total = 0;
+        foreach (var f in new DirectoryInfo(dir).EnumerateFiles())
+        {
+            if (f.Extension == ".tmp")
+            {
+                if (now - f.LastWriteTimeUtc > TimeSpan.FromHours(1)) try { f.Delete(); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                continue;
+            }
+            files.Add(f);
+            total += f.Length;
+        }
+        if (total <= limit) return 0;
+        int removed = 0;
+        foreach (var f in files.OrderBy(f => f.LastWriteTimeUtc))
+        {
+            if (total <= limit * 3 / 4) break;
+            long length = f.Length;   // a FileInfo forgets its length once the file is deleted
+            try { f.Delete(); total -= length; removed++; }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        return removed;
     }
 
     /// <summary>The folders older builds of PyMagic wrote.</summary>

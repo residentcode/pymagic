@@ -365,12 +365,15 @@ public sealed partial class TypeEvaluator
         var declared = DeclaredType(symModule, sym);
         if (declared != null) return declared;
 
-        // locals: only the assignments that can reach this use, past calls that never return. Only in functions: in a module or
-        // class body the gates are its many top-level calls (`SafeConstructor.add_constructor(...)` dozens of times), and deciding
-        // them from every read there runs into the classes being built
+        // locals, and names of a module or class body: only the assignments that can reach this use, past calls that never return
         if ((r.Access & Access.Read) != 0 && ReferenceEquals(sym.Scope, r.UseScope))
         {
-            var reach = r.UseScope is { Kind: ScopeKind.Function or ScopeKind.Lambda } ? TypedFlow(m, r.UseScope)?.ReachingFor(n) : m.Flow.ReachingDefinitions(n);
+            var reach = r.UseScope switch
+            {
+                { Kind: ScopeKind.Function or ScopeKind.Lambda } fn => TypedFlow(m, fn)?.ReachingFor(n),
+                { Kind: ScopeKind.Module or ScopeKind.Class } body => BodyReachingFor(m, body, n),
+                _ => m.Flow.ReachingDefinitions(n),
+            };
             // a module-level read before the module binds the name (`builtin_str = str` and later `str = str`) still finds the builtin
             if (reach is { Definitions.Count: 0, Reachable: true, MaybeUnbound: true } && r.UseScope?.Kind == ScopeKind.Module
                 && _ws.Builtins.Semantics.ModuleScope.Symbols.ContainsKey(n.Name))

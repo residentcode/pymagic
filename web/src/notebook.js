@@ -148,9 +148,9 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
         state.vversion++;
         if (!state.vopen) {
             state.vopen = true;
-            lsp.notify('textDocument/didOpen', { textDocument: { uri: state.vuri, languageId: 'python', version: state.vversion, text: state.vdoc.text } });
+            lsp.notify('textDocument/didOpen', { textDocument: { uri: state.vuri, languageId: 'python', version: state.vversion, text: state.vdoc.text }, notebookCells: state.vdoc.cells });
         } else {
-            lsp.notify('textDocument/didChange', { textDocument: { uri: state.vuri, version: state.vversion }, contentChanges: [{ text: state.vdoc.text }] });
+            lsp.notify('textDocument/didChange', { textDocument: { uri: state.vuri, version: state.vversion }, contentChanges: [{ text: state.vdoc.text }], notebookCells: state.vdoc.cells });
         }
     }
 
@@ -240,7 +240,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
             btn('＋ Code', 'Add a code cell below (Alt+Enter)', () => addCell(state, 'code')),
             btn('＋ Text', 'Add a markdown cell below', () => addCell(state, 'markdown')),
             btn('Format', 'Lay out the code of every code cell (the formatter of the toolbar); one cell: Shift+Alt+F', () => void formatAll(state)),
-            btn('Clear outputs', 'Remove the outputs of every cell', () => { clearOutputs(state.nb); state.views.forEach(paintOutputs); pushSoon(state); }),
+            btn('Clear outputs', 'Remove the outputs of every cell', () => { clearOutputs(state.nb); state.views.forEach(paintOutputs); pushSoon(state); virtualSoon(state); }),
             btn('Variables', 'Show or hide the Variables window (the names the kernel holds after each run)', () => { state.varsOpen = !state.varsOpen; paintVars(state); }),
             (state.consoleBtn = btn('Console', 'Show or hide the Jupyter console: a line to type into, sharing the kernel and the variables of the cells', () => toggleConsole(state))),
             btn('Open in browser', 'Show the notebook as a page in your web browser (a copy: the cells as they are now, with their outputs)', () => void openInBrowser(state)),
@@ -617,6 +617,7 @@ export function setupNotebook({ monaco, area, editorEl, save, relOf, lsp, rootUr
             setStatus(state, 'idle', `Python ${state.python ?? ''} idle`);
             state.ids.delete(m.id);
             pushSoon(state);
+            virtualSoon(state);   // the run count changed: the check of names defined in later cells follows the run order
             pump(state);
             return;
         }

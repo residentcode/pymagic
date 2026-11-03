@@ -14,6 +14,7 @@ public sealed partial class LanguageService
     public IReadOnlyList<CompletionItem> Completion(string uri, Position pos)
     {
         if (_templateDocs.ContainsKey(uri)) return DjangoTemplateOff(uri) ? Array.Empty<CompletionItem>() : TemplateCompletion(uri, pos);
+        if (_featureDocs.ContainsKey(uri)) return FeatureCompletion(uri, pos);
         if (!_docs.TryGetValue(uri, out var doc)) return Array.Empty<CompletionItem>();
         string text = doc.Text;
         int offset = new LineMap(text).OffsetOf(pos);

@@ -464,7 +464,8 @@ function registerProviders() {
             return { range: toRange(cell ? cell.fromServer(h.range) : h.range), contents: [{ value: h.contents.value }] };
         },
     });
-    monaco.languages.registerDefinitionProvider(CODE_LANGUAGES, {
+    // a .feature file's steps go to their step definitions (LanguageService.Bdd.cs)
+    monaco.languages.registerDefinitionProvider([...CODE_LANGUAGES, 'gherkin'], {
         async provideDefinition(model, position) {
             const cell = notebook?.targetOf(model, position);
             const uri = cell ? cell.uri : serverUri.get(model);
@@ -514,14 +515,15 @@ function registerProviders() {
                     kind: completionKinds[i.kind] ?? K.Text,
                     detail: i.detail,
                     documentation: i.documentation ? { value: i.documentation } : undefined,
-                    insertText: i.isSnippet ? withoutCallParens(i.insertText ?? i.label) : i.insertText ?? i.label,
+                    insertText: i.textEdit && !cell ? i.textEdit.newText : i.isSnippet ? withoutCallParens(i.insertText ?? i.label) : i.insertText ?? i.label,
                     insertTextRules: i.isSnippet ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
                     // an import to add, or the expression a postfix template takes over
                     // an import added at the top of a notebook's file would land in another cell: no edits there
                     additionalTextEdits: cell ? undefined : i.additionalTextEdits?.map((e) => ({ range: toRange(e.range), text: e.newText })),
                     filterText: i.filterText,
                     sortText: i.sortText,
-                    range,
+                    // a step of a .feature file replaces all that is typed after its keyword, not just the word
+                    range: i.textEdit && !cell ? toRange(i.textEdit.range) : range,
                 })),
             };
         },
@@ -529,6 +531,8 @@ function registerProviders() {
     monaco.languages.registerCompletionItemProvider('python', completionProvider(['.']));
     // in a template the names after `{%`, `|` and a quote are what is typed next
     monaco.languages.registerCompletionItemProvider('django-html', completionProvider(['.', '|', '"', "'", ' ', '%']));
+    // in a .feature file the steps come after a keyword and its space
+    monaco.languages.registerCompletionItemProvider('gherkin', completionProvider([' ']));
     monaco.languages.registerReferenceProvider(CODE_LANGUAGES, {
         async provideReferences(model, position, context) {
             const cell = notebook?.targetOf(model, position);

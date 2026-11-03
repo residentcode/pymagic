@@ -1367,6 +1367,7 @@ public sealed partial class TypeEvaluator
                 if (s.Info.QualifiedName == "builtins.dict" && TypedDictFieldsOf(dc.Info) != null) return true;
 
                 if (TupleLengthsDiffer(dc, s)) return false;
+                if (TupleItemsDiffer(dc, s, fresh)) return false;
 
                 var spec = SpecializeAs(s, dc.Info);
                 if (spec != null)
@@ -1427,6 +1428,28 @@ public sealed partial class TypeEvaluator
         if (want.Any(w => w is TypeVarTupleType or UnboundedItemsType) || have.Any(h => h is TypeVarTupleType)) return false;
         int least = have.Count(h => h is not UnboundedItemsType);
         return have.Any(h => h is UnboundedItemsType) ? least > want.Count : least != want.Count;
+    }
+
+    /// <summary>
+    /// A tuple of known items compared item by item, as PyCharm does (`tuple[int, str]` for `tuple[int, int]`: "Expected type
+    /// 'tuple[int, int]', got 'tuple[int, str]' instead"): with a wanted tuple of the same length each item against its own, with
+    /// `tuple[int, ...]` each item against int. The union of the items alone (the tuple's one argument) lets them pass either way.
+    /// An Unknown item fits whatever is wanted.
+    /// </summary>
+    bool TupleItemsDiffer(ClassType dest, ClassType src, bool fresh)
+    {
+        if (src.TupleItems is not { } have || !IsBuiltinSequence(dest, "tuple") || !IsBuiltinSequence(src, "tuple") || have.Any(h => h is TypeVarTupleType)) return false;
+        if (dest.TupleItems is { } want)
+        {
+            if (want.Count != have.Count || want.Any(w => w is TypeVarTupleType or UnboundedItemsType) || have.Any(h => h is UnboundedItemsType)) return false;
+            for (int i = 0; i < want.Count; i++)
+                if (!IsAssignable(want[i], have[i], fresh)) return true;
+            return false;
+        }
+        if (dest.Args is not [var element]) return false;
+        foreach (var h in have)
+            if (!IsAssignable(element, h is UnboundedItemsType u ? u.Item : h, fresh)) return true;
+        return false;
     }
 
     /// <summary>

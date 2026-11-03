@@ -54,6 +54,64 @@ public sealed partial class TypeEvaluator
         return typed;
     }
 
+    /// <summary>How far the gates of a module or class body are decided, in the order they are written.</summary>
+    sealed class BodyGates
+    {
+        public required List<Instruction> Gates;              // by id, which is the order they are written
+        public int Decided;                                   // Gates[..Decided] are decided
+        public List<Instruction> Differ = new();              // the decided ones types turn the other way, in order
+        public List<ScopeFlow> Flows = new();                 // Flows[k]: the flow with Differ[..k] turned
+    }
+    readonly Dictionary<ScopeFlow, BodyGates> _bodyGates = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// The definitions that reach a read in a module or class body past the calls before it that never return. The gates of a
+    /// body are its top-level calls, and a read there is often made while something else is being worked out (a class's base
+    /// while the class is built, a ParamSpec in a decorator's annotation while the decorated def is): deciding every gate of
+    /// the body then, as TypedFlow does, meets that thing half done further down (`FullConstructor.add_constructor(...)` in
+    /// PyYAML's constructor.py after `class FullConstructor(SafeConstructor)`), and some answers are kept that way. Only the
+    /// gates written before the read can end the paths to it (a gate later in a loop is left as the graph has it), so only
+    /// those are decided; the whole typed flow is taken when it is known.
+    /// </summary>
+    internal ReachingResult? BodyReachingFor(ModuleInfo m, Scope scope, NameExpr n)
+    {
+        var flow = m.Flow.For(scope);
+        if (flow == null) return null;
+        if (flow.Graph.Gates.Count == 0) return flow.ReachingFor(n);
+        if (_typedFlows.TryGetValue(flow, out var whole)) return whole.ReachingFor(n);
+        // while a class's bases or MRO are being worked out they are kept without a cycle mark: decide nothing then
+        if (_classDataActive.Count > 0 || _mroActive.Count > 0 || flow.ReadInstructions(n) is not { Count: > 0 } reads) return flow.ReachingFor(n);
+        int upTo = reads.Max(i => i.Id);
+
+        if (!_bodyGates.TryGetValue(flow, out var known))
+            known = new BodyGates { Gates = flow.Graph.Gates.OrderBy(g => g.Id).ToList(), Flows = { flow } };
+        if (known.Decided < known.Gates.Count && known.Gates[known.Decided].Id < upTo)
+        {
+            if (!_typedFlowsActive.Add(flow)) return flow.ReachingFor(n);
+            // decided on a copy: an answer that leaned on a cut cycle holds for this read only
+            var next = new BodyGates { Gates = known.Gates, Decided = known.Decided, Differ = known.Differ.ToList(), Flows = known.Flows.ToList() };
+            try
+            {
+                while (next.Decided < next.Gates.Count && next.Gates[next.Decided].Id < upTo)
+                {
+                    var g = next.Gates[next.Decided++];
+                    // a gate after one that ends the flow is not reached, and stays as the graph has it
+                    if (!next.Flows[^1].Reachable[g.Id] || GateBlocks(m, g) == ControlFlowGraph.BlocksWithoutTypes(g)) continue;
+                    next.Differ.Add(g);
+                    var differ = new HashSet<Instruction>(next.Differ, ReferenceEqualityComparer.Instance);
+                    next.Flows.Add(flow.WithGates(i => differ.Contains(i) != ControlFlowGraph.BlocksWithoutTypes(i)));
+                }
+            }
+            finally { _typedFlowsActive.Remove(flow); }
+            if (_open.Count == 0) _bodyGates[flow] = next;
+            known = next;
+        }
+        else _bodyGates.TryAdd(flow, known);
+        int turned = 0;
+        while (turned < known.Differ.Count && known.Differ[turned].Id < upTo) turned++;
+        return known.Flows[turned].ReachingFor(n);
+    }
+
     /// <summary>Whether nothing flows on from a gate: a call that never returns, or a with block none of whose context managers swallows exceptions.</summary>
     internal bool GateBlocks(ModuleInfo m, Instruction gate)
     {

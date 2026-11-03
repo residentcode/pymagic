@@ -477,6 +477,7 @@ public sealed class Server
             {
                 var td = p!["textDocument"]!;
                 string uri = td["uri"]!.GetValue<string>();
+                _service.SetNotebookCells(uri, p["notebookCells"]);   // a notebook's cells and run counts (LanguageService.NotebookInspections.cs)
                 _service.Open(uri, td["text"]!.GetValue<string>(), td["version"]?.GetValue<int>() ?? 0);
                 _dirty.Add(uri);
                 if (!Deferred) FlushDiagnostics();
@@ -489,6 +490,7 @@ public sealed class Server
                 // full-document sync: the last change carries the whole text
                 string text = changes[^1]!["text"]!.GetValue<string>();
                 string uri = td["uri"]!.GetValue<string>();
+                _service.SetNotebookCells(uri, p["notebookCells"]);   // a notebook's cells and run counts (LanguageService.NotebookInspections.cs)
                 _service.Change(uri, text, td["version"]?.GetValue<int>() ?? 0);
                 _dirty.Add(uri);
                 if (!Deferred) FlushDiagnostics();

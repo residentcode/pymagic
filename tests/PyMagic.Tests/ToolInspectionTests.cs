@@ -88,6 +88,19 @@ public class ToolInspectionTests
     }
 
     [Fact]
+    public void PandasListOfValuesAsPyCharmHasIt()
+    {
+        // PyCharm's own example: list(df['column'].values); a DataFrame's values, and a list of the project's own, are left alone
+        string code = "import pandas as pd\n\ndf = pd.DataFrame({'a': [1]})\n" +
+            "items = list(df['a'].values)\n" +         // 3
+            "rows = list(df.values)\n" +               // 4
+            "def f(list):\n    return list(df['a'].values)\n";
+        var svc = Project(null, ("pandas/__init__.pyi", FakePandas), ("m.py", code));
+        Assert.Equal("3: Method Series.to_list() is recommended", string.Join(" | ", Found(svc, "m.py", "pandas-series-to-list")));
+        Assert.Contains("items = df['a'].to_list()\n", Fixed(svc, "m.py", code, "pandas-series-to-list", 3, "Replace with to_list()"));
+    }
+
+    [Fact]
     public void PandasWithTheRealStubs()
     {
         if (ScanSite() is not { } site) return;   // pandas and pandas-stubs are in the scan's Python only
@@ -266,6 +279,59 @@ public class ToolInspectionTests
         // the same text in an ordinary file is not a notebook
         var plain = Project(null, ("script.py", cells));
         Assert.Equal(0, plain.Diagnostics(Root + "script.py").Count(d => d.Code == "notebook-cell-order"));
+    }
+
+    [Fact]
+    public void NotebookGlobalAssignedAgainInAnotherCell()
+    {
+        string uri = Root + ".pymagic/notebooks/again_ipynb.py";
+        string cells = "df = 1\nfor i in range(3):\n    pass\ndef load():\n    return 1\n" +   // cell 0 (lines 0-4)
+            "df = 2\ndf = 3\nfor i in range(2):\n    pass\n" +                           // cell 1 (lines 5-8): both df marked, i is a loop counter
+            "def load():\n    return 2\nonce = 1\nonce = 2\n";                          // cell 2 (lines 9-12): a function again, once twice in one cell
+        var svc = Project(null, (".pymagic/notebooks/again_ipynb.py", cells));
+        List<int> Lines() => svc.Diagnostics(uri).Where(d => d.Code == "notebook-redeclaration").Select(d => d.Range.Start.Line).ToList();
+        Assert.Equal(0, Lines().Count);   // without the page's cells there are no cells to tell apart
+        svc.SetNotebookCells(uri, System.Text.Json.Nodes.JsonNode.Parse(
+            "[{\"start\":0,\"lines\":5,\"count\":1},{\"start\":5,\"lines\":4,\"count\":2},{\"start\":9,\"lines\":4}]"));
+        svc.Change(uri, cells, 2);
+        Assert.Equal("5 6", string.Join(" ", Lines()));
+        Assert.True(svc.Diagnostics(uri).First(d => d.Code == "notebook-redeclaration").Message.Contains("Global variable 'df' is redeclared"), "message");
+    }
+
+    [Fact]
+    public void NotebookCellsTakenInTheOrderTheyRan()
+    {
+        // ran cells take the slots of the ran cells by their counts; a cell never run keeps its place
+        Assert.True(LanguageService.RunOrder(new int?[] { null, null }) == null, "no counts: the order of the file");
+        Assert.Equal("2 1 0", string.Join(" ", LanguageService.RunOrder(new int?[] { 3, null, 1 })!));
+        Assert.Equal("1 2 0", string.Join(" ", LanguageService.RunOrder(new int?[] { 5, 7, 2 })!));
+        Assert.Equal("0 1", string.Join(" ", LanguageService.RunOrder(new int?[] { 4, 4 })!));   // equal counts: the order of the file
+
+        string uri = Root + ".pymagic/notebooks/runs_ipynb.py";
+        string cells = "print(total)\n" +          // cell 0 (line 0), ran second: total was defined by then
+            "total = 1\nprint(later)\n" +          // cell 1 (lines 1-2), ran first: later comes after
+            "later = 2\nprint(other)\nother = 3\n" + // cell 2 (lines 3-5), never ran: keeps its place; other only further down in it
+            "print(fresh)\n" +                     // cell 3 (line 6), never ran
+            "fresh = 4\n";                         // cell 4 (line 7), ran third
+        var svc = Project(null, (".pymagic/notebooks/runs_ipynb.py", cells));
+        List<string> Lines() => svc.Diagnostics(uri).Where(d => d.Code == "notebook-cell-order").Select(d => $"{d.Range.Start.Line}: {d.Message}").ToList();
+        // without run counts the cells are read from the top
+        Assert.Equal("0 2 4 6", string.Join(" ", Lines().Select(l => l[..l.IndexOf(':')])));
+
+        svc.SetNotebookCells(uri, System.Text.Json.Nodes.JsonNode.Parse(
+            "[{\"start\":0,\"lines\":1,\"count\":2},{\"start\":1,\"lines\":2,\"count\":1},{\"start\":3,\"lines\":3,\"count\":null},{\"start\":6,\"lines\":1},{\"start\":7,\"lines\":1,\"count\":3}]"));
+        svc.Change(uri, cells, 2);   // the page sends the cells with the text
+        var found = Lines();
+        // run order: cell 1, cell 0, cell 2 (its own place), cell 3, cell 4
+        Assert.Equal("2 4 6", string.Join(" ", found.Select(l => l[..l.IndexOf(':')])));
+        Assert.True(found[0].Contains("a cell that runs after this one"), found[0]);
+        Assert.True(found[1].Contains("further down in this cell"), found[1]);
+        Assert.True(found[2].Contains("a cell that runs after this one"), found[2]);
+
+        // an older page (no cells) reads from the top again
+        svc.SetNotebookCells(uri, null);
+        svc.Change(uri, cells, 3);
+        Assert.Equal(4, Lines().Count);
     }
 
     // ------------------------------------------------------------ PySpark

@@ -26,14 +26,15 @@ public sealed partial class LanguageService
     public sealed record GherkinTable(List<(int Line, List<(string Text, int Start, int End)> Cells)> Rows);
     public sealed record GherkinExamples(int Line, int Start, int End, GherkinTable? Table);
     public sealed record GherkinScenario(string Name, bool Outline, bool Background, int Line, int Start, int End, List<GherkinStep> Steps, List<GherkinExamples> Examples);
-    public sealed record GherkinFeature(List<GherkinScenario> Scenarios, List<GherkinTable> Tables);
+    public sealed record GherkinFeature(List<GherkinScenario> Scenarios, List<GherkinTable> Tables, GherkinDialect Dialect);
 
-    static readonly Regex StepLine = new(@"^(?<kw>Given|When|Then|And|But|\*)\s+(?<text>.*?)\s*$", RegexOptions.Compiled);
-    static readonly Regex BlockLine = new(@"^(?<kw>Feature|Rule|Background|Scenario Outline|Scenario Template|Scenario|Example|Examples|Scenarios)\s*:(?<name>.*)$", RegexOptions.Compiled);
-
-    /// <summary>Reads a .feature file (English keywords): its scenarios with their steps (And / But / * take the kind of the step before), Examples and tables.</summary>
+    /// <summary>
+    /// Reads a .feature file in the language its `# language:` comment names (English otherwise): its scenarios with their steps (And / But / * take
+    /// the kind of the step before), Examples and tables.
+    /// </summary>
     public static GherkinFeature ParseGherkin(string text)
     {
+        var dialect = GherkinDialect.For(text);
         var scenarios = new List<GherkinScenario>();
         var tables = new List<GherkinTable>();
         GherkinScenario? current = null;
@@ -78,11 +79,11 @@ public sealed partial class LanguageService
             }
             table = null;
             if (body.Length == 0 || body.StartsWith('#') || body.StartsWith('@')) continue;
-            var block = BlockLine.Match(body);
+            var block = dialect.BlockLine.Match(body);
             if (block.Success)
             {
-                string kw = block.Groups["kw"].Value;
-                if (kw is "Examples" or "Scenarios")
+                string blockKind = dialect.BlockKinds[block.Groups["kw"].Value];
+                if (blockKind == "examples")
                 {
                     if (current == null) continue;
                     examples = new GherkinExamples(lineNo, start, start + body.Length, null);
@@ -90,31 +91,31 @@ public sealed partial class LanguageService
                     continue;
                 }
                 examples = null;
-                if (kw is "Feature" or "Rule") { current = null; continue; }
-                current = new GherkinScenario(block.Groups["name"].Value.Trim(), kw is "Scenario Outline" or "Scenario Template", kw == "Background", lineNo, start, start + body.Length, new(), new());
+                if (blockKind is "feature" or "rule") { current = null; continue; }
+                current = new GherkinScenario(block.Groups["name"].Value.Trim(), blockKind == "scenarioOutline", blockKind == "background", lineNo, start, start + body.Length, new(), new());
                 scenarios.Add(current);
                 kind = "given";
                 continue;
             }
-            var step = StepLine.Match(body);
+            var step = dialect.StepLine.Match(body);
             if (step.Success && current != null && examples == null)
             {
                 string kw = step.Groups["kw"].Value;
-                if (kw is "Given" or "When" or "Then") kind = kw.ToLowerInvariant();
+                if (dialect.KindOf(kw) is { } own) kind = own;
                 int textStart = start + step.Groups["text"].Index;
                 current.Steps.Add(new GherkinStep(kw, kind, step.Groups["text"].Value, lineNo, textStart, textStart + step.Groups["text"].Length));
             }
         }
-        return new GherkinFeature(scenarios, tables);
+        return new GherkinFeature(scenarios, tables, dialect);
     }
 
     // ------------------------------------------------------------ step definitions
 
     /// <summary>
     /// One step definition: its kind (given, when, then or step for any), how its pattern is read ("parse", "re" or "exact"; null when the pattern is not a
-    /// literal, which then matches every step), the framework, and where it is.
+    /// literal, which then matches every step), the framework, and where it is: its pattern (Start, End) and its function's name (NameStart).
     /// </summary>
-    public sealed record StepDefinition(string Kind, string? Pattern, string Matcher, string Framework, string Uri, int Start, int End, string FunctionName)
+    public sealed record StepDefinition(string Kind, string? Pattern, string Matcher, string Framework, string Uri, int Start, int End, string FunctionName, int NameStart = -1)
     {
         Regex? _regex;
         bool _broken;
@@ -218,7 +219,7 @@ public sealed partial class LanguageService
                 else if (arg is ConstExpr) pattern = PatternLiteral(arg);
                 // a matcher of behave's that is not known, or a pattern that is not a literal: it may match anything
                 if (how == "unknown") pattern = null;
-                result.Add(new StepDefinition(kind, pattern, how, framework, uri, arg.Start, arg.End, f.Name));
+                result.Add(new StepDefinition(kind, pattern, how, framework, uri, arg.Start, arg.End, f.Name, f.NameStart));
             }
         }
         return result;
@@ -336,6 +337,9 @@ public sealed partial class LanguageService
                         if (!columns.Contains(p.Groups[1].Value))
                             found.Add((step.Start + p.Index, step.Start + p.Index + p.Length, $"No Examples column for '<{p.Groups[1].Value}>'", "bdd-examples-column", Severity.Warning));
         }
+        // a `# language:` Cucumber does not have: the file is read as English, so its keywords are not
+        if (GherkinDialect.LanguageOf(doc.Text) is { Code: { } code } lang && GherkinDialect.Of(code) == null)
+            found.Add((lang.Start, lang.End, $"Unknown language: '{code}' (read as English)", "bdd-unknown-language", Severity.Error));
         foreach (var t in feature.Tables)
         {
             int width = t.Rows[0].Cells.Count;
@@ -368,10 +372,7 @@ public sealed partial class LanguageService
             foreach (var s in ParseGherkin(text).Scenarios)
                 foreach (var step in s.Steps)
                 {
-                    var texts = StepTexts(s, step).ToList();
-                    // an outline step without rows stands for no text: its parameters may be anything
-                    if (texts.Count == 0) texts.AddRange(new[] { OutlineParameter.Replace(step.Text, "1"), OutlineParameter.Replace(step.Text, "x") });
-                    steps.AddRange(texts.Select(t => (step.Kind, t)));
+                    steps.AddRange(MatchTexts(s, step).Select(t => (step.Kind, t)));
                 }
         foreach (var d in mine)
         {
@@ -379,6 +380,192 @@ public sealed partial class LanguageService
             var f = new Finding(d.Start, d.End - d.Start, $"Step definition '{d.FunctionName}' is not used by any step of the project's .feature files", "bdd-unused-step", FindingLevel.Weak);
             if (!Suppressed(m.Source, f)) yield return AsDiag(f);
         }
+    }
+
+    // ------------------------------------------------------------ a step's definition, a definition's steps, completion
+
+    /// <summary>The texts a step is matched with: those of <see cref="StepTexts"/>, and for an outline step without rows its text with numbers and with words for the parameters.</summary>
+    static List<string> MatchTexts(GherkinScenario s, GherkinStep step)
+    {
+        var texts = StepTexts(s, step).ToList();
+        // an outline step without rows stands for no text: its parameters may be anything
+        if (texts.Count == 0) texts.AddRange(new[] { OutlineParameter.Replace(step.Text, "1"), OutlineParameter.Replace(step.Text, "x") });
+        return texts;
+    }
+
+    /// <summary>The step whose line the offset is on (on its keyword or its text), with its scenario.</summary>
+    static (GherkinScenario Scenario, GherkinStep Step)? StepAt(GherkinFeature feature, string text, int at)
+    {
+        foreach (var s in feature.Scenarios)
+            foreach (var step in s.Steps)
+                if (LineStart(text, step.Start) <= at && at <= step.End) return (s, step);
+        return null;
+    }
+
+    /// <summary>The text of a file of the project: the open buffer, or the file on disk.</summary>
+    string? ProjectText(string uri)
+    {
+        if (_docs.TryGetValue(uri, out var open)) return open.Text;
+        if (PathOfUri(uri) is not { } path || !File.Exists(path)) return null;
+        try { return File.ReadAllText(path); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    /// <summary>Where a step definition is: its function's name (its pattern when the name is not known).</summary>
+    Location? LocationOf(StepDefinition d, Dictionary<string, LineMap?> maps)
+    {
+        if (!maps.TryGetValue(d.Uri, out var lines)) maps[d.Uri] = lines = ProjectText(d.Uri) is { } text ? new LineMap(text) : null;
+        if (lines == null) return null;
+        return d.NameStart >= 0 ? new Location(d.Uri, lines.RangeOf(d.NameStart, d.NameStart + d.FunctionName.Length)) : new Location(d.Uri, lines.RangeOf(d.Start, d.End));
+    }
+
+    /// <summary>Go to Declaration on a step of a .feature file: the @given / @when / @then functions whose patterns match it, as PyCharm goes to them.</summary>
+    IReadOnlyList<Location> FeatureDefinition(string uri, Position pos)
+    {
+        if (!Plugins.On("bdd") || !_featureDocs.TryGetValue(uri, out var doc)) return Array.Empty<Location>();
+        var feature = ParseGherkin(doc.Text);
+        if (StepAt(feature, doc.Text, new LineMap(doc.Text).OffsetOf(pos)) is not { } hit) return Array.Empty<Location>();
+        var texts = MatchTexts(hit.Scenario, hit.Step);
+        var maps = new Dictionary<string, LineMap?>();
+        // a pattern that is not a literal matches every step, but it is not where this step is defined
+        return ProjectStepDefinitions().Where(d => d.Pattern != null && texts.Any(t => d.Matches(hit.Step.Kind, t)))
+            .Select(d => LocationOf(d, maps)).Where(l => l != null).Select(l => l!).ToList();
+    }
+
+    /// <summary>
+    /// Find Usages on a step definition (on its pattern, or on its function's name for all the patterns it has): the steps of the project's .feature
+    /// files it matches. Null when the position is not on a step definition.
+    /// </summary>
+    IReadOnlyList<Location>? StepUsages(string uri, Position pos, bool includeDeclaration)
+    {
+        if (!Plugins.On("bdd") || !_docs.TryGetValue(uri, out var doc) || !doc.Text.Contains("behave", StringComparison.Ordinal) && !doc.Text.Contains("pytest_bdd", StringComparison.Ordinal)) return null;
+        int at = new LineMap(doc.Text).OffsetOf(pos);
+        var defs = StepDefinitionsIn(Parser.Parse(doc.Text).Module, doc.Text, uri).Where(d => d.Pattern != null).ToList();
+        var mine = defs.Where(d => d.Start <= at && at <= d.End).ToList();
+        if (mine.Count == 0) mine = defs.Where(d => d.NameStart >= 0 && d.NameStart <= at && at <= d.NameStart + d.FunctionName.Length).ToList();
+        if (mine.Count == 0) return null;
+        var result = new List<Location>();
+        foreach (var (featureUri, text) in ProjectFeatures())
+        {
+            LineMap? lines = null;
+            foreach (var s in ParseGherkin(text).Scenarios)
+                foreach (var step in s.Steps)
+                {
+                    var texts = MatchTexts(s, step);
+                    if (!mine.Any(d => texts.Any(t => d.Matches(step.Kind, t)))) continue;
+                    lines ??= new LineMap(text);
+                    result.Add(new Location(featureUri, lines.RangeOf(step.Start, step.End)));
+                }
+        }
+        result = result.OrderBy(l => l.Uri, StringComparer.Ordinal).ThenBy(l => l.Range.Start.Line).ToList();
+        if (includeDeclaration && LocationOf(mine[0], new()) is { } declaration) result.Insert(0, declaration);
+        return result;
+    }
+
+    /// <summary>
+    /// Completion after a step keyword of a .feature file: the patterns of the project's step definitions of that kind (And / But / * take the kind of the
+    /// step before), whose parameters become the snippet's placeholders. The item replaces what is typed after the keyword.
+    /// </summary>
+    IReadOnlyList<CompletionItem> FeatureCompletion(string uri, Position pos)
+    {
+        if (!Plugins.On("bdd") || !_featureDocs.TryGetValue(uri, out var doc)) return Array.Empty<CompletionItem>();
+        string text = doc.Text;
+        var lines = new LineMap(text);
+        int offset = Math.Min(lines.OffsetOf(pos), text.Length);
+        int lineStart = LineStart(text, offset);
+        string before = text[lineStart..offset];
+        string typed = before.TrimStart();
+        var feature = ParseGherkin(text);
+        var m = feature.Dialect.StepLine.Match(typed);
+        if (!m.Success || m.Groups["kw"].Length == typed.Length) return Array.Empty<CompletionItem>();   // "Given" without the space after it
+        int textStart = lineStart + (before.Length - typed.Length) + m.Groups["text"].Index;
+        // the kind the parser gave this line; when it is not a step yet ("And " with nothing after it), its keyword's, or for And the step before's
+        int line = pos.Line;
+        var all = feature.Scenarios.SelectMany(s => s.Steps).ToList();
+        string kind = all.Where(s => s.Line == line).Select(s => s.Kind).FirstOrDefault()
+            ?? feature.Dialect.KindOf(m.Groups["kw"].Value) ?? all.LastOrDefault(s => s.Line < line)?.Kind ?? "given";
+        var range = lines.RangeOf(textStart, offset);
+        var items = new List<CompletionItem>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var d in ProjectStepDefinitions())
+        {
+            if (d.Pattern == null || d.Kind != "step" && d.Kind != kind || !seen.Add(d.Pattern)) continue;
+            var (snippet, plain) = StepSnippet(d.Pattern, d.Matcher);
+            string file = System.IO.Path.GetFileName(PathOfUri(d.Uri) ?? d.Uri);
+            items.Add(new CompletionItem(d.Pattern, CompletionKind.Function, $"{d.FunctionName} ({file})", SortText: plain, InsertText: snippet, IsSnippet: true,
+                FilterText: plain, TextEdit: new TextEdit(range, snippet)));
+        }
+        return items;
+    }
+
+    /// <summary>
+    /// A step pattern as a snippet whose placeholders are its parameters (behave's and parse's {name}, a regular expression's groups and wildcards), and
+    /// as plain text with the parameters' names, which completion filters by: "{n:d} apples" is "${1:n} apples" and "n apples".
+    /// </summary>
+    public static (string Snippet, string Plain) StepSnippet(string pattern, string matcher)
+    {
+        var snippet = new StringBuilder();
+        var plain = new StringBuilder();
+        int n = 0;
+        void Literal(char c) { if (c is '$' or '}' or '\\') snippet.Append('\\'); snippet.Append(c); plain.Append(c); }
+        void Placeholder(string name)
+        {
+            n++;
+            snippet.Append(name.Length > 0 ? $"${{{n}:{name}}}" : $"${{{n}}}");
+            plain.Append(name.Length > 0 ? name : "...");
+        }
+        if (matcher == "exact")
+            foreach (char c in pattern) Literal(c);
+        else if (matcher == "re")
+        {
+            string re = pattern;
+            if (re.StartsWith('^')) re = re[1..];
+            if (re.EndsWith(@"\Z", StringComparison.Ordinal)) re = re[..^2];
+            else if (re.EndsWith('$') && !re.EndsWith(@"\$", StringComparison.Ordinal)) re = re[..^1];
+            for (int i = 0; i < re.Length; i++)
+            {
+                char c = re[i];
+                if (c == '(')
+                {
+                    // a group, to its closing parenthesis: one placeholder, named after (?P<name>...)
+                    int depth = 0, j = i;
+                    for (; j < re.Length; j++)
+                    {
+                        if (re[j] == '\\') { j++; continue; }
+                        if (re[j] == '(') depth++;
+                        else if (re[j] == ')' && --depth == 0) break;
+                    }
+                    var named = Regex.Match(re[i..], @"^\(\?P?<(\w+)>");
+                    Placeholder(named.Success ? named.Groups[1].Value : "");
+                    i = Math.Min(j, re.Length - 1);
+                    if (i + 1 < re.Length && re[i + 1] is '?' or '*' or '+') i++;
+                    continue;
+                }
+                // a wildcard outside a group: \d+, .*, \w+, [a-z]+
+                var wild = Regex.Match(re[i..], @"^(\\[dDwWsS]|\.|\[(\\.|[^\]])*\])[*+?]?");
+                if (wild.Success && wild.Length > 1)
+                {
+                    Placeholder("");
+                    i += wild.Length - 1;
+                    continue;
+                }
+                if (c == '\\' && i + 1 < re.Length) { Literal(re[++i]); continue; }
+                Literal(c);
+            }
+        }
+        else
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                char c = pattern[i];
+                if ((c == '{' || c == '}') && i + 1 < pattern.Length && pattern[i + 1] == c) { Literal(c); i++; continue; }
+                int close = c == '{' ? pattern.IndexOf('}', i) : -1;
+                if (close < 0) { Literal(c); continue; }
+                string field = pattern[(i + 1)..close];
+                int colon = field.IndexOf(':');
+                Placeholder((colon < 0 ? field : field[..colon]).Trim());
+                i = close;
+            }
+        return (snippet.ToString(), plain.ToString());
     }
 
     // ------------------------------------------------------------ Create step definition

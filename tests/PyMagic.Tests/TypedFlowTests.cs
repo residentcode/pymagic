@@ -88,6 +88,34 @@ public class TypedFlowTests
     }
 
     [Fact]
+    public void ModuleAndClassBodiesTakeOnlyTheAssignmentsThatPassCallsThatNeverReturn()
+    {
+        Assert.Equal("int", T(Fail + "import os\nx = None\nif os.name:\n    x = 1\nelse:\n    fail('no')\nx\n"));
+        Assert.Equal("int", T(Fail + "import os\nclass C:\n    x = None\n    if os.name:\n        x = 1\n    else:\n        fail('no')\n    x\n"));
+        // seen from another function, the module's name is still all its assignments
+        Assert.Equal("None | int", T(Fail + "import os\nx = None\nif os.name:\n    x = 1\nelse:\n    fail('no')\n\ndef g():\n    x\n"));
+    }
+
+    [Fact]
+    public void CallsOnAClassAfterItInTheModuleDoNotLoseItsBases()
+    {
+        // PyYAML's constructor.py: `class FullConstructor(SafeConstructor)` and then `FullConstructor.add_constructor(...)` at the
+        // top level; the base is read while the class is being built, before those calls are decided
+        const string src = "class Base:\n    made = {}\n\n    @classmethod\n    def add(cls, tag, f):\n        if not 'made' in cls.__dict__:\n            cls.made = cls.made.copy()\n        cls.made[tag] = f\n\n"
+            + "class Safe(Base):\n    def one(self):\n        pass\n\nSafe.add('a', None)\n\n"
+            + "class Full(Safe):\n    def more(self):\n        self.one()\n\nFull.add('b', None)\n\nclass Unsafe(Full):\n    pass\n\nUnsafe.add('c', None)\n";
+        foreach (var first in new[] { "", "Safe", "Full", "Unsafe" })
+        {
+            var (ws, m) = Load(src);
+            // one of the calls asked first, as an inspection of another module would
+            if (first != "")
+                ws.Evaluator.TypeOf(m, AstChildren.Descendants(m.Ast).OfType<CallExpr>().First(c => c.Func is AttributeExpr { Value: NameExpr n } && n.Name == first));
+            var found = ws.Evaluator.Inspect(m).Select(d => d.Message).ToList();
+            Assert.True(found.Count == 0, first + ": " + string.Join("; ", found));
+        }
+    }
+
+    [Fact]
     public void AModuleLevelReadBeforeTheModuleRebindsABuiltinIsTheBuiltin()
     {
         // requests/compat.py: `builtin_str = str` and two lines later `str = str`

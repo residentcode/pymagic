@@ -162,9 +162,8 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Not seen on screen: the sidebar picture (item 331), shown only on the finish page after an install and in the uninstaller; the folder page's refusal of a folder that is not PyMagic's (only its rule's tests and the silent installs ran).
 
 **Type engine** (ibnbolbna's area until 31 October 2026, ours from then on; what ibnbolbna did and left is in [docs/ibnbolbna-work.md](docs/ibnbolbna-work.md))
-- Left by items 333 to 342 (the type engine's Open work, done 3 November 2026): module and class bodies still take their names' reaching definitions from the plain flow (the typed one gave false reports in PyYAML's constructor); the library scan's `inspect` counts inconsistent returns without the evaluator; two tuples of the same length with different item types (`tuple[int, str]` for `tuple[int, int]`) are not reported.
-- BDD (item 341): going to a step's definition from a .feature file and completing steps there, Gherkin's keywords in other languages than English. The notebook check reads the cells from the top, not by their run counts. The names of the mock, notebook and Spark inspections were not compared with PyCharm's own list (its install folder was not read).
-- The parsed-file cache (item 339): the current build's folder only grows until the next build removes it.
+- Found by item 344: an argument of the wrong type in a call (PyCharm's *Incorrect type*, on by default there) is never reported in the app: the server checks it only with its ReportTypeMismatches option, which the page never sets (it has been off since the first language server). Turned on, the library scan gives 94 more reports (PM_TYPE_MISMATCHES=1 in the harness), many of them false (an Optional not narrowed, a union of functions for a callable, ctypes fields), so the argument types have to be made right before it can be on.
+- Left by item 348: PyCharm's *Method Series.to_list() is recommended* also checks polars; PyMagic checks pandas only (polars is not installed here to test against).
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
 
@@ -195,8 +194,9 @@ Not work left: choices made and kept, noted where they were made.
 - Editor: PyMagic's keys differ where PyCharm's are already taken here: next / previous method is Ctrl+Shift+Down / Up (Alt+Down moves the line), the block's start / end is Alt+[ / Alt+] (Ctrl+[ indents)
 - Refactoring: Simpler than PyCharm's: Introduce Parameter gives the parameter a default instead of passing the value at each call, Invert Boolean works on variables (not on functions that return one), and moved members do not bring the imports they need.
 - Search: Simpler than PyCharm's: the conditions on a variable are a regular expression on its text (no type or count conditions), and duplicates are compared statement by statement.
+- Inspections PyMagic has and PyCharm does not (items 341 and 348): *Patch target that does not exist*, *Attribute a mock does not have* and *Name defined in a later cell*, kept; *Incorrect number of parameters for @patch decorated function* reports too few parameters only, since pytest fills extra ones with fixtures (PyCharm also reports too many).
 - Python inspections that PyCharm has and PyMagic does not: Left on purpose: advertising stub packages that could be installed, since PyMagic ships typeshed's third-party stubs and already has those types.
 
 ## Work done
 
-The 342 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 348 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

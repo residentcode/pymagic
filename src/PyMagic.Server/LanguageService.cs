@@ -672,6 +672,7 @@ public sealed partial class LanguageService
     public IReadOnlyList<Location> Definition(string uri, Position pos)
     {
         if (_templateDocs.ContainsKey(uri)) return DjangoTemplateOff(uri) ? Array.Empty<Location>() : TemplateDefinition(uri, pos);
+        if (_featureDocs.ContainsKey(uri)) return FeatureDefinition(uri, pos);
         var m = ModuleFor(uri);
         if (m == null) return Array.Empty<Location>();
         var ws = Current().Workspace;

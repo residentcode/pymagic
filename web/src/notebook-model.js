@@ -216,7 +216,7 @@ export function virtualDocument(nb) {
         const code = maskMagics(sourceOf(cell).replace(/\r\n?/g, '\n'));
         const lines = code.split('\n').length;
         parts.push(code);
-        cells.push({ index, start: line, lines });
+        cells.push({ index, start: line, lines, count: cell.execution_count ?? null });   // the run count: the server takes the cells in the order they ran
         line += lines;
     });
     return { text: parts.join('\n'), cells };

@@ -27,6 +27,7 @@ public sealed partial class LanguageService
     {
         using var searching = Searching(uri, pos);
         if (Plugins.On("django") && DjangoReferences(uri, pos, includeDeclaration) is { Count: > 0 } djangoSites) return djangoSites;
+        if (StepUsages(uri, pos, includeDeclaration) is { } steps) return steps;   // a step definition: the steps of .feature files it matches
         var snap = Full();
         if (snap.ByUri.TryGetValue(uri, out var fm))
         {

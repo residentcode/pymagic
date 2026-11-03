@@ -6,8 +6,8 @@ using PyMagic.Server.Pytest;
 namespace PyMagic.Server;
 
 /// <summary>
-/// PyCharm's two pandas inspections (PyCharm Professional's "Pandas" group): `s.values.tolist()` on a Series where `s.to_list()` says it
-/// (PyPandasSeriesToListInspection), and a DataFrame, Series or Index in a place that asks for its truth value (`if df:`, `not s`,
+/// PyCharm's two pandas inspections (PyCharm Professional's "Pandas" group): `list(s.values)` (PyCharm's own case), `s.values.tolist()` and
+/// `s.to_numpy().tolist()` on a Series where `s.to_list()` says it (PyPandasSeriesToListInspection), and a DataFrame, Series or Index in a place that asks for its truth value (`if df:`, `not s`,
 /// `s > 0 and ...`), which pandas answers with "ValueError: The truth value of a DataFrame is ambiguous" (PyPandasTruthValueIsAmbiguousInspection).
 /// The types come from pandas itself or pandas-stubs, whichever the interpreter has.
 /// </summary>
@@ -91,6 +91,10 @@ public sealed partial class LanguageService
                 && (arr is AttributeExpr { Attr: "values" } || arr is CallExpr { Func: AttributeExpr { Attr: "to_numpy" }, Args.Count: 0 })
                 && PandasKind(ev, ev.TypeOf(m, arr is AttributeExpr va ? va.Value : ((AttributeExpr)((CallExpr)arr).Func).Value)) == "Series")
                 yield return new Finding(call.Start, call.End - call.Start, "Method Series.to_list() is recommended", "pandas-series-to-list", FindingLevel.Weak);
+            // list(s.values): the case PyCharm's help gives
+            else if (node is CallExpr { Func: NameExpr { Name: "list" } lf, Args: [{ Name: null, Stars: 0, Value: AttributeExpr { Attr: "values" } lv }] } lcall
+                && IsBuiltinList(m, ev, lf) && PandasKind(ev, ev.TypeOf(m, lv.Value)) == "Series")
+                yield return new Finding(lcall.Start, lcall.End - lcall.Start, "Method Series.to_list() is recommended", "pandas-series-to-list", FindingLevel.Weak);
 
             foreach (var test in TruthTested(m, node))
                 if (PandasKindOf(m, ev, test) is { } kind)
@@ -98,6 +102,10 @@ public sealed partial class LanguageService
                         $"The truth value of a {kind} is ambiguous: pandas raises ValueError (use a.empty, a.bool(), a.item(), a.any() or a.all())", "pandas-truth-value", FindingLevel.Warning);
         }
     }
+
+    /// <summary>The name is the builtin list (not a name of the project's that hides it).</summary>
+    static bool IsBuiltinList(ModuleInfo m, TypeEvaluator ev, NameExpr n) =>
+        ev.TypeOf(m, n) is ClassType { IsInstance: false, Info: { Name: "list" } info } && info.Module.Name == "builtins";
 
     /// <summary>The expressions whose truth value this node asks for: conditions of if, elif, while, assert, a conditional expression and a comprehension, the operand of not, and the operands of and / or that decide.</summary>
     static IEnumerable<Expr> TruthTested(ModuleInfo m, Node node)
@@ -133,6 +141,11 @@ public sealed partial class LanguageService
         if (code == "pandas-series-to-list")
         {
             var call = AstChildren.Descendants(m.Ast).OfType<CallExpr>().FirstOrDefault(c => c.Start == start && c.End == end);
+            if (call is { Func: NameExpr, Args: [{ Value: AttributeExpr { Value: var of } }] })
+            {
+                add("Replace with to_list()", true, new[] { new Edit(call.Start, call.End, text[of.Start..of.End] + ".to_list()") });
+                return;
+            }
             if (call?.Func is not AttributeExpr { Value: var arr }) return;
             var series = arr is AttributeExpr va ? va.Value : arr is CallExpr { Func: AttributeExpr ta } ? ta.Value : null;
             if (series == null) return;

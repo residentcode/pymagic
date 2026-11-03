@@ -3531,6 +3531,62 @@ describe('the type engine of 3 November: BDD steps, mock.patch, tuple assignment
     });
 });
 
+describe('the type engine leftovers: BDD go to and completion, Gherkin languages, tuple items', () => {
+    const put = (rel, text) => { mkdirSync(dirname(join(app.root, rel)), { recursive: true }); writeFileSync(join(app.root, rel), text); };
+    const marks = (rel, wanted) => page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); if (!m.uri.path.endsWith(${JSON.stringify(rel)})) return null; const f = window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).map((x) => x.startLineNumber + ': ' + x.message); return f.some((x) => x.includes(${JSON.stringify(wanted)})) ? f : null; })()`, 30000, `${wanted} in ${rel}`);
+    const steps = "from behave import given, when\n\n\n@given('{n:d} apples in the basket')\ndef step_impl(context, n):\n    pass\n\n\n@when('I pay')\ndef step_pay(context):\n    pass\n";
+
+    test('BDD: F12 on a step opens its definition; after When the project\'s when steps are offered', async () => {
+        put('shopbdd/steps/shop.py', steps);
+        put('shopbdd/shop.feature', 'Feature: Shop\n  Scenario: S\n    Given 3 apples in the basket\n    When I pay\n');
+        await open('shopbdd/shop.feature');
+        await page.evaluate(`(() => { const e = window.pymagic.editor; e.setPosition({ lineNumber: 3, column: 14 }); e.focus(); e.trigger('test', 'editor.action.revealDefinition', {}); })()`);
+        const at = await page.waitFor(`(() => { const e = window.pymagic.editor; const m = e.getModel(); return m.uri.path.endsWith('shopbdd/steps/shop.py') ? m.getLineContent(e.getPosition().lineNumber) : null; })()`, 20000, 'the step definition');
+        assert.match(at, /def step_impl\(context, n\)/);
+        await open('shopbdd/shop.feature');
+        await page.evaluate(`(() => { const e = window.pymagic.editor; const m = e.getModel(); const end = m.getLineCount(); e.executeEdits('e2e', [{ range: { startLineNumber: end, startColumn: 1, endLineNumber: end, endColumn: m.getLineMaxColumn(end) }, text: '    When ' }]); e.setPosition({ lineNumber: end, column: 10 }); e.focus(); e.trigger('test', 'editor.action.triggerSuggest', {}); })()`);
+        const labels = await page.waitFor(`(() => { const r = [...document.querySelectorAll('.suggest-widget .monaco-list-row')].map((x) => x.getAttribute('aria-label') ?? ''); return r.some((x) => x.startsWith('I pay')) ? r : null; })()`, 15000, 'the when steps');
+        assert.ok(!labels.some((x) => x.includes('apples')), labels.join(' | '));
+        await page.evaluate(`window.pymagic.editor.trigger('test', 'hideSuggestWidget', {})`);
+    });
+
+    test('Gherkin in German: its keywords are read, an undefined step is marked; an unknown language is marked', async () => {
+        put('shopde/steps/shop.py', steps);
+        put('shopde/laden.feature', '# language: de\nFunktionalität: Laden\n  Szenario: S\n    Angenommen 3 apples in the basket\n    Wenn I leave\n');
+        await open('shopde/laden.feature');
+        const found = await marks('shopde/laden.feature', "Undefined step reference: 'I leave'");
+        assert.ok(found.some((x) => x.startsWith('5: ')), found.join(' | '));
+        assert.ok(!found.some((x) => x.startsWith('4: ')), found.join(' | '));
+        // the file's own `# language: de` makes Funktionalität a keyword (alone the line would be English)
+        const keyword = await page.evaluate(`window.pymagic.monaco.editor.tokenize(window.pymagic.editor.getModel().getValue(), 'gherkin')[1].map((x) => x.type).join(' ')`);
+        assert.match(keyword, /keyword/);
+        put('shopde/xx.feature', '# language: xx\nFeature: F\n');
+        await open('shopde/xx.feature');
+        await marks('shopde/xx.feature', "Unknown language: 'xx'");
+    });
+
+    test('At the top level a branch that ends in a NoReturn call does not reach the name: the hover says int', async () => {
+        put('toplevel.py', 'import os\nfrom typing import NoReturn\n\n\ndef fail() -> NoReturn:\n    raise SystemExit\n\n\nx = None\nif os.name:\n    x = 1\nelse:\n    fail()\nprint(x)\n');
+        await open('toplevel.py');
+        let text = null;
+        for (let i = 0; i < 6 && !text; i++) {
+            await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 14, column: 7 }); ed.focus(); ed.trigger('e2e', 'editor.action.showHover', {}); })()`);
+            text = await page.waitFor(`[...document.querySelectorAll('.monaco-hover-content')].map((h) => h.textContent).join(' ').trim() || null`, 4000, 'the hover').catch(() => null);
+        }
+        assert.ok(text && /\bx: int\b/.test(text) && !/None/.test(text), text ?? 'no hover');
+    });
+
+    test('Tuples of one length with other item types are marked; the same items are not', async () => {
+        put('tuples.py', 'def pair() -> tuple[int, int]:\n    return 1, "a"\n\n\nx: tuple[int, int] = (1, "a")\ny: tuple[int, int] = (1, 2)\n');
+        await open('tuples.py');
+        const found = await marks('tuples.py', "Expected type 'tuple[int, int]', got 'tuple[int, str]' instead");
+        // the return and the annotated assignment (the arguments of a call wait for the type mismatch option)
+        assert.ok(found.some((x) => x.startsWith('2: ') && x.includes('tuple[int, str]')), found.join(' | '));
+        assert.ok(found.some((x) => x.startsWith('5: ') && x.includes('tuple[int, str]')), found.join(' | '));
+        assert.ok(!found.some((x) => x.startsWith('6: ') && x.includes('Expected type')), found.join(' | '));
+    });
+});
+
 describe('Settings > Plugins', () => {
     const openPlugins = async () => {
         await page.evaluate(`${$('b-gear')}.click()`);

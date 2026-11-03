@@ -36,7 +36,8 @@ public sealed record RouteEntry(string Methods, string Path, string Name, string
     List<RouteParam>? Params = null, string? Response = null, string? Status = null, List<string>? Tags = null);
 
 public sealed record CompletionItem(string Label, int Kind, string? Detail = null, string? SortText = null, string? InsertText = null,
-    bool IsSnippet = false, List<TextEdit>? AdditionalTextEdits = null, string? FilterText = null, string? Documentation = null);
+    bool IsSnippet = false, List<TextEdit>? AdditionalTextEdits = null, string? FilterText = null, string? Documentation = null,
+    TextEdit? TextEdit = null);   // TextEdit: what the item replaces when it is not the word at the cursor (a step's text after its keyword)
 
 public static class SymbolKind
 {

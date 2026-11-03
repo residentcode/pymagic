@@ -209,7 +209,14 @@ const nbOf = (...cells) => ({ cells: cells.map(([cell_type, text]) => ({ cell_ty
 test('virtualDocument joins the code cells and leaves out the text cells', () => {
     const doc = m.virtualDocument(nbOf(['code', 'a = 1\nb = 2'], ['markdown', '# not code'], ['code', ''], ['code', 'print(a)']));
     assert.equal(doc.text, 'a = 1\nb = 2\n\nprint(a)');
-    assert.deepEqual(doc.cells, [{ index: 0, start: 0, lines: 2 }, { index: 2, start: 2, lines: 1 }, { index: 3, start: 3, lines: 1 }]);
+    assert.deepEqual(doc.cells, [{ index: 0, start: 0, lines: 2, count: null }, { index: 2, start: 2, lines: 1, count: null }, { index: 3, start: 3, lines: 1, count: null }]);
+});
+
+test('virtualDocument sends each code cell\'s run count (null when it never ran), for the run order of the names check', () => {
+    const nb = nbOf(['code', 'print(x)'], ['markdown', 'text'], ['code', 'x = 1'], ['code', 'y = 2']);
+    nb.cells[0].execution_count = 2;
+    nb.cells[2].execution_count = 1;
+    assert.deepEqual(m.virtualDocument(nb).cells.map((c) => c.count), [2, 1, null]);
 });
 
 test('magics and shell lines become pass, keeping their indent', () => {

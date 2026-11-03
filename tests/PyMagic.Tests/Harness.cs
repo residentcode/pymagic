@@ -194,10 +194,12 @@ public static class Program
                 if (m == null) continue;
                 files++;
                 var swInsp = System.Diagnostics.Stopwatch.StartNew();
-                IReadOnlyList<PyMagic.Core.Syntax.Diagnostic> found = ws.Evaluator.Inspect(m);
-                // PM_INSPECTIONS=1 adds the syntax-level inspections (unused variables, == None, ...) to the count
+                // PM_TYPE_MISMATCHES=1 adds the arguments of the wrong type (the server's ReportTypeMismatches)
+                IReadOnlyList<PyMagic.Core.Syntax.Diagnostic> found = ws.Evaluator.Inspect(m, System.Environment.GetEnvironmentVariable("PM_TYPE_MISMATCHES") != null);
+                // PM_INSPECTIONS=1 adds the syntax-level inspections (unused variables, == None, ...) to the count; with the evaluator,
+                // as the app runs them, so a call that never returns ends a path for the inconsistent returns
                 if (System.Environment.GetEnvironmentVariable("PM_INSPECTIONS") != null)
-                    found = found.Concat(PyMagic.Core.Types.CodeInspections.Run(m).Select(x =>
+                    found = found.Concat(PyMagic.Core.Types.CodeInspections.Run(m, ws.Evaluator).Select(x =>
                         new PyMagic.Core.Syntax.Diagnostic(x.Start, x.Length, $"[{x.Code}] {x.Message}")))
                         .Concat(m.Semantics.Diagnostics).Concat(m.Flow.Analyse().Where(x => x.Message != "Unreachable code")).ToList();
                 // findings that sit inside an f-string field are tagged, to see what parsing the fields changed
