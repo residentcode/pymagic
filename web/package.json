@@ -11,6 +11,7 @@
     "@xterm/xterm": "5.5.0",
     "emmet-monaco-es": "5.7.0",
     "monaco-editor": "0.52.2",
+    "tailwindcss": "4.3.3",
     "yaml": "2.6.1"
   },
   "devDependencies": {

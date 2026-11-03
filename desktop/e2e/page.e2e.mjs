@@ -51,6 +51,8 @@ const FILES = {
     'emmet/page.hjs': 'ul>li*2\n',
     'tags/page.html': '<h1>{{ title }}</h1>\n<p>Welcome to {{ title }}</p>\n',
     'fullline/config.py': 'import json\n\n\ndef load_config(path):\n    with open(path) as f:\n        config = \n    return config\n',
+    'tw/input.css': '@import "tailwindcss";\n@theme { --color-brand: #3366ff; }\n',
+    'tw/page.html': '<div class="md:flex items-center">\n    <div class="ml-au"></div>\n    <p class="bg-bra"></p>\n</div>\n',
     'tags/App.jsx': 'export const App = () => (\n  <section className="a"><Item key={1} /></section>\n);\n',
     'emmet/App.vue': 'ul>li*2\n',
     'emmet/App.jsx': 'export const App = () => (\n  div.card>h2\n);\n',
@@ -3036,6 +3038,38 @@ describe('New Project: the other kinds', () => {
         assert.equal((await pages()).length, 1);
         assert.equal(await fetch(new URL('/api/info', second.url)).then(() => 'up', () => 'down'), 'down');
         await page.evaluate(`window.pymagic.changeSetting({ openProjectIn: 'ask' })`);
+    });
+
+    test('Tailwind CSS: its classes completed in a class attribute, with the variants typed and the project\'s own @theme colours', async () => {
+        assert.ok(await page.evaluate('window.pymagicTailwindReady'), 'Tailwind was not found in the project (tw/input.css imports it)');
+        // the caret after the class being typed, the suggestion chosen by its label, the line read back and put back
+        const complete = async (line, column, label) => {
+            await open('tw/page.html');
+            const before = await page.evaluate('window.pymagic.editor.getModel().getValue()');
+            await page.evaluate(`(() => { const e = window.pymagic.editor; e.setPosition({ lineNumber: ${line}, column: ${column} }); e.focus(); e.trigger('test', 'editor.action.triggerSuggest', {}); })()`);
+            const row = `[...document.querySelectorAll('.suggest-widget .monaco-list-row')].find((r) => r.getAttribute('aria-label')?.startsWith(${JSON.stringify(label)}))`;
+            const index = await page.waitFor(`(() => { const r = ${row}; return r ? Number(r.dataset.index) + 1 : 0; })()`, 15000, 'the suggestion ' + label) - 1;
+            for (let i = 0; i < index; i++) await page.evaluate(`window.pymagic.editor.trigger('test', 'selectNextSuggestion', {})`);
+            await page.evaluate(`window.pymagic.editor.trigger('test', 'acceptSelectedSuggestion', {})`);
+            const after = await page.evaluate(`window.pymagic.editor.getModel().getLineContent(${line})`);
+            await page.evaluate(`window.pymagic.editor.getModel().setValue(${JSON.stringify(before)})`);
+            return after;
+        };
+        // the picture the user sent: ml-au becomes ml-auto
+        assert.equal(await complete(2, 22, 'ml-auto'), '    <div class="ml-auto"></div>');
+        // a colour of the project's own theme
+        assert.equal(await complete(3, 21, 'bg-brand'), '    <p class="bg-brand"></p>');
+        // its CSS on hover
+        // (earlier tests leave hover widgets in the page: the one with the CSS is looked for, and the hover asked for again while it is not there)
+        await open('tw/page.html');
+        const hover = await page.waitFor(`(() => {
+            const shown = [...document.querySelectorAll('.monaco-hover-content')].map((h) => h.textContent).find((t) => t.includes('display'));
+            if (shown) return shown;
+            window.twHoverTries = (window.twHoverTries ?? 0) + 1;
+            if (window.twHoverTries % 10 === 1) { const e = window.pymagic.editor; e.setPosition({ lineNumber: 1, column: 17 }); e.focus(); e.trigger('test', 'editor.action.showHover', {}); }
+            return '';
+        })()`, 15000, 'the hover');
+        assert.match(hover, /display: flex/);
     });
 
     test('Full line completion: the rest of the line in grey, written by the bundled model, taken with Tab', async () => {

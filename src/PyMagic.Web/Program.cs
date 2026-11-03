@@ -1296,6 +1296,14 @@ app.MapGet("/api/packages/locks", async () =>
     return Results.Json(await Task.Run(() => LockFiles.CheckStale(root, found, LockFiles.Find, LockFiles.RunTool)), camelCase);
 });
 // the schema a config file is checked against (built into PyMagic; a project's own copy in .pymagic/schemas first): nothing is downloaded
+// whether the project uses Tailwind CSS, and its stylesheet that imports it (the Tailwind CSS plugin's class completion)
+app.MapGet("/api/tailwind", () =>
+{
+    if (!Plugins.On("tailwind")) return Results.Json(new { used = false });
+    var use = Tailwind.Detect(root);
+    string? css = use.Css == null ? null : File.ReadAllText(ResolveInRoot(use.Css));
+    return Results.Json(new { used = use.Used, path = use.Css, css, why = use.Why });
+});
 app.MapGet("/api/schemas/get", (string name) => Schemas.Of(root, name) is { } schema ? Results.Text(schema, "application/json") : Results.NotFound());
 // a TOML text as JSON, for checking pyproject.toml against its schema
 app.MapPost("/api/toml", async (HttpRequest req) =>

@@ -36,6 +36,7 @@ import { languageFor as languageForFile } from './file-language';
 import { setupEmmet } from './emmet';
 import { setupTagPairs } from './tag-pairs';
 import { setupFullLine } from './fullline';
+import { setupTailwind } from './tailwind';
 import { projectDesktop } from './openproject.js';
 import { setupNotebook } from './notebook';
 import { buildInfo, buildLabel } from './build-info.js';
@@ -1172,6 +1173,8 @@ async function main() {
         setupTagPairs();
     if (plugin('fullline'))
         setupFullLine();
+    if (plugin('tailwind'))
+        window.pymagicTailwindReady = setupTailwind().catch(() => null);
     if (plugin('profiler'))
         setupProfiler({ ...common, askText: (...a) => explorer.askText(...a) });
     if (plugin('httpclient'))

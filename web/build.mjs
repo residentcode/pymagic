@@ -41,5 +41,8 @@ const options = {
   logLevel: 'info',
 };
 
-if (watch) await (await context(options)).watch();
-else await build(options);
+// Tailwind CSS's design system, on its own (the page loads it only in a project that uses Tailwind): its theme and utilities go in as text
+const tailwind = { ...options, entryPoints: { tailwind: 'src/tailwind-entry.js' }, loader: { '.css': 'text' } };
+
+if (watch) { await (await context(options)).watch(); await (await context(tailwind)).watch(); }
+else { await build(options); await build(tailwind); }
