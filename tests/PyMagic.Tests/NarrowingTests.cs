@@ -101,6 +101,9 @@ public class NarrowingTests
         Assert.Equal("list[int]", T(head + "    if isinstance(d['k'], list):\n        d['k']"));
         Assert.Equal("list[int]", T(head + "    if not isinstance(d[\"k\"], list):\n        return\n    d['k']"));   // either quote is one key
         Assert.Equal("int", T(head + "    if isinstance(t[0], int):\n        t[0]"));
+        Assert.Equal("int", T(head + "    if t[0] is not None:\n        t[0]"));                                     // the item, and
+        Assert.Equal("int", T(head + "    if t[0] is None:\n        return\n    t[0]"));
+        Same("tuple[int, str]", T("def g(u: tuple[int, str] | tuple[None, bytes]):\n    if u[0] is not None:\n        u"));   // the container
         Same("int | list[int]", T(head + "    if isinstance(d['k'], list):\n        d['j']"));                       // another key
         Same("int | list[int]", T(head + "    if isinstance(d['k'], list):\n        d['k'] = 1\n        d['k']"));  // written: forgotten
         Same("int | list[int]", T(head + "    if isinstance(d['k'], list):\n        d = {}\n        d['k']"));      // the dict replaced

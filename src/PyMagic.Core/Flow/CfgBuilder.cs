@@ -146,6 +146,18 @@ internal sealed class CfgBuilder
         return body.Contains('\\') || body.Contains(text[0]) ? null : body;
     }
 
+    /// <summary>
+    /// `x[0] is not None`, `x["k"] == "a"`: the condition narrows the container (a union of tuples or TypedDicts, by that item) and the item
+    /// itself too, which is a reference of its own (`if t[0] is not None: t[0] + 1`). Null when the condition is not such a comparison.
+    /// </summary>
+    (Symbol Sym, string Path)? ComparedItem(Expr cond, Expr container)
+    {
+        if (cond is not CompareExpr { Ops.Count: 1 } c) return null;
+        var item = (c.Left is ConstExpr ? c.Comparators[0] : c.Left) as SubscriptExpr;
+        if (item == null || !ReferenceEquals(Referent(item.Value), container) || !TryChain(item, out var root, out var path) || path.Length == 0) return null;
+        return _model.ReferenceOf(root)?.Symbol is { } sym ? (sym, path) : null;
+    }
+
     /// <summary>`x` or `(x := value)`: the expression whose name or member path a condition can narrow.</summary>
     static Expr Referent(Expr e) => e is NamedExpr { Target: NameExpr t } ? t : e;
 
@@ -386,7 +398,10 @@ internal sealed class CfgBuilder
                     if (sym != null)
                     {
                         _cur = c; var onTrue = Emit(InstrKind.Assert, e, sym, null, path, true);
+                        var item = ComparedItem(e, reference);
+                        if (item != null) onTrue = Emit(InstrKind.Assert, e, item.Value.Sym, null, item.Value.Path, true);
                         _cur = c; var onFalse = Emit(InstrKind.Assert, e, sym, null, path, false);
+                        if (item != null) onFalse = Emit(InstrKind.Assert, e, item.Value.Sym, null, item.Value.Path, false);
                         return (new List<Instruction> { onTrue }, new List<Instruction> { onFalse });
                     }
                 }
