@@ -101,6 +101,22 @@ public class ToolInspectionTests
     }
 
     [Fact]
+    public void PolarsSeriesToListToo()
+    {
+        // PyCharm's Series.to_list() inspection covers polars too; its truth-value one is pandas' only
+        const string fakePolars = "from typing import Any\n\n\nclass Series:\n    values: Any\n    def to_list(self) -> list[Any]: ...\n    def to_numpy(self) -> Any: ...\n    def __bool__(self) -> bool: ...\n\n\n"
+            + "class DataFrame:\n    def __getitem__(self, key: str) -> Series: ...\n";
+        string code = "import polars as pl\n\ndf: pl.DataFrame = pl.DataFrame()\n" +
+            "a = list(df['a'].values)\n" +         // 3
+            "b = df['a'].to_numpy().tolist()\n" +  // 4
+            "if df['a']:\n    pass\n";
+        var svc = Project(null, ("polars/__init__.pyi", fakePolars), ("p.py", code));
+        Assert.Equal("3: Method Series.to_list() is recommended | 4: Method Series.to_list() is recommended", string.Join(" | ", Found(svc, "p.py", "pandas-series-to-list")));
+        Assert.Equal(0, Found(svc, "p.py", "pandas-truth-value").Count);
+        Assert.Contains("a = df['a'].to_list()\n", Fixed(svc, "p.py", code, "pandas-series-to-list", 3, "Replace with to_list()"));
+    }
+
+    [Fact]
     public void PandasWithTheRealStubs()
     {
         if (ScanSite() is not { } site) return;   // pandas and pandas-stubs are in the scan's Python only

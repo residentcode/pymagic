@@ -95,6 +95,19 @@ public class NarrowingTests
     }
 
     [Fact]
+    public void ItemsWithAConstantKey()
+    {
+        const string head = "def f(d: dict[str, int | list[int]], t: tuple[int | None, str]):\n";
+        Assert.Equal("list[int]", T(head + "    if isinstance(d['k'], list):\n        d['k']"));
+        Assert.Equal("list[int]", T(head + "    if not isinstance(d[\"k\"], list):\n        return\n    d['k']"));   // either quote is one key
+        Assert.Equal("int", T(head + "    if isinstance(t[0], int):\n        t[0]"));
+        Same("int | list[int]", T(head + "    if isinstance(d['k'], list):\n        d['j']"));                       // another key
+        Same("int | list[int]", T(head + "    if isinstance(d['k'], list):\n        d['k'] = 1\n        d['k']"));  // written: forgotten
+        Same("int | list[int]", T(head + "    if isinstance(d['k'], list):\n        d = {}\n        d['k']"));      // the dict replaced
+        Same("int | list[int]", T(head + "    k = 'k'\n    if isinstance(d[k], list):\n        d[k]"));              // a key in a name
+    }
+
+    [Fact]
     public void AttributeChains()
     {
         const string cls = "class A:\n    v: Optional[int]\n    w: Optional[str]\n";

@@ -255,7 +255,7 @@ public sealed partial class TypeEvaluator
             case NameExpr n: return TypeOfName(m, n);
             case AttributeExpr a: return NarrowedAttribute(m, a);
             case CallExpr c: return TypeOfCall(m, c);
-            case SubscriptExpr s: return TypeOfSubscript(m, s);
+            case SubscriptExpr s: return NarrowedSubscript(m, s);
 
             case TupleExpr t: return TupleOf(t.Items.Select(i => i is StarExpr ? PyType.Unknown : TypeOf(m, i)).ToList());
             case ListExpr l: return Inst("list", ElementUnion(m, l.Items));
@@ -385,9 +385,25 @@ public sealed partial class TypeEvaluator
         return TypeOfSymbol(sym);
     }
 
-    /// <summary>`ib = attrib` after four `@overload def attrib`: each def replaces the one before it in the flow, but the name stands for all of them.</summary>
+    /// <summary>
+    /// `ib = attrib` after four `@overload def attrib`: each def replaces the one before it in the flow, but the name stands for all of them.
+    /// In a .py file the last def is the implementation after the overloads: a call is checked against the overloads too, as in PyCharm.
+    /// </summary>
     PyType WholeOverloads(PyType t, Symbol sym) =>
-        t is FunctionType { Info.Flags: var flags } && (flags & FuncFlags.Overload) != 0 && TypeOfSymbol(sym) is OverloadedType all ? all : t;
+        t is FunctionType f && ((f.Info.Flags & FuncFlags.Overload) != 0 || ImplementsOverloads(f, sym)) && TypeOfSymbol(sym) is OverloadedType all ? all : t;
+
+    /// <summary>The def right after an `@overload` def of the same name: the implementation the overloads describe.</summary>
+    bool ImplementsOverloads(FunctionType f, Symbol sym)
+    {
+        if (f.Info.Node is not FunctionDef def || _ws.ModuleOf(sym) is not { } m) return false;
+        Declaration? before = null;
+        foreach (var d in sym.Declarations.OrderBy(d => d.Node.Start))
+        {
+            if (d.Node.Start >= def.Start) break;
+            before = d;
+        }
+        return before is { Kind: DeclKind.Function } && TypeOfDeclaration(m, before) is FunctionType { Info.Flags: var flags } && (flags & FuncFlags.Overload) != 0;
+    }
 
     PyType BuiltinNameType(string name)
     {

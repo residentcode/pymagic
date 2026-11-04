@@ -15,7 +15,7 @@ public sealed partial class LanguageService
 {
     IEnumerable<Diag> PandasDiagnostics(ModuleInfo m, TypeEvaluator ev)
     {
-        if (m.IsStub || !m.Source.Contains("pandas", StringComparison.Ordinal) && !m.Source.Contains("pd.", StringComparison.Ordinal)) yield break;
+        if (m.IsStub || !m.Source.Contains("pandas", StringComparison.Ordinal) && !m.Source.Contains("pd.", StringComparison.Ordinal) && !m.Source.Contains("polars", StringComparison.Ordinal)) yield break;
         foreach (var f in PandasFindings(m, ev))
             if (!Suppressed(m.Source, f)) yield return AsDiag(f);
     }
@@ -82,6 +82,14 @@ public sealed partial class LanguageService
         return ReferenceEquals(a.Targets[0], sym.Declarations[0].Node) ? a.Value : null;
     }
 
+    /// <summary>A Series of pandas, or of polars (PyCharm's Series.to_list() inspection covers both; its truth value one is pandas' only).</summary>
+    static bool IsSeriesForToList(TypeEvaluator ev, PyType t)
+    {
+        if (PandasKind(ev, t) == "Series") return true;
+        if (t is UnionType u) return u.MemberList.All(x => IsSeriesForToList(ev, x));
+        return t is ClassType { IsInstance: true } c && ev.MroOf(c.Info).Any(b => b is ClassType { Info: { Name: "Series" } i } && (i.Module.Name == "polars" || i.Module.Name.StartsWith("polars.", StringComparison.Ordinal)));
+    }
+
     IEnumerable<Finding> PandasFindings(ModuleInfo m, TypeEvaluator ev)
     {
         foreach (var node in AstChildren.Descendants(m.Ast))
@@ -89,11 +97,11 @@ public sealed partial class LanguageService
             // s.values.tolist() (and s.to_numpy().tolist()) on a Series: the list comes straight from s.to_list()
             if (node is CallExpr { Func: AttributeExpr { Attr: "tolist", Value: var arr }, Args.Count: 0 } call
                 && (arr is AttributeExpr { Attr: "values" } || arr is CallExpr { Func: AttributeExpr { Attr: "to_numpy" }, Args.Count: 0 })
-                && PandasKind(ev, ev.TypeOf(m, arr is AttributeExpr va ? va.Value : ((AttributeExpr)((CallExpr)arr).Func).Value)) == "Series")
+                && IsSeriesForToList(ev, ev.TypeOf(m, arr is AttributeExpr va ? va.Value : ((AttributeExpr)((CallExpr)arr).Func).Value)))
                 yield return new Finding(call.Start, call.End - call.Start, "Method Series.to_list() is recommended", "pandas-series-to-list", FindingLevel.Weak);
             // list(s.values): the case PyCharm's help gives
             else if (node is CallExpr { Func: NameExpr { Name: "list" } lf, Args: [{ Name: null, Stars: 0, Value: AttributeExpr { Attr: "values" } lv }] } lcall
-                && IsBuiltinList(m, ev, lf) && PandasKind(ev, ev.TypeOf(m, lv.Value)) == "Series")
+                && IsBuiltinList(m, ev, lf) && IsSeriesForToList(ev, ev.TypeOf(m, lv.Value)))
                 yield return new Finding(lcall.Start, lcall.End - lcall.Start, "Method Series.to_list() is recommended", "pandas-series-to-list", FindingLevel.Weak);
 
             foreach (var test in TruthTested(m, node))

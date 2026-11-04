@@ -83,6 +83,23 @@ public class TypedDictMethodTests
     }
 
     [Fact]
+    public void AMappingPatternWithALiteralKeyNarrowsAUnionOfTypedDicts()
+    {
+        Assert.Equal("A", Last(Union + "def f(s: A | B | C):\n    match s:\n        case {'type': 'a'}:\n            s\n"));
+        Assert.Equal("A | B", Last(Union + "def f(s: A | B | C):\n    match s:\n        case {'type': 'a' | 'b'} as hit:\n            s\n"));
+        // a key whose pattern is not a literal, or not a literal type, says nothing
+        Assert.Equal("A | B | C", Last(Union + "def f(s: A | B | C):\n    match s:\n        case {'type': str()}:\n            s\n"));
+        Assert.Equal("A | B", Last(Union + "def f(s: A | B):\n    match s:\n        case {'ret': 'x'}:\n            s\n"));
+    }
+
+    [Fact]
+    public void SetdefaultChecksTheDefaultAgainstTheKeysType()
+    {
+        var found = Found(Head + "def f(m: Meta, i: Item):\n    m.setdefault('funcs', 'x')\n    m.setdefault('funcs', [])\n    m.setdefault('funcs', [1])\n    m.setdefault('item', i)\n    m.setdefault('item', 3)\n");
+        Assert.Equal("Expected type 'list[int]', got 'str' instead|Expected type 'Item', got 'int' instead", string.Join("|", found.Where(f => f.StartsWith("Expected type"))));
+    }
+
+    [Fact]
     public void GetIsUnchanged()
     {
         Assert.Equal("Item | None", Last(Head + "def f(m: Meta):\n    m.get('item')\n"));

@@ -108,7 +108,13 @@ internal sealed class CfgBuilder
     internal static bool TryChain(Expr e, out NameExpr root, out string path)
     {
         var parts = new List<string>();
-        while (e is AttributeExpr a) { parts.Add(a.Attr); e = a.Value; }
+        while (true)
+        {
+            if (e is AttributeExpr a) { parts.Add(a.Attr); e = a.Value; }
+            // d["k"], x[0], x[-1]: an item with a constant key is a reference too (`if isinstance(d["k"], list): len(d["k"])`)
+            else if (e is SubscriptExpr s && ConstKey(s.Index) is { } key) { parts.Add(key); e = s.Value; }
+            else break;
+        }
         if (e is NameExpr n)
         {
             root = n;
@@ -118,6 +124,26 @@ internal sealed class CfgBuilder
         }
         root = null!; path = "";
         return false;
+    }
+
+    /// <summary>
+    /// A constant subscript as a part of a member path: `["k"]` for a plain string (spelled with either quote), `[0]` and `[-1]` for an int;
+    /// null for anything else (a name, an f-string, escapes), whose value the flow cannot follow.
+    /// </summary>
+    static string? ConstKey(Expr index) => index switch
+    {
+        ConstExpr { Kind: ConstKind.Str, IsFString: false, Text: var t } when PlainString(t) is { } s => "[\"" + s + "\"]",
+        ConstExpr { Kind: ConstKind.Int, Text: var t } => "[" + t + "]",
+        UnaryExpr { Op: "-", Operand: ConstExpr { Kind: ConstKind.Int, Text: var t } } => "[-" + t + "]",
+        _ => null,
+    };
+
+    /// <summary>The value of a string literal in one pair of quotes without prefix or escapes ('k', "k"); null otherwise.</summary>
+    static string? PlainString(string text)
+    {
+        if (text.Length < 2 || text[0] is not ('\'' or '"') || text[^1] != text[0] || text.StartsWith("'''") || text.StartsWith("\"\"\"")) return null;
+        var body = text[1..^1];
+        return body.Contains('\\') || body.Contains(text[0]) ? null : body;
     }
 
     /// <summary>`x` or `(x := value)`: the expression whose name or member path a condition can narrow.</summary>
@@ -611,7 +637,7 @@ internal sealed class CfgBuilder
     /// <summary>Assigning to / deleting self.a.b invalidates what was learned about self.a.b (and below).</summary>
     void EmitMemberWrite(Expr target, InstrKind kind)
     {
-        if (target is AttributeExpr && TryChain(target, out var root, out var path))
+        if (target is AttributeExpr or SubscriptExpr && TryChain(target, out var root, out var path) && path.Length > 0)
         {
             var sym = _model.ReferenceOf(root)?.Symbol;
             if (sym != null) Emit(kind, target, sym, null, path);

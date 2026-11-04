@@ -401,10 +401,14 @@ public sealed partial class TypeEvaluator
         return t is NeverType ? PyType.Unknown : t;
     }
     /// <summary>Type of <c>a.b.c</c> after applying conditions such as <c>if a.b is not None</c>.</summary>
-    PyType NarrowedAttribute(ModuleInfo m, AttributeExpr a)
+    PyType NarrowedAttribute(ModuleInfo m, AttributeExpr a) => NarrowedChain(m, a, AttributeType(TypeOf(m, a.Value), a.Attr).Type);
+
+    /// <summary>Type of <c>d["k"]</c> or <c>x[0]</c> after conditions such as <c>if isinstance(d["k"], list)</c>; other subscripts as they are.</summary>
+    PyType NarrowedSubscript(ModuleInfo m, SubscriptExpr s) => NarrowedChain(m, s, TypeOfSubscript(m, s));
+
+    PyType NarrowedChain(ModuleInfo m, Expr a, PyType baseline)
     {
-        var baseline = AttributeType(TypeOf(m, a.Value), a.Attr).Type;
-        if (!CfgBuilder.TryChain(a, out var root, out var path)) return baseline;
+        if (!CfgBuilder.TryChain(a, out var root, out var path) || path.Length == 0) return baseline;
         var r = m.Semantics.ReferenceOf(root);
         if (r?.Symbol == null || r.UseScope == null) return baseline;
         var flow = m.Flow.For(r.UseScope);

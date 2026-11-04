@@ -53,6 +53,19 @@ public class UnexpectedOverloadTypesTests
     }
 
     [Fact]
+    public void OverloadsOfAFunctionInAPyFileAreChecked()
+    {
+        // the name reads as its implementation in the flow; a call is still checked against the overloads, and gets their return types
+        var src = "from typing import overload\n\n\n@overload\ndef f(a: int) -> int: ...\n@overload\ndef f(a: str) -> str: ...\ndef f(a):\n    return a\n\n\n"
+            + "f(1.5)\nf('s')\nf(1)\n";
+        Assert.Equal("Unexpected type(s): (float) Possible type(s): (int) (str)", string.Join("; ", Found(src)));
+        var ws = new Workspace();
+        var m = ws.AddModule("main", src + "x = f('s')\n");
+        var x = PyMagic.Core.Syntax.AstChildren.Descendants(m.Ast).OfType<PyMagic.Core.Syntax.NameExpr>().Last(n => n.Name == "x");
+        Assert.Equal("str", ws.Evaluator.TypeOf(m, x).ToString());
+    }
+
+    [Fact]
     public void FunctionsAndAUnionOfFunctionsFitACallable()
     {
         var src = "from typing import Any, Callable, TypeVar\n\nF = TypeVar('F', bound=Callable[..., Any])\n\n\n"

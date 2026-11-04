@@ -110,6 +110,16 @@ public sealed partial class TypeEvaluator
         return kept.Count == 0 ? t : PyType.Union(kept);
     }
 
+    /// <summary>A key's value pattern in `case {key: pattern}:`: a literal, or literals joined by `|`, narrow by the key; anything else leaves the union.</summary>
+    PyType NarrowByTypedDictKeyPattern(PyType t, string key, Pattern pattern) => pattern switch
+    {
+        MatchAs { Pattern: { } inner } => NarrowByTypedDictKeyPattern(t, key, inner),
+        MatchValue v when LiteralOf(v.Value) != null => NarrowByTypedDictKey(t, key, v.Value, equal: true),
+        MatchOr o when o.Alternatives.All(a => a is MatchValue av && LiteralOf(av.Value) != null)
+            => PyType.Union(o.Alternatives.Select(a => NarrowByTypedDictKey(t, key, ((MatchValue)a).Value, equal: true))),
+        _ => t,
+    };
+
     static string Flipped(string op) => op switch { "<" => ">", "<=" => ">=", ">" => "<", ">=" => "<=", _ => op };
     static string Negated(string op) => op switch { "==" => "!=", "!=" => "==", "<" => ">=", "<=" => ">", ">" => "<=", _ => "<" };
 
@@ -480,8 +490,15 @@ public sealed partial class TypeEvaluator
             case MatchSequence sq:
                 return NarrowSequence(m, sq, t, matched);
 
-            case MatchMapping:
-                return NarrowMapping(t, matched);
+            case MatchMapping mp:
+            {
+                t = NarrowMapping(t, matched);
+                if (!matched) return t;
+                // `case {"type": "a" | "b"}:` on a union of TypedDicts, as `x["type"] == "a"` narrows it
+                for (int i = 0; i < mp.Keys.Count && i < mp.Patterns.Count; i++)
+                    if (StringValue(mp.Keys[i]) is string key) t = NarrowByTypedDictKeyPattern(t, key, mp.Patterns[i]);
+                return t;
+            }
 
             case MatchValue v:
             {

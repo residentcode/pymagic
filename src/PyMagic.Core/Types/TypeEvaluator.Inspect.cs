@@ -78,7 +78,7 @@ public sealed partial class TypeEvaluator
         int le = offset;
         while (le < text.Length && text[le] != '\n' && text[le] != '\r') le++;
         int hash = text.IndexOf('#', ls, le - ls);
-        if (hash >= 0 && TypeIgnore.Match(text, hash) is { Success: true } onLine && onLine.Index < le) return true;
+        if (hash >= 0 && TypeIgnore.Match(text, hash) is { Success: true } onLine && onLine.Index < le && InComment(text[ls..le])) return true;
         // the top of the file: blank lines and comments before the first statement
         int i = 0;
         while (i < text.Length)
@@ -92,6 +92,10 @@ public sealed partial class TypeEvaluator
         }
         return false;
     }
+
+    /// <summary>The line's `# type: ignore` is a comment, not text in a string (`print("# type: ignore")`); the line is lexed on its own.</summary>
+    static bool InComment(string line) =>
+        Lexer.Tokenize(line).Any(t => t.Kind == TokenKind.Comment && TypeIgnore.IsMatch(line, t.Start) && TypeIgnore.Match(line, t.Start).Index < t.End);
 
     void InspectAttribute(ModuleInfo m, AttributeExpr attr, List<Diagnostic> diags, bool includeNone)
     {

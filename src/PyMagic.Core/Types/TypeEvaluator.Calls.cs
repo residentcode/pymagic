@@ -271,7 +271,7 @@ public sealed partial class TypeEvaluator
             return Single(new CallTarget(callee, TypeVarFromCall(m, call, tvName), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 
         if (TypedDictGet(m, call) is PyType tdGet)
-            return Single(new CallTarget(callee, tdGet, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
+            return Single(new CallTarget(callee, tdGet, Array.Empty<ArgumentMapping>(), TypedDictSetdefaultProblems(m, call, tdGet)));
 
         if (DjangoSpecialCall(m, call, callee) is { } djangoResult)
             return Single(new CallTarget(callee, djangoResult, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
@@ -295,6 +295,17 @@ public sealed partial class TypeEvaluator
         var field = fields?.FirstOrDefault(f => f.Field.Name == key);
         if (field == null || field.Value.Field == null) return null;
         return TypedDictKeyResult(m, call, ga.Attr, field.Value.Field.Type);
+    }
+
+    /// <summary>`movie.setdefault("year", "1999")`: the default goes into the TypedDict, so it must be of the key's type (the call's type, from TypedDictGet).</summary>
+    IReadOnlyList<CallProblem> TypedDictSetdefaultProblems(ModuleInfo m, CallExpr call, PyType fieldType)
+    {
+        if (call.Func is not AttributeExpr { Attr: "setdefault" } || call.Args.Count != 2 || fieldType is UnknownType || fieldType.Members.Any(x => x is UnknownType))
+            return Array.Empty<CallProblem>();
+        var value = call.Args[1].Value;
+        var given = TypeOf(m, value);
+        if (IsAssignable(fieldType, given, IsFreshValue(m, value))) return Array.Empty<CallProblem>();
+        return new[] { new CallProblem(CallProblemKind.Type, value, $"Expected type '{fieldType}', got '{given}' instead") };
     }
 
     PyType TypedDictKeyResult(ModuleInfo m, CallExpr call, string method, PyType fieldType)
