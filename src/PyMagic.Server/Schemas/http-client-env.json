@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "pymagic:http-client-env",
+  "title": "HTTP Client Environment File",
+  "description": "http-client.env.json: each environment's name to its variables, which a request reads as {{name}}. $shared holds the variables every environment has. Written for PyMagic, after the format of JetBrains' HTTP Client.",
+  "type": "object",
+  "additionalProperties": { "$ref": "#/definitions/environment" },
+  "definitions": {
+    "environment": {
+      "type": "object",
+      "description": "The variables of one environment.",
+      "additionalProperties": { "$ref": "#/definitions/value" }
+    },
+    "value": {
+      "description": "A variable's value; an object is read as nested values ({{auth.user}}).",
+      "type": ["string", "number", "boolean", "object", "array", "null"]
+    }
+  }
+}

@@ -10,16 +10,68 @@ namespace PyMagic.Server;
 /// </summary>
 public static class Schemas
 {
-    /// <summary>The fixed schemas, by the name the page asks for.</summary>
-    public static readonly IReadOnlyList<string> Names = ["package", "pyproject", "workflow", "compose", "gitlab", "precommit", "mkdocs", "dependabot", "codecov", "tox", "renovate",
-        // OpenAPI 3.1 (its schema uses $dynamicRef), 3.0 and Swagger 2.0; Kustomize's kustomization.yaml
-        "openapi31", "openapi", "swagger", "kustomization"];
+    /// <summary>The fixed schemas the status bar's picker lists, by the name the page asks for, with the title PyCharm gives them where it has them.</summary>
+    public static readonly IReadOnlyList<(string Name, string Title)> Registered =
+    [
+        ("asyncapi2", "AsyncAPI 2"), ("asyncapi3", "AsyncAPI 3"), ("babelrc", "Babelrc"), ("codecov", "Codecov"), ("compose", "Compose Specification"),
+        ("dependabot", "Dependabot"), ("devcontainer", "Dev Containers"), ("eslintrc", "ESLint"), ("github-action", "GitHub Action JSON Schema"),
+        ("workflow", "GitHub Workflow JSON Schema"), ("gitlab", "GitLab CI"), ("http-client-env", "HTTP Client Environment File"),
+        ("http-client-private-env", "HTTP Client Private Environment File"), ("jest", "Jest"), ("jsconfig", "JSConfig"),
+        ("jsonschema-2019-09", "JSON Schema 2019-09"), ("jsonschema-2020-12", "JSON Schema 2020-12"), ("jsonschema-4", "JSON Schema 4"),
+        ("jsonschema-6", "JSON Schema 6"), ("jsonschema-7", "JSON Schema 7"), ("kustomization", "Kustomization"),
+        ("markdown-frontmatter", "Markdown Front Matter Generic Schema"), ("mermaid", "Mermaid Config"), ("mkdocs", "MkDocs"),
+        ("openapi", "OpenAPI 3.0"), ("openapi31", "OpenAPI 3.1"), ("package", "package"), ("precommit", "pre-commit"), ("prettierrc", "Prettier"),
+        ("pyproject", "pyproject.toml"), ("renovate", "Renovate"), ("stylelintrc", "StyleLint"), ("swagger", "Swagger 2.0"), ("tox", "tox"),
+        ("tsconfig", "TSConfig"), ("tsd", "TSD"), ("tslint", "TSLint"), ("typings", "Typings"),
+    ];
+
+    /// <summary>The fixed schemas, by the name the page asks for: the registered ones and the vocabularies the JSON Schema meta-schemas $ref.</summary>
+    public static readonly IReadOnlyList<string> Names = Registered.Select(r => r.Name).Concat(new[]
+    {
+        "jsonschema-2019-09-core", "jsonschema-2019-09-applicator", "jsonschema-2019-09-validation", "jsonschema-2019-09-meta-data", "jsonschema-2019-09-format",
+        "jsonschema-2019-09-content", "jsonschema-2020-12-core", "jsonschema-2020-12-applicator", "jsonschema-2020-12-unevaluated", "jsonschema-2020-12-validation",
+        "jsonschema-2020-12-meta-data", "jsonschema-2020-12-format-annotation", "jsonschema-2020-12-content",
+    }).ToList();
 
     // Kubernetes has one schema per kind (k8s-deployment-apps-v1, k8s-service-v1): a $ref into the definitions of every built-in kind
     static readonly System.Text.RegularExpressions.Regex KubernetesName = new("^k8s-[a-z0-9]+(-[a-z0-9]+){0,2}$");
 
     /// <summary>Whether the name is one of the fixed schemas or the schema of a Kubernetes kind.</summary>
     public static bool IsKnown(string name) => Names.Contains(name) || KubernetesName.IsMatch(name);
+
+    /// <summary>
+    /// Each fixed schema's $id (or draft-04's id) to its name, without the fragment and with http read as https: what a file's "$schema" names, and
+    /// what one schema $refs of another (AsyncAPI's of JSON Schema 7, the 2020-12 meta-schema's of its vocabularies), are found by it.
+    /// </summary>
+    public static readonly Lazy<Dictionary<string, string>> Ids = new(() =>
+    {
+        var ids = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var name in Names)
+        {
+            if (Resource(name) is not { } text) continue;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(text);
+                foreach (var key in new[] { "$id", "id" })
+                    if (doc.RootElement.TryGetProperty(key, out var id) && id.ValueKind == System.Text.Json.JsonValueKind.String && id.GetString() is { Length: > 0 } s)
+                    {
+                        ids.TryAdd(NormalId(s), name);
+                        break;
+                    }
+            }
+            catch (System.Text.Json.JsonException) { }
+        }
+        return ids;
+    });
+
+    /// <summary>A schema address as the ids are kept: no fragment, no trailing slash, http as https.</summary>
+    public static string NormalId(string id)
+    {
+        int hash = id.IndexOf('#');
+        if (hash >= 0) id = id[..hash];
+        if (id.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) id = "https://" + id[7..];
+        return id.TrimEnd('/');
+    }
 
     static string? Resource(string file)
     {
@@ -30,6 +82,27 @@ public static class Schemas
     }
 
     static readonly Lazy<string?> KubernetesText = new(() => Resource("k8s-definitions")?.Trim());
+
+    /// <summary>
+    /// Mermaid's schema describes the whole configuration after its defaults are filled in, so it requires every field (fontFamily, logLevel, every
+    /// diagram's section); a config file sets only what it changes. It is served without its `required` lists, so a real file is not reported.
+    /// </summary>
+    static readonly Lazy<string?> MermaidText = new(() =>
+    {
+        if (Resource("mermaid") is not { } text) return null;
+        var node = System.Text.Json.Nodes.JsonNode.Parse(text);
+        void Strip(System.Text.Json.Nodes.JsonNode? n)
+        {
+            if (n is System.Text.Json.Nodes.JsonObject o)
+            {
+                if (o["required"] is System.Text.Json.Nodes.JsonArray) o.Remove("required");
+                foreach (var (_, v) in o.ToList()) Strip(v);
+            }
+            else if (n is System.Text.Json.Nodes.JsonArray a) foreach (var v in a) Strip(v);
+        }
+        Strip(node);
+        return node?.ToJsonString();
+    });
 
     // a kind's name (k8s-deployment-apps-v1: the kind, the first part of its API group, the version) to its definition, read from x-kubernetes-group-version-kind
     static readonly Lazy<Dictionary<string, string>> KubernetesKinds = new(() =>
@@ -53,6 +126,7 @@ public static class Schemas
     /// <summary>The schema built into PyMagic, or null for a name it has none of (a kind Kubernetes does not have).</summary>
     public static string? Builtin(string name)
     {
+        if (name == "mermaid") return MermaidText.Value;
         if (Names.Contains(name)) return Resource(name);
         if (!KubernetesName.IsMatch(name) || !KubernetesKinds.Value.TryGetValue(name, out var definition) || KubernetesText.Value is not { } text) return null;
         // the kind's definition as the root, its definitions beside it (the text after the opening brace, not parsed again)
@@ -60,6 +134,54 @@ public static class Schemas
     }
 
     public static string FolderOf(string root) => Path.Combine(root, ".pymagic", "schemas");
+
+    /// <summary>
+    /// The project's own choices, as PyCharm keeps its JSON Schema mappings: <c>{"mappings": [{"name", "schema", "patterns": [...]}], "ignored": [...]}</c>
+    /// in .pymagic/schema-mappings.json. A mapping's schema is a built-in name or <c>file:</c> and a path in the project; its patterns are paths from
+    /// the project's root, with * (in a name) and ** (any folders). Ignored files are checked against no schema.
+    /// </summary>
+    public static string MappingsPath(string root) => Path.Combine(root, ".pymagic", "schema-mappings.json");
+
+    public static string ReadMappings(string root)
+    {
+        try { if (File.Exists(MappingsPath(root))) return CheckedMappings(File.ReadAllText(MappingsPath(root))) ?? Empty; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        return Empty;
+    }
+
+    const string Empty = "{\"mappings\":[],\"ignored\":[]}";
+
+    /// <summary>Writes the project's mappings; false when the text is not of their shape (nothing is written then).</summary>
+    public static bool WriteMappings(string root, string json)
+    {
+        if (CheckedMappings(json) is not { } text) return false;
+        Directory.CreateDirectory(Path.GetDirectoryName(MappingsPath(root))!);
+        File.WriteAllText(MappingsPath(root), text + "\n");
+        return true;
+    }
+
+    /// <summary>The mappings as they are kept (indented), or null when the text is not of their shape: a schema that is neither built in nor a project file.</summary>
+    static string? CheckedMappings(string json)
+    {
+        try
+        {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(json) as System.Text.Json.Nodes.JsonObject;
+            if (node == null) return null;
+            var mappings = node["mappings"] as System.Text.Json.Nodes.JsonArray ?? new System.Text.Json.Nodes.JsonArray();
+            var ignored = node["ignored"] as System.Text.Json.Nodes.JsonArray ?? new System.Text.Json.Nodes.JsonArray();
+            foreach (var m in mappings)
+            {
+                if (m is not System.Text.Json.Nodes.JsonObject o || o["schema"]?.GetValue<string>() is not { Length: > 0 } schema) return null;
+                if (!schema.StartsWith("file:", StringComparison.Ordinal) && !IsKnown(schema)) return null;
+                if (o["patterns"] is not System.Text.Json.Nodes.JsonArray { Count: > 0 } patterns || patterns.Any(p => p?.GetValue<string>() is not { Length: > 0 })) return null;
+                if (o["name"] is not null && o["name"]!.GetValue<string>() is null) return null;
+            }
+            if (ignored.Any(p => p?.GetValue<string>() is not { Length: > 0 })) return null;
+            var clean = new System.Text.Json.Nodes.JsonObject { ["mappings"] = mappings.DeepClone(), ["ignored"] = ignored.DeepClone() };
+            return clean.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException or InvalidOperationException or FormatException) { return null; }
+    }
 
     static readonly HashSet<string> Skipped = new(StringComparer.OrdinalIgnoreCase) { ".git", "node_modules", ".venv", "venv", "env", "__pycache__", ".pymagic", ".idea", ".tox", "dist", "build" };
 

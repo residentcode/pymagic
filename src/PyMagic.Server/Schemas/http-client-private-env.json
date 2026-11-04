@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "pymagic:http-client-private-env",
+  "title": "HTTP Client Private Environment File",
+  "description": "http-client.private.env.json: the secret variables of each environment (passwords, tokens), kept out of version control; they take the place of http-client.env.json's of the same name. Written for PyMagic, after the format of JetBrains' HTTP Client.",
+  "type": "object",
+  "additionalProperties": {
+    "type": "object",
+    "description": "The private variables of one environment.",
+    "additionalProperties": { "type": ["string", "number", "boolean", "object", "array", "null"] }
+  }
+}

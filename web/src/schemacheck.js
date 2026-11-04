@@ -4,15 +4,54 @@
 // A Kubernetes manifest is any YAML file with an apiVersion and a kind (several documents in one file are each checked); its schema is the one of that kind.
 import * as monaco from 'monaco-editor';
 import { parse as parseYaml, parseAllDocuments } from 'yaml';
-import { validate, locate, schemaOf, openapiSchemaOf, looksKubernetes, kubernetesSchemaOf, crdSchemas, crdKeyOf } from './schema-model';
+// Which schema a file gets, as PyCharm decides it: none when the project ignores the file, else the project's own mapping (status bar,
+// "Schema: ..."), else the file's "$schema" (or YAML's `# yaml-language-server: $schema=`), else its name. A schema's $refs into another
+// built-in document (AsyncAPI's of JSON Schema 7, the 2020-12 meta-schema's vocabularies) are loaded with it.
+import { validate, locate, schemaOf, openapiSchemaOf, asyncapiSchemaOf, looksKubernetes, kubernetesSchemaOf, crdSchemas, crdKeyOf, parseJsonc, frontMatterOf, chooseSchema, declaredSchema, yamlModeline, externalRefs } from './schema-model';
 
 export { schemaOf };
 
 const OWNER = 'pymagic-schema';
 
+/** The files whose schema is looked for: JSON, YAML, TOML and Markdown, and the dotfiles a schema is known for by name (.babelrc, .eslintrc). */
+export const SCHEMA_FILES = /\.(json|jsonc|ya?ml|toml|md|markdown)$/i;
+
 export function setupSchemaCheck(deps) {
     const kept = new Map();               // name -> parsed schema, or null when PyMagic has none of that name (a kind Kubernetes does not have)
     const timers = new Map();
+    const choices = new Map();            // a model -> the schema chosen for it: {label, choice} (the status bar's "Schema: ...")
+
+    // the built-in schemas with their titles and $ids, and the project's mappings and ignored files (read again when they are changed)
+    let catalog = null;
+    const catalogNow = () => (catalog ??= fetch('/api/schemas/list').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((c) => c ?? { registered: [], ids: {} }));
+    let project = null;
+    const projectNow = () => (project ??= fetch('/api/schemas/mappings').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((p) => p ?? { mappings: [], ignored: [] }));
+
+    // a schema the project keeps itself (a mapping's file:, a relative "$schema"), read again after a save
+    const files = new Map();
+    function fileSchema(path) {
+        if (!files.has(path)) files.set(path, fetch('/api/schemas/file?path=' + encodeURIComponent(path)).then((r) => (r.ok ? r.json() : null)).catch(() => null));
+        return files.get(path);
+    }
+
+    /** The other built-in documents a schema $refs (by $id), loaded before it is used: validate's registry. */
+    async function registryFor(schema) {
+        const { ids } = await catalogNow();
+        const found = new Map();
+        const pending = [...externalRefs(schema)];
+        while (pending.length && found.size < 40) {
+            const id = pending.pop();
+            if (found.has(id) || !ids[id]) continue;
+            const doc = await schemaFor(ids[id]);
+            found.set(id, doc);
+            if (doc) pending.push(...externalRefs(doc));
+        }
+        return found.size ? (id) => found.get(id) ?? null : null;
+    }
+
+    function titleOf(name, registered) {
+        return registered.find((r) => r.name === name)?.title ?? name;
+    }
 
     // the custom resources' schemas, from the CustomResourceDefinitions in the project's YAML files (read again after a save)
     let crds = null;
@@ -29,7 +68,7 @@ export function setupSchemaCheck(deps) {
         });
         return (await crds).get(key) ?? null;
     }
-    window.addEventListener('pymagic:saved', () => { crds = null; });
+    window.addEventListener('pymagic:saved', () => { crds = null; files.clear(); });
 
     async function schemaFor(name) {
         if (kept.has(name)) return kept.get(name);
@@ -42,8 +81,14 @@ export function setupSchemaCheck(deps) {
     /** The file's text as data, by its extension: JSON, TOML (read by Python) or YAML; undefined when it does not parse (the other checks say why). */
     async function dataOf(rel, text) {
         const lower = rel.toLowerCase();
-        if (lower.endsWith('.json') || lower.endsWith('.renovaterc')) {
-            try { return JSON.parse(text); } catch { return undefined; }
+        // JSON with comments and trailing commas as well (tsconfig, devcontainer.json, .eslintrc), and the dotfiles without an extension
+        if (/\.jsonc?$/.test(lower) || /(^|\/)\.(renovaterc|babelrc|eslintrc|prettierrc|stylelintrc)$/.test(lower)) {
+            try { return parseJsonc(text); }
+            catch {
+                // .eslintrc, .prettierrc and .stylelintrc may also be YAML
+                if (/\.(eslintrc|prettierrc|stylelintrc)$/.test(lower)) { try { return parseYaml(text, { prettyErrors: false }); } catch { return undefined; } }
+                return undefined;
+            }
         }
         if (lower.endsWith('.toml')) {
             const res = await fetch('/api/toml', { method: 'POST', body: text }).catch(() => null);
@@ -54,15 +99,41 @@ export function setupSchemaCheck(deps) {
     }
 
     /** What to check in the file: [{name, data, text, line}] (text and line: where the document is, for a file of several). */
-    async function targetsOf(rel, text) {
-        const base = schemaOf(rel);
-        if (base === 'openapi') {
-            const data = await dataOf(rel, text);
-            const name = openapiSchemaOf(data);
-            return name ? [{ name, data, text, line: 0 }] : [];
+    async function targetsOf(rel, text, model) {
+        const { ids, registered } = await catalogNow();
+        const lower = rel.toLowerCase();
+        const isYaml = /\.ya?ml$/.test(lower);
+        // what the file says itself: "$schema" in JSON, the yaml-language-server modeline in YAML
+        let data;
+        let declared = null;
+        if (isYaml) declared = declaredSchema(yamlModeline(text), ids, rel);
+        else if (!/\.(toml|md|markdown)$/.test(lower)) {
+            data = await dataOf(rel, text);
+            if (data && typeof data === 'object' && !Array.isArray(data)) declared = declaredSchema(data.$schema, ids, rel);
         }
-        if (base) return [{ name: base, data: await dataOf(rel, text), text, line: 0 }];
-        if (!/\.ya?ml$/i.test(rel) || !looksKubernetes(text)) return [];
+        const choice = chooseSchema(rel, await projectNow(), declared);
+        const note = (label) => { choices.set(model, { label, choice }); window.dispatchEvent(new CustomEvent('pymagic:schema-choice', { detail: { model } })); };
+        if (choice?.ignored) { note(null); return []; }
+        if (choice?.file) {
+            note(choice.mapping ?? choice.file);
+            return [{ file: choice.file, data: data ?? (await dataOf(rel, text)), text, line: 0 }];
+        }
+        let base = choice?.name ?? null;
+        data ??= base && base !== 'markdown-frontmatter' ? await dataOf(rel, text) : undefined;
+        // OpenAPI and AsyncAPI files say by their version which schema is theirs
+        if (base === 'openapi') base = openapiSchemaOf(data);
+        else if (base === 'asyncapi') base = asyncapiSchemaOf(data);
+        if (base === 'markdown-frontmatter') {
+            const fm = frontMatterOf(text);
+            if (!fm) { note(null); return []; }
+            let front;
+            try { front = parseYaml(fm.text, { prettyErrors: false }); } catch { front = undefined; }
+            note(titleOf(base, registered));
+            return [{ name: base, data: front, text: fm.text, line: fm.line }];
+        }
+        if (base) { note(choice.mapping ?? titleOf(base, registered)); return [{ name: base, data, text, line: 0 }]; }
+        if (!isYaml || !looksKubernetes(text)) { note(null); return []; }
+        note('Kubernetes');
         const targets = [];
         let docs;
         try { docs = parseAllDocuments(text, { prettyErrors: false }); } catch { return []; }
@@ -81,17 +152,17 @@ export function setupSchemaCheck(deps) {
         const rel = deps.relOf(model);
         if (!rel || model.isDisposed()) return;
         const text = model.getValue();
-        const targets = await targetsOf(rel, text);
+        const targets = await targetsOf(rel, text, model);
         if (!targets.length) { monaco.editor.setModelMarkers(model, OWNER, []); return; }   // no manifest (any more) in the file
         const markers = [];
         let checked = false;
         for (const target of targets) {
             // a kind Kubernetes does not have: the project's CustomResourceDefinition of it, if there is one
-            const schema = (await schemaFor(target.name)) ?? (target.manifest ? await crdSchemaFor(target.data) : null);
+            const schema = target.file ? await fileSchema(target.file) : (await schemaFor(target.name)) ?? (target.manifest ? await crdSchemaFor(target.data) : null);
             if (!schema || model.isDisposed()) continue;
             checked = true;
             if (target.data === undefined) continue;
-            for (const p of validate(target.data, schema)) {
+            for (const p of validate(target.data, schema, 200, await registryFor(schema))) {
                 const at = locate(target.text, p);
                 const line = at.line + target.line;
                 markers.push({
@@ -103,16 +174,43 @@ export function setupSchemaCheck(deps) {
         if (checked && !model.isDisposed()) monaco.editor.setModelMarkers(model, OWNER, markers);
     }
 
+    const watched = new Set();
     function watch(model) {
         const rel = deps.relOf(model);
-        if (!rel || !(schemaOf(rel) || /\.ya?ml$/i.test(rel))) return;
+        if (!rel || !(schemaOf(rel) || SCHEMA_FILES.test(rel))) return;
+        watched.add(model);
         void check(model);
         model.onDidChangeContent(() => {
             clearTimeout(timers.get(model));
             timers.set(model, setTimeout(() => void check(model), 1000));
         });
+        model.onWillDispose(() => { watched.delete(model); choices.delete(model); });
     }
 
     monaco.editor.onDidCreateModel((model) => setTimeout(() => watch(model), 0));
     for (const model of monaco.editor.getModels()) watch(model);
+
+    /** Every open file checked again (the project's mappings changed). */
+    function recheck() {
+        project = null;
+        for (const model of watched) if (!model.isDisposed()) void check(model);
+    }
+    window.addEventListener('pymagic:schema-mappings', recheck);
+
+    // what the status bar's schema picker needs
+    return {
+        /** The schema chosen for a file: {label (null: none), choice}, or undefined while it is not known yet. */
+        choiceOf: (model) => choices.get(model),
+        /** Whether a schema is looked for in this file at all (the picker is shown for it). */
+        isSchemaFile: (model) => watched.has(model),
+        catalog: catalogNow,
+        mappings: projectNow,
+        /** Saves the project's mappings (.pymagic/schema-mappings.json) and checks the open files again; false when the server refused them. */
+        async saveMappings(next) {
+            const res = await fetch('/api/schemas/mappings', { method: 'PUT', body: JSON.stringify(next) }).catch(() => null);
+            if (!res?.ok) return false;
+            recheck();
+            return true;
+        },
+    };
 }

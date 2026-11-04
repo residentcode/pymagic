@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "pymagic:markdown-frontmatter",
+  "title": "Markdown Front Matter Generic Schema",
+  "description": "The YAML block between --- lines at the top of a Markdown file, as static site generators (Jekyll, Hugo, MkDocs, Docusaurus) read it: the common keys with their usual types; any other key is allowed. Written for PyMagic.",
+  "type": "object",
+  "properties": {
+    "title": { "type": "string", "description": "The page's title." },
+    "description": { "type": "string", "description": "A short summary of the page." },
+    "date": { "type": "string", "description": "When the page was written (YAML reads 2026-11-04 as a date)." },
+    "lastmod": { "type": "string" },
+    "draft": { "type": "boolean", "description": "A draft is left out of the built site." },
+    "author": { "type": ["string", "array"], "items": { "type": "string" } },
+    "authors": { "type": ["string", "array"], "items": { "type": "string" } },
+    "tags": { "type": ["string", "array"], "items": { "type": "string" } },
+    "categories": { "type": ["string", "array"], "items": { "type": "string" } },
+    "keywords": { "type": ["string", "array"], "items": { "type": "string" } },
+    "layout": { "type": "string" },
+    "slug": { "type": "string" },
+    "permalink": { "type": "string" },
+    "weight": { "type": "number", "description": "The page's place in a menu or list." },
+    "sidebar_position": { "type": "number" },
+    "hide": { "type": "array", "items": { "type": "string" } }
+  }
+}

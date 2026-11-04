@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/schema-model.js', import.meta.url), 'utf8');
-const { validate, locate, schemaOf, openapiSchemaOf, looksKubernetes, kubernetesSchemaOf, crdSchemas, crdKeyOf } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { validate, locate, schemaOf, openapiSchemaOf, looksKubernetes, kubernetesSchemaOf, crdSchemas, crdKeyOf, asyncapiSchemaOf, parseJsonc, frontMatterOf, globMatch, chooseSchema, declaredSchema, yamlModeline, externalRefs, normalId } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 const msgs = (data, schema) => validate(data, schema).map((p) => `${p.path.join('.')}: ${p.message}`);
 
 const schema = {
@@ -243,4 +243,88 @@ test('YAML against the other bundled schemas: a small good file passes, a broken
         assert.deepEqual(msgs(good, s), [], name + ' (good)');
         assert.ok(msgs(broken, s).length > 0, name + ' (broken) is not marked');
     }
+});
+
+
+// ---------------------------------------------------------------- the schemas PyCharm lists, mappings and "$schema"
+
+test('the files of the schemas PyCharm lists are known by their names', () => {
+    const cases = {
+        'asyncapi.yaml': 'asyncapi', 'docs/my-asyncapi.json': 'asyncapi', '.devcontainer/devcontainer.json': 'devcontainer', '.devcontainer/py/devcontainer.json': 'devcontainer',
+        '.devcontainer.json': 'devcontainer', 'action.yml': 'github-action', '.github/actions/setup/action.yaml': 'github-action', '.babelrc': 'babelrc', 'babel.config.json': 'babelrc',
+        '.eslintrc': 'eslintrc', '.eslintrc.yml': 'eslintrc', 'jest.config.json': 'jest', 'jsconfig.json': 'jsconfig', 'tsconfig.json': 'tsconfig', 'tsconfig.build.json': 'tsconfig',
+        '.prettierrc': 'prettierrc', '.stylelintrc.json': 'stylelintrc', 'tslint.json': 'tslint', 'tsd.json': 'tsd', 'typings.json': 'typings', 'mermaid.config.json': 'mermaid',
+        'http-client.env.json': 'http-client-env', 'http-client.private.env.json': 'http-client-private-env', 'README.md': 'markdown-frontmatter', 'other.json': null,
+    };
+    for (const [rel, want] of Object.entries(cases)) assert.equal(schemaOf(rel), want, rel);
+    assert.equal(asyncapiSchemaOf({ asyncapi: '2.6.0' }), 'asyncapi2');
+    assert.equal(asyncapiSchemaOf({ asyncapi: '3.0.0' }), 'asyncapi3');
+    assert.equal(asyncapiSchemaOf({ openapi: '3.0.0' }), null);
+});
+
+test('JSON with comments and trailing commas is read (tsconfig); front matter is found at the top of Markdown only', () => {
+    assert.deepEqual(parseJsonc('{\n  // the target\n  "a": "http://x//y", /* b */ "b": [1, 2,],\n}'), { a: 'http://x//y', b: [1, 2] });
+    assert.throws(() => parseJsonc('{ "a": }'));
+    assert.deepEqual(frontMatterOf('---\ntitle: T\n---\n# Head\n'), { text: 'title: T', line: 1 });
+    assert.equal(frontMatterOf('# Head\n---\ntitle: T\n---\n'), null);
+});
+
+test('a mapping\'s pattern: a path from the root, * in a name, ** any folders, a bare name in any folder', () => {
+    const cases = [['config/*.json', 'config/a.json', true], ['config/*.json', 'config/x/a.json', false], ['**/*.json', 'a/b/c.json', true], ['**/*.json', 'c.json', true],
+        ['*.json', 'deep/a.json', true], ['a.json', 'x/a.json', true], ['a.json', 'xa.json', false], ['src/**/conf.yaml', 'src/conf.yaml', true],
+        ['src/**/conf.yaml', 'src/a/b/conf.yaml', true], ['src/**', 'src/a/b.json', true], ['src/**', 'other/a.json', false], ['conf?.json', 'conf1.json', true]];
+    for (const [pattern, rel, want] of cases) assert.equal(globMatch(pattern, rel), want, `${pattern} ${rel}`);
+});
+
+test('which schema a file gets: ignored, then a mapping, then its own "$schema", then its name', () => {
+    const project = { mappings: [{ name: 'Mine', schema: 'file:schemas/app.json', patterns: ['config/*.json'] }, { name: 'TS', schema: 'tsconfig', patterns: ['base.json'] }], ignored: ['tsconfig.json'] };
+    assert.deepEqual(chooseSchema('tsconfig.json', project, null), { ignored: true, why: 'ignored' });
+    assert.deepEqual(chooseSchema('config/a.json', project, { name: 'jest' }), { file: 'schemas/app.json', why: 'mapping', mapping: 'Mine' });
+    assert.deepEqual(chooseSchema('pkg/base.json', project, null), { name: 'tsconfig', why: 'mapping', mapping: 'TS' });
+    assert.deepEqual(chooseSchema('package.json', project, { name: 'jest' }), { name: 'jest', why: 'declared' });
+    assert.deepEqual(chooseSchema('package.json', project, null), { name: 'package', why: 'name' });
+    assert.equal(chooseSchema('data.json', project, null), null);
+});
+
+test('a file\'s "$schema": a built-in schema by its $id, a .json path relative to the file, nothing for an address PyMagic has not got', () => {
+    const ids = { 'https://json-schema.org/draft-07/schema': 'jsonschema-7', 'https://json.schemastore.org/tsconfig': 'tsconfig' };
+    assert.deepEqual(declaredSchema('http://json-schema.org/draft-07/schema#', ids, 'a.json'), { name: 'jsonschema-7' });
+    assert.deepEqual(declaredSchema('https://json.schemastore.org/tsconfig', ids, 'x/tsconfig.base.json'), { name: 'tsconfig' });
+    assert.deepEqual(declaredSchema('./schemas/my.json', ids, 'conf/app.json'), { file: 'conf/schemas/my.json' });
+    assert.deepEqual(declaredSchema('../s.json', ids, 'conf/app.json'), { file: 's.json' });
+    assert.equal(declaredSchema('../../s.json', ids, 'conf/app.json'), null);            // outside the project
+    assert.equal(declaredSchema('https://example.com/other.json', ids, 'a.json'), null);   // not downloaded
+    assert.equal(yamlModeline('# yaml-language-server: $schema=https://json.schemastore.org/tsconfig\na: 1\n'), 'https://json.schemastore.org/tsconfig');
+    assert.equal(yamlModeline('a: 1\n'), null);
+    assert.equal(normalId('http://json-schema.org/draft-07/schema#'), 'https://json-schema.org/draft-07/schema');
+});
+
+test('$refs: to a definition under its own $id (AsyncAPI), to another document by its id, and draft-06/07 "$id": "#name" anchors', () => {
+    // AsyncAPI keeps each definition under an absolute $id, and $refs it by that address
+    const asyncapi = {
+        $id: 'http://asyncapi.com/definitions/3.0.0/asyncapi.json', type: 'object', properties: { info: { $ref: 'http://asyncapi.com/definitions/3.0.0/info.json' } },
+        definitions: { 'http://asyncapi.com/definitions/3.0.0/info.json': { $id: 'http://asyncapi.com/definitions/3.0.0/info.json', type: 'object', required: ['title'], properties: { title: { type: 'string' }, contact: { $ref: '#/definitions/contact' } }, definitions: { contact: { type: 'object', properties: { email: { type: 'string' } } } } } },
+    };
+    assert.deepEqual(msgs({ info: {} }, asyncapi), ['info: The property title is required']);
+    assert.deepEqual(msgs({ info: { title: 'T', contact: { email: 3 } } }, asyncapi), ['info.contact.email: Should be string, not integer']);
+    // another document: the registry gives it by its normalized id; without one the $ref is accepted
+    const meta = { $id: 'https://example.org/meta/core', type: 'object', properties: { $id: { type: 'string' } } };
+    const root = { $id: 'https://example.org/schema', allOf: [{ $ref: 'meta/core' }] };
+    assert.deepEqual([...externalRefs(root)], ['https://example.org/meta/core']);
+    assert.deepEqual(validate({ $id: 3 }, root, 200, (id) => (id === 'https://example.org/meta/core' ? meta : null)).map((p) => p.message), ['Should be string, not integer']);
+    assert.deepEqual(validate({ $id: 3 }, root).map((p) => p.message), []);
+    // "$id": "#positive" names an anchor
+    const anchored = { definitions: { p: { $id: '#positive', type: 'integer', minimum: 1 } }, properties: { n: { $ref: '#positive' } } };
+    assert.deepEqual(msgs({ n: 0 }, anchored), ['n: Should be at least 1']);
+});
+
+test('draft-04\'s boolean exclusive bounds, the later numeric ones, and $recursiveRef', () => {
+    assert.deepEqual(msgs(0, { minimum: 0, exclusiveMinimum: true }), [': Should be more than 0']);
+    assert.deepEqual(msgs(0, { minimum: 0 }), []);
+    assert.deepEqual(msgs(5, { maximum: 5, exclusiveMaximum: true }), [': Should be less than 5']);
+    assert.deepEqual(msgs(5, { exclusiveMaximum: 5 }), [': Should be less than 5']);
+    assert.deepEqual(msgs(1, { exclusiveMinimum: 0 }), []);
+    // 2019-09: a subschema checked against the outermost schema
+    const recursive = { $recursiveAnchor: true, type: 'object', properties: { child: { $recursiveRef: '#' } }, additionalProperties: false };
+    assert.deepEqual(msgs({ child: { child: { x: 1 } } }, recursive), ['child.child.x: The property x is not allowed here']);
 });

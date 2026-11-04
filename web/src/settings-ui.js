@@ -8,6 +8,7 @@ import { buildLabel, shortTime } from './build-info.js';
 import { keymapCommands, defineCommand } from './commands.js';
 import { keyFromEvent, effectiveKeys, clashes, withKey } from './keymap-model.js';
 import { readSnippets, writeSnippets, readFileTemplates } from './codegen-model.js';
+import { schemaMappingsPage } from './schema-picker.js';
 
 const SNIPPETS = '.pymagic/snippets.json', FILE_TEMPLATES = '.pymagic/fileTemplates.json';
 let liveTemplateSource = null;
@@ -170,6 +171,10 @@ function note(text) {
 }
 
 const SPECIAL = {
+    // the project's JSON Schema mappings and ignored files (the status bar's "Schema: ..." makes them too)
+    schemas(page) {
+        void schemaMappingsPage(page);
+    },
     formatter(page, close) {
         page.append(
             mirrorSelect($('fmt-engine'), 'Formatter', 'The built-in one needs nothing; black and ruff are used when the project\'s interpreter has them. The options of black and ruff come from pyproject.toml.'),
@@ -571,7 +576,7 @@ const SPECIAL = {
     },
 };
 
-const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections', 'Inspections'], ['terminal', 'Terminal'], ['git', 'Git'], ['django', 'Django'], ['templates', 'Templates'], ['keymap', 'Keymap'], ['plugins', 'Plugins'], ['about', 'About']];
+const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections', 'Inspections'], ['schemas', 'JSON Schemas'], ['terminal', 'Terminal'], ['git', 'Git'], ['django', 'Django'], ['templates', 'Templates'], ['keymap', 'Keymap'], ['plugins', 'Plugins'], ['about', 'About']];
 
 let isOpen = false;
 

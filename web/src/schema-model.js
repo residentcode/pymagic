@@ -16,6 +16,7 @@ function anchors(root) {
         if (!node || typeof node !== 'object' || depth > 60) return;
         if (!Array.isArray(node)) {
             if (typeof node.$anchor === 'string' && !found.has(node.$anchor)) found.set(node.$anchor, node);
+            if (typeof node.$id === 'string' && /^#[^/]/.test(node.$id) && !found.has(node.$id.slice(1))) found.set(node.$id.slice(1), node);
             if (typeof node.$dynamicAnchor === 'string' && !found.has(node.$dynamicAnchor)) found.set(node.$dynamicAnchor, node);
         }
         for (const v of Object.values(node)) visit(v, depth + 1);
@@ -23,6 +24,102 @@ function anchors(root) {
     visit(root, 0);
     anchorsOf.set(root, found);
     return found;
+}
+
+/** A schema address as ids are kept: no fragment, no trailing slash, http read as https (the server's Schemas.NormalId does the same). */
+export function normalId(id) {
+    let s = String(id);
+    const hash = s.indexOf('#');
+    if (hash >= 0) s = s.slice(0, hash);
+    if (/^http:\/\//i.test(s)) s = 'https://' + s.slice(7);
+    return s.replace(/\/+$/, '');
+}
+
+const SKIPPED = new Set(['enum', 'const', 'default', 'examples', 'example']);   // values, not schemas: an "$id" there is data
+
+/**
+ * Each node of a schema document with the document it belongs to and the address its relative $refs are read against, and the nodes that
+ * carry an $id (AsyncAPI keeps its definitions under their own: "http://asyncapi.com/definitions/3.0.0/tag.json"). Draft-04's `id` counts in a
+ * draft-04 document only. Built once per document.
+ */
+const indexes = new WeakMap();
+function indexOf(root) {
+    if (!root || typeof root !== 'object') return null;
+    if (indexes.has(root)) return indexes.get(root);
+    const draft4 = typeof root.$schema === 'string' && /draft-04/.test(root.$schema);
+    const ctx = new WeakMap();
+    const ids = new Map();
+    const visit = (node, base, doc, depth) => {
+        if (!node || typeof node !== 'object' || depth > 80) return;
+        if (!Array.isArray(node)) {
+            const own = typeof node.$id === 'string' ? node.$id : draft4 && typeof node.id === 'string' ? node.id : null;
+            // "$id": "#name" is draft-06/07's way to name an anchor (anchors() finds it), not a document of its own
+            if (own && !own.startsWith('#')) {
+                try { base = new URL(own, base || undefined).href; } catch { base = own; }
+                doc = node;
+                ids.set(normalId(base), node);
+            }
+            ctx.set(node, { doc, base });
+            for (const [k, v] of Object.entries(node)) if (!SKIPPED.has(k)) visit(v, base, doc, depth + 1);
+        }
+        else for (const v of node) visit(v, base, doc, depth + 1);
+    };
+    visit(root, '', root, 0);
+    const index = { ctx, ids };
+    indexes.set(root, index);
+    return index;
+}
+
+/**
+ * The addresses a schema $refs outside itself (another document: JSON Schema 7 from AsyncAPI, the vocabularies from the 2020-12 meta-schema),
+ * normalized: the page loads those it has (built in, by their $id) before checking, and hands them to validate as its registry.
+ */
+export function externalRefs(root) {
+    const index = indexOf(root);
+    const out = new Set();
+    if (!index) return out;
+    const visit = (node, depth) => {
+        if (!node || typeof node !== 'object' || depth > 80) return;
+        if (!Array.isArray(node)) {
+            const ref = node.$ref;
+            if (typeof ref === 'string' && !ref.startsWith('#')) {
+                const base = index.ctx.get(node)?.base;
+                let abs;
+                try { abs = new URL(ref, base || undefined).href; } catch { abs = ref; }
+                const id = normalId(abs);
+                if (!index.ids.has(id)) out.add(id);
+            }
+            for (const [k, v] of Object.entries(node)) if (!SKIPPED.has(k)) visit(v, depth + 1);
+        }
+        else for (const v of node) visit(v, depth + 1);
+    };
+    visit(root, 0);
+    return out;
+}
+
+/** What a $ref of `from` names: in the same document, under an $id of the root's, or in a document of the registry (by its normalized id). */
+function resolveRef(root, from, ref, registry) {
+    const at = indexOf(root)?.ctx.get(from) ?? findContext(from, registry) ?? { doc: root, base: '' };
+    if (ref.startsWith('#')) return resolve(at.doc, ref);
+    let abs;
+    try { abs = new URL(ref, at.base || undefined).href; } catch { abs = ref; }
+    const hash = abs.indexOf('#');
+    const id = normalId(abs);
+    let target = indexOf(root)?.ids.get(id);
+    if (!target && registry) {
+        const doc = registry(id);
+        if (doc) target = indexOf(doc)?.ids.get(id) ?? doc;
+    }
+    if (!target) return null;
+    return hash >= 0 && abs.length > hash + 1 ? resolve(target, abs.slice(hash)) : target;
+}
+
+/** The context of a node of a registry document (a $ref reached into another document, whose own $refs are read against it). */
+const registryDocs = new Set();
+function findContext(node, registry) {
+    if (!registry) return null;
+    for (const doc of registryDocs) { const c = indexOf(doc)?.ctx.get(node); if (c) return c; }
+    return null;
 }
 
 function resolve(root, ref) {
@@ -37,9 +134,17 @@ function resolve(root, ref) {
     return node;
 }
 
-/** Problems of `data` against `schema`: [{path: [keys and indexes], message}]. */
-export function validate(data, schema, limit = 200) {
+/**
+ * Problems of `data` against `schema`: [{path: [keys and indexes], message}]. `registry(id)` gives another schema document by its normalized
+ * id, for the $refs that leave this one (externalRefs says which); without it such a $ref is accepted.
+ */
+export function validate(data, schema, limit = 200, registry = null) {
     const out = [];
+    if (registry) {
+        // the registry's documents are indexed as they are reached, so their own relative $refs resolve
+        const own = registry;
+        registry = (id) => { const doc = own(id); if (doc) registryDocs.add(doc); return doc; };
+    }
     // walk gives the names of the properties the node (and what it applies) dealt with, which `unevaluatedProperties` needs
     const walk = (value, node, path, depth) => {
         const evaluated = new Set();
@@ -47,11 +152,16 @@ export function validate(data, schema, limit = 200) {
         if (node === true || node == null || typeof node !== 'object' || depth > 40) return evaluated;
         if (node === false) { out.push({ path, message: 'Not allowed here' }); return evaluated; }
         const merge = (set) => { for (const k of set) evaluated.add(k); };
-        for (const ref of [node.$ref, node.$dynamicRef]) {
-            if (typeof ref !== 'string') continue;
-            const target = resolve(schema, ref);
+        if (typeof node.$ref === 'string') {
+            const target = resolveRef(schema, node, node.$ref, registry);
             if (target) merge(walk(value, target, path, depth + 1));
         }
+        // $dynamicRef (2020-12) and $recursiveRef (2019-09) name the outermost schema's anchor: the schema being checked against
+        if (typeof node.$dynamicRef === 'string') {
+            const target = resolve(schema, node.$dynamicRef) ?? resolveRef(schema, node, node.$dynamicRef, registry);
+            if (target) merge(walk(value, target, path, depth + 1));
+        }
+        if (node.$recursiveRef === '#') merge(walk(value, schema, path, depth + 1));
         // not: the value must not fit; if/then/else: what fits `if` is held to `then`, the rest to `else`
         if (node.not !== undefined && node.not !== false && problemsOf(value, node.not, path, depth + 1).length === 0) {
             // `not` of properties that may not be given (Renovate's options of the global config): each one given is named
@@ -103,8 +213,13 @@ export function validate(data, schema, limit = 200) {
             }
         }
         if (typeof value === 'number') {
-            if (node.minimum !== undefined && value < node.minimum) out.push({ path, message: `Should be at least ${node.minimum}` });
-            if (node.maximum !== undefined && value > node.maximum) out.push({ path, message: `Should be at most ${node.maximum}` });
+            // draft-04 makes the bound itself exclusive with `exclusiveMinimum: true`; draft-06 and later give the bound as exclusiveMinimum
+            if (node.minimum !== undefined && (node.exclusiveMinimum === true ? value <= node.minimum : value < node.minimum))
+                out.push({ path, message: node.exclusiveMinimum === true ? `Should be more than ${node.minimum}` : `Should be at least ${node.minimum}` });
+            if (node.maximum !== undefined && (node.exclusiveMaximum === true ? value >= node.maximum : value > node.maximum))
+                out.push({ path, message: node.exclusiveMaximum === true ? `Should be less than ${node.maximum}` : `Should be at most ${node.maximum}` });
+            if (typeof node.exclusiveMinimum === 'number' && value <= node.exclusiveMinimum) out.push({ path, message: `Should be more than ${node.exclusiveMinimum}` });
+            if (typeof node.exclusiveMaximum === 'number' && value >= node.exclusiveMaximum) out.push({ path, message: `Should be less than ${node.exclusiveMaximum}` });
         }
         if (Array.isArray(value)) {
             if (node.minItems !== undefined && value.length < node.minItems) out.push({ path, message: `Should have at least ${node.minItems} items` });
@@ -212,7 +327,114 @@ export function schemaOf(rel) {
     if (name === 'renovate.json' || name === '.renovaterc' || name === '.renovaterc.json') return 'renovate';
     if (/^(openapi|swagger)(\.[^/.]+)?\.(ya?ml|json)$/.test(name)) return 'openapi';
     if (/^kustomization\.ya?ml$/.test(name) || rel.split('/').pop() === 'Kustomization') return 'kustomization';
+    // the files SchemaStore's catalog maps to the schemas PyCharm lists (asyncapi says by its content which version)
+    if (/asyncapi[^/]*\.(json|ya?ml)$/.test(name)) return 'asyncapi';
+    if (/(^|\/)\.devcontainer(\/[^/]+)?\/devcontainer\.json$/.test(lower) || name === '.devcontainer.json') return 'devcontainer';
+    if (/^action\.ya?ml$/.test(name)) return 'github-action';
+    if (/^(\.babelrc(\.json)?|babel\.config\.json)$/.test(name)) return 'babelrc';
+    if (/^\.eslintrc(\.json|\.ya?ml)?$/.test(name)) return 'eslintrc';
+    if (name === 'jest.config.json') return 'jest';
+    if (/^jsconfig(\.[^/]+)?\.json$/.test(name)) return 'jsconfig';
+    if (/^tsconfig(\.[^/]+)?\.json$/.test(name)) return 'tsconfig';
+    if (/^\.prettierrc(\.json|\.ya?ml)?$/.test(name)) return 'prettierrc';
+    if (/^\.stylelintrc(\.json|\.ya?ml)?$/.test(name)) return 'stylelintrc';
+    if (/^tslint\.(json|ya?ml)$/.test(name)) return 'tslint';
+    if (name === 'tsd.json') return 'tsd';
+    if (name === 'typings.json') return 'typings';
+    if (/^(mermaid\.config|\.?mermaidrc)\.json$/.test(name)) return 'mermaid';
+    if (name === 'http-client.env.json') return 'http-client-env';
+    if (name === 'http-client.private.env.json') return 'http-client-private-env';
+    if (/\.(md|markdown)$/.test(name)) return 'markdown-frontmatter';
     return name === 'package.json' ? 'package' : name === 'pyproject.toml' ? 'pyproject' : null;
+}
+
+/** The AsyncAPI schema of a document, by its `asyncapi` version: 'asyncapi2' (2.x), 'asyncapi3' (3.x), or null. */
+export function asyncapiSchemaOf(data) {
+    const v = data && typeof data === 'object' ? String(data.asyncapi ?? '') : '';
+    return /^2\./.test(v) ? 'asyncapi2' : /^3\./.test(v) ? 'asyncapi3' : null;
+}
+
+/** Files read as JSON with comments (JSONC): tsconfig, jsconfig, devcontainer.json, .eslintrc and the like allow // and /* *\/ and trailing commas. */
+export function parseJsonc(text) {
+    let out = '';
+    let i = 0;
+    while (i < text.length) {
+        const c = text[i];
+        if (c === '"') {
+            let j = i + 1;
+            while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+            out += text.slice(i, j + 1);
+            i = j + 1;
+        }
+        else if (c === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; }
+        else if (c === '/' && text[i + 1] === '*') { const end = text.indexOf('*/', i + 2); const gone = text.slice(i, end < 0 ? text.length : end + 2); out += gone.replace(/[^\n]/g, ' '); i = end < 0 ? text.length : end + 2; }
+        else { out += c; i++; }
+    }
+    // a comma before a closing bracket
+    return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'));
+}
+
+/** The YAML front matter of a Markdown text (between --- lines at its very top): {text, line} (line: where it starts, 0-based), or null. */
+export function frontMatterOf(text) {
+    const m = /^---\r?\n([\s\S]*?)\r?\n---\s*(\r?\n|$)/.exec(text);
+    return m ? { text: m[1], line: 1 } : null;
+}
+
+/** A project path matched against a mapping's pattern: a path from the root, * within a name, ** for any folders, ? one character; no slash: any folder. */
+export function globMatch(pattern, rel) {
+    const p = pattern.replace(/\\/g, '/').replace(/^\.\//, '');
+    let re = '';
+    for (let i = 0; i < p.length; i++) {
+        if (p.startsWith('**/', i)) { re += '(?:.*/)?'; i += 2; }
+        else if (p.startsWith('/**', i) && i + 3 === p.length) { re += '(?:/.*)?'; i += 2; }
+        else if (p.startsWith('**', i)) { re += '.*'; i += 1; }
+        else if (p[i] === '*') re += '[^/]*';
+        else if (p[i] === '?') re += '[^/]';
+        else re += p[i].replace(/[.+^${}()|[\]]/g, '\\$&');
+    }
+    return new RegExp((p.includes('/') ? '^' : '^(?:.*/)?') + re + '$', 'i').test(rel.replace(/\\/g, '/'));
+}
+
+/**
+ * Which schema checks a file, as PyCharm decides it: none when the project ignores the file; else the project's own mapping whose pattern
+ * matches; else what the file says itself ("$schema", or YAML's `# yaml-language-server: $schema=`); else its name (schemaOf).
+ * Gives {name} (a built-in schema), {file} (a .json in the project), {ignored: true}, or null; `why` says which rule chose it.
+ */
+export function chooseSchema(rel, project, declared) {
+    const norm = rel.replace(/\\/g, '/');
+    if ((project?.ignored ?? []).some((p) => p.replace(/\\/g, '/') === norm)) return { ignored: true, why: 'ignored' };
+    for (const m of project?.mappings ?? []) {
+        if (!(m.patterns ?? []).some((p) => globMatch(p, norm))) continue;
+        return m.schema.startsWith('file:') ? { file: m.schema.slice(5), why: 'mapping', mapping: m.name } : { name: m.schema, why: 'mapping', mapping: m.name };
+    }
+    if (declared) return { ...declared, why: 'declared' };
+    const name = schemaOf(norm);
+    return name ? { name, why: 'name' } : null;
+}
+
+/**
+ * What a file's own "$schema" names: a built-in schema by its $id ({name}), a .json path relative to the file ({file}, a path from the
+ * project's root), or null (an address PyMagic has not got: nothing is downloaded). `ids` maps normalized ids to names.
+ */
+export function declaredSchema(value, ids, rel) {
+    if (typeof value !== 'string' || !value) return null;
+    const name = ids?.[normalId(value)];
+    if (name) return { name };
+    if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return null;
+    if (!/\.json$/i.test(value)) return null;
+    const dir = rel.replace(/\\/g, '/').split('/').slice(0, -1);
+    for (const part of value.replace(/\\/g, '/').split('/')) {
+        if (part === '' || part === '.') continue;
+        if (part === '..') { if (!dir.length) return null; dir.pop(); }
+        else dir.push(part);
+    }
+    return { file: dir.join('/') };
+}
+
+/** YAML's way to name its schema: a `# yaml-language-server: $schema=<address>` comment in the file's first lines. */
+export function yamlModeline(text) {
+    const m = /^\s*#\s*yaml-language-server:\s*\$schema=(\S+)/m.exec(text.split('\n').slice(0, 10).join('\n'));
+    return m ? m[1] : null;
 }
 
 /** The schema of an OpenAPI / Swagger document, by its version: 'openapi31' (3.1.x), 'openapi' (3.0.x), 'swagger' (2.0), or null. */

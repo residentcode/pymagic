@@ -268,6 +268,8 @@ li.in-excluded { opacity: .55; }
 #conn::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
 #conn.ok { color: var(--good); } #conn.bad { color: var(--bad); }
 #status #cursor { color: var(--fg); }
+#status .status-pick { cursor: pointer; border-radius: var(--radius); padding: 1px 6px; }
+#status .status-pick:hover { background: var(--hover); color: var(--fg); }
 
 /* ------------------------------------------------------------------ menus, dialogs and notices */
 .ask-shade { position: fixed; inset: 0; background: rgba(4, 5, 12, .62); backdrop-filter: blur(2px); display: flex; align-items: flex-start; justify-content: center; padding-top: 16vh; z-index: 90; }   /* above the windows that ask (diagrams, settings) */
@@ -280,6 +282,13 @@ li.in-excluded { opacity: .55; }
 .ask-buttons .spacer { flex: 1; }
 /* the HTTP client's environments: one row a variable */
 .ask-box.http-envs { width: min(760px, 94vw); }
+.ask-box.schema-mapping { width: min(520px, 94vw); }
+.ask-box .schema-field { display: grid; grid-template-columns: 90px 1fr; align-items: start; gap: 8px; margin: 8px 0; }
+.ask-box .schema-field > span { color: var(--dim); padding-top: 4px; }
+.ask-box .schema-field textarea { width: 100%; resize: vertical; font-family: var(--mono); }
+.schema-mappings { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.schema-mapping-row { display: flex; align-items: center; gap: 10px; }
+.schema-mapping-row > .detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .http-env-table { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow: auto; margin-top: 10px; }
 .http-env-row { display: grid; grid-template-columns: 170px 170px minmax(0, 1fr) 54px 28px; gap: 6px; align-items: center; }
 .http-env-row.head { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }

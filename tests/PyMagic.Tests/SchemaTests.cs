@@ -8,6 +8,49 @@ public class SchemaTests
 {
     static string PythonExe => Environment.GetEnvironmentVariable("PYMAGIC_PYTHON") ?? "python";
 
+    [Fact]
+    public void EachSchemaIsFoundByItsId()
+    {
+        // what a file's "$schema" and one schema's $ref of another name: http read as https, without the fragment
+        var ids = Schemas.Ids.Value;
+        Assert.Equal("jsonschema-7", ids[Schemas.NormalId("http://json-schema.org/draft-07/schema#")]);
+        Assert.Equal("jsonschema-4", ids[Schemas.NormalId("http://json-schema.org/draft-04/schema#")]);
+        Assert.Equal("jsonschema-2020-12-core", ids["https://json-schema.org/draft/2020-12/meta/core"]);
+        Assert.Equal("tsconfig", ids["https://json.schemastore.org/tsconfig"]);
+        Assert.Equal("asyncapi3", ids["https://asyncapi.com/definitions/3.0.0/asyncapi.json"]);
+    }
+
+    [Fact]
+    public void MermaidsSchemaRequiresNothing()
+    {
+        // it describes the whole configuration with its defaults filled in; a config file sets only what it changes
+        var text = Schemas.Builtin("mermaid")!;
+        Assert.True(!text.Contains("\"required\":["), "no required lists");
+        Assert.True(text.Contains("\"flowchart\""), "the schema itself is kept");
+    }
+
+    [Fact]
+    public void TheProjectsMappingsAreKeptWhenTheyAreOfTheirShape()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "pm-mappings-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Assert.Equal("{\"mappings\":[],\"ignored\":[]}", Schemas.ReadMappings(root));
+            Assert.True(Schemas.WriteMappings(root, "{\"mappings\":[{\"name\":\"TS\",\"schema\":\"tsconfig\",\"patterns\":[\"base.json\"]},{\"name\":\"Mine\",\"schema\":\"file:schemas/a.json\",\"patterns\":[\"config/*.json\"]}],\"ignored\":[\"x.json\"]}"));
+            var kept = System.Text.Json.Nodes.JsonNode.Parse(Schemas.ReadMappings(root))!;
+            Assert.Equal(2, kept["mappings"]!.AsArray().Count);
+            Assert.Equal("x.json", kept["ignored"]![0]!.GetValue<string>());
+            // a schema PyMagic has not got, no files, or not JSON: refused, and the file stays as it was
+            Assert.True(!Schemas.WriteMappings(root, "{\"mappings\":[{\"name\":\"X\",\"schema\":\"nope\",\"patterns\":[\"a.json\"]}]}"), "an unknown schema");
+            Assert.True(!Schemas.WriteMappings(root, "{\"mappings\":[{\"name\":\"X\",\"schema\":\"tsconfig\",\"patterns\":[]}]}"), "no files");
+            Assert.True(!Schemas.WriteMappings(root, "{\"mappings\":[{\"name\":\"X\",\"schema\":\"tsconfig\"}]}"), "no patterns");
+            Assert.True(!Schemas.WriteMappings(root, "not json"), "not JSON");
+            Assert.Equal(2, System.Text.Json.Nodes.JsonNode.Parse(Schemas.ReadMappings(root))!["mappings"]!.AsArray().Count);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     static bool PythonHasToml()
     {
         try
@@ -21,12 +64,18 @@ public class SchemaTests
     [Fact]
     public void EverySchemaIsBuiltIn()
     {
-        Assert.Equal(15, Schemas.Names.Count);
-        foreach (var name in new[] { "package", "pyproject", "workflow", "compose", "gitlab", "precommit", "mkdocs", "dependabot", "codecov", "tox", "renovate", "openapi31", "openapi", "swagger", "kustomization" })
+        // the registered ones (the status bar's list, PyCharm's and the earlier ones) and the vocabularies of the 2019-09 and 2020-12 meta-schemas
+        Assert.Equal(38, Schemas.Registered.Count);
+        Assert.Equal(38 + 13, Schemas.Names.Count);
+        foreach (var name in Schemas.Names)
         {
             string text = Schemas.Builtin(name) ?? throw new AssertionException(name + " is not built in");
             Assert.True(System.Text.Json.Nodes.JsonNode.Parse(text) is System.Text.Json.Nodes.JsonObject, name);
         }
+        foreach (var title in new[] { "AsyncAPI 2", "AsyncAPI 3", "Babelrc", "Dev Containers", "ESLint", "GitHub Action JSON Schema", "GitHub Workflow JSON Schema", "HTTP Client Environment File",
+            "HTTP Client Private Environment File", "Jest", "JSConfig", "JSON Schema 2019-09", "JSON Schema 2020-12", "JSON Schema 4", "JSON Schema 6", "JSON Schema 7",
+            "Markdown Front Matter Generic Schema", "OpenAPI 3.0", "OpenAPI 3.1", "package", "Prettier", "StyleLint", "Swagger 2.0", "TSConfig", "TSD", "TSLint", "Typings" })
+            Assert.True(Schemas.Registered.Any(r => r.Title == title), "PyCharm's " + title);
         Assert.True(Schemas.Builtin("pyproject")!.Contains("\"project\""));
     }
 

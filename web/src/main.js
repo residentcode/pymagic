@@ -18,7 +18,7 @@ import { setupTemplateLinks } from './templatelinks';
 import { setupEmbedded } from './embedded';
 import { setupTemplatePreview } from './templatepreview';
 import { addModelAdmin, addModelSerializer } from './django-model';
-import { setLiveTemplateSource } from './settings-ui';
+import { setLiveTemplateSource, openSettings } from './settings-ui';
 import { setupHierarchy } from './hierarchy';
 import { setupRoutes } from './routes';
 import { setupDjango } from './django';
@@ -28,6 +28,7 @@ import { setupCoverage } from './coverage';
 import { setupRequirementsCheck } from './requirements-check';
 import { setupFileChecks } from './filecheck';
 import { setupSchemaCheck } from './schemacheck';
+import { setupSchemaPicker } from './schema-picker';
 import { pluginOn, hiddenElements } from './plugin-model';
 import { setupSemantic } from './semantic';
 import { setupProfiler } from './profiler';
@@ -1197,7 +1198,7 @@ async function main() {
     setupRequirementsCheck(common);
     setupFileChecks(common);
     if (plugin('schemas'))
-        setupSchemaCheck(common);
+        setupSchemaPicker({ editor, relOf: common.relOf, checker: setupSchemaCheck(common), openSettings });
     if (plugin('emmet'))
         setupEmmet();
     if (plugin('tagpairs'))

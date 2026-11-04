@@ -1374,6 +1374,23 @@ app.MapGet("/api/tailwind", () =>
     return Results.Json(new { used = use.Used, path = use.Css, css, why = use.Why });
 });
 app.MapGet("/api/schemas/get", (string name) => Schemas.Of(root, name) is { } schema ? Results.Text(schema, "application/json") : Results.NotFound());
+// the status bar's schema picker: the built-in schemas with their titles, and each one's $id (what a file's "$schema" and a $ref name)
+app.MapGet("/api/schemas/list", () => Results.Json(new { registered = Schemas.Registered.Select(r => new { name = r.Name, title = r.Title }), ids = Schemas.Ids.Value }));
+// the project's schema mappings and ignored files (.pymagic/schema-mappings.json)
+app.MapGet("/api/schemas/mappings", () => Results.Text(Schemas.ReadMappings(root), "application/json"));
+app.MapPut("/api/schemas/mappings", async (HttpRequest req) =>
+{
+    using var reader = new StreamReader(req.Body);
+    return Schemas.WriteMappings(root, await reader.ReadToEndAsync()) ? Results.Ok() : Results.BadRequest("not a list of schema mappings");
+});
+// a schema the project keeps itself (a mapping's file:, or a relative "$schema"): a .json file inside the project
+app.MapGet("/api/schemas/file", (string path) =>
+{
+    if (!path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) return Results.BadRequest("a schema is a .json file");
+    string full;
+    try { full = ResolveInRoot(path); } catch (Exception e) when (e is ArgumentException or UnauthorizedAccessException or InvalidOperationException) { return Results.BadRequest("outside the project"); }
+    return File.Exists(full) ? Results.Text(File.ReadAllText(full), "application/json") : Results.NotFound();
+});
 // the project's CustomResourceDefinitions (the page checks a custom resource against the one that declares its kind)
 app.MapGet("/api/schemas/crds", () => Results.Json(Schemas.CustomResourceDefinitions(root).Select(c => new { path = c.Path, text = c.Text })));
 // a TOML text as JSON, for checking pyproject.toml against its schema

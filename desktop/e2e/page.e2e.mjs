@@ -3617,6 +3617,70 @@ describe('Incorrect type: arguments of the wrong type, unions, # type: ignore', 
     });
 });
 
+describe('JSON Schemas: the status bar picker, ignoring a file, a mapping, "$schema"', () => {
+    const put = (rel, text) => { mkdirSync(dirname(join(app.root, rel)), { recursive: true }); writeFileSync(join(app.root, rel), text); };
+    const schemaMarks = (rel) => `(() => { const m = window.pymagic.editor.getModel(); if (!m.uri.path.endsWith(${JSON.stringify(rel)})) return null; return window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri, owner: 'pymagic-schema' }).map((x) => x.startLineNumber + ': ' + x.message); })()`;
+    const status = () => page.evaluate(`document.getElementById('schema')?.textContent ?? ''`);
+    const pick = async (label) => {
+        await page.evaluate(`document.getElementById('schema').click()`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim() === ${JSON.stringify(label)})`, 10000, 'the menu row ' + label);
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim() === ${JSON.stringify(label)}).click()`);
+    };
+    const clearMappings = () => { mkdirSync(join(app.root, '.pymagic'), { recursive: true }); writeFileSync(join(app.root, '.pymagic/schema-mappings.json'), '{"mappings":[],"ignored":[]}\n'); };
+
+    test('tsconfig.json, with comments, is checked against TSConfig; the status bar names it; ignoring the file takes its marks away', async () => {
+        clearMappings();
+        put('web/tsconfig.json', '{\n  // the compiler\n  "compilerOptions": {\n    "strict": "yes",\n    "target": "ES2022",\n  },\n}\n');
+        await open('web/tsconfig.json');
+        const found = await page.waitFor(`(() => { const f = ${schemaMarks('web/tsconfig.json')}; return f && f.some((x) => x.startsWith('4: ')) ? f : null; })()`, 30000, 'the strict mark');
+        assert.ok(!found.some((x) => x.startsWith('5: ')), found.join(' | '));   // a good target, and the comments and trailing commas are fine
+        await page.waitFor(`document.getElementById('schema')?.textContent === 'Schema: TSConfig'`, 10000, 'Schema: TSConfig');
+        await pick('Ignore JSON schema for file');
+        await page.waitFor(`(() => { const f = ${schemaMarks('web/tsconfig.json')}; return f && f.length === 0; })()`, 15000, 'the marks gone');
+        assert.equal(await status(), 'Schema: ignored');
+        assert.match(readFileSync(join(app.root, '.pymagic/schema-mappings.json'), 'utf8'), /"web\/tsconfig.json"/);
+        await pick('Ignore JSON schema for file');   // checked again
+        await page.waitFor(`(() => { const f = ${schemaMarks('web/tsconfig.json')}; return f && f.length > 0; })()`, 15000, 'the marks back');
+    });
+
+    test('a file\'s own "$schema" naming a schema of the project, and a file mapped to Jest from the picker', async () => {
+        clearMappings();
+        put('schemas/app.schema.json', '{"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}\n');
+        put('conf/app.json', '{\n  "$schema": "../schemas/app.schema.json",\n  "size": 1\n}\n');
+        await open('conf/app.json');
+        await page.waitFor(`(() => { const f = ${schemaMarks('conf/app.json')}; return f && f.some((x) => x.includes('The property name is required')) ? f : null; })()`, 30000, 'name required');
+        await page.waitFor(`document.getElementById('schema')?.textContent === 'Schema: schemas/app.schema.json'`, 10000, 'the project schema named');
+
+        put('conf/test-settings.json', '{\n  "roots": "src"\n}\n');
+        await open('conf/test-settings.json');
+        await page.waitFor(`document.getElementById('schema')?.textContent === 'No JSON schema'`, 15000, 'no schema');
+        await pick('Jest');
+        await page.waitFor(`(() => { const f = ${schemaMarks('conf/test-settings.json')}; return f && f.some((x) => x.startsWith('2: ') && x.includes('Should be array')) ? f : null; })()`, 30000, 'roots as Jest has it');
+        assert.equal(await status(), 'Schema: Jest');
+        const kept = JSON.parse(readFileSync(join(app.root, '.pymagic/schema-mappings.json'), 'utf8'));
+        assert.deepEqual(kept.mappings, [{ name: 'Jest', schema: 'jest', patterns: ['conf/test-settings.json'] }]);
+        clearMappings();
+    });
+
+    test('Settings > JSON Schemas lists the project\'s mappings; Remove takes one away', async () => {
+        writeFileSync(join(app.root, '.pymagic/schema-mappings.json'), JSON.stringify({ mappings: [{ name: 'Mine', schema: 'tsconfig', patterns: ['base/*.json'] }], ignored: ['old.json'] }));
+        await page.evaluate(`${$('b-gear')}.click()`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.trim().startsWith('Settings…'))`, 5000, 'the gear\'s menu');
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.trim().startsWith('Settings…')).click()`);
+        await page.waitFor(`document.querySelector('.settings-nav')`, 5000, 'the Settings window');
+        await page.evaluate(`[...document.querySelectorAll('.settings-nav button')].find((b) => b.textContent === 'JSON Schemas').click()`);
+        const rows = await page.waitFor(`(() => { const r = [...document.querySelectorAll('.schema-mapping-row')].map((x) => x.textContent); return r.length === 2 ? r : null; })()`, 10000, 'the two rows');
+        assert.match(rows[0], /Mine → TSConfig/);
+        assert.match(rows[0], /base\/\*\.json/);
+        assert.match(rows[1], /old\.json \(no schema\)/);
+        await page.evaluate(`[...document.querySelector('.schema-mapping-row').querySelectorAll('button')].find((b) => b.textContent === 'Remove').click()`);
+        await page.waitFor(`document.querySelectorAll('.schema-mapping-row').length === 1`, 10000, 'one row left');
+        assert.deepEqual(JSON.parse(readFileSync(join(app.root, '.pymagic/schema-mappings.json'), 'utf8')).mappings, []);
+        await page.evaluate(`[...document.querySelectorAll('.settings-foot button')].find((b) => b.textContent === 'Done').click()`);
+        clearMappings();
+    });
+});
+
 describe('Settings > Plugins', () => {
     const openPlugins = async () => {
         await page.evaluate(`${$('b-gear')}.click()`);
