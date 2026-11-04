@@ -3511,6 +3511,18 @@ describe('the type engine of 3 November: BDD steps, mock.patch, tuple assignment
         assert.ok(!found.some((x) => x.includes("'a shop'")), 'the defined step is not marked');
     });
 
+    test('TOML: a pyproject.toml is coloured, not plain text (headers, keys, strings each their own colour)', async () => {
+        put('toml-colours/pyproject.toml', '[project]\nname = "shop"\nversion = "0.1.0"\nauthors = [\n    { name = "me", email = "me@example.com" }\n]\ndependencies = []\n\n[project.scripts]\nshop = "shop:main"\n');
+        await open('toml-colours/pyproject.toml');
+        assert.equal(await page.evaluate('window.pymagic.editor.getModel().getLanguageId()'), 'toml');
+        const types = await page.evaluate(`window.pymagic.monaco.editor.tokenize(window.pymagic.editor.getModel().getValue(), 'toml').flat().map((t) => t.type)`);
+        for (const want of ['type.toml', 'variable.toml', 'string.toml', 'delimiter.bracket.toml']) assert.ok(types.includes(want), want + ' in ' + types.join(' '));
+        // as drawn: the colour of each part in the editor's lines
+        const colourOf = (text) => page.waitFor(`(() => { const s = [...document.querySelectorAll('.monaco-editor .view-lines span span')].find((x) => x.textContent === ${JSON.stringify(text)}); return s ? getComputedStyle(s).color : null; })()`, 10000, text + ' drawn');
+        const header = await colourOf('project'), key = await colourOf('name'), value = await colourOf('"shop"');
+        assert.ok(new Set([header, key, value]).size === 3, `${header} ${key} ${value}`);
+    });
+
     test('mock.patch as a decorator hands the mock to its parameter; a target that does not exist is marked', async () => {
         put('app/__init__.py', '');
         put('app/services.py', 'def notify():\n    pass\n');

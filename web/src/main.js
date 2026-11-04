@@ -36,6 +36,7 @@ import { setupDatabase } from './database';
 import { setupHttpClient } from './http';
 import './ejs-language';
 import './gherkin-language';
+import './toml-language';
 import { languageFor as languageForFile } from './file-language';
 import { setupEmmet } from './emmet';
 import { setupTagPairs } from './tag-pairs';

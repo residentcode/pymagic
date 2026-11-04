@@ -2,7 +2,7 @@
 
 /** The languages a file can be shown as (Override File Type): those the page colours without a language worker. */
 export const FILE_TYPES = [
-    ['python', 'Python'], ['django-html', 'Django / Jinja template'], ['plaintext', 'Plain text'], ['markdown', 'Markdown'], ['ini', 'INI / TOML'],
+    ['python', 'Python'], ['django-html', 'Django / Jinja template'], ['plaintext', 'Plain text'], ['markdown', 'Markdown'], ['ini', 'INI'], ['toml', 'TOML'],
     ['yaml', 'YAML'], ['xml', 'XML'], ['sql', 'SQL'], ['shell', 'Shell script'], ['powershell', 'PowerShell'], ['bat', 'Batch file'], ['dockerfile', 'Dockerfile'],
 ];
 

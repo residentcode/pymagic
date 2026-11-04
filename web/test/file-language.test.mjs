@@ -14,6 +14,7 @@ const MONACO = [
     { id: 'ruby', extensions: ['.rb'], filenames: ['rakefile', 'Gemfile'] },
     { id: 'dockerfile', extensions: ['.dockerfile'], filenames: ['Dockerfile'] },
     { id: 'ini', extensions: ['.ini', '.properties'] },
+    { id: 'toml', extensions: ['.toml'], filenames: ['Pipfile', 'poetry.lock', 'uv.lock', 'pdm.lock', 'Cargo.lock'] },   // PyMagic's own, toml-language.js
     { id: 'xml', extensions: ['.xml', '.svg'] },
     { id: 'kotlin', extensions: ['.kt'] },
 ];
@@ -55,4 +56,12 @@ test('files known by their name, and a script by its #! line', () => {
     assert.equal(of('notes.unknown'), 'plaintext');
     assert.equal(languageOfShebang('#!/usr/bin/env -S node --no-warnings'), 'javascript');
     assert.equal(languageOfShebang('#!/bin/bash'), 'shell');
+});
+
+test('TOML files are TOML, not plain text: by extension and the lock files by name', () => {
+    assert.equal(of('pyproject.toml'), 'toml');
+    assert.equal(of('tools/ruff.toml'), 'toml');
+    assert.equal(of('Pipfile'), 'toml');
+    assert.equal(of('uv.lock'), 'toml');
+    assert.equal(of('package-lock.json'), 'json');
 });
