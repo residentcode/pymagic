@@ -1,6 +1,7 @@
 // A menu that opens under a button or at a point: rows with a shortcut, a check mark or a submenu, separators, and the keys.
 //
-// items: '-' (a separator) or { label, key?, run?, checked?, disabled?, submenu?, onActive? }; a submenu is another list of items;
+// items: '-' (a separator) or { label, key?, run?, checked?, disabled?, submenu?, onActive?, icon? }; a submenu is another list of items;
+// icon: a symbol of the sprite in index.html ('py'), or [symbol, colour class] (['web', 'web']), shown where the tick is when it is not ticked;
 // onActive runs when the row becomes the active one (by the mouse or the arrow keys).
 // Returns the function that closes it (all levels). Only one menu is open at a time.
 
@@ -53,6 +54,13 @@ export function openMenu(anchor, items) {
             const check = document.createElement('span');
             check.className = 'ctx-check';
             if (item.checked) check.append(icon('tick'));
+            else if (item.icon) {
+                // the row's icon (a sprite name, or [name, colour class]) where the tick would be
+                const [name, cls] = Array.isArray(item.icon) ? item.icon : [item.icon, item.icon];
+                const svg = icon(name);
+                svg.classList.add('ctx-icon', ...(cls ? [cls] : []));
+                check.append(svg);
+            }
             const label = document.createElement('span');
             label.className = 'ctx-label';
             label.textContent = item.label;

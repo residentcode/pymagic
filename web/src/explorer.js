@@ -384,8 +384,8 @@ export function setupExplorer(deps) {
 
     function newItems(dir) {
         return NEW_KINDS.filter((k) => k === '-' || !k.plugin || deps.plugin?.(k.plugin) !== false).map((k) => k === '-' ? '-'
-            : k.ignore ? { label: k.label, submenu: IGNORE_FILES.map(([name, owner, text]) => ({ label: `${name} (${owner})`, run: () => void createIgnore(dir, name, text) })) }
-            : { label: k.label, key: k.key, run: () => void createKind(dir, k) });
+            : k.ignore ? { label: k.label, icon: k.icon, submenu: IGNORE_FILES.map(([name, owner, text]) => ({ label: `${name} (${owner})`, icon: ['ignore', 'cog'], run: () => void createIgnore(dir, name, text) })) }
+            : { label: k.label, key: k.key, icon: k.icon, run: () => void createKind(dir, k) });
     }
 
     /** Copy Path/Reference: what PyCharm offers to copy for a file or folder, each shown with its value. */
@@ -558,9 +558,9 @@ export function setupExplorer(deps) {
     function menu(x, y, path, isDir) {
         const dir = path === '' ? '' : isDir ? path : parentOf(path);
         const items = [{ label: 'New', submenu: newItems(dir) }];
-        if (path) items.push('-', { label: 'Cut', key: 'Ctrl+X', run: () => take(path, true) }, { label: 'Copy', key: 'Ctrl+C', run: () => take(path, false) },
+        if (path) items.push('-', { label: 'Cut', key: 'Ctrl+X', icon: 'cut', run: () => take(path, true) }, { label: 'Copy', key: 'Ctrl+C', icon: 'copy', run: () => take(path, false) },
             { label: 'Copy path/reference', submenu: copyItems(path) });
-        if (clip) items.push({ label: `Paste ${baseName(clip.path)}`, key: 'Ctrl+V', run: () => paste(dir) });
+        if (clip) items.push({ label: `Paste ${baseName(clip.path)}`, key: 'Ctrl+V', icon: 'paste', run: () => paste(dir) });
         if (path) {
             items.push('-', { label: 'Rename…', key: 'F2', run: () => rename(path, isDir) }, { label: 'Move…', key: 'F6', run: () => moveTo(path) },
                 { label: 'Delete…', key: 'Del', run: () => remove(path, isDir) });
@@ -579,7 +579,7 @@ export function setupExplorer(deps) {
         }
         // find, inspect, format, tests, history, Open In, .gitignore: the same as the tabs' (fileactions.js)
         if (deps.items) items.push('-', ...deps.items(path, isDir));
-        items.push('-', { label: 'Refresh', run: () => refresh() });
+        items.push('-', { label: 'Refresh', icon: 'refresh', run: () => refresh() });
         openMenu({ x, y }, items);
     }
     $('sidebar').oncontextmenu = (e) => { e.preventDefault(); menu(e.clientX, e.clientY, '', true); };

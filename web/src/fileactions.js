@@ -144,27 +144,27 @@ export function setupFileActions(deps) {
         if (!isDir && isPy(path)) items.push({ label: 'Classes of this file', run: async () => { await deps.openFile(path); show('file'); } });
         items.push({ label: 'Classes of the project', run: () => show('classes') }, { label: 'Modules and imports', run: () => show('modules') });
         if (deps.plugin?.('django') !== false) items.push({ label: 'Django models', run: () => show('models') });
-        return [{ label: 'Diagrams', submenu: items }];
+        return [{ label: 'Diagrams', icon: ['hier', ''], submenu: items }];
     }
 
     /** The items for a file, shared by the tree and the tabs. */
     function fileItems(rel) {
         const items = [];
         if (isPy(rel)) {
-            items.push({ label: `Run '${rel.slice(rel.lastIndexOf('/') + 1)}'`, run: () => deps.run.runScript(rel, '', false) },
-                { label: `Debug '${rel.slice(rel.lastIndexOf('/') + 1)}'`, run: () => deps.run.runScript(rel, '', true) });
-            if (isTestFile(rel)) items.push({ label: 'Run the tests in it', run: () => deps.tests.runPath(rel) }, { label: 'Debug the tests in it', run: () => deps.tests.runPath(rel, true) });
+            items.push({ label: `Run '${rel.slice(rel.lastIndexOf('/') + 1)}'`, icon: 'run', run: () => deps.run.runScript(rel, '', false) },
+                { label: `Debug '${rel.slice(rel.lastIndexOf('/') + 1)}'`, icon: 'debug', run: () => deps.run.runScript(rel, '', true) });
+            if (isTestFile(rel)) items.push({ label: 'Run the tests in it', icon: 'run', run: () => deps.tests.runPath(rel) }, { label: 'Debug the tests in it', icon: 'debug', run: () => deps.tests.runPath(rel, true) });
             const more = moreRunItems(rel, false);
             if (more.length) items.push({ label: 'More run/debug', submenu: more });
             items.push('-');
         }
         items.push(
             { label: 'Local history', run: () => history(rel) },
-            { label: 'Compare with', submenu: [
+            { label: 'Compare with', icon: ['compare', ''], submenu: [
                 { label: 'Clipboard', run: () => compareWithClipboard(rel) },
                 { label: 'Another file…', run: () => compareWithFile(rel) },
             ] },
-            { label: 'Reload from disk', run: () => deps.reload(rel) },
+            { label: 'Reload from disk', icon: ['refresh', ''], run: () => deps.reload(rel) },
             '-',
             openIn(rel, false),
             { label: 'Add to .gitignore', run: () => gitignore(rel) },
@@ -182,12 +182,12 @@ export function setupFileActions(deps) {
             { label: 'Replace in files…', run: () => deps.search.open(undefined, { include: isDir ? includeFor(path) : path, replace: true }) },
             { label: 'Inspect code', run: () => deps.problems.inspect(path, isDir) },
             '-',
-            { label: 'Reformat code', run: () => tidy(path, 'format') },
+            { label: 'Reformat code', icon: ['format', ''], run: () => tidy(path, 'format') },
             { label: 'Optimize imports', run: () => tidy(path, 'imports') },
         );
         if (isDir) {
-            items.push({ label: `Run the tests in ${path ? `'${path.slice(path.lastIndexOf('/') + 1)}'` : 'the project'}`, run: () => deps.tests.runPath(path) },
-                { label: `Debug the tests in ${path ? `'${path.slice(path.lastIndexOf('/') + 1)}'` : 'the project'}`, run: () => deps.tests.runPath(path, true) });
+            items.push({ label: `Run the tests in ${path ? `'${path.slice(path.lastIndexOf('/') + 1)}'` : 'the project'}`, icon: 'run', run: () => deps.tests.runPath(path) },
+                { label: `Debug the tests in ${path ? `'${path.slice(path.lastIndexOf('/') + 1)}'` : 'the project'}`, icon: 'debug', run: () => deps.tests.runPath(path, true) });
             const more = moreRunItems(path, true);
             if (more.length) items.push({ label: 'More run/debug', submenu: more });
             items.push('-', openIn(path, true));

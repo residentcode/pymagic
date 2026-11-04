@@ -394,6 +394,15 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 .ctx-item.disabled { color: var(--faint); cursor: default; }
 .ctx-item.disabled.active { background: none; }
 .ctx-check { width: 16px; flex: none; display: inline-flex; justify-content: center; color: var(--accent-text); }
+/* a row's icon, where the tick would be: the colours the project tree gives the same kinds of file */
+.ctx-check .ctx-icon { color: var(--dim); }
+.ctx-check .ctx-icon.py { color: var(--info); }
+.ctx-check .ctx-icon.folder { color: var(--info); }
+.ctx-check .ctx-icon.web { color: var(--teal); }
+.ctx-check .ctx-icon.data { color: var(--warn); }
+.ctx-check .ctx-icon.cog { color: var(--faint); }
+.ctx-check .ctx-icon.run { color: var(--good); }
+.ctx-check .ctx-icon.debug { color: var(--warn); }
 .ctx-label { flex: 1; }
 .ctx-key { margin-left: 24px; }
 .ctx-arrow { color: var(--faint); display: inline-flex; margin-right: -4px; }

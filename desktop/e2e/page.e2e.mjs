@@ -3713,6 +3713,10 @@ describe('the project tree: the project folder as its first row, and its menu as
         const entries = await page.waitFor(`(() => { const m = [...document.querySelectorAll('.ctx-menu')][1]; return m ? [...m.querySelectorAll('.ctx-item .ctx-label')].map((x) => x.textContent) : null; })()`, 5000, 'the New submenu');
         for (const e of ['Python File', 'File', 'Scratch File', 'Directory', 'Python Package', 'HTML File', 'Stylesheet', 'Dockerfile', 'Dev Container Config…', 'Docker Compose File', 'HTTP Request', 'OpenAPI Specification', 'EditorConfig File', '.ignore File'])
             assert.ok(entries.includes(e), `${e} in ${entries.join(', ')}`);
+        // each has its icon, as in PyCharm (the sprite's symbol, drawn where a tick would be)
+        const missing = await page.evaluate(`[...[...document.querySelectorAll('.ctx-menu')][1].querySelectorAll('.ctx-item')].filter((r) => !r.querySelector('.ctx-check svg.ctx-icon use[href^="#i-"]')).map((r) => r.textContent)`);
+        assert.deepEqual(missing, []);
+        assert.equal(await page.evaluate(`document.querySelector('#i-docker') !== null && document.querySelector('#i-notebook') !== null`), true);
         await choose(1, 'Python File');
         await answer('made_by_new');
         await page.waitFor(`window.pymagic.editor.getModel().uri.path.endsWith('/made_by_new.py')`, 15000, 'the new file open');
