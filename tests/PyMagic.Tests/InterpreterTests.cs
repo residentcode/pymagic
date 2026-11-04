@@ -323,4 +323,47 @@ public class InterpreterTests
         Assert.Throws<ServiceException>(() => manager.CreateVenv(RealPython, ".venv", withPip: false));
         Assert.Throws<ServiceException>(() => manager.CreateVenv(RealPython, "..\\escape", withPip: false));
     }
+
+    [Fact]
+    public void AnEnvironmentMadeInTheProjectBecomesItsInterpreterWhenItHadNoneOfItsOwn()
+    {
+        if (RealPython == null) return;
+        using var s = new Sandbox();
+        var manager = new InterpreterManager(s.Dir, Fake(s, s.Dir, new[] { Path.GetDirectoryName(RealPython)! }));
+        manager.Select(RealPython);   // a Python outside the project, as before uv sync
+        Assert.True(manager.AdoptNewEnvironment(".venv", TimeSpan.FromSeconds(1)) == null, "no environment yet");
+        string exe = new InterpreterManager(s.Dir, Fake(s, s.Dir)).CreateVenv(RealPython, ".venv", withPip: false);   // made by something else
+        var taken = manager.AdoptNewEnvironment(".venv")!;
+        Assert.Equal(Path.GetFullPath(exe), taken.Path);
+        Assert.Equal(taken.Path, new InterpreterManager(s.Dir, Fake(s, s.Dir)).InitializeDefault()!.Path);   // and remembered
+        // one of the project's own is kept: a second one is not taken
+        new InterpreterManager(s.Dir, Fake(s, s.Dir)).CreateVenv(RealPython, "venv", withPip: false);
+        Assert.True(manager.AdoptNewEnvironment("venv") == null, "the project has its own already");
+        Assert.Equal(taken.Path, manager.Current!.Path);
+    }
+
+    [Fact]
+    public void AUvProjectUsesItsOwnVenvOverAPythonSavedOutsideIt()
+    {
+        if (RealPython == null) return;
+        using var s = new Sandbox();
+        var env = Fake(s, s.Dir, new[] { Path.GetDirectoryName(RealPython)! });
+        new InterpreterManager(s.Dir, env).Select(RealPython);
+        string exe = new InterpreterManager(s.Dir, env).CreateVenv(RealPython, ".venv", withPip: false);
+        // not a uv project: the saved choice stays
+        Assert.Equal(Path.GetFullPath(RealPython), Path.GetFullPath(new InterpreterManager(s.Dir, env).InitializeDefault()!.Path));
+        File.WriteAllText(s.Path_("pyproject.toml"), "[project]\nname = \"shop\"\nversion = \"0.1.0\"\ndependencies = []\n");
+        File.WriteAllText(s.Path_("uv.lock"), "version = 1\n");
+        Assert.Equal(Path.GetFullPath(exe), new InterpreterManager(s.Dir, env).InitializeDefault()!.Path);
+    }
+
+    [Fact]
+    public void TheWatcherKnowsAnEnvironmentByItsPyvenvCfg()
+    {
+        Assert.Equal(".venv", ProjectWatcher.EnvironmentOf(".venv/pyvenv.cfg"));
+        Assert.Equal("venv", ProjectWatcher.EnvironmentOf("venv\\pyvenv.cfg"));
+        Assert.True(ProjectWatcher.EnvironmentOf("tools/.venv/pyvenv.cfg") == null, "only the project folder's own");
+        Assert.True(ProjectWatcher.EnvironmentOf(".venv/Lib/site.py") == null);
+        Assert.True(ProjectWatcher.EnvironmentOf("node_modules/pyvenv.cfg") == null);
+    }
 }

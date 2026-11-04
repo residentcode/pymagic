@@ -275,5 +275,14 @@ export function setupInterpreters() {
         };
         (nameSelect.style.display === 'none' ? nameInput : nameSelect).focus();
     }
+    // a .venv made in the project (uv sync, uv venv in the terminal): the host took it as the interpreter
+    // (or, when the project had one of its own already, the new one is only listed)
+    window.addEventListener('pymagic:interpreter-taken', (e) => {
+        if (e.detail.kind === 'interpreter') {
+            say(`Using ${e.detail.text}, the project's new environment`);
+            window.dispatchEvent(new Event('pymagic:interpreter'));
+        }
+        void refresh(0);
+    });
     void refresh();
 }

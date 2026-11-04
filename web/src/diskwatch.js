@@ -46,7 +46,11 @@ export function setupDiskWatch(deps) {
     }
 
     source.onmessage = (e) => {
-        try { batch.push(parseEvent(JSON.parse(e.data))); } catch { return; }
+        let event;
+        try { event = parseEvent(JSON.parse(e.data)); } catch { return; }
+        // not a file: the host took an environment just made in the project as the interpreter (its label)
+        if (event.kind === 'interpreter' || event.kind === 'environment') { window.dispatchEvent(new CustomEvent('pymagic:interpreter-taken', { detail: { kind: event.kind, text: event.path } })); return; }
+        batch.push(event);
         clearTimeout(timer);
         timer = setTimeout(() => {
             const events = batch;

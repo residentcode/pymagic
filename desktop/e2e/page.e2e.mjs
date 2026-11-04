@@ -3795,6 +3795,32 @@ describe('the project tree: the project folder as its first row, and its menu as
     });
 });
 
+describe('an environment made in the project from outside', () => {
+    test('a venv made by a command (uv sync, python -m venv) is found at once: taken as the interpreter when the project had none of its own, listed otherwise', async () => {
+        assert.ok(!existsSync(join(projectRoot, 'venv')), 'the test project has no venv folder');
+        const before = await page.evaluate(`fetch('/api/interpreter').then((r) => r.json())`);
+        const made = spawnSync('python', ['-m', 'venv', '--without-pip', join(projectRoot, 'venv')], { encoding: 'utf8' });
+        assert.equal(made.status, 0, made.stderr);
+        try {
+            const own = before.path && before.path.toLowerCase().startsWith(projectRoot.toLowerCase());
+            // the picker lists it without a reload; and, when the project had no environment of its own, it is the one chosen
+            const found = await page.waitFor(`[...document.getElementById('interp').options].find((o) => /[\\\\/]venv[\\\\/]/i.test(o.value))?.value`, 90000, 'the new venv in the picker');
+            assert.ok(found, 'listed');
+            if (!own) {
+                await page.waitFor(`document.getElementById('interp').value.toLowerCase().includes('\\\\venv\\\\')`, 30000, 'the new venv chosen');
+                const now = await page.evaluate(`fetch('/api/interpreter').then((r) => r.json())`);
+                assert.ok(/[\\/]venv[\\/]/i.test(now.path), now.path);
+            } else {
+                assert.equal((await page.evaluate(`fetch('/api/interpreter').then((r) => r.json())`)).path, before.path, 'the project\'s own environment is kept');
+            }
+        } finally {
+            // the interpreter the other tests use
+            if (before.path) await page.evaluate(`fetch('/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: ${JSON.stringify(before.path)} }) }).then((r) => r.status)`);
+            removeTree(join(projectRoot, 'venv'));
+        }
+    });
+});
+
 describe('Settings > Plugins', () => {
     const openPlugins = async () => {
         await page.evaluate(`${$('b-gear')}.click()`);

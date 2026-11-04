@@ -36,6 +36,10 @@ public sealed class InterpreterManager
     public PythonInterpreter? InitializeDefault()
     {
         var saved = ReadSavedPath();
+        // a uv project runs in its own .venv (uv run, uv sync use nothing else): that one, even when a Python outside the project was saved before
+        if (UvProject.IsUvProject(_root) && (saved == null || !ExecutionTarget.IsSpec(saved) && !InProject(saved)) && OwnEnvironment(".venv") is { } own
+            && InterpreterInspector.Inspect(own, "venv", ".venv") is { Interpreter: { } uvVenv })
+            return Set(uvVenv, save: saved != null);
         if (saved != null && Inspect(saved, "system", "saved") is { Interpreter: { } s })
             return Set(s, save: false);
 
@@ -83,6 +87,51 @@ public sealed class InterpreterManager
         if (save && interpreter != null) Save(interpreter.Path);
         Changed?.Invoke(interpreter);
         return interpreter;
+    }
+
+    /// <summary>Whether an interpreter's path is inside the project folder (one of its own environments).</summary>
+    bool InProject(string path)
+    {
+        if (ExecutionTarget.IsSpec(path)) return false;
+        try
+        {
+            string root = Path.GetFullPath(_root).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+            return Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+    }
+
+    /// <summary>The python of the project's environment of that folder name (.venv, venv, ...) when it has one, else null.</summary>
+    public string? OwnEnvironment(string name)
+    {
+        string dir = Path.Combine(_root, name);
+        string exe = OperatingSystem.IsWindows() ? Path.Combine(dir, "Scripts", "python.exe") : Path.Combine(dir, "bin", "python");
+        return File.Exists(Path.Combine(dir, "pyvenv.cfg")) && File.Exists(exe) ? exe : null;
+    }
+
+    /// <summary>
+    /// A virtual environment just made in the project folder (by uv sync, uv venv or python -m venv in the terminal): it becomes the project's
+    /// interpreter when the current one is not one of the project's own, as PyCharm takes a new project environment. Its python is waited for (the
+    /// tool writes pyvenv.cfg first); null when it is not taken.
+    /// </summary>
+    public PythonInterpreter? AdoptNewEnvironment(string name, TimeSpan? wait = null)
+    {
+        var until = DateTime.UtcNow + (wait ?? TimeSpan.FromSeconds(60));
+        string? exe;
+        while ((exe = OwnEnvironment(name)) == null)
+        {
+            if (DateTime.UtcNow > until) return null;
+            Thread.Sleep(500);
+        }
+        if (Current is { } current && InProject(current.Path)) return null;
+        // the tool may still be writing it: a few tries
+        for (int i = 0; i < 10; i++)
+        {
+            if (InterpreterInspector.Inspect(exe, "venv", name) is { Interpreter: { } found }) return Set(found, save: true);
+            if (DateTime.UtcNow > until) break;
+            Thread.Sleep(1000);
+        }
+        return null;
     }
 
     static bool SamePath(string a, string b) =>

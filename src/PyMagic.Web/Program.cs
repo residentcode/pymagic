@@ -691,6 +691,16 @@ app.MapPost("/api/history/revert", async (HttpRequest req) =>
 // the files that change on disk, as server-sent events: "kind|path" (changed, created, deleted; "all|*" when there were too many to tell)
 var projectWatcher = new ProjectWatcher(root);
 app.Lifetime.ApplicationStopping.Register(projectWatcher.Dispose);
+// a .venv made in the project (uv sync, uv venv, python -m venv in the terminal) becomes its interpreter when it had none of its own; the page is told
+projectWatcher.EnvironmentMade += name => Task.Run(() =>
+{
+    try
+    {
+        if (interpreters.AdoptNewEnvironment(name) is { } chosen) projectWatcher.Announce("interpreter", chosen.Label);
+        else projectWatcher.Announce("environment", name);   // the project had one of its own: the new one is listed
+    }
+    catch (Exception e) { Console.Error.WriteLine("New environment " + name + ": " + e.Message); }
+});
 app.MapGet("/api/watch", async (HttpContext ctx) =>
 {
     ctx.Response.Headers.ContentType = "text/event-stream";

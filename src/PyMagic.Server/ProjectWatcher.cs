@@ -72,12 +72,39 @@ public sealed class ProjectWatcher : IDisposable
         }
     }
 
+    /// <summary>A virtual environment was made in the project folder: the name of its folder (.venv, venv, ...), when its pyvenv.cfg is written.</summary>
+    public event Action<string>? EnvironmentMade;
+
+    static readonly string[] EnvironmentNames = { ".venv", "venv", "env", "virtualenv" };
+
+    /// <summary>The environment folder a change is the pyvenv.cfg of (`.venv/pyvenv.cfg`), or null.</summary>
+    public static string? EnvironmentOf(string rel)
+    {
+        var parts = rel.Split('/', '\\');
+        return parts.Length == 2 && parts[1].Equals("pyvenv.cfg", StringComparison.OrdinalIgnoreCase) && EnvironmentNames.Contains(parts[0], StringComparer.OrdinalIgnoreCase) ? parts[0] : null;
+    }
+
+    readonly ConcurrentDictionary<string, DateTime> _environmentsTold = new(StringComparer.OrdinalIgnoreCase);
+
     void Tell(string kind, string full)
     {
         string rel = Path.GetRelativePath(_root, full).Replace('\\', '/');
+        if (kind != "deleted" && EnvironmentOf(rel) is { } env)
+        {
+            // created, then written: told once
+            var now = DateTime.UtcNow;
+            if (!_environmentsTold.TryGetValue(env, out var last) || now - last > TimeSpan.FromSeconds(30))
+            {
+                _environmentsTold[env] = now;
+                EnvironmentMade?.Invoke(env);
+            }
+        }
         if (rel.StartsWith("..", StringComparison.Ordinal) || Ignored(rel)) return;
         TellAll(kind + "|" + rel);
     }
+
+    /// <summary>Hands something to every page that listens, as `kind|text` (the interpreter the host chose: `interpreter|label`).</summary>
+    public void Announce(string kind, string text) => TellAll(kind + "|" + text);
 
     void TellAll(string rel)
     {
