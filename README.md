@@ -162,7 +162,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Not seen on screen: the sidebar picture (item 331), shown only on the finish page after an install and in the uninstaller; the folder page's refusal of a folder that is not PyMagic's (only its rule's tests and the silent installs ran).
 
 **Type engine** (ibnbolbna's area until 31 October 2026, ours from then on; what ibnbolbna did and left is in [docs/ibnbolbna-work.md](docs/ibnbolbna-work.md))
-- Left by items 354 to 358: yaml's representer.py:324 and 330 (`(list(reduce) + [None] * 5)[:5]` unpacked, then an item that may be None used as an iterable) stay reported, judged real under PyCharm 2026.1's strict unions but not compared with PyCharm itself; the library scan was not run again after item 357 (its environment was removed); `t[0] is not None` narrows a union of tuples, not the item `t[0]` itself.
+- Left by items 354 to 358: yaml's representer.py:324 and 330 (`(list(reduce) + [None] * 5)[:5]` unpacked, then an item that may be None used as an iterable) stay reported, judged real under PyCharm 2026.1's strict unions but not compared with PyCharm itself; `t[0] is not None` narrows a union of tuples, not the item `t[0]` itself.
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
 
