@@ -80,7 +80,7 @@ import { setupAutoSave } from './autosave';
 import { themeName, defineTheme, defineLightTheme } from './theme';
 import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings, withoutCallParens, onSettings, change as changeSetting, pluginsAtStart } from './settings';
 import { requote } from './quotes-model';
-import { defineCommand, setupCommands, applyKeybindings, currentKeyLabel } from './commands.js';
+import { defineCommand, setupCommands, applyKeybindings, currentKeyLabel, runById } from './commands.js';
 import { setKeyLabels } from './menu';
 // each language service runs in its worker; the rest share the editor's
 self.MonacoEnvironment = {
@@ -1178,6 +1178,7 @@ async function main() {
     // the menus of the project tree, the tabs and the editor (fileactions.js)
     const fileActions = setupFileActions({
         openFile, run: runHooks, tests, history, search, problems, terminal, reload: reloadFromDisk, lsp, uriFor, relOfUri, bookmarks, editor, saveFile, applyEdits: refactor.applyEdits,
+        plugin: (name) => plugin(name),
         pythonFiles: () => [...knownFiles], tidyFile,
         showDiff: git.showDiff, refreshGit: git.refresh,
         refreshTree: async () => { await explorer?.refresh(); },
@@ -1329,6 +1330,10 @@ async function main() {
     knownFiles = new Set(files);
     explorer = setupExplorer({
         items: (path, isDir) => fileActions.treeItems(path, isDir),
+        // the project folder as the tree's first row; New's entries that are other windows' (a scratch file, a data source)
+        root: info.root, plugin: (name) => plugin(name),
+        newScratch: () => runById('pymagic.scratch.new'),
+        addDataSource: database ? (initial) => database.addSqlite(initial) : null,
         findUsages: (path) => fileActions.findUsages(path),
         // Safe Delete: how many places import what is deleted, listed in the Search panel
         usages: async (path) => {

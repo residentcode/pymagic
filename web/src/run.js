@@ -1814,6 +1814,8 @@ export function setupRun(deps) {
     }
     return {
         onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null,
+        /** A file run under the profiler (the tree's More Run/Debug > Profile). */
+        profileScript: (rel) => launch(rel, false, true, ''),
         /** `python -m module args`; false when a run is going. */
         runModule: (module, args = [], debug = false) => launch(null, debug, false, args, { module }),
         /** The program that is running, as a service of the Services window: stopped, restarted (started again as it was) or shown. */

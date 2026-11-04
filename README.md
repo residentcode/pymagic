@@ -194,8 +194,9 @@ Not work left: choices made and kept, noted where they were made.
 - Search: Simpler than PyCharm's: the conditions on a variable are a regular expression on its text (no type or count conditions), and duplicates are compared statement by statement.
 - Inspections PyMagic has and PyCharm does not (items 341 and 348): *Patch target that does not exist*, *Attribute a mock does not have* and *Name defined in a later cell*, kept; *Incorrect number of parameters for @patch decorated function* reports too few parameters only, since pytest fills extra ones with fixtures (PyCharm also reports too many).
 - JSON Schemas (item 360): no *Load SchemaStore Mappings*: PyCharm downloads SchemaStore's schemas when asked; PyMagic checks against the ones it bundles, and a mapping can name a schema file of the project.
+- Project tree (item 361): no *Jupyter Connection* under New (a notebook chooses its Jupyter server in its own toolbar) and no *Repair IDE on File* (PyMagic keeps no per-file index to repair; Reload from disk reads the file again).
 - Python inspections that PyCharm has and PyMagic does not: Left on purpose: advertising stub packages that could be installed, since PyMagic ships typeshed's third-party stubs and already has those types.
 
 ## Work done
 
-The 360 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 361 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

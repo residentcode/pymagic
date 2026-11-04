@@ -218,8 +218,9 @@ export function setupDatabase(deps) {
     const toggleNode = (key) => { if (open.has(key)) open.delete(key); else open.add(key); };
 
     $('db-refresh').onclick = async () => { schemas.clear(); databaseLists.clear(); await loadSources(); };
-    $('db-add').onclick = async () => {
-        const path = await deps.askText('Add an SQLite database', 'db.sqlite3', 'A file of the project, from its folder; a new one is made');
+    /** Adds an SQLite file of the project as a data source (the tree's New > Data Source in Path starts it with the folder's path). */
+    async function addSqlite(initial = 'db.sqlite3') {
+        const path = await deps.askText('Add an SQLite database', initial, 'A file of the project, from its folder; a new one is made');
         if (!path?.trim())
             return;
         const res = await fetch('/api/db/sources', { method: 'POST', body: JSON.stringify({ path: path.trim() }) });
@@ -228,8 +229,10 @@ export function setupDatabase(deps) {
             return;
         }
         open.add(path.trim().replace(/\\/g, '/'));
+        showTab('database');
         await loadSources();
-    };
+    }
+    $('db-add').onclick = () => void addSqlite();
 
     // ------------------------------------------------------------ a PostgreSQL or MySQL server
     const DEFAULT_PORTS = { postgres: '5432', mysql: '3306' };
@@ -725,6 +728,7 @@ export function setupDatabase(deps) {
     setMode('table');
     return {
         show: () => { showTab('database'); void loadSources(); },
+        addSqlite,
         /** The tables and views of the chosen data source (the first when none is chosen), for SQL completed elsewhere. */
         async objects() {
             if (!sources.length) await loadSources();

@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { launch, project, removeTree, sleep } from './app.mjs';
 
 const FILES = {
@@ -3678,6 +3678,80 @@ describe('JSON Schemas: the status bar picker, ignoring a file, a mapping, "$sch
         assert.deepEqual(JSON.parse(readFileSync(join(app.root, '.pymagic/schema-mappings.json'), 'utf8')).mappings, []);
         await page.evaluate(`[...document.querySelectorAll('.settings-foot button')].find((b) => b.textContent === 'Done').click()`);
         clearMappings();
+    });
+});
+
+describe('the project tree: the project folder as its first row, and its menu as PyCharm has it', () => {
+    const rowOf = (path) => `document.querySelector('#files li[data-path="${path}"]')`;
+    const rightClick = (path) => page.evaluate(`(() => { const li = ${rowOf(path)}; const r = li.getBoundingClientRect(); li.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: r.left + 20, clientY: r.top + 5 })); })()`);
+    const labels = (level) => page.evaluate(`[...document.querySelectorAll('.ctx-menu')][${level}] ? [...[...document.querySelectorAll('.ctx-menu')][${level}].querySelectorAll('.ctx-item .ctx-label')].map((x) => x.textContent) : null`);
+    const choose = async (level, label) => {
+        await page.waitFor(`(() => { const m = [...document.querySelectorAll('.ctx-menu')][${level}]; return !!m && [...m.querySelectorAll('.ctx-item')].some((r) => r.querySelector('.ctx-label').textContent === ${JSON.stringify(label)}); })()`, 5000, 'the row ' + label);
+        await page.evaluate(`[...[...document.querySelectorAll('.ctx-menu')][${level}].querySelectorAll('.ctx-item')].find((r) => r.querySelector('.ctx-label').textContent === ${JSON.stringify(label)}).click()`);
+    };
+    const answer = async (text) => {
+        await page.waitFor(`document.querySelector('.ask-box input')`, 5000, 'the name box');
+        await page.evaluate(`(() => { const i = document.querySelector('.ask-box input'); i.value = ${JSON.stringify(text)}; [...document.querySelectorAll('.ask-box button')].find((b) => b.textContent === 'OK').click(); })()`);
+    };
+
+    test('the first row is the project folder, with its path; everything else is inside it, and it closes and opens', async () => {
+        const root = await page.waitFor(`(() => { const li = document.querySelector('#files li'); return li?.dataset.kind === 'root' ? { name: li.querySelector('.fname').textContent, path: li.querySelector('.fpath').textContent } : null; })()`, 10000, 'the root row');
+        assert.equal(root.name, basename(app.root));
+        assert.equal(root.path.replace(/\\/g, '/').toLowerCase(), app.root.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase());
+        // the project's top-level rows are one step in from it
+        const pads = await page.evaluate(`[document.querySelector('#files li.root').style.paddingLeft, ${rowOf('calc.py')}?.style.paddingLeft]`);
+        assert.deepEqual(pads, ['8px', '22px']);
+        await page.evaluate(`document.querySelector('#files li.root').click()`);
+        await page.waitFor(`document.querySelectorAll('#files li').length === 1`, 5000, 'only the root');
+        await page.evaluate(`document.querySelector('#files li.root').click()`);
+        await page.waitFor(`!!${rowOf('calc.py')}`, 5000, 'the files again');
+    });
+
+    test('New on the project folder: PyCharm\'s entries; a Python file gets .py, a package its __init__.py, .gitignore its start', async () => {
+        await rightClick('');
+        await choose(0, 'New');
+        const entries = await page.waitFor(`(() => { const m = [...document.querySelectorAll('.ctx-menu')][1]; return m ? [...m.querySelectorAll('.ctx-item .ctx-label')].map((x) => x.textContent) : null; })()`, 5000, 'the New submenu');
+        for (const e of ['Python File', 'File', 'Scratch File', 'Directory', 'Python Package', 'HTML File', 'Stylesheet', 'Dockerfile', 'Dev Container Config…', 'Docker Compose File', 'HTTP Request', 'OpenAPI Specification', 'EditorConfig File', '.ignore File'])
+            assert.ok(entries.includes(e), `${e} in ${entries.join(', ')}`);
+        await choose(1, 'Python File');
+        await answer('made_by_new');
+        await page.waitFor(`window.pymagic.editor.getModel().uri.path.endsWith('/made_by_new.py')`, 15000, 'the new file open');
+        assert.ok(existsSync(join(app.root, 'made_by_new.py')));
+
+        await rightClick('');
+        await choose(0, 'New');
+        await choose(1, 'Python Package');
+        await answer('newpkg');
+        await page.waitFor(`window.pymagic.editor.getModel().uri.path.endsWith('/newpkg/__init__.py')`, 15000, 'the package\'s __init__.py');
+
+        await rightClick('');
+        await choose(0, 'New');
+        await choose(1, '.ignore File');
+        await choose(2, '.dockerignore (Docker)');
+        await page.waitFor(`window.pymagic.editor.getModel().uri.path.endsWith('/.dockerignore')`, 15000, '.dockerignore open');
+        assert.match(readFileSync(join(app.root, '.dockerignore'), 'utf8'), /\.venv/);
+    });
+
+    test('a file\'s menu: Copy path/reference gives its absolute path, its path, its name and its dotted reference; Diagrams and More run/debug', async () => {
+        mkdirSync(join(app.root, 'shop/orders'), { recursive: true });
+        writeFileSync(join(app.root, 'shop/orders/models.py'), 'class Order:\n    pass\n');
+        writeFileSync(join(app.root, 'shop/__init__.py'), '');
+        writeFileSync(join(app.root, 'shop/orders/__init__.py'), '');
+        await page.evaluate(`document.getElementById('ex-refresh').click()`);
+        await page.waitFor(`!!${rowOf('shop')}`, 10000, 'shop in the tree');
+        await page.evaluate(`window.pymagic.openFile('shop/orders/models.py')`);
+        await page.waitFor(`!!${rowOf('shop/orders/models.py')}`, 10000, 'the file in the tree');
+        await rightClick('shop/orders/models.py');
+        const top = await labels(0);
+        for (const e of ['New', 'Copy path/reference', 'Find usages', 'Rename…', 'Diagrams', 'Local history']) assert.ok(top.includes(e), `${e} in ${top.join(', ')}`);
+        await choose(0, 'Copy path/reference');
+        const copies = await page.waitFor(`(() => { const m = [...document.querySelectorAll('.ctx-menu')][1]; return m ? [...m.querySelectorAll('.ctx-item .ctx-label')].map((x) => x.textContent) : null; })()`, 5000, 'the copy submenu');
+        assert.ok(copies.includes('Path from the project folder: shop/orders/models.py'), copies.join(' | '));
+        assert.ok(copies.includes('File name: models.py'), copies.join(' | '));
+        assert.ok(copies.includes('Reference: shop.orders.models'), copies.join(' | '));
+        assert.ok(copies.some((c) => c.startsWith('Absolute path: ')), copies.join(' | '));
+        await page.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+        await page.evaluate(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
     });
 });
 

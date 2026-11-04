@@ -728,7 +728,8 @@ export function setupTests(deps) {
     void load().catch(() => { });
     setButtons();
     /** Runs the tests of a file, or of every test file under a folder (the menus of the project tree and the tabs). */
-    async function runPath(path, debug = false) {
+    /** The tests of a file or folder ('' the project): run, debugged, run with coverage, or profiled (how: 'run' | 'coverage' | 'profile'). */
+    async function runPath(path, debug = false, how = 'run') {
         await load();
         const ids = roots.filter((r) => !path || r.file === path || r.file.startsWith(path + '/')).map((r) => r.id);
         if (debug && ids.length) {
@@ -741,7 +742,8 @@ export function setupTests(deps) {
 `, 'info');
             return;
         }
-        await run(ids);
+        if (how === 'profile') { profileTests(ids); return; }
+        await run(ids, how === 'coverage');
     }
     return { runPath };
 }

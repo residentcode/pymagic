@@ -166,6 +166,9 @@ kbd { font: 11px var(--mono); background: var(--raised); border: 1px solid var(-
 #files { grid-area: files; list-style: none; margin: 0; padding: 0 6px 12px; outline: none; overflow: auto; min-height: 60px; }
 #files li { display: flex; align-items: center; gap: 2px; height: 26px; padding: 0 8px; border-radius: var(--radius); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none; color: var(--fg); }
 #files li:hover { background: var(--hover); }
+/* the project folder, the tree's first row: its name, then its path dimmed (as PyCharm) */
+#files li.root .fname { font-weight: 600; flex: none; }
+#files li.root .fpath { margin-left: 8px; color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 #files li.sel:not(.active) { background: var(--hover2); }
 #files li.active { background: var(--sel); color: var(--fg); box-shadow: inset 2px 0 0 var(--accent); }
 #files li .twisty { display: inline-flex; align-items: center; justify-content: center; width: 14px; flex: none; color: var(--faint); font-size: 10px; }

@@ -3,6 +3,7 @@ import { toast } from './toast';
 import { openMenu } from './menu';
 import { copyName, join, moveProblem, movedPath, packageTarget, moduleTarget } from './explorer-model';
 import { templateText } from './codegen';
+import { NEW_KINDS, IGNORE_FILES, newFileName, newFileText } from './newfile-model';
 
 const FILE_TYPE = 'application/x-pymagic-file';   // a row of the tree being dragged; the editor and the tab bars take nothing from it
 
@@ -130,6 +131,11 @@ export function setupExplorer(deps) {
     let lazy = new Set();   // Mark Directory As (.pymagic/folders.json), and TEMPLATES['DIRS']
     let coverage = window.pymagicCoverageTree ?? null;   // {path: {lines, hit, branches, taken, percent}} from the Coverage panel, or null
     try { open = new Set(JSON.parse(localStorage.getItem('pymagic.explorer.open') ?? '[]')); } catch { /* storage unavailable */ }
+    // the project folder itself is the tree's first row, as in PyCharm: its name, its path dimmed, and everything else inside it
+    const rootPath = String(deps.root ?? '').replace(/[\\/]+$/, '');
+    const rootName = rootPath.split(/[\\/]/).pop() || 'Project';
+    let rootOpen = true;
+    try { rootOpen = localStorage.getItem('pymagic.explorer.rootClosed') !== '1'; } catch { /* storage unavailable */ }
     window.addEventListener('pymagic:coverageTree', (e) => { coverage = e.detail; paint(); });
     list.tabIndex = 0;
 
@@ -215,8 +221,38 @@ export function setupExplorer(deps) {
         return li;
     }
 
+    /** The project folder's row: a click opens or closes it, its menu is the project's (New, Paste, Find in files, ...). */
+    function rootRow() {
+        const li = document.createElement('li');
+        li.dataset.path = '';
+        li.dataset.kind = 'root';
+        li.className = 'root';
+        li.style.paddingLeft = '8px';
+        li.title = rootPath;
+        const twisty = document.createElement('span');
+        twisty.className = 'twisty';
+        twisty.append(sprite(rootOpen ? 'chev-down' : 'chev-right'));
+        const icon = document.createElement('span');
+        icon.className = 'ficon';
+        icon.append(sprite(rootOpen ? 'folder-open' : 'folder', 'folder'));
+        const label = document.createElement('span');
+        label.className = 'fname';
+        label.textContent = rootName;
+        const where = document.createElement('span');
+        where.className = 'fpath';
+        where.textContent = rootPath;
+        li.append(twisty, icon, label, where);
+        li.onclick = () => {
+            rootOpen = !rootOpen;
+            try { localStorage.setItem('pymagic.explorer.rootClosed', rootOpen ? '0' : '1'); } catch { /* storage unavailable */ }
+            paint();
+        };
+        li.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); menu(e.clientX, e.clientY, '', true); };
+        return li;
+    }
+
     function paint() {
-        const rows = [];
+        const rows = [rootRow()];
         const walk = (dir, depth) => {
             const { subdirs, names } = children(dir);
             for (const d of subdirs) {
@@ -226,7 +262,7 @@ export function setupExplorer(deps) {
             }
             for (const f of names) rows.push(row(f.path, baseName(f.path), false, depth, false));
         };
-        walk('', 0);
+        if (rootOpen) walk('', 1);
         list.replaceChildren(...rows);
         window.dispatchEvent(new Event('pymagic:files'));
         deps.refreshDirty();
@@ -273,7 +309,8 @@ export function setupExplorer(deps) {
 
     function reveal(path) {
         let p = parentOf(path);
-        let changed = false;
+        let changed = !rootOpen;
+        rootOpen = true;
         while (p) { if (!open.has(p)) { open.add(p); changed = true; } p = parentOf(p); }
         if (changed) { remember(); paint(); }
     }
@@ -306,6 +343,61 @@ export function setupExplorer(deps) {
         reveal(path);
         await deps.synced();
         if (!isDir) await deps.openFile(path);
+    }
+
+    /** New > (a kind): its name asked with the kind's start, its extension added, the project's file template or the kind's text inside. */
+    async function createKind(dir, kind) {
+        if (kind.dir) return create(dir, true);
+        if (kind.scratch) return deps.newScratch?.();
+        if (kind.dataSource) return deps.addDataSource?.(dir ? `${dir}/db.sqlite3` : 'db.sqlite3');
+        const what = kind.package ? 'New Python package' : `New ${kind.label.replace(/…$/, '')}`;
+        const typed = await askText(what, kind.initial ?? '', dir ? `in ${dir}` : 'in the project folder');
+        if (!typed) return;
+        const name = newFileName(kind, typed);
+        if (INVALID.test(name) || name.startsWith('/')) { toast('That is not a usable name.', true); return; }
+        const path = dir ? `${dir}/${name}` : name;
+        // a package: the folder and its __init__.py (with the project's template for it, if any)
+        const file = kind.package ? `${path}/__init__.py` : path;
+        const content = (await templateText(file.slice(file.lastIndexOf('/') + 1))) || newFileText(kind, file);
+        if (!(await post({ op: 'create', path: file, dir: false, content }))) return;
+        for (let p = parentOf(file); p; p = parentOf(p)) open.add(p);
+        remember();
+        selected = file;
+        await refresh();
+        reveal(file);
+        await deps.synced();
+        await deps.openFile(file);
+    }
+
+    /** New > .ignore File > (one): made in the folder with its usual start, or opened when the folder has it already. */
+    async function createIgnore(dir, name, text) {
+        const path = dir ? `${dir}/${name}` : name;
+        if (!files.some((f) => f.path === path)) {
+            if (!(await post({ op: 'create', path, dir: false, content: text }))) return;
+            await refresh();
+            await deps.synced();
+        }
+        selected = path;
+        reveal(path);
+        await deps.openFile(path);
+    }
+
+    function newItems(dir) {
+        return NEW_KINDS.filter((k) => k === '-' || !k.plugin || deps.plugin?.(k.plugin) !== false).map((k) => k === '-' ? '-'
+            : k.ignore ? { label: k.label, submenu: IGNORE_FILES.map(([name, owner, text]) => ({ label: `${name} (${owner})`, run: () => void createIgnore(dir, name, text) })) }
+            : { label: k.label, key: k.key, run: () => void createKind(dir, k) });
+    }
+
+    /** Copy Path/Reference: what PyCharm offers to copy for a file or folder, each shown with its value. */
+    function copyItems(path) {
+        const absolute = rootPath ? `${rootPath}${rootPath.includes('\\') ? '\\' : '/'}${path.replace(/\//g, rootPath.includes('\\') ? '\\' : '/')}` : path;
+        const list = [['Absolute path', absolute], ['Path from the project folder', path], ['File name', baseName(path)]];
+        // a module's or package's dotted name, as an import names it
+        if (/\.pyi?$/.test(path) || dirs.includes(path)) {
+            const dotted = path.replace(/\.pyi?$/, '').replace(/\/__init__$/, '').split('/').join('.');
+            list.push(['Reference', dotted]);
+        }
+        return list.map(([label, value]) => ({ label: `${label}: ${value.length > 60 ? '…' + value.slice(-59) : value}`, run: () => { void navigator.clipboard?.writeText(value); toast(`Copied ${value}`); } }));
     }
 
     async function rename(path, isDir) {
@@ -465,16 +557,13 @@ export function setupExplorer(deps) {
 
     function menu(x, y, path, isDir) {
         const dir = path === '' ? '' : isDir ? path : parentOf(path);
-        const items = [
-            { label: 'New file…', run: () => create(dir, false) },
-            { label: 'New folder…', run: () => create(dir, true) },
-        ];
-        if (path) items.push('-', { label: 'Cut', key: 'Ctrl+X', run: () => take(path, true) }, { label: 'Copy', key: 'Ctrl+C', run: () => take(path, false) });
+        const items = [{ label: 'New', submenu: newItems(dir) }];
+        if (path) items.push('-', { label: 'Cut', key: 'Ctrl+X', run: () => take(path, true) }, { label: 'Copy', key: 'Ctrl+C', run: () => take(path, false) },
+            { label: 'Copy path/reference', submenu: copyItems(path) });
         if (clip) items.push({ label: `Paste ${baseName(clip.path)}`, key: 'Ctrl+V', run: () => paste(dir) });
         if (path) {
             items.push('-', { label: 'Rename…', key: 'F2', run: () => rename(path, isDir) }, { label: 'Move…', key: 'F6', run: () => moveTo(path) },
-                { label: 'Delete…', key: 'Del', run: () => remove(path, isDir) },
-                { label: 'Copy path', run: () => navigator.clipboard?.writeText(path) });
+                { label: 'Delete…', key: 'Del', run: () => remove(path, isDir) });
         }
         // Convert to Package / to Module: the file moves, imports of it stay the same
         if (path && !isDir && packageTarget(path, exists)) items.push('-', { label: 'Convert to package', run: () => void convert(path, packageTarget(path, exists), null) });

@@ -123,6 +123,30 @@ export function setupFileActions(deps) {
         ? { label: 'Remove the bookmark', run: () => deps.bookmarks.toggleFile(rel, isDir) }
         : { label: 'Add a bookmark', run: () => deps.bookmarks.toggleFile(rel, isDir) };
 
+    /** More Run/Debug: the run that the plugins add, for a Python file (profiled) and for its tests or a folder's (coverage, profiled). */
+    function moreRunItems(path, isDir) {
+        const on = (name) => deps.plugin?.(name) !== false;
+        const name = path ? `'${path.slice(path.lastIndexOf('/') + 1)}'` : 'the project';
+        const items = [];
+        if (!isDir && isPy(path) && on('profiler') && deps.run.profileScript) items.push({ label: `Profile ${name}`, run: () => void deps.run.profileScript(path) });
+        if (isDir || isTestFile(path)) {
+            if (on('coverage')) items.push({ label: `Run the tests in ${name} with coverage`, run: () => deps.tests.runPath(path, false, 'coverage') });
+            if (on('profiler')) items.push({ label: `Profile the tests in ${name}`, run: () => deps.tests.runPath(path, false, 'profile') });
+        }
+        return items;
+    }
+
+    /** Diagrams: the classes of a Python file (it opens first), and the project's classes, modules and Django models. */
+    function diagramItems(path, isDir) {
+        if (deps.plugin?.('diagrams') === false) return [];
+        const show = (kind) => window.dispatchEvent(new CustomEvent('pymagic:diagram', { detail: kind }));
+        const items = [];
+        if (!isDir && isPy(path)) items.push({ label: 'Classes of this file', run: async () => { await deps.openFile(path); show('file'); } });
+        items.push({ label: 'Classes of the project', run: () => show('classes') }, { label: 'Modules and imports', run: () => show('modules') });
+        if (deps.plugin?.('django') !== false) items.push({ label: 'Django models', run: () => show('models') });
+        return [{ label: 'Diagrams', submenu: items }];
+    }
+
     /** The items for a file, shared by the tree and the tabs. */
     function fileItems(rel) {
         const items = [];
@@ -130,6 +154,8 @@ export function setupFileActions(deps) {
             items.push({ label: `Run '${rel.slice(rel.lastIndexOf('/') + 1)}'`, run: () => deps.run.runScript(rel, '', false) },
                 { label: `Debug '${rel.slice(rel.lastIndexOf('/') + 1)}'`, run: () => deps.run.runScript(rel, '', true) });
             if (isTestFile(rel)) items.push({ label: 'Run the tests in it', run: () => deps.tests.runPath(rel) }, { label: 'Debug the tests in it', run: () => deps.tests.runPath(rel, true) });
+            const more = moreRunItems(rel, false);
+            if (more.length) items.push({ label: 'More run/debug', submenu: more });
             items.push('-');
         }
         items.push(
@@ -161,14 +187,18 @@ export function setupFileActions(deps) {
         );
         if (isDir) {
             items.push({ label: `Run the tests in ${path ? `'${path.slice(path.lastIndexOf('/') + 1)}'` : 'the project'}`, run: () => deps.tests.runPath(path) },
-                { label: `Debug the tests in ${path ? `'${path.slice(path.lastIndexOf('/') + 1)}'` : 'the project'}`, run: () => deps.tests.runPath(path, true) },
-                '-', openIn(path, true));
+                { label: `Debug the tests in ${path ? `'${path.slice(path.lastIndexOf('/') + 1)}'` : 'the project'}`, run: () => deps.tests.runPath(path, true) });
+            const more = moreRunItems(path, true);
+            if (more.length) items.push({ label: 'More run/debug', submenu: more });
+            items.push('-', openIn(path, true));
             items.push({ label: 'Local history', run: () => deps.history.showFolder(path) });
             if (path) items.push({ label: 'Add to .gitignore', run: () => gitignore(path) }, bookmarkItem(path, true));
             items.push({ label: 'Clean Python compiled files', run: () => clean(path) });
         } else {
             items.push('-', ...fileItems(path));
         }
+        const diagrams = diagramItems(path, isDir);
+        if (diagrams.length) items.push('-', ...diagrams);
         return items;
     }
 
