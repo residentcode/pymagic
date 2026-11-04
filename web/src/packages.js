@@ -120,7 +120,8 @@ export function setupPackages() {
             return;
         }
         table.textContent = '';
-        if (!hasPip || packages.length === 0) {
+        // without pip the list is still shown when Python could tell what is installed
+        if (packages.length === 0) {
             table.textContent = hasPip ? 'No packages installed.' : '';
             return;
         }
@@ -640,6 +641,9 @@ export function setupPackages() {
         void run('install', [e.detail]);
     });
     window.addEventListener('pymagic:interpreter', () => { outdated = new Map(); $('pk-outdated').textContent = 'Check updates'; if (loaded)
+        void load(); });
+    // installed or removed from outside (uv add, uv sync, pip install in the terminal): the list as it is now
+    window.addEventListener('pymagic:packagesChanged', (e) => { if (e.detail?.outside && loaded && !client)
         void load(); });
     // another panel asks for packages (the Database panel's driver): installed here, the log in the Packages tab
     window.addEventListener('pymagic:installPackages', (e) => void run('install', e.detail));

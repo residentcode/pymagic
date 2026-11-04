@@ -85,8 +85,82 @@ public sealed class InterpreterManager
         if (interpreter?.Target is SshTarget ssh) ssh.Project = _root;            // what is copied to the remote machine
         lock (_gate) _current = interpreter;
         if (save && interpreter != null) Save(interpreter.Path);
+        WatchPackages(interpreter);
         Changed?.Invoke(interpreter);
         return interpreter;
+    }
+
+    // ------------------------------------------------------------ packages installed from outside
+
+    /// <summary>
+    /// Raised (after <see cref="Reload"/>) when packages were installed into the interpreter or taken out of it by something else than the Packages
+    /// panel: uv add, uv sync or pip install in the terminal. Its site-packages folders are watched; a burst of changes is one event.
+    /// </summary>
+    public event Action<PythonInterpreter>? PackagesChanged;
+
+    /// <summary>How long the watcher waits after the last change before it reads the interpreter again (an install writes many files).</summary>
+    public TimeSpan PackagesSettle { get; set; } = TimeSpan.FromSeconds(2);
+
+    readonly List<FileSystemWatcher> _packageWatchers = new();
+    string _watchedKey = "";
+    Timer? _settle;
+
+    void WatchPackages(PythonInterpreter? interpreter)
+    {
+        var dirs = interpreter is { Target.IsLocal: true } ? interpreter.SitePackages.Where(Directory.Exists).Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList() : new List<string>();
+        string key = string.Join("|", dirs);
+        lock (_packageWatchers)
+        {
+            if (key == _watchedKey) return;
+            _watchedKey = key;
+            foreach (var w in _packageWatchers) w.Dispose();
+            _packageWatchers.Clear();
+            foreach (var dir in dirs)
+            {
+                try
+                {
+                    // a package is a folder (and its .dist-info) at the top of site-packages; what is inside them is not looked at
+                    var w = new FileSystemWatcher(dir) { IncludeSubdirectories = false, NotifyFilter = NotifyFilters.DirectoryName | NotifyFilters.FileName };
+                    w.Created += (_, e) => Touched(e.Name);
+                    w.Deleted += (_, e) => Touched(e.Name);
+                    w.Renamed += (_, e) => Touched(e.Name);
+                    // too many changes, or the folder itself went (uv sync made .venv again): watched anew after the reload
+                    w.Error += (_, _) => { lock (_packageWatchers) _watchedKey = ""; Touched(null); };
+                    w.EnableRaisingEvents = true;
+                    _packageWatchers.Add(w);
+                }
+                catch (Exception e) when (e is ArgumentException or IOException or PlatformNotSupportedException) { }
+            }
+        }
+    }
+
+    /// <summary>Whether a name at the top of site-packages says a package came or went (its metadata folder, a .pth file, or a module); caches and temporary files do not.</summary>
+    public static bool IsPackageChange(string? name)
+    {
+        if (name == null) return true;
+        if (name.StartsWith('~') || name.StartsWith(".") || name.Equals("__pycache__", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
+    }
+
+    /// <summary>Reads the interpreter again and watches its folders anew, as after a change of its packages (its environment was made again).</summary>
+    public void RefreshPackages()
+    {
+        lock (_packageWatchers) _watchedKey = "";
+        Touched(null);
+    }
+
+    void Touched(string? name)
+    {
+        if (!IsPackageChange(name)) return;
+        lock (_packageWatchers)
+        {
+            _settle?.Dispose();
+            _settle = new Timer(_ =>
+            {
+                try { if (Reload() is { } now) PackagesChanged?.Invoke(now); }
+                catch (Exception e) { Console.Error.WriteLine("Reading the interpreter again: " + e.Message); }
+            }, null, PackagesSettle, Timeout.InfiniteTimeSpan);
+        }
     }
 
     /// <summary>Whether an interpreter's path is inside the project folder (one of its own environments).</summary>

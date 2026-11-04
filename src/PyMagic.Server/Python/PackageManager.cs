@@ -35,6 +35,8 @@ public static class PackageManager
         if (code != 0)
         {
             bool noPip = error.Contains("No module named pip", StringComparison.OrdinalIgnoreCase);
+            // an environment uv made has no pip: Python's own record of what is installed (importlib.metadata, what uv pip list reads too)
+            if (noPip && Distributions(python, timeoutMs, target) is { } own) return new PackageList(false, null, own);
             return new PackageList(!noPip, noPip ? "pip is not installed for this interpreter" : LastLine(error) ?? $"pip exited with {code}", Array.Empty<InstalledPackage>());
         }
         try
@@ -49,6 +51,27 @@ public static class PackageManager
         {
             return new PackageList(true, "unexpected answer from pip", Array.Empty<InstalledPackage>());
         }
+    }
+
+    const string DistributionsScript =
+        "import json, importlib.metadata as m\n" +
+        "seen = {}\n" +
+        "for d in m.distributions():\n" +
+        "    name = d.metadata['Name']\n" +
+        "    if name and name.lower() not in seen: seen[name.lower()] = {'name': name, 'version': d.version}\n" +
+        "print(json.dumps(list(seen.values())))\n";
+
+    /// <summary>The installed distributions as Python itself knows them (no pip needed); null when the interpreter cannot say.</summary>
+    public static List<InstalledPackage>? Distributions(string python, int timeoutMs = 60000, ExecutionTarget? target = null)
+    {
+        var (code, output, _) = Exec(python, new[] { "-c", DistributionsScript }, timeoutMs, target);
+        if (code != 0) return null;
+        try
+        {
+            return JsonNode.Parse(output)!.AsArray().Select(p => new InstalledPackage(p!["name"]!.GetValue<string>(), p["version"]!.GetValue<string>(), false, null))
+                .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException or InvalidOperationException or NullReferenceException) { return null; }
     }
 
     /// <summary>Packages with a newer release (asks the package index, so it needs the network and can take a while).</summary>

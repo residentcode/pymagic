@@ -3819,6 +3819,37 @@ describe('an environment made in the project from outside', () => {
             removeTree(join(projectRoot, 'venv'));
         }
     });
+
+    test('a package installed from outside (uv add, pip install in the terminal) is seen without a restart: its "not installed" marker goes', async () => {
+        const before = await page.evaluate(`fetch('/api/interpreter').then((r) => r.json())`);
+        const envDir = join(projectRoot, 'pkgenv');
+        const made = spawnSync('python', ['-m', 'venv', '--without-pip', envDir], { encoding: 'utf8' });
+        assert.equal(made.status, 0, made.stderr);
+        try {
+            const python = join(envDir, 'Scripts', 'python.exe');
+            const chose = await page.evaluate(`fetch('/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: ${JSON.stringify(python)} }) }).then((r) => r.status)`);
+            assert.equal(chose, 200);
+            await page.evaluate(`window.dispatchEvent(new Event('pymagic:interpreter'))`);
+            mkdirSync(join(projectRoot, 'pkgcheck'), { recursive: true });
+            writeFileSync(join(projectRoot, 'pkgcheck', 'requirements.txt'), 'shoplib\n');
+            await open('pkgcheck/requirements.txt');
+            const marker = `(() => { const m = window.pymagic.editor.getModel(); return window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).some((x) => x.message.includes("'shoplib' is not installed")); })()`;
+            await page.waitFor(marker, 30000, 'shoplib marked as not installed');
+            // what pip writes into site-packages, by something else than the Packages panel
+            const site = join(envDir, 'Lib', 'site-packages');
+            mkdirSync(join(site, 'shoplib'), { recursive: true });
+            writeFileSync(join(site, 'shoplib', '__init__.py'), 'X = 1\n');
+            mkdirSync(join(site, 'shoplib-1.0.dist-info'), { recursive: true });
+            writeFileSync(join(site, 'shoplib-1.0.dist-info', 'METADATA'), 'Metadata-Version: 2.1\nName: shoplib\nVersion: 1.0\n');
+            writeFileSync(join(site, 'shoplib-1.0.dist-info', 'RECORD'), '');
+            await page.waitFor(`!${marker}`, 40000, 'the marker gone once the install settled');
+        } finally {
+            if (before.path) await page.evaluate(`fetch('/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: ${JSON.stringify(before.path)} }) }).then((r) => r.status)`);
+            await page.evaluate(`window.dispatchEvent(new Event('pymagic:interpreter'))`);
+            removeTree(envDir);
+            removeTree(join(projectRoot, 'pkgcheck'));
+        }
+    });
 });
 
 describe('Settings > Plugins', () => {

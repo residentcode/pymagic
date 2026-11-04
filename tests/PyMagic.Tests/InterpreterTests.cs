@@ -358,6 +358,34 @@ public class InterpreterTests
     }
 
     [Fact]
+    public void APackageInstalledFromOutsideIsSeenOnceTheInstallSettles()
+    {
+        Assert.True(InterpreterManager.IsPackageChange("django") && InterpreterManager.IsPackageChange("Django-4.1.6.dist-info") && InterpreterManager.IsPackageChange(null));
+        Assert.True(!InterpreterManager.IsPackageChange("__pycache__") && !InterpreterManager.IsPackageChange("~jango") && !InterpreterManager.IsPackageChange("x.tmp"), "pip's temporary names");
+        if (RealPython == null) return;
+        using var s = new Sandbox();
+        var (exe, site) = MakeVenv(s);
+        var manager = new InterpreterManager(s.Dir, Fake(s, s.Dir)) { PackagesSettle = TimeSpan.FromMilliseconds(300) };
+        manager.Select(exe, save: false);
+        int told = 0;
+        using var seen = new ManualResetEventSlim();
+        manager.PackagesChanged += _ => { Interlocked.Increment(ref told); seen.Set(); };
+        // what pip writes: the package's folder, its files and its .dist-info
+        Directory.CreateDirectory(Path.Combine(site, "shoplib"));
+        File.WriteAllText(Path.Combine(site, "shoplib", "__init__.py"), "X = 1\n");
+        Directory.CreateDirectory(Path.Combine(site, "shoplib-1.0.dist-info"));
+        File.WriteAllText(Path.Combine(site, "shoplib-1.0.dist-info", "METADATA"), "Name: shoplib\nVersion: 1.0\n");
+        Assert.True(seen.Wait(TimeSpan.FromSeconds(30)), "told after the install");
+        Thread.Sleep(1000);
+        Assert.Equal(1, told);   // one burst, one event
+        Assert.True(manager.Current != null && string.Equals(manager.Current.Path, Path.GetFullPath(exe), StringComparison.OrdinalIgnoreCase));
+        // and taken out again
+        seen.Reset();
+        Directory.Delete(Path.Combine(site, "shoplib-1.0.dist-info"), true);
+        Assert.True(seen.Wait(TimeSpan.FromSeconds(30)), "told after the removal");
+    }
+
+    [Fact]
     public void TheWatcherKnowsAnEnvironmentByItsPyvenvCfg()
     {
         Assert.Equal(".venv", ProjectWatcher.EnvironmentOf(".venv/pyvenv.cfg"));

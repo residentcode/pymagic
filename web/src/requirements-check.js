@@ -60,9 +60,11 @@ export function setupRequirementsCheck(deps) {
 
     monaco.editor.onDidCreateModel((model) => setTimeout(() => watch(model), 0));
     for (const model of monaco.editor.getModels()) watch(model);
-    // packages installed or removed: the markers of the open files again
-    window.addEventListener('pymagic:packagesChanged', () => {
+    // packages installed or removed (here or from outside), or another interpreter: the markers of the open files again
+    const again = () => {
         installed = null;
         for (const model of monaco.editor.getModels()) if (kindOf(deps.relOf(model) ?? '')) void check(model);
-    });
+    };
+    window.addEventListener('pymagic:packagesChanged', again);
+    window.addEventListener('pymagic:interpreter', again);
 }

@@ -49,6 +49,8 @@ export function setupDiskWatch(deps) {
         let event;
         try { event = parseEvent(JSON.parse(e.data)); } catch { return; }
         // not a file: the host took an environment just made in the project as the interpreter (its label)
+        // packages installed or removed from outside (uv add, pip install in the terminal): the host read the interpreter again
+        if (event.kind === 'packages') { window.dispatchEvent(new CustomEvent('pymagic:packagesChanged', { detail: { outside: true } })); return; }
         if (event.kind === 'interpreter' || event.kind === 'environment') { window.dispatchEvent(new CustomEvent('pymagic:interpreter-taken', { detail: { kind: event.kind, text: event.path } })); return; }
         batch.push(event);
         clearTimeout(timer);

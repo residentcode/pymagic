@@ -691,13 +691,22 @@ app.MapPost("/api/history/revert", async (HttpRequest req) =>
 // the files that change on disk, as server-sent events: "kind|path" (changed, created, deleted; "all|*" when there were too many to tell)
 var projectWatcher = new ProjectWatcher(root);
 app.Lifetime.ApplicationStopping.Register(projectWatcher.Dispose);
+// packages installed or removed by something else than the Packages panel (uv add, uv sync, pip install in the terminal): the engine has read the
+// interpreter again, and the page refreshes the Packages panel and the markers of requirements files and pyproject.toml
+interpreters.PackagesChanged += now => projectWatcher.Announce("packages", now.Label);
 // a .venv made in the project (uv sync, uv venv, python -m venv in the terminal) becomes its interpreter when it had none of its own; the page is told
 projectWatcher.EnvironmentMade += name => Task.Run(() =>
 {
     try
     {
         if (interpreters.AdoptNewEnvironment(name) is { } chosen) projectWatcher.Announce("interpreter", chosen.Label);
-        else projectWatcher.Announce("environment", name);   // the project had one of its own: the new one is listed
+        else
+        {
+            projectWatcher.Announce("environment", name);   // the project had one of its own: the new one is listed
+            // the current one made again (uv sync after its Python changed): its packages are read again and watched anew
+            if (interpreters.OwnEnvironment(name) is { } exe && interpreters.Current is { } cur && string.Equals(Path.GetFullPath(cur.Path), Path.GetFullPath(exe), StringComparison.OrdinalIgnoreCase))
+                interpreters.RefreshPackages();
+        }
     }
     catch (Exception e) { Console.Error.WriteLine("New environment " + name + ": " + e.Message); }
 });
@@ -1243,11 +1252,12 @@ app.MapGet("/api/packages", async () =>
     var current = interpreters.Current;
     if (current == null) return Results.Json(new { error = "no interpreter selected", hasPip = false, packages = Array.Empty<object>() });
     var list = await Task.Run(() => PackageManager.List(current.Python, target: current.Target));
+    string manager = !current.Target.IsLocal ? "pip" : Conda.For(current.Python) != null ? "conda" : UvProject.For(root, current.Python) != null ? "uv-project" : UvPip.For(current.Python) != null ? "uv" : "pip";
     return Results.Json(new
     {
-        interpreter = Describe(current), hasPip = list.HasPip, error = list.Error, packages = list.Packages,
-        isVenv = current.IsVenv, canInstall = PackageManager.CanInstallGlobally(current),
-        manager = !current.Target.IsLocal ? "pip" : Conda.For(current.Python) != null ? "conda" : UvProject.For(root, current.Python) != null ? "uv-project" : UvPip.For(current.Python) != null ? "uv" : "pip",
+        // an environment uv made has no pip and needs none: uv installs into it
+        interpreter = Describe(current), hasPip = list.HasPip || manager is "uv" or "uv-project", error = list.Error, packages = list.Packages,
+        isVenv = current.IsVenv, canInstall = PackageManager.CanInstallGlobally(current), manager,
     });
 });
 

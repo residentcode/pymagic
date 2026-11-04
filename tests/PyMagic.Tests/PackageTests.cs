@@ -184,7 +184,13 @@ public class PackageTests
 
         var none = PackageManager.List(python);
         Assert.True(!none.HasPip);
-        Assert.Contains("pip is not installed", none.Error!);
+        // what is installed is still known without pip (an environment uv made has none): Python's own record
+        Assert.True(none.Error == null, none.Error);
+        Assert.True(!none.Packages.Any(x => x.Name == "shoplib"));
+        string site = Directory.GetDirectories(Path.Combine(p.Root, ".venv"), "site-packages", SearchOption.AllDirectories).First();
+        Directory.CreateDirectory(Path.Combine(site, "shoplib-2.1.dist-info"));
+        File.WriteAllText(Path.Combine(site, "shoplib-2.1.dist-info", "METADATA"), "Metadata-Version: 2.1\nName: shoplib\nVersion: 2.1\n");
+        Assert.Equal("2.1", PackageManager.List(python).Packages.Single(x => x.Name == "shoplib").Version);
 
         var fix = p.Module(python, "ensurepip", "--upgrade");
         Assert.Equal(0, fix.Code);
