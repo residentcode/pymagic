@@ -50,6 +50,12 @@ export function setupDiskWatch(deps) {
         try { event = parseEvent(JSON.parse(e.data)); } catch { return; }
         // not a file: the host took an environment just made in the project as the interpreter (its label)
         // packages installed or removed from outside (uv add, pip install in the terminal): the host read the interpreter again
+        // a node_modules changed (npm install or uninstall settled): the tree shows it, package.json beside it is checked again
+        if (event.kind === 'node') {
+            window.dispatchEvent(new CustomEvent('pymagic:nodeModules', { detail: event.path }));
+            busy = busy.then(() => deps.refreshTree()).catch(() => { });
+            return;
+        }
         if (event.kind === 'packages') { window.dispatchEvent(new CustomEvent('pymagic:packagesChanged', { detail: { outside: true } })); return; }
         if (event.kind === 'interpreter' || event.kind === 'environment') { window.dispatchEvent(new CustomEvent('pymagic:interpreter-taken', { detail: { kind: event.kind, text: event.path } })); return; }
         batch.push(event);

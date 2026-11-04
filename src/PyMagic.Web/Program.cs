@@ -1247,6 +1247,15 @@ app.MapGet("/api/venv", () => Results.Json(new { uv = LockFiles.Find("uv") != nu
 
 // ---- packages ----------------------------------------------------------------------------------------------------
 
+// the npm packages a package.json's node_modules has (?dir= the folder of the package.json, "" for the project's): null when there is no node_modules
+app.MapGet("/api/node/installed", (string? dir) =>
+{
+    string folder;
+    try { folder = string.IsNullOrEmpty(dir) ? root : ResolveInRoot(dir); }
+    catch (UnauthorizedAccessException) { return Results.BadRequest(); }
+    return Results.Json(new { packages = NodePackages.Installed(folder) });
+});
+
 app.MapGet("/api/packages", async () =>
 {
     var current = interpreters.Current;

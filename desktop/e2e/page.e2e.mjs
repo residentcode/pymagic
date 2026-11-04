@@ -3850,6 +3850,25 @@ describe('an environment made in the project from outside', () => {
             removeTree(join(projectRoot, 'pkgcheck'));
         }
     });
+
+    test('npm install from outside: a package.json dependency marked "not installed" loses its marker once node_modules has it', async () => {
+        const app = join(projectRoot, 'npmcheck');
+        mkdirSync(app, { recursive: true });
+        writeFileSync(join(app, 'package.json'), '{\n  "name": "shop",\n  "dependencies": {\n    "express": "^4.18.2"\n  }\n}\n');
+        try {
+            await open('npmcheck/package.json');
+            const marked = `(() => { const m = window.pymagic.editor.getModel(); return window.pymagic.monaco.editor.getModelMarkers({ resource: m.uri }).some((x) => x.message.startsWith("Package 'express' is not installed")); })()`;
+            await page.waitFor(marked, 20000, 'express marked as not installed');
+            // what npm install writes, by something else than PyMagic
+            mkdirSync(join(app, 'node_modules', 'express', 'lib'), { recursive: true });
+            writeFileSync(join(app, 'node_modules', 'express', 'package.json'), '{ "name": "express", "version": "4.18.2" }');
+            writeFileSync(join(app, 'node_modules', 'express', 'lib', 'express.js'), 'module.exports = 1;\n');
+            writeFileSync(join(app, 'node_modules', '.package-lock.json'), '{}');
+            await page.waitFor(`!${marked}`, 30000, 'the marker gone once the install settled');
+        } finally {
+            removeTree(app);
+        }
+    });
 });
 
 describe('Settings > Plugins', () => {

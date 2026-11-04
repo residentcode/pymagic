@@ -99,8 +99,38 @@ public sealed class ProjectWatcher : IDisposable
                 EnvironmentMade?.Invoke(env);
             }
         }
+        if (NodeModulesOf(rel) is { } modules) NodePackagesTouched(modules);
         if (rel.StartsWith("..", StringComparison.Ordinal) || Ignored(rel)) return;
         TellAll(kind + "|" + rel);
+    }
+
+    /// <summary>How long after the last change in a node_modules its install is taken as done (npm writes thousands of files).</summary>
+    public TimeSpan NodeSettle { get; set; } = TimeSpan.FromSeconds(2);
+
+    readonly ConcurrentDictionary<string, Timer> _nodeTimers = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The node_modules folder (relative, with /) a change says a package came or went in: the folder itself, a package at its top
+    /// (`node_modules/express`, `node_modules/@types/node`), or npm's record of the install (`node_modules/.package-lock.json`); null for anything
+    /// deeper (the files inside a package) or outside one.
+    /// </summary>
+    public static string? NodeModulesOf(string rel)
+    {
+        var parts = rel.Replace('\\', '/').Split('/');
+        // node_modules inside a package is that package's own: the project's is the first one on the path
+        int at = Array.FindIndex(parts, p => p.Equals("node_modules", StringComparison.OrdinalIgnoreCase));
+        if (at < 0) return null;
+        int depth = parts.Length - at - 1;
+        bool top = depth == 0 || depth == 1 || depth == 2 && parts[at + 1].StartsWith('@');
+        return top ? string.Join('/', parts.Take(at + 1)) : null;
+    }
+
+    void NodePackagesTouched(string modules)
+    {
+        // one notice when the install settles: `node|path/of/node_modules`
+        _nodeTimers.AddOrUpdate(modules,
+            m => new Timer(_ => { if (_nodeTimers.TryRemove(m, out var t)) t.Dispose(); TellAll("node|" + m); }, null, NodeSettle, Timeout.InfiniteTimeSpan),
+            (_, existing) => { existing.Change(NodeSettle, Timeout.InfiniteTimeSpan); return existing; });
     }
 
     /// <summary>Hands something to every page that listens, as `kind|text` (the interpreter the host chose: `interpreter|label`).</summary>

@@ -26,6 +26,7 @@ import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
 import { setupRequirementsCheck } from './requirements-check';
+import { setupNpmCheck } from './npm-check';
 import { setupFileChecks } from './filecheck';
 import { setupSchemaCheck } from './schemacheck';
 import { setupSchemaPicker } from './schema-picker';
@@ -1198,6 +1199,7 @@ async function main() {
     fileActions.attachEditor(editor, monaco, () => refactorMenu(editor, refactor));
     const coverage = plugin('coverage') ? setupCoverage(common) : null;
     setupRequirementsCheck(common);
+    setupNpmCheck(common);
     setupFileChecks(common);
     if (plugin('schemas'))
         setupSchemaPicker({ editor, relOf: common.relOf, checker: setupSchemaCheck(common), openSettings });
