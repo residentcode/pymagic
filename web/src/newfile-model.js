@@ -34,15 +34,15 @@ export const IGNORE_FILES = [
  * `plugin`: shown only with that plugin on. `icon`: [symbol of the sprite, colour class], as menu.js draws it.
  */
 export const NEW_KINDS = [
-    { label: 'Python File', ext: '.py', icon: ['py', 'py'] },
-    { label: 'Jupyter Notebook', ext: '.ipynb', initial: 'Untitled', text: EMPTY_NOTEBOOK, plugin: 'notebooks', icon: ['notebook', 'data'] },
+    { label: 'Python File', ext: '.py', icon: ['python', ''] },
+    { label: 'Jupyter Notebook', ext: '.ipynb', initial: 'Untitled', text: EMPTY_NOTEBOOK, plugin: 'notebooks', icon: ['jupyter', ''] },
     { label: 'File', icon: ['file', 'doc'] },
     { label: 'Scratch File', scratch: true, key: 'Ctrl+Shift+Alt+Insert', icon: ['new-file', 'doc'] },
     { label: 'Directory', dir: true, icon: ['folder', 'folder'] },
     { label: 'Python Package', package: true, icon: ['package', 'folder'] },
-    { label: 'JavaScript File', ext: '.js', icon: ['code', 'data'] },
-    { label: 'TypeScript File', ext: '.ts', icon: ['code', 'py'] },
-    { label: 'HTML File', ext: '.html', icon: ['web', 'web'] },
+    { label: 'JavaScript File', ext: '.js', icon: ['js', ''] },
+    { label: 'TypeScript File', ext: '.ts', icon: ['ts', ''] },
+    { label: 'HTML File', ext: '.html', icon: ['html', ''] },
     { label: 'Stylesheet', ext: '.css', icon: ['css', 'py'] },
     { label: 'Dockerfile', initial: 'Dockerfile', text: DOCKERFILE, icon: ['docker', 'py'] },
     { label: 'Dev Container Config…', initial: '.devcontainer/devcontainer.json', text: DEVCONTAINER, icon: ['cube', 'py'] },
@@ -51,9 +51,9 @@ export const NEW_KINDS = [
     { label: 'OpenAPI Specification', initial: 'openapi.yaml', text: OPENAPI, icon: ['route', 'run'] },
     { label: 'EditorConfig File', initial: '.editorconfig', text: EDITORCONFIG, icon: ['cog', 'cog'] },
     { label: 'Resource Bundle', ext: '.properties', text: '# ${NAME}: key = text\n', icon: ['cog', 'cog'] },
-    { label: '.ignore File', ignore: true, icon: ['ignore', 'cog'] },
+    { label: '.ignore File', ignore: true, icon: ['dotignore', 'doc'] },
     '-',
-    { label: 'Data Source in Path', dataSource: true, plugin: 'database', icon: ['data', 'data'] },
+    { label: 'Data Source in Path', dataSource: true, plugin: 'database', icon: ['database', 'data'] },
 ];
 
 /** The name a kind makes from what was typed: its extension added when the typed name has none of its own. */

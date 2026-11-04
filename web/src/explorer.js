@@ -11,13 +11,14 @@ const $ = (id) => document.getElementById(id);
 
 // file kind -> the symbol of the icon sprite in index.html (and the class that colours it)
 const ICONS = {
-    py: ['py', ''], pyi: ['py', ''], html: ['web', 'web'], htm: ['web', 'web'], jinja: ['web', 'web'], j2: ['web', 'web'], css: ['web', 'web'], js: ['code', 'web'],
+    py: ['python', ''], pyi: ['python', ''], pyw: ['python', ''], html: ['html', ''], htm: ['html', ''], jinja: ['web', 'web'], j2: ['web', 'web'], css: ['css', 'folder'], js: ['js', ''],
     json: ['data', 'data'], md: ['doc', 'doc'], rst: ['doc', 'doc'], txt: ['doc', 'doc'], pdf: ['doc', 'doc'],
-    toml: ['cog', 'cog'], ini: ['cog', 'cog'], cfg: ['cog', 'cog'], yaml: ['cog', 'cog'], yml: ['cog', 'cog'], env: ['cog', 'cog'], http: ['web', 'web'], sql: ['data', 'data'],
+    toml: ['cog', 'cog'], ini: ['cog', 'cog'], cfg: ['cog', 'cog'], yaml: ['cog', 'cog'], yml: ['cog', 'cog'], env: ['cog', 'cog'], http: ['web', 'web'], sql: ['database', 'data'],
+    ipynb: ['jupyter', ''], sqlite: ['database', 'data'], sqlite3: ['database', 'data'], db: ['database', 'data'],
     sh: ['shell', 'cog'], ps1: ['shell', 'cog'], bat: ['shell', 'cog'], cmd: ['shell', 'cog'],
     png: ['file', 'doc'], jpg: ['file', 'doc'], jpeg: ['file', 'doc'], gif: ['file', 'doc'], svg: ['file', 'doc'], ico: ['file', 'doc'],
     // JavaScript and TypeScript, the view engines and components of the other kinds of New Project
-    ts: ['code', 'web'], tsx: ['code', 'web'], jsx: ['code', 'web'], mjs: ['code', 'web'], cjs: ['code', 'web'], scss: ['web', 'web'], less: ['web', 'web'],
+    ts: ['ts', ''], tsx: ['ts', ''], jsx: ['js', ''], mjs: ['js', ''], cjs: ['js', ''], scss: ['css', 'folder'], less: ['css', 'folder'],
     ejs: ['web', 'web'], eta: ['web', 'web'], hjs: ['web', 'web'], hbs: ['web', 'web'], handlebars: ['web', 'web'], mustache: ['web', 'web'], pug: ['web', 'web'], jade: ['web', 'web'],
     twig: ['web', 'web'], vash: ['web', 'web'], njk: ['web', 'web'], liquid: ['web', 'web'], vue: ['web', 'web'], svelte: ['web', 'web'], astro: ['web', 'web'],
     xml: ['data', 'data'], webmanifest: ['data', 'data'], gradle: ['cog', 'cog'], properties: ['cog', 'cog'], lock: ['cog', 'cog'],
@@ -36,7 +37,10 @@ const BINARY = /\.(png|jpe?g|gif|ico|bmp|webp|zip|whl|gz|tar|7z|rar|pdf|exe|dll|
 
 function iconOf(name) {
     const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-    if (['requirements.txt', 'Dockerfile', '.gitignore', 'Gemfile', 'Podfile', '.editorconfig', '.gitattributes', '.npmrc', '.prettierrc'].includes(name)) return ['cog', 'cog'];
+    // files known by their whole name: Docker's, the ignore files (PyCharm's .i*), the other settings
+    if (name === 'Dockerfile' || /^(docker-)?compose(\.[^.]+)?\.ya?ml$/i.test(name)) return ['docker', 'folder'];
+    if (/^\.[a-z]+ignore$/.test(name)) return ['dotignore', 'doc'];
+    if (['requirements.txt', 'Gemfile', 'Podfile', '.editorconfig', '.gitattributes', '.npmrc', '.prettierrc'].includes(name)) return ['cog', 'cog'];
     return ICONS[ext] ?? ['file', 'doc'];
 }
 
@@ -384,7 +388,7 @@ export function setupExplorer(deps) {
 
     function newItems(dir) {
         return NEW_KINDS.filter((k) => k === '-' || !k.plugin || deps.plugin?.(k.plugin) !== false).map((k) => k === '-' ? '-'
-            : k.ignore ? { label: k.label, icon: k.icon, submenu: IGNORE_FILES.map(([name, owner, text]) => ({ label: `${name} (${owner})`, icon: ['ignore', 'cog'], run: () => void createIgnore(dir, name, text) })) }
+            : k.ignore ? { label: k.label, icon: k.icon, submenu: IGNORE_FILES.map(([name, owner, text]) => ({ label: `${name} (${owner})`, icon: ['dotignore', 'doc'], run: () => void createIgnore(dir, name, text) })) }
             : { label: k.label, key: k.key, icon: k.icon, run: () => void createKind(dir, k) });
     }
 
