@@ -32,6 +32,9 @@ export function normalId(id) {
     const hash = s.indexOf('#');
     if (hash >= 0) s = s.slice(0, hash);
     if (/^http:\/\//i.test(s)) s = 'https://' + s.slice(7);
+    // SchemaStore's one schema has several addresses: json.schemastore.org, www.schemastore.org or schemastore.org, with .json or without
+    const store = /^https:\/\/(www\.|json\.)?schemastore\.org\/(.+?)(\.json)?\/?$/i.exec(s);
+    if (store) s = 'https://json.schemastore.org/' + store[2];
     return s.replace(/\/+$/, '');
 }
 
@@ -397,10 +400,11 @@ export function globMatch(pattern, rel) {
 
 /**
  * Which schema checks a file, as PyCharm decides it: none when the project ignores the file; else the project's own mapping whose pattern
- * matches; else what the file says itself ("$schema", or YAML's `# yaml-language-server: $schema=`); else its name (schemaOf).
+ * matches; else what the file says itself ("$schema", or YAML's `# yaml-language-server: $schema=`); else its name (schemaOf); else SchemaStore's
+ * catalog (storeSchemaOf).
  * Gives {name} (a built-in schema), {file} (a .json in the project), {ignored: true}, or null; `why` says which rule chose it.
  */
-export function chooseSchema(rel, project, declared) {
+export function chooseSchema(rel, project, declared, store = null) {
     const norm = rel.replace(/\\/g, '/');
     if ((project?.ignored ?? []).some((p) => p.replace(/\\/g, '/') === norm)) return { ignored: true, why: 'ignored' };
     for (const m of project?.mappings ?? []) {
@@ -409,7 +413,23 @@ export function chooseSchema(rel, project, declared) {
     }
     if (declared) return { ...declared, why: 'declared' };
     const name = schemaOf(norm);
-    return name ? { name, why: 'name' } : null;
+    if (name) return { name, why: 'name' };
+    const stored = storeSchemaOf(norm, store);
+    return stored ? { name: stored, why: 'store' } : null;
+}
+
+/**
+ * The SchemaStore schema a file gets by SchemaStore's catalog, as VS Code and PyCharm read its fileMatch: a pattern without a / is the file's name in
+ * any folder, one with a / the end of its path; a pattern starting with ! leaves those files out. `store`: [{name, fileMatch}]; null when none fits.
+ */
+export function storeSchemaOf(rel, store) {
+    const norm = rel.replace(/\\/g, '/');
+    for (const entry of store ?? []) {
+        const patterns = entry.fileMatch ?? [];
+        const fits = (p) => globMatch(p.includes('/') && !p.startsWith('**/') ? '**/' + p.replace(/^\//, '') : p, norm);
+        if (patterns.some((p) => !p.startsWith('!') && fits(p)) && !patterns.some((p) => p.startsWith('!') && fits(p.slice(1)))) return entry.name;
+    }
+    return null;
 }
 
 /**

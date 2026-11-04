@@ -31,3 +31,5 @@ The schemas PyMagic checks config files against, built into the app (no download
 | http-client-env.json, http-client-private-env.json, markdown-frontmatter.json | written for PyMagic (JetBrains' own are not published): the HTTP Client's environment files, and the usual keys of Markdown front matter |
 
 To bring one up to date, download it again over its file here and rebuild.
+
+SchemaStore's catalog and schemas are in ../SchemaStore (schemas.zip, index.json, LICENSE.txt), from https://github.com/SchemaStore/schemastore (src/schemas/json, every file up to 500 KB) and https://www.schemastore.org/api/json/catalog.json, fetched 2026-11-04; they are Apache License 2.0.

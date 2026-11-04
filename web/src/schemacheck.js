@@ -23,7 +23,7 @@ export function setupSchemaCheck(deps) {
 
     // the built-in schemas with their titles and $ids, and the project's mappings and ignored files (read again when they are changed)
     let catalog = null;
-    const catalogNow = () => (catalog ??= fetch('/api/schemas/list').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((c) => c ?? { registered: [], ids: {} }));
+    const catalogNow = () => (catalog ??= fetch('/api/schemas/list').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((c) => c ?? { registered: [], ids: {}, store: [] }));
     let project = null;
     const projectNow = () => (project ??= fetch('/api/schemas/mappings').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((p) => p ?? { mappings: [], ignored: [] }));
 
@@ -49,8 +49,8 @@ export function setupSchemaCheck(deps) {
         return found.size ? (id) => found.get(id) ?? null : null;
     }
 
-    function titleOf(name, registered) {
-        return registered.find((r) => r.name === name)?.title ?? name;
+    function titleOf(name, registered, store = []) {
+        return registered.find((r) => r.name === name)?.title ?? store.find((s) => s.name === name)?.title ?? name;
     }
 
     // the custom resources' schemas, from the CustomResourceDefinitions in the project's YAML files (read again after a save)
@@ -100,7 +100,7 @@ export function setupSchemaCheck(deps) {
 
     /** What to check in the file: [{name, data, text, line}] (text and line: where the document is, for a file of several). */
     async function targetsOf(rel, text, model) {
-        const { ids, registered } = await catalogNow();
+        const { ids, registered, store } = await catalogNow();
         const lower = rel.toLowerCase();
         const isYaml = /\.ya?ml$/.test(lower);
         // what the file says itself: "$schema" in JSON, the yaml-language-server modeline in YAML
@@ -111,7 +111,7 @@ export function setupSchemaCheck(deps) {
             data = await dataOf(rel, text);
             if (data && typeof data === 'object' && !Array.isArray(data)) declared = declaredSchema(data.$schema, ids, rel);
         }
-        const choice = chooseSchema(rel, await projectNow(), declared);
+        const choice = chooseSchema(rel, await projectNow(), declared, store);
         const note = (label) => { choices.set(model, { label, choice }); window.dispatchEvent(new CustomEvent('pymagic:schema-choice', { detail: { model } })); };
         if (choice?.ignored) { note(null); return []; }
         if (choice?.file) {
@@ -131,7 +131,7 @@ export function setupSchemaCheck(deps) {
             note(titleOf(base, registered));
             return [{ name: base, data: front, text: fm.text, line: fm.line }];
         }
-        if (base) { note(choice.mapping ?? titleOf(base, registered)); return [{ name: base, data, text, line: 0 }]; }
+        if (base) { note(choice.mapping ?? titleOf(base, registered, store)); return [{ name: base, data, text, line: 0 }]; }
         if (!isYaml || !looksKubernetes(text)) { note(null); return []; }
         note('Kubernetes');
         const targets = [];

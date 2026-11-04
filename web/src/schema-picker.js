@@ -24,7 +24,7 @@ async function saveMappings(next) {
  * The dialog of one mapping: its name, its schema (a built-in one, or a .json of the project) and the files it is for (one path or pattern a
  * line: * within a name, ** for any folders). Resolves to the mapping, or null when it is cancelled.
  */
-export function mappingDialog(title, registered, initial = { name: '', schema: '', patterns: [] }) {
+export function mappingDialog(title, registered, initial = { name: '', schema: '', patterns: [] }, store = []) {
     return new Promise((resolve) => {
         const shade = document.createElement('div');
         shade.className = 'ask-shade';
@@ -39,6 +39,12 @@ export function mappingDialog(title, registered, initial = { name: '', schema: '
         name.placeholder = 'My config';
         const schema = document.createElement('select');
         for (const r of registered) schema.append(new Option(r.title, r.name));
+        if (store.length) {
+            const group = document.createElement('optgroup');
+            group.label = 'SchemaStore.org';
+            for (const s of store) group.append(new Option(s.title, s.name));
+            schema.append(group);
+        }
         schema.append(new Option('A JSON file of the project…', 'file:'));
         const file = document.createElement('input');
         file.placeholder = 'schemas/config.schema.json';
@@ -75,7 +81,7 @@ export function mappingDialog(title, registered, initial = { name: '', schema: '
             if (!list.length) { note.textContent = 'Name at least one file.'; patterns.focus(); return; }
             if (schema.value === 'file:' && !/\.json$/i.test(target)) { note.textContent = 'The schema file is a .json file of the project.'; file.focus(); return; }
             const chosen = schema.value === 'file:' ? 'file:' + target : target;
-            done({ name: name.value.trim() || (registered.find((r) => r.name === chosen)?.title ?? target), schema: chosen, patterns: list });
+            done({ name: name.value.trim() || ([...registered, ...store].find((r) => r.name === chosen)?.title ?? target), schema: chosen, patterns: list });
         };
         cancel.onclick = () => done(null);
         shade.onmousedown = (e) => { if (e.target === shade) done(null); };
@@ -108,7 +114,7 @@ export function setupSchemaPicker({ editor, relOf, checker, openSettings }) {
         const model = editor.getModel();
         const rel = model && relOf(model);
         if (!rel) return;
-        const [{ registered }, project] = await Promise.all([listNow(), mappingsNow()]);
+        const [{ registered, store = [] }, project] = await Promise.all([listNow(), mappingsNow()]);
         const chosen = checker.choiceOf(model)?.choice;
         const ignored = (project.ignored ?? []).includes(rel);
         // the file in a mapping of its own: out of every mapping that names it alone, and into the one of that schema (PyCharm's way)
@@ -121,22 +127,80 @@ export function setupSchemaPicker({ editor, relOf, checker, openSettings }) {
         };
         const items = [
             {
-                label: 'Ignore JSON schema for file', checked: ignored,
+                label: 'Ignore JSON schema for file', checked: ignored, icon: ['ban', ''],
                 run: () => void saveMappings({ ...project, ignored: ignored ? project.ignored.filter((p) => p !== rel) : [...(project.ignored ?? []), rel] }),
             },
             {
-                label: 'New Schema Mapping…',
+                label: 'New Schema Mapping…', icon: ['plus', ''],
                 run: async () => {
-                    const m = await mappingDialog('New Schema Mapping', registered, { name: '', schema: chosen?.name ?? registered[0]?.name ?? '', patterns: [rel] });
+                    const m = await mappingDialog('New Schema Mapping', registered, { name: '', schema: chosen?.name ?? registered[0]?.name ?? '', patterns: [rel] }, store);
                     if (m) await saveMappings({ ...project, mappings: [...(project.mappings ?? []), m] });
                 },
             },
-            { label: 'Edit Schema Mappings…', run: () => openSettings('schemas') },
+            { label: 'Edit Schema Mappings…', icon: ['gear', ''], run: () => openSettings('schemas') },
             '-',
-            ...registered.map((r) => ({ label: r.title, checked: !ignored && chosen?.name === r.name, run: () => void assign(r.name, r.title) })),
+            ...registered.map((r) => ({ label: r.title, icon: ['schema', 'schema'], checked: !ignored && chosen?.name === r.name, run: () => void assign(r.name, r.title) })),
+            '-',
+            // SchemaStore's: the one this file has (ticked), and the rest behind a search (there are hundreds)
+            ...store.filter((s) => !ignored && chosen?.name === s.name).map((s) => ({ label: `${s.title} (SchemaStore.org)`, checked: true, run: () => void assign(s.name, s.title) })),
+            {
+                label: `SchemaStore.org schemas (${store.length})…`, icon: ['web', 'py'], disabled: !store.length,
+                run: async () => { const s = await storeChooser(store); if (s) await assign(s.name, s.title); },
+            },
         ];
         openMenu(item, items);
     };
+}
+
+/** SchemaStore's schemas to choose one from: a box that filters them by their title, name or the files they are for. Resolves to the entry or null. */
+function storeChooser(store) {
+    return new Promise((resolve) => {
+        const shade = document.createElement('div');
+        shade.className = 'ask-shade';
+        const box = document.createElement('div');
+        box.className = 'ask-box schema-store';
+        const h = document.createElement('div');
+        h.className = 'ask-title';
+        h.textContent = 'SchemaStore.org schemas';
+        const filter = document.createElement('input');
+        filter.placeholder = 'Filter: a name or a file (eslint, .prettierrc, docker)';
+        filter.spellcheck = false;
+        const list = document.createElement('div');
+        list.className = 'schema-store-list';
+        const row = document.createElement('div');
+        row.className = 'ask-buttons';
+        const cancel = document.createElement('button');
+        cancel.textContent = 'Cancel';
+        row.append(cancel);
+        box.append(h, filter, list, row);
+        shade.append(box);
+        const done = (value) => { shade.remove(); document.removeEventListener('keydown', onKey, true); resolve(value); };
+        const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(null); } };
+        const paint = () => {
+            const needle = filter.value.trim().toLowerCase();
+            const shown = store.filter((s) => !needle || `${s.title} ${s.name} ${(s.fileMatch ?? []).join(' ')}`.toLowerCase().includes(needle)).slice(0, 200);
+            list.replaceChildren(...shown.map((s) => {
+                const b = document.createElement('button');
+                b.className = 'schema-store-row';
+                const t = document.createElement('span');
+                t.textContent = s.title;
+                const f = document.createElement('span');
+                f.className = 'detail';
+                f.textContent = (s.fileMatch ?? []).slice(0, 3).join(', ');
+                b.append(t, f);
+                b.onclick = () => done(s);
+                return b;
+            }));
+        };
+        filter.oninput = paint;
+        filter.onkeydown = (e) => { if (e.key === 'Enter') list.querySelector('button')?.click(); };
+        cancel.onclick = () => done(null);
+        shade.onmousedown = (e) => { if (e.target === shade) done(null); };
+        document.addEventListener('keydown', onKey, true);
+        document.body.append(shade);
+        paint();
+        filter.focus();
+    });
 }
 
 /** Settings > JSON Schemas: the project's mappings (name, schema, files) and its ignored files, each to edit or remove. */
@@ -149,9 +213,9 @@ export async function schemaMappingsPage(content) {
     const add = document.createElement('button');
     add.textContent = 'Add mapping…';
     content.append(intro, list, add);
-    const { registered } = await listNow();
+    const { registered, store = [] } = await listNow();
     let project = await mappingsNow();
-    const titleOf = (schema) => (schema.startsWith('file:') ? schema.slice(5) : registered.find((r) => r.name === schema)?.title ?? schema);
+    const titleOf = (schema) => (schema.startsWith('file:') ? schema.slice(5) : [...registered, ...store].find((r) => r.name === schema)?.title ?? schema);
     const save = async (next) => { if (await saveMappings(next)) { project = next; paint(); } };
     function paint() {
         list.replaceChildren();
@@ -172,7 +236,7 @@ export async function schemaMappingsPage(content) {
             const edit = document.createElement('button');
             edit.textContent = 'Edit…';
             edit.onclick = async () => {
-                const next = await mappingDialog('Edit Schema Mapping', registered, m);
+                const next = await mappingDialog('Edit Schema Mapping', registered, m, store);
                 if (next) await save({ ...project, mappings: project.mappings.map((x, j) => (j === i ? next : x)) });
             };
             const remove = document.createElement('button');
@@ -194,7 +258,7 @@ export async function schemaMappingsPage(content) {
         }
     }
     add.onclick = async () => {
-        const m = await mappingDialog('New Schema Mapping', registered);
+        const m = await mappingDialog('New Schema Mapping', registered, undefined, store);
         if (m) await save({ ...project, mappings: [...project.mappings, m] });
     };
     paint();

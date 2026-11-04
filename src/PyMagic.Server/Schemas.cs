@@ -37,7 +37,68 @@ public static class Schemas
     static readonly System.Text.RegularExpressions.Regex KubernetesName = new("^k8s-[a-z0-9]+(-[a-z0-9]+){0,2}$");
 
     /// <summary>Whether the name is one of the fixed schemas or the schema of a Kubernetes kind.</summary>
-    public static bool IsKnown(string name) => Names.Contains(name) || KubernetesName.IsMatch(name);
+    public static bool IsKnown(string name) => Names.Contains(name) || KubernetesName.IsMatch(name) || StoreStem(name) is { } stem && Store.Value.Files.Contains(stem);
+
+    // ------------------------------------------------------------ SchemaStore.org
+
+    /// <summary>A SchemaStore schema's name as the page asks for it: "store:" and its file's name without .json (store:babelrc).</summary>
+    public const string StorePrefix = "store:";
+
+    static string? StoreStem(string name) => name.StartsWith(StorePrefix, StringComparison.Ordinal) ? name[StorePrefix.Length..] : null;
+
+    /// <summary>A catalog entry PyMagic has the schema of: its name (store:...), the title the catalog gives it, and the files it is for.</summary>
+    public sealed record StoreEntry(string Name, string Title, IReadOnlyList<string> FileMatch);
+
+    /// <summary>
+    /// SchemaStore's catalog and schemas, built into PyMagic (SchemaStore/: downloaded with the user's yes, every schema of its repository up to 500 KB,
+    /// Apache License 2.0, its LICENSE.txt ships beside the app): the index says which files each catalog entry is for and each schema's $id; the
+    /// schemas are one zip, read when a file needs one.
+    /// </summary>
+    static readonly Lazy<(IReadOnlyList<StoreEntry> Catalog, Dictionary<string, string> Ids, HashSet<string> Files, byte[] Zip)> Store = new(() =>
+    {
+        var catalog = new List<StoreEntry>();
+        var ids = new Dictionary<string, string>(StringComparer.Ordinal);
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        byte[] zip = [];
+        using (var z = typeof(Schemas).Assembly.GetManifestResourceStream("schemastore.zip"))
+        {
+            if (z == null) return (catalog, ids, files, zip);
+            using var copy = new MemoryStream();
+            z.CopyTo(copy);
+            zip = copy.ToArray();
+        }
+        using (var archive = new System.IO.Compression.ZipArchive(new MemoryStream(zip), System.IO.Compression.ZipArchiveMode.Read))
+            foreach (var e in archive.Entries) if (e.Name.EndsWith(".json", StringComparison.Ordinal)) files.Add(e.Name[..^5]);
+        using var index = typeof(Schemas).Assembly.GetManifestResourceStream("schemastore-index.json");
+        if (index == null) return (catalog, ids, files, zip);
+        using var doc = System.Text.Json.JsonDocument.Parse(index);
+        foreach (var e in doc.RootElement.GetProperty("catalog").EnumerateArray())
+        {
+            string stem = e.GetProperty("name").GetString() ?? "";
+            if (!files.Contains(stem)) continue;
+            catalog.Add(new StoreEntry(StorePrefix + stem, e.GetProperty("title").GetString() ?? stem, e.GetProperty("fileMatch").EnumerateArray().Select(f => f.GetString() ?? "").Where(f => f.Length > 0).ToList()));
+        }
+        foreach (var p in doc.RootElement.GetProperty("ids").EnumerateObject())
+            if (p.Value.GetString() is { } stem && files.Contains(stem)) ids.TryAdd(NormalId(p.Name), StorePrefix + stem);
+        return (catalog, ids, files, zip);
+    });
+
+    /// <summary>SchemaStore's catalog entries whose schema PyMagic has (the status bar's picker lists them; the page picks one by a file's name).</summary>
+    public static IReadOnlyList<StoreEntry> StoreCatalog => Store.Value.Catalog;
+
+    static readonly object StoreLock = new();
+
+    /// <summary>The text of a SchemaStore schema, from the zip; null when PyMagic has not got it.</summary>
+    static string? StoreText(string stem)
+    {
+        if (!Store.Value.Files.Contains(stem)) return null;
+        lock (StoreLock)
+        {
+            using var archive = new System.IO.Compression.ZipArchive(new MemoryStream(Store.Value.Zip), System.IO.Compression.ZipArchiveMode.Read);
+            using var reader = new StreamReader(archive.GetEntry(stem + ".json")!.Open(), Encoding.UTF8);
+            return reader.ReadToEnd();
+        }
+    }
 
     /// <summary>
     /// Each fixed schema's $id (or draft-04's id) to its name, without the fragment and with http read as https: what a file's "$schema" names, and
@@ -61,6 +122,8 @@ public static class Schemas
             }
             catch (System.Text.Json.JsonException) { }
         }
+        // SchemaStore's after PyMagic's own: an address both have is PyMagic's
+        foreach (var (id, name) in Store.Value.Ids) ids.TryAdd(id, name);
         return ids;
     });
 
@@ -70,8 +133,13 @@ public static class Schemas
         int hash = id.IndexOf('#');
         if (hash >= 0) id = id[..hash];
         if (id.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) id = "https://" + id[7..];
+        // SchemaStore's one schema has several addresses: json.schemastore.org, www.schemastore.org or schemastore.org, with .json or without
+        var store = StoreAddress.Match(id);
+        if (store.Success) id = "https://json.schemastore.org/" + store.Groups["path"].Value;
         return id.TrimEnd('/');
     }
+
+    static readonly System.Text.RegularExpressions.Regex StoreAddress = new(@"^https://(www\.|json\.)?schemastore\.org/(?<path>.+?)(\.json)?/?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     static string? Resource(string file)
     {
@@ -127,6 +195,7 @@ public static class Schemas
     public static string? Builtin(string name)
     {
         if (name == "mermaid") return MermaidText.Value;
+        if (StoreStem(name) is { } stem) return StoreText(stem);
         if (Names.Contains(name)) return Resource(name);
         if (!KubernetesName.IsMatch(name) || !KubernetesKinds.Value.TryGetValue(name, out var definition) || KubernetesText.Value is not { } text) return null;
         // the kind's definition as the root, its definitions beside it (the text after the opening brace, not parsed again)

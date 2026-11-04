@@ -1375,7 +1375,13 @@ app.MapGet("/api/tailwind", () =>
 });
 app.MapGet("/api/schemas/get", (string name) => Schemas.Of(root, name) is { } schema ? Results.Text(schema, "application/json") : Results.NotFound());
 // the status bar's schema picker: the built-in schemas with their titles, and each one's $id (what a file's "$schema" and a $ref name)
-app.MapGet("/api/schemas/list", () => Results.Json(new { registered = Schemas.Registered.Select(r => new { name = r.Name, title = r.Title }), ids = Schemas.Ids.Value }));
+app.MapGet("/api/schemas/list", () => Results.Json(new
+{
+    registered = Schemas.Registered.Select(r => new { name = r.Name, title = r.Title }),
+    ids = Schemas.Ids.Value,
+    // SchemaStore's catalog: the files each of its schemas is for (the page picks one by a file's name when PyMagic's own list has none)
+    store = Schemas.StoreCatalog.Select(s => new { name = s.Name, title = s.Title, fileMatch = s.FileMatch }),
+}));
 // the project's schema mappings and ignored files (.pymagic/schema-mappings.json)
 app.MapGet("/api/schemas/mappings", () => Results.Text(Schemas.ReadMappings(root), "application/json"));
 app.MapPut("/api/schemas/mappings", async (HttpRequest req) =>

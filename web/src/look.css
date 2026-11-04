@@ -286,6 +286,11 @@ li.in-excluded { opacity: .55; }
 /* the HTTP client's environments: one row a variable */
 .ask-box.http-envs { width: min(760px, 94vw); }
 .ask-box.schema-mapping { width: min(520px, 94vw); }
+.ask-box.schema-store { width: min(560px, 94vw); }
+.schema-store-list { max-height: 50vh; overflow: auto; margin: 8px 0; display: flex; flex-direction: column; }
+.schema-store-row { display: flex; justify-content: space-between; gap: 12px; text-align: left; background: none; border: 0; padding: 5px 8px; border-radius: var(--radius); color: var(--fg); cursor: pointer; }
+.schema-store-row:hover { background: var(--hover); }
+.schema-store-row .detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ask-box .schema-field { display: grid; grid-template-columns: 90px 1fr; align-items: start; gap: 8px; margin: 8px 0; }
 .ask-box .schema-field > span { color: var(--dim); padding-top: 4px; }
 .ask-box .schema-field textarea { width: 100%; resize: vertical; font-family: var(--mono); }
@@ -403,6 +408,7 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 .ctx-check .ctx-icon.cog { color: var(--faint); }
 .ctx-check .ctx-icon.run { color: var(--good); }
 .ctx-check .ctx-icon.debug { color: var(--warn); }
+.ctx-check .ctx-icon.schema { color: var(--violet); }
 .ctx-label { flex: 1; }
 .ctx-key { margin-left: 24px; }
 .ctx-arrow { color: var(--faint); display: inline-flex; margin-right: -4px; }

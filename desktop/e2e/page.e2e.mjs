@@ -3662,6 +3662,30 @@ describe('JSON Schemas: the status bar picker, ignoring a file, a mapping, "$sch
         clearMappings();
     });
 
+    test('SchemaStore: a "$schema" in its .json form, a file only its catalog knows, icons in the menu, and its schemas behind a search', async () => {
+        clearMappings();
+        put('conf/with-schema.json', '{\n  "$schema": "https://json.schemastore.org/tsconfig.json",\n  "compilerOptions": {}\n}\n');
+        await open('conf/with-schema.json');
+        await page.waitFor(`document.getElementById('schema')?.textContent === 'Schema: TSConfig'`, 15000, 'TSConfig by its address');
+        put('web/nodemon.json', '{\n  "watch": ["src"]\n}\n');
+        await open('web/nodemon.json');
+        await page.waitFor(`document.getElementById('schema')?.textContent === 'Schema: nodemon.json'`, 15000, 'nodemon by SchemaStore\'s catalog');
+        // the menu: every row has its icon (the ticked one its tick), SchemaStore's tick and its search
+        await page.evaluate(`document.getElementById('schema').click()`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((d) => d.textContent.startsWith('SchemaStore.org schemas ('))`, 10000, 'the SchemaStore row');
+        const bare = await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].filter((r) => !r.querySelector('.ctx-check svg')).map((r) => r.textContent)`);
+        assert.deepEqual(bare, []);
+        assert.ok(await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((r) => r.textContent === 'nodemon.json (SchemaStore.org)' && r.querySelector('use[href="#i-tick"]'))`), 'nodemon ticked');
+        await page.evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((d) => d.textContent.startsWith('SchemaStore.org schemas (')).click()`);
+        await page.waitFor(`document.querySelector('.schema-store input')`, 5000, 'the search');
+        await page.evaluate(`(() => { const i = document.querySelector('.schema-store input'); i.value = 'lerna'; i.dispatchEvent(new Event('input')); })()`);
+        await page.waitFor(`[...document.querySelectorAll('.schema-store-row')].some((b) => b.textContent.startsWith('lerna.json'))`, 5000, 'lerna found');
+        await page.evaluate(`[...document.querySelectorAll('.schema-store-row')].find((b) => b.textContent.startsWith('lerna.json')).click()`);
+        await page.waitFor(`document.getElementById('schema')?.textContent === 'Schema: lerna.json'`, 15000, 'mapped to lerna');
+        assert.deepEqual(JSON.parse(readFileSync(join(app.root, '.pymagic/schema-mappings.json'), 'utf8')).mappings, [{ name: 'lerna.json', schema: 'store:lerna', patterns: ['web/nodemon.json'] }]);
+        clearMappings();
+    });
+
     test('Settings > JSON Schemas lists the project\'s mappings; Remove takes one away', async () => {
         writeFileSync(join(app.root, '.pymagic/schema-mappings.json'), JSON.stringify({ mappings: [{ name: 'Mine', schema: 'tsconfig', patterns: ['base/*.json'] }], ignored: ['old.json'] }));
         await page.evaluate(`${$('b-gear')}.click()`);

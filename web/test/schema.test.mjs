@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/schema-model.js', import.meta.url), 'utf8');
-const { validate, locate, schemaOf, openapiSchemaOf, looksKubernetes, kubernetesSchemaOf, crdSchemas, crdKeyOf, asyncapiSchemaOf, parseJsonc, frontMatterOf, globMatch, chooseSchema, declaredSchema, yamlModeline, externalRefs, normalId } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { validate, locate, schemaOf, openapiSchemaOf, looksKubernetes, kubernetesSchemaOf, crdSchemas, crdKeyOf, asyncapiSchemaOf, parseJsonc, frontMatterOf, globMatch, chooseSchema, declaredSchema, yamlModeline, externalRefs, normalId, storeSchemaOf } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 const msgs = (data, schema) => validate(data, schema).map((p) => `${p.path.join('.')}: ${p.message}`);
 
 const schema = {
@@ -327,4 +327,31 @@ test('draft-04\'s boolean exclusive bounds, the later numeric ones, and $recursi
     // 2019-09: a subschema checked against the outermost schema
     const recursive = { $recursiveAnchor: true, type: 'object', properties: { child: { $recursiveRef: '#' } }, additionalProperties: false };
     assert.deepEqual(msgs({ child: { child: { x: 1 } } }, recursive), ['child.child.x: The property x is not allowed here']);
+});
+
+
+test('SchemaStore\'s addresses are one: json., www. or no host part, with .json or without, http or https', () => {
+    for (const a of ['https://json.schemastore.org/tsconfig', 'https://json.schemastore.org/tsconfig.json', 'http://json.schemastore.org/tsconfig.json',
+        'https://www.schemastore.org/tsconfig.json', 'https://schemastore.org/tsconfig', 'https://json.schemastore.org/tsconfig.json#'])
+        assert.equal(normalId(a), 'https://json.schemastore.org/tsconfig', a);
+    assert.equal(normalId('https://example.com/a.json'), 'https://example.com/a.json');   // other addresses keep their .json
+    assert.deepEqual(declaredSchema('https://json.schemastore.org/tsconfig.json', { 'https://json.schemastore.org/tsconfig': 'tsconfig' }, 'a.json'), { name: 'tsconfig' });
+});
+
+test('SchemaStore\'s catalog picks a schema by its fileMatch when PyMagic\'s own names have none; ! leaves files out', () => {
+    const store = [
+        { name: 'store:nodemon', fileMatch: ['nodemon.json'] },
+        { name: 'store:ruff', fileMatch: ['ruff.toml', '.ruff.toml'] },
+        { name: 'store:helmfile', fileMatch: ['helmfile.d/**/*.yaml', '!helmfile.d/**/values*.yaml'] },
+    ];
+    assert.equal(storeSchemaOf('nodemon.json', store), 'store:nodemon');
+    assert.equal(storeSchemaOf('web/nodemon.json', store), 'store:nodemon');
+    assert.equal(storeSchemaOf('ruff.toml', store), 'store:ruff');
+    assert.equal(storeSchemaOf('deploy/helmfile.d/apps/a.yaml', store), 'store:helmfile');
+    assert.equal(storeSchemaOf('deploy/helmfile.d/apps/values-a.yaml', store), null);
+    assert.equal(storeSchemaOf('data.json', store), null);
+    // PyMagic's own name comes first; SchemaStore's after it; a mapping or "$schema" before both
+    assert.deepEqual(chooseSchema('package.json', null, null, [{ name: 'store:package', fileMatch: ['package.json'] }]), { name: 'package', why: 'name' });
+    assert.deepEqual(chooseSchema('nodemon.json', null, null, store), { name: 'store:nodemon', why: 'store' });
+    assert.deepEqual(chooseSchema('nodemon.json', null, { name: 'jest' }, store), { name: 'jest', why: 'declared' });
 });

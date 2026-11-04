@@ -21,6 +21,22 @@ public class SchemaTests
     }
 
     [Fact]
+    public void SchemaStoresSchemasAreBuiltIn()
+    {
+        // its catalog's entries whose schema is in the zip, with the files they are for; each schema read when asked for
+        Assert.True(Schemas.StoreCatalog.Count > 600, $"{Schemas.StoreCatalog.Count} entries");
+        var nodemon = Schemas.StoreCatalog.First(e => e.Name == "store:nodemon");
+        Assert.Equal("nodemon.json", nodemon.FileMatch[0]);
+        Assert.True(Schemas.IsKnown("store:nodemon") && !Schemas.IsKnown("store:no-such-schema"), "known");
+        Assert.True(System.Text.Json.Nodes.JsonNode.Parse(Schemas.Builtin("store:ruff")!) is System.Text.Json.Nodes.JsonObject, "ruff's schema from the zip");
+        // a schema both have is PyMagic's own; one only SchemaStore has is found by its address in every form
+        Assert.Equal("tsconfig", Schemas.Ids.Value[Schemas.NormalId("https://json.schemastore.org/tsconfig.json")]);
+        Assert.Equal("store:nodemon", Schemas.Ids.Value[Schemas.NormalId("https://www.schemastore.org/nodemon.json")]);
+        Assert.Equal("https://json.schemastore.org/partial-eslint-plugins", Schemas.NormalId("http://json.schemastore.org/partial-eslint-plugins.json#"));
+        Assert.True(Schemas.Ids.Value.ContainsKey("https://json.schemastore.org/partial-eslint-plugins"), "ESLint's plugin part, which eslintrc $refs");
+    }
+
+    [Fact]
     public void MermaidsSchemaRequiresNothing()
     {
         // it describes the whole configuration with its defaults filled in; a config file sets only what it changes
