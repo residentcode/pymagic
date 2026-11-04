@@ -7,7 +7,9 @@
       "%ProgramFiles%\\PowerShell\\7\\pwsh.exe"
     ],
     "args": "-NoLogo",
-    "venvArgs": "-NoExit -Command \"function global:prompt { '({prompt}) PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }\""
+    "commandArg": "-NoExit -Command",
+    "startCommand": "function global:uv { $u = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1; if (-not $u) { Write-Error 'uv is not installed'; return }; $a = @($args); if ($a.Count -gt 0 -and $a[0] -eq 'init' -and -not ($a | Where-Object { $_ -in '--package','--lib','--script','--build-backend' -or $_ -like '--build-backend=*' })) { $more = @(); if ($a -notcontains '--no-package') { $more += '--no-package' }; if ($a -notcontains '--no-readme') { $more += '--no-readme' }; if (-not ($a | Where-Object { $_ -like '--author-from*' })) { $more += '--author-from','none' }; $a = @('init') + $more + @($a | Select-Object -Skip 1) }; & $u.Source @a }",
+    "venvCommand": "function global:prompt { '({prompt}) PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }"
   },
   {
     "id": "powershell",
@@ -17,7 +19,9 @@
       "path:powershell.exe"
     ],
     "args": "-NoLogo",
-    "venvArgs": "-NoExit -Command \"function global:prompt { '({prompt}) PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }\""
+    "commandArg": "-NoExit -Command",
+    "startCommand": "function global:uv { $u = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1; if (-not $u) { Write-Error 'uv is not installed'; return }; $a = @($args); if ($a.Count -gt 0 -and $a[0] -eq 'init' -and -not ($a | Where-Object { $_ -in '--package','--lib','--script','--build-backend' -or $_ -like '--build-backend=*' })) { $more = @(); if ($a -notcontains '--no-package') { $more += '--no-package' }; if ($a -notcontains '--no-readme') { $more += '--no-readme' }; if (-not ($a | Where-Object { $_ -like '--author-from*' })) { $more += '--author-from','none' }; $a = @('init') + $more + @($a | Select-Object -Skip 1) }; & $u.Source @a }",
+    "venvCommand": "function global:prompt { '({prompt}) PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }"
   },
   {
     "id": "cmd",
@@ -28,7 +32,9 @@
     ],
     "venvEnv": {
       "PROMPT": "({prompt}) $P$G"
-    }
+    },
+    "commandArg": "/k",
+    "startCommand": "doskey uv=if /i \"$1$2\"==\"init\" (uv init --no-package --no-readme --author-from none) else (uv $*)"
   },
   {
     "id": "gitbash",
@@ -39,7 +45,8 @@
     ],
     "args": "--login -i",
     "env": {
-      "CHERE_INVOKING": "1"
+      "CHERE_INVOKING": "1",
+      "BASH_FUNC_uv%%": "() { if [ \"$1\" = init ]; then local a k=1 p=1 r=1 w=1; for a in \"$@\"; do case \"$a\" in --package|--lib|--script|--build-backend|--build-backend=*) k=0;; --no-package) p=0;; --no-readme) r=0;; --author-from|--author-from=*) w=0;; esac; done; if [ $k = 1 ]; then local x=(); [ $p = 1 ] && x+=(--no-package); [ $r = 1 ] && x+=(--no-readme); [ $w = 1 ] && x+=(--author-from none); shift; set -- init \"${x[@]}\" \"$@\"; fi; fi; command uv \"$@\"; }"
     }
   },
   {

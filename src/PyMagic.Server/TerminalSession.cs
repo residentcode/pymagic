@@ -63,7 +63,9 @@ public sealed class TerminalSession : IDisposable
         if (windows)
         {
             foreach (var a in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command" }) info.ArgumentList.Add(a);
-            info.ArgumentList.Add("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; " + line);
+            // uv init makes an application here as in the Terminal panel (the shell list's uv function)
+            string uv = ConsoleShells.Catalogue().FirstOrDefault(p => p.Id == "powershell")?.StartCommand is { Length: > 0 } f ? f + "; " : "";
+            info.ArgumentList.Add("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; " + uv + line);
         }
         else { info.ArgumentList.Add("-c"); info.ArgumentList.Add(line); }
         PrepareEnvironment(info);

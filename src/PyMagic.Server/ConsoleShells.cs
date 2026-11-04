@@ -4,19 +4,30 @@ using System.Text.RegularExpressions;
 namespace PyMagic.Server;
 
 /// <summary>A shell the Terminal panel can start: its id (what the settings keep), its name, the command line, and variables it needs.</summary>
-/// <param name="VenvArgs">Added to the command line while a virtual environment is active, with {prompt} for its name (PowerShell's prompt).</param>
+/// <param name="VenvArgs">Added to the command line while a virtual environment is active, with {prompt} for its name.</param>
 /// <param name="VenvEnv">Variables set while one is active, with {prompt} (cmd's PROMPT).</param>
+/// <param name="CommandArg">How the shell is given commands to run before the user types (PowerShell's <c>-NoExit -Command</c>, cmd's <c>/k</c>).</param>
+/// <param name="StartCommand">Run when it starts (PowerShell's and cmd's <c>uv</c> that makes `uv init` an application, <see cref="UvInit"/>).</param>
+/// <param name="VenvCommand">Run when it starts while a virtual environment is active, with {prompt} (PowerShell's prompt function).</param>
 public sealed record ConsoleShell(string Id, string Name, string CommandLine, IReadOnlyDictionary<string, string>? Environment = null,
-    string? VenvArgs = null, IReadOnlyDictionary<string, string>? VenvEnv = null)
+    string? VenvArgs = null, IReadOnlyDictionary<string, string>? VenvEnv = null, string? CommandArg = null, string? StartCommand = null, string? VenvCommand = null)
 {
     /// <summary>The command line and the variables for a terminal whose virtual environment is called <paramref name="prompt"/> (null: none is active).</summary>
     public (string CommandLine, Dictionary<string, string> Environment) WithVenv(string? prompt)
     {
         var env = new Dictionary<string, string>(Environment ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase);
-        if (prompt == null) return (CommandLine, env);
-        foreach (var (k, v) in VenvEnv ?? new Dictionary<string, string>()) env[k] = v.Replace("{prompt}", prompt);
-        env["VIRTUAL_ENV_PROMPT"] = prompt;
-        return (string.IsNullOrEmpty(VenvArgs) ? CommandLine : CommandLine + " " + VenvArgs.Replace("{prompt}", prompt), env);
+        string line = CommandLine;
+        var commands = new List<string>();
+        if (!string.IsNullOrEmpty(StartCommand)) commands.Add(StartCommand);
+        if (prompt != null)
+        {
+            foreach (var (k, v) in VenvEnv ?? new Dictionary<string, string>()) env[k] = v.Replace("{prompt}", prompt);
+            env["VIRTUAL_ENV_PROMPT"] = prompt;
+            if (!string.IsNullOrEmpty(VenvArgs)) line += " " + VenvArgs.Replace("{prompt}", prompt);
+            if (!string.IsNullOrEmpty(VenvCommand)) commands.Add(VenvCommand.Replace("{prompt}", prompt));
+        }
+        if (commands.Count > 0 && !string.IsNullOrEmpty(CommandArg)) line += " " + CommandArg + " \"" + string.Join("; ", commands) + "\"";
+        return (line, env);
     }
 }
 
@@ -25,7 +36,7 @@ public sealed record ConsoleShell(string Id, string Name, string CommandLine, IR
 /// "path:name.exe" (searched on the PATH), or "path:name.exe>relative" (a file relative to the folder of one found on the PATH).
 /// </summary>
 public sealed record ShellProfile(string Id, string Name, string[] Find, string? Args = null, Dictionary<string, string>? Env = null,
-    string? VenvArgs = null, Dictionary<string, string>? VenvEnv = null);
+    string? VenvArgs = null, Dictionary<string, string>? VenvEnv = null, string? CommandArg = null, string? StartCommand = null, string? VenvCommand = null);
 
 /// <summary>
 /// The shells found on this PC for the Terminal panel, from the list in Run/shells.json. The page names one by its id and the engine starts
@@ -92,7 +103,7 @@ public static class ConsoleShells
         {
             if (profile.Find.Select(Place).FirstOrDefault(p => p != null) is not { } program) continue;
             var command = Quote(program) + (string.IsNullOrEmpty(profile.Args) ? "" : " " + profile.Args);
-            shells.Add(new(profile.Id, profile.Name, command, profile.Env, profile.VenvArgs, profile.VenvEnv));
+            shells.Add(new(profile.Id, profile.Name, command, profile.Env, profile.VenvArgs, profile.VenvEnv, profile.CommandArg, profile.StartCommand, profile.VenvCommand));
         }
         return shells;
     }

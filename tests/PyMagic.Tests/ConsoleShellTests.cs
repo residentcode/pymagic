@@ -92,13 +92,16 @@ public class ConsoleShellTests
         var list = ConsoleShells.Catalogue();
         var pwsh = list.Single(p => p.Id == "powershell");
         var cmd = list.Single(p => p.Id == "cmd");
-        var shell = new ConsoleShell("powershell", "Windows PowerShell", "powershell.exe -NoLogo", null, pwsh.VenvArgs, pwsh.VenvEnv);
+        var shell = new ConsoleShell("powershell", "Windows PowerShell", "powershell.exe -NoLogo", null, pwsh.VenvArgs, pwsh.VenvEnv, pwsh.CommandArg, pwsh.StartCommand, pwsh.VenvCommand);
         var (line, env) = shell.WithVenv(".venv");
-        Assert.Equal("powershell.exe -NoLogo -NoExit -Command \"function global:prompt { '(.venv) PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }\"", line);
+        // the uv function first (uv init as an application), then the prompt
+        Assert.True(line.StartsWith("powershell.exe -NoLogo -NoExit -Command \"function global:uv {"), line);
+        Assert.True(line.EndsWith("; function global:prompt { '(.venv) PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }\""), line);
+        Assert.True(line.Count(c => c == '"') == 2, "one argument: no double quote inside it");
         Assert.Equal(".venv", env["VIRTUAL_ENV_PROMPT"]);
-        Assert.Equal("powershell.exe -NoLogo", shell.WithVenv(null).CommandLine);
-        var (cmdLine, cmdEnv) = new ConsoleShell("cmd", "Command Prompt", "cmd.exe", null, cmd.VenvArgs, cmd.VenvEnv).WithVenv("shop");
-        Assert.Equal("cmd.exe", cmdLine);
+        Assert.True(!shell.WithVenv(null).CommandLine.Contains("prompt"), "no prompt without an environment");
+        var (cmdLine, cmdEnv) = new ConsoleShell("cmd", "Command Prompt", "cmd.exe", null, cmd.VenvArgs, cmd.VenvEnv, cmd.CommandArg, cmd.StartCommand, cmd.VenvCommand).WithVenv("shop");
+        Assert.True(cmdLine.StartsWith("cmd.exe /k \"doskey uv="), cmdLine);
         Assert.Equal("(shop) $P$G", cmdEnv["PROMPT"]);
     }
 }

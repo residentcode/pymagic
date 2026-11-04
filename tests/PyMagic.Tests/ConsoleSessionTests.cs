@@ -88,6 +88,47 @@ public class ConsoleSessionTests
     }
 
     [Fact]
+    public void UvInitTypedInTheTerminalMakesAnApplicationInEachShell()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        // a uv that says what it was given, first on the PATH
+        string bin = Path.Combine(Path.GetTempPath(), "pm_uvinit_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(bin);
+        try
+        {
+            File.WriteAllText(Path.Combine(bin, "uv.cmd"), "@echo ARGS: %*\r\n");
+            File.WriteAllText(Path.Combine(bin, "uv"), "#!/bin/sh\necho \"ARGS: $*\"\n");
+            int tried = 0;
+            foreach (var shell in ConsoleShells.Found().Where(s => s.Id is "powershell" or "pwsh" or "cmd" or "gitbash"))
+            {
+                var (line, shellEnv) = shell.WithVenv(null);
+                var env = CurrentEnvironment();
+                string pathKey = env.Keys.FirstOrDefault(k => k.Equals("PATH", StringComparison.OrdinalIgnoreCase)) ?? "PATH";
+                env[pathKey] = bin + Path.PathSeparator + env.GetValueOrDefault(pathKey);
+                foreach (var (k, v) in shellEnv) env[k] = v;
+                using var console = new ConsoleSession();
+                var output = new StringBuilder();
+                using var done = new ManualResetEventSlim();
+                console.Start(line, Path.GetTempPath(), env, 200, 30, text => { lock (output) output.Append(text); }, _ => done.Set());
+                Thread.Sleep(shell.Id == "gitbash" ? 4000 : 2500);
+                console.Write("uv init\r");
+                Thread.Sleep(1500);
+                console.Write("uv run app.py\r");
+                Thread.Sleep(1500);
+                console.Write("exit\r");
+                done.Wait(TimeSpan.FromSeconds(15));
+                string plain;
+                lock (output) plain = Plain(output.ToString());
+                Assert.True(plain.Contains("ARGS: init --no-package --no-readme --author-from none"), shell.Id + ": " + plain);
+                Assert.True(plain.Contains("ARGS: run app.py"), shell.Id + ": other commands as typed: " + plain);
+                tried++;
+            }
+            Assert.True(tried > 0, "no shell found");
+        }
+        finally { try { Directory.Delete(bin, true); } catch (IOException) { } }
+    }
+
+    [Fact]
     public void TheEnvironmentBlockIsSortedAndEndsWithTwoNuls()
     {
         string block = ConsoleSession.EnvironmentBlock(new Dictionary<string, string?> { ["b"] = "2", ["A"] = "1", ["skip"] = null, ["=C:"] = "x" });
