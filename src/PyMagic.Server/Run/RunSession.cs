@@ -480,6 +480,7 @@ public sealed partial class RunSession : IDisposable
             {
                 var msg = JsonNode.Parse(text);
                 if (msg == null) continue;
+                if (TakeConsoleDebugMessage(msg)) continue;   // the debugger of a console elsewhere, on its way to the debug server
                 // the debugger names files as its target does (/mnt/c/proj/a.py in WSL): the editor knows them as paths of this machine
                 if (!Target.IsLocal)
                 {
@@ -492,6 +493,7 @@ public sealed partial class RunSession : IDisposable
                 _emit(msg);
             }
             // the helper hung up: close our end now (a tunnel through ssh keeps the session alive until both ends are closed)
+            EndConsoleRelay();
             lock (_gate) { try { _channel?.Dispose(); } catch (IOException) { } _channel = null; }
             client.Dispose();
         }
@@ -552,6 +554,8 @@ public sealed partial class RunSession : IDisposable
                             msg["file"] = ToRemote(Path.GetFullPath(Path.Combine(_root ?? "", toFile)));
                         // Attach Debugger of the console: pm_debug.py is a file of its own beside the other helpers, imported from where it was put
                         if (type == "consoleAttach") msg["helper"] = Path.GetDirectoryName(ExtractHelper("pm_debug.py"));
+                        // a console elsewhere than this computer: the debugger goes over the console's own connection (RunSession.ConsoleDebug.cs)
+                        if (type == "consoleAttach") PrepareConsoleAttachLocked(msg);
                         string json = msg.ToJsonString();
                         if (_serving) { RememberLocked(type!, msg, json); SendToProgramsLocked(type!, json); }
                         else if (_channel == null) _pending.Add(json); else WriteRawLocked(json);
@@ -583,6 +587,7 @@ public sealed partial class RunSession : IDisposable
 
     void Cleanup()
     {
+        EndConsoleRelay();
         lock (_gate)
         {
             try { _listener?.Stop(); } catch (SocketException) { }

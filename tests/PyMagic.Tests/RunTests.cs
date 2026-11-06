@@ -165,12 +165,17 @@ public class RunTests
 
     /// <summary>Attach Debugger of the console: the console connects to a debug server (as Debug Cell's kernel does), a breakpoint in a file of the
     /// project stops a function the console calls, and after Detach the console goes on without the debugger.</summary>
+    /// <remarks>With <paramref name="overChannel"/> the debugger talks over the console's own connection, as for an interpreter elsewhere (SSH, WSL,
+    /// Docker), which cannot reach the debug server: pm_debug is sent with the request, and the debug server's messages go through the console.</remarks>
     [Fact]
-    public void TheConsoleAttachesToTheDebuggerAndStopsAtABreakpoint()
+    [Case(false)]
+    [Case(true)]
+    public void TheConsoleAttachesToTheDebuggerAndStopsAtABreakpoint(bool overChannel)
     {
         if (!HavePython) return;
         using var h = new Harness();
         h.Script("lib.py", "def double(n):\n    m = n * 2\n    return m\n");
+        h.Session.ConsoleDebugOverChannel = overChannel;
         h.Session.StartConsole(h.Root, null);
         h.Type("consoleReady");
         var events = new BlockingCollection<JsonNode>();
@@ -194,15 +199,82 @@ public class RunTests
         h.Session.Handle(new JsonObject { ["type"] = "consoleExec", ["id"] = 900, ["code"] = "print('got', double(21))" });
         var stopped = Next("stopped");
         Assert.Equal(2, stopped["frames"]![0]!["line"]!.GetValue<int>());
-        Assert.True(stopped["frames"]![0]!["file"]!.GetValue<string>().EndsWith("lib.py"));
+        Assert.Equal(Path.Combine(h.Root, "lib.py"), stopped["frames"]![0]!["file"]!.GetValue<string>());
+        // while the console's command is stopped, the debugger still hears the IDE: a value is evaluated, a step is taken
+        server.Handle(new JsonObject { ["type"] = "evaluate", ["id"] = 1, ["frameId"] = 0, ["expression"] = "n + 1" });
+        Assert.Equal("22", Next("evaluated")["result"]!.GetValue<string>());
+        server.Handle(new JsonObject { ["type"] = "next" });
+        Assert.Equal(3, Next("stopped")["frames"]![0]!["line"]!.GetValue<int>());
         server.Handle(new JsonObject { ["type"] = "continue" });
         h.Next(e => e["type"]?.GetValue<string>() == "consoleDone" && e["id"]?.GetValue<int>() == 900);
         Assert.Contains("got 42", h.AllOutput());
+        h.Request("consoleExec", new JsonObject { ["code"] = "import pm_debug; print('helper from', pm_debug.__file__)" });
+        Assert.Contains(overChannel ? "helper from pm_debug.py" : "helper from " + Path.GetTempPath(), h.AllOutput());   // sent with the request, not a file here
         h.Request("consoleDetach", new JsonObject());
         Next("disconnected");
         h.Request("consoleExec", new JsonObject { ["code"] = "print('again', double(5))" });   // no stop now
         Assert.Contains("again 10", h.AllOutput());
         Assert.Contains("The debugger is detached", h.AllOutput());
+    }
+
+    /// <summary>
+    /// Attach Debugger of a console whose interpreter is on another machine over SSH (the Open work's "with an interpreter elsewhere than this
+    /// computer"): the project is copied there, the console runs in Python 3.14 there, and the debugger goes over the console's own connection to
+    /// the debug server of this computer, with the files named as each side has them. Runs only when PYMAGIC_CT_HOST, PYMAGIC_CT_KEY and
+    /// PYMAGIC_CT_KNOWN_HOSTS name the machine (root by key, /usr/local/bin/python3.14 there); skipped without.
+    /// </summary>
+    [Fact]
+    public void TheConsoleOfAnInterpreterOverSshAttachesToTheDebugger()
+    {
+        string? V(string name) => Environment.GetEnvironmentVariable(name) is { Length: > 0 } v ? v : null;
+        if (V("PYMAGIC_CT_HOST") is not { } host || V("PYMAGIC_CT_KEY") is not { } key || V("PYMAGIC_CT_KNOWN_HOSTS") is not { } known) return;
+        using var h = new Harness();
+        h.Script("lib.py", "import sys\ndef double(n):\n    m = n * 2\n    return m\n");
+        var target = new SshTarget(host, "root", 22, key, known) { Project = h.Root };
+        h.Session.Target = target;
+        h.Session.Python = "/usr/local/bin/python3.14";
+        h.Session.StartConsole(h.Root, null);
+        h.Next(e => e["type"]?.GetValue<string>() == "consoleReady", 90000);
+        h.Request("consoleExec", new JsonObject { ["code"] = "import sys, os; print('console on', sys.platform, sys.version_info[:2], os.getcwd())" });
+        Assert.Contains("console on linux (3, 14) " + target.ProjectDir, h.AllOutput());
+
+        var events = new BlockingCollection<JsonNode>();
+        using var server = new RunSession(events.Add);
+        server.Listen(h.Root, "127.0.0.1", 0, "", Array.Empty<(string, string)>(), new Dictionary<string, JsonArray> { ["lib.py"] = new JsonArray(3) });
+        var seen = new List<string>();
+        JsonNode Next(string type, int seconds = 60)
+        {
+            while (true)
+            {
+                if (!events.TryTake(out var e, TimeSpan.FromSeconds(seconds))) throw new AssertionException("timed out waiting for " + type + "; the debugger said: " + string.Join(" | ", seen) + "; the console said: " + h.AllOutput());
+                seen.Add(e.ToJsonString());
+                if (e["type"]?.GetValue<string>() == type) return e;
+            }
+        }
+        var listening = Next("listening");
+        // as the page asks: the debug server's address on this computer, which the machine there cannot reach
+        var attached = h.Request("consoleAttach", new JsonObject { ["host"] = "127.0.0.1", ["port"] = listening["port"]!.GetValue<int>(), ["token"] = listening["token"]!.GetValue<string>() });
+        Assert.True(attached["error"] == null, attached.ToJsonString() + " " + h.AllOutput());
+        Next("connected");
+        h.Request("consoleExec", new JsonObject { ["code"] = "from lib import double" });
+        h.Session.Handle(new JsonObject { ["type"] = "consoleExec", ["id"] = 900, ["code"] = "print('got', double(21))" });
+        var stopped = Next("stopped");
+        Assert.Equal(3, stopped["frames"]![0]!["line"]!.GetValue<int>());
+        // the breakpoint was named as the machine has the file, the stop as this computer has it
+        Assert.Equal(Path.Combine(h.Root, "lib.py"), stopped["frames"]![0]!["file"]!.GetValue<string>());
+        server.Handle(new JsonObject { ["type"] = "evaluate", ["id"] = 1, ["frameId"] = 0, ["expression"] = "n + 1" });
+        Assert.Equal("22", Next("evaluated")["result"]!.GetValue<string>());
+        server.Handle(new JsonObject { ["type"] = "evaluate", ["id"] = 2, ["frameId"] = 0, ["expression"] = "sys.platform" });
+        Assert.Equal("'linux'", Next("evaluated")["result"]!.GetValue<string>());
+        server.Handle(new JsonObject { ["type"] = "next" });
+        Assert.Equal(4, Next("stopped")["frames"]![0]!["line"]!.GetValue<int>());
+        server.Handle(new JsonObject { ["type"] = "continue" });
+        h.Next(e => e["type"]?.GetValue<string>() == "consoleDone" && e["id"]?.GetValue<int>() == 900, 60000);
+        Assert.Contains("got 42", h.AllOutput());
+        h.Request("consoleDetach", new JsonObject());
+        Next("disconnected");
+        h.Request("consoleExec", new JsonObject { ["code"] = "print('again', double(5))" });   // no stop now
+        Assert.Contains("again 10", h.AllOutput());
     }
 
     [Fact]

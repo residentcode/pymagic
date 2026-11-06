@@ -8,6 +8,10 @@ The host sends JSON lines over a local TCP socket, as to the debugger:
   consoleComplete {id, text}       the completions of the last word. Answer: consoleCompletions {id, items}
   consoleAttach   {id, host, port, token, helper}   Attach Debugger: connect to the IDE's debug server (pm_debug, from the folder
                                    `helper`); the code run from then on stops at the IDE's breakpoints. Answer: consoleDone {id, error?}
+                                   With via "console" (an interpreter elsewhere than the IDE's computer, which cannot reach its debug
+                                   server) pm_debug comes as text (`helperSource`) and talks over this connection: what it sends goes
+                                   out as debugOut {text}, what the debug server sends comes in as debugIn {text} ("" when it is gone),
+                                   and debugEnd tells that the debugger let go.
   consoleDetach   {id}             the debugger lets go; the console goes on. Answer: consoleDone {id}
 With --ipython the code runs in IPython's InteractiveShell (magics, Out[n]) when IPython is installed; if it is not, a note is
 printed and the console is the plain one.
@@ -23,6 +27,49 @@ import socket
 import sys
 import threading
 import traceback
+
+
+class ConsoleChannel:
+    """The debugger's connection to the IDE over the console's own (a socket for pm_debug: sendall, makefile, close, shutdown), for an
+    interpreter on another machine, in WSL or in a container, from which the IDE's debug server cannot be reached."""
+
+    def __init__(self, console):
+        self.console = console
+        self.incoming = queue.Queue()
+        self.closed = False
+
+    def free_threads(self):
+        # the console's reader carries what the IDE sends to the debugger: held at a stop, nothing more would come
+        return [self.console.reader_ident] if self.console.reader_ident is not None else []
+
+    def sendall(self, data):
+        if self.closed:
+            raise OSError("the channel to the IDE is closed")
+        self.console.send({"type": "debugOut", "text": data.decode("utf-8")})
+
+    def feed(self, text):
+        self.incoming.put(text if text else None)
+
+    def makefile(self, *args, **kwargs):
+        return self.lines()
+
+    def lines(self):
+        while True:
+            text = self.incoming.get()
+            if text is None:
+                return
+            for line in text.splitlines():
+                yield line + "\n"
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        self.incoming.put(None)
+        self.console.send({"type": "debugEnd"})
+
+    def shutdown(self, how=None):
+        self.close()
 
 
 class Console:
@@ -61,14 +108,23 @@ class Console:
             except OSError:
                 os._exit(1)
 
+    reader_ident = None   # the thread that reads the host's messages: the debugger neither traces nor holds it (it carries the debugger's input)
+    channel = None        # the debugger's way to the IDE over this connection (ConsoleChannel), while attached that way
+
     def read_loop(self):
+        self.reader_ident = threading.get_ident()
         for line in self.sock.makefile("r", encoding="utf-8", newline="\n"):
             try:
                 msg = json.loads(line)
             except ValueError:
                 continue
             kind = msg.get("type")
-            if kind == "go":
+            if kind == "debugIn":
+                # here, not in the queue of commands: the command that runs may be the one stopped at a breakpoint
+                channel = self.channel
+                if channel is not None:
+                    channel.feed(msg.get("text") or "")
+            elif kind == "go":
                 self.go.set()
             elif kind == "stop":
                 os._exit(137)
@@ -159,12 +215,24 @@ class Console:
         helper = msg.get("helper")
         if helper and helper not in sys.path:
             sys.path.append(helper)
+        source = msg.get("helperSource")
+        if source and "pm_debug" not in sys.modules:
+            # the IDE is on another computer: its copy of pm_debug is not on this one, so it came with the request
+            import types
+            module = types.ModuleType("pm_debug")
+            module.__file__ = "pm_debug.py"
+            sys.modules["pm_debug"] = module
+            exec(compile(source, "pm_debug.py", "exec"), module.__dict__)
         import pm_debug
-        self.debugger = pm_debug.connect(msg.get("host", "127.0.0.1"), int(msg["port"]), msg.get("token", ""), os.getcwd())
+        sock = None
+        if msg.get("via") == "console":
+            sock = self.channel = ConsoleChannel(self)
+        self.debugger = pm_debug.connect(msg.get("host", "127.0.0.1"), int(msg["port"]), msg.get("token", ""), os.getcwd(), sock=sock)
         print("The debugger is attached: the breakpoints of the project stop the code run here")
 
     def detach(self):
         dbg, self.debugger = self.debugger, None
+        self.channel = None
         if dbg is None:
             return
         try:
