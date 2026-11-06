@@ -91,6 +91,67 @@ public class DatabaseTests
     }
 
     [Fact]
+    public void ADatabaseUrlIsReadAsTheFormsFields()
+    {
+        var (kind, f) = Databases.DatabaseUrl("postgres://shop%40owner:p%2Fw%3Ax@db.example.org:6543/shop%20main?sslmode=verify-full&connect_timeout=5")!.Value;
+        Assert.Equal("postgres", kind);
+        Assert.Equal("shop@owner|p/w:x|db.example.org|6543|shop main|verify-full", string.Join("|", f["user"], f["password"], f["host"], f["port"], f["database"], f["sslMode"]));
+        var (my, m) = Databases.DatabaseUrl("mysql://root@[::1]/legacy")!.Value;
+        Assert.Equal("mysql", my);
+        Assert.Equal("::1|3306|root||legacy", string.Join("|", m["host"], m["port"], m["user"], m["password"], m["database"]));
+        Assert.Equal("postgres", Databases.DatabaseUrl("postgis://u@/geo")!.Value.Kind);
+        Assert.Equal("localhost", Databases.DatabaseUrl("postgis://u@/geo")!.Value.Fields["host"]);
+        Assert.True(Databases.DatabaseUrl("sqlite:///db.sqlite3") == null, "not a server");
+        Assert.True(Databases.DatabaseUrl("not a url") == null);
+        Assert.True(!Databases.DatabaseUrl("postgres://h/d?sslmode=nonsense")!.Value.Fields.ContainsKey("sslMode"), "an unknown mode is left out");
+    }
+
+    [Fact]
+    public void DjangoEnvironsAndDjDatabaseUrlsDatabasesAreOffered()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "pm_dj_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "shop"));
+        Environment.SetEnvironmentVariable("PM_TEST_REPORTS_URL", "mysql://reporter:r3p@reports.internal:3307/reports");
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "manage.py"), "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'shop.settings')\n");
+            File.WriteAllText(Path.Combine(root, "shop", "__init__.py"), "");
+            // DATABASE_URL in the project's .env, as environ.Env.read_env(BASE_DIR / ".env") reads it
+            File.WriteAllText(Path.Combine(root, ".env"), "# the database\nDEBUG=on\nexport DATABASE_URL=\"postgres://shopper:s3cret@db.internal:5433/shop\"\n");
+            File.WriteAllText(Path.Combine(root, "shop", "settings.py"), """
+                import environ, dj_database_url
+                env = environ.Env()
+                environ.Env.read_env()
+                DATABASES = {
+                    "default": env.db(),
+                    "reports": env.db_url("PM_TEST_REPORTS_URL"),
+                    "archive": env.db("PM_TEST_UNSET_URL", default="postgres://arch@archive.internal/old?sslmode=require"),
+                    "cache": env.db("PM_TEST_CACHE_URL", default="sqlite:///cache.sqlite3"),
+                }
+                DATABASES["analytics"] = dj_database_url.config(env="PM_TEST_UNSET_URL", default="mysql://an@stats.internal/analytics")
+                DATABASES["legacy"] = dj_database_url.parse("postgresql://old:pw@legacy.internal:5544/legacy")
+                """);
+            var offers = Databases.Find(root).Where(s => s.Offer != null).ToList();
+            Assert.Equal("analytics:mysql:stats.internal:3306/analytics,archive:postgres:archive.internal:5432/old,default:postgres:db.internal:5433/shop,"
+                + "legacy:postgres:legacy.internal:5544/legacy,reports:mysql:reports.internal:3307/reports",
+                string.Join(",", offers.Select(s => $"{s.Offer!["alias"]}:{s.Server}:{s.Detail}").OrderBy(x => x, StringComparer.Ordinal)));
+            var main = offers.Single(o => o.Offer!["alias"] == "default");
+            Assert.Equal("shopper|s3cret", main.Offer!["user"] + "|" + main.Offer["password"]);
+            Assert.Equal("require", offers.Single(o => o.Offer!["alias"] == "archive").Offer!["sslMode"]);
+            Assert.Equal("reporter", offers.Single(o => o.Offer!["alias"] == "reports").Offer!["user"]);
+            // the environment comes before the .env
+            Environment.SetEnvironmentVariable("DATABASE_URL", "postgres://env@from-env.internal/envdb");
+            Assert.Equal("from-env.internal:5432/envdb", Databases.Find(root).Single(s => s.Offer?["alias"] == "default").Detail);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PM_TEST_REPORTS_URL", null);
+            Environment.SetEnvironmentVariable("DATABASE_URL", null);
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void ThePostgresAndMysqlDatabasesOfDjangosSettingsAreOfferedUntilConnected()
     {
         string root = Path.Combine(Path.GetTempPath(), "pm_dj_" + Guid.NewGuid().ToString("N"));

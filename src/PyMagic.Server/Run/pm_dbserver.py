@@ -94,7 +94,10 @@ def postgres_args(s):
     """psycopg's (libpq's) connection settings. Through an SSH tunnel ("via") libpq connects to the tunnel's address (hostaddr) and
     still checks the certificate against the server's own name (host), so verify-full works through a tunnel too."""
     args = {"host": s.get("host") or "localhost", "port": int(s.get("port") or 5432), "user": s.get("user") or "postgres",
-            "password": s.get("password") or None, "dbname": s.get("database") or "postgres", "connect_timeout": TIMEOUT}
+            "password": s.get("password") or None, "dbname": s.get("database") or "postgres", "connect_timeout": TIMEOUT,
+            # text as UTF-8 whatever the database's encoding: a database made as SQL_ASCII (initdb under the C locale, Ubuntu's default
+            # in a container) would otherwise give every text value to psycopg as bytes
+            "client_encoding": "UTF8"}
     via = s.get("via")
     if via:
         args["hostaddr"] = via["host"]

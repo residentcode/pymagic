@@ -147,7 +147,9 @@ public static class Databases
     /// The PostgreSQL and MySQL databases of the project's Django settings (each entry of <c>DATABASES</c> whose ENGINE is one of theirs, GeoDjango's
     /// too): the server form's fields from its HOST, PORT, USER, PASSWORD and NAME. A value may be a literal, or read from the environment as
     /// <c>os.environ.get("DB_HOST", "localhost")</c>, <c>os.getenv(...)</c>, <c>os.environ["DB_HOST"]</c>, django-environ's <c>env("DB_HOST", default=...)</c> or
-    /// decouple's <c>config(...)</c>: the variable's value here when it is set, else the default written.
+    /// decouple's <c>config(...)</c>: the variable's value here when it is set, else the default written. An entry may also be a database URL:
+    /// django-environ's <c>env.db()</c> / <c>env.db_url("VAR", default=...)</c> and dj-database-url's <c>config(env=..., default=...)</c> /
+    /// <c>parse(...)</c>, the URL from the environment (DATABASE_URL unless another variable is named), else the project's .env, else the default.
     /// </summary>
     public static List<(string Settings, string Alias, string Kind, Dictionary<string, string> Fields)> DjangoServers(string root)
     {
@@ -180,8 +182,110 @@ public static class Databases
                 };
                 if (!result.Any(r => r.Item1 == module && r.Item2 == alias)) result.Add((module, alias, kind, fields));
             }
+            // a database given as a URL: django-environ's env.db() / env.db_url(), dj-database-url's config() / parse()
+            Dictionary<string, string>? dotenv = null;
+            foreach (var (alias, call, args) in UrlEntries(text))
+            {
+                dotenv ??= DotEnv(baseDir, root);
+                if (UrlOf(call, args, dotenv) is not { } url || DatabaseUrl(url) is not { } parsed) continue;
+                var (kind, fields) = parsed;
+                fields["name"] = $"{alias} ({module})";
+                if (!result.Any(r => r.Item1 == module && r.Item2 == alias)) result.Add((module, alias, kind, fields));
+            }
         }
         return result;
+    }
+
+    // "alias": env.db(...) inside DATABASES = {...}, and DATABASES["alias"] = env.db(...) on a line of its own; the call and its arguments
+    static readonly System.Text.RegularExpressions.Regex UrlCall = new(
+        @"(?<call>\b(?:env|environ\.Env\(\))\.db(?:_url)?|\bdj_database_url\.(?:config|parse))\s*\(", System.Text.RegularExpressions.RegexOptions.Compiled);
+    static readonly System.Text.RegularExpressions.Regex UrlAlias = new(@"['""](?<alias>[\w-]+)['""]\s*:\s*$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    static readonly System.Text.RegularExpressions.Regex UrlAssign = new(@"^DATABASES\s*\[\s*['""](?<alias>[\w-]+)['""]\s*\]\s*=\s*$", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    static IEnumerable<(string Alias, string Call, string Args)> UrlEntries(string text)
+    {
+        int bodyFrom = -1, bodyTo = -1;
+        if (DatabasesStart.Match(text) is { Success: true } start) { bodyFrom = start.Index + start.Length; bodyTo = Closing(text, bodyFrom - 1); }
+        foreach (System.Text.RegularExpressions.Match m in UrlCall.Matches(text))
+        {
+            int open = m.Index + m.Length - 1;
+            string args = text[(open + 1)..Math.Max(open + 1, Closing(text, open))];
+            int lineStart = text.LastIndexOf('\n', Math.Max(0, m.Index - 1)) + 1;
+            string before = text[lineStart..m.Index];
+            if (m.Index > bodyFrom && m.Index < bodyTo && UrlAlias.Match(text[Math.Max(bodyFrom, lineStart)..m.Index]) is { Success: true } inDict)
+                yield return (inDict.Groups["alias"].Value, m.Groups["call"].Value, args);
+            else if (UrlAssign.Match(before) is { Success: true } assigned && assigned.Index == 0)
+                yield return (assigned.Groups["alias"].Value, m.Groups["call"].Value, args);
+        }
+    }
+
+    // the URL the call reads: its variable (DATABASE_URL unless named) from this process's environment or the project's .env, else its default
+    static string? UrlOf(string call, string args, Dictionary<string, string> dotenv)
+    {
+        string? Value(string variable) => Environment.GetEnvironmentVariable(variable) is { Length: > 0 } v ? v : dotenv.GetValueOrDefault(variable);
+        string? Literal(string? s) => s != null && System.Text.RegularExpressions.Regex.Match(s.Trim(), @"^[rbuf]?['""](?<s>[^'""]*)['""]") is { Success: true } l ? l.Groups["s"].Value : null;
+        string? Keyword(string name) => System.Text.RegularExpressions.Regex.Match(args, $@"\b{name}\s*=\s*(?<v>[rbuf]?['""][^'""]*['""])") is { Success: true } k ? Literal(k.Groups["v"].Value) : null;
+        string first = args.Split(',')[0].Trim();
+        bool positional = first.Length > 0 && !System.Text.RegularExpressions.Regex.IsMatch(first, @"^\w+\s*=");
+        if (call.EndsWith(".parse"))
+        {
+            // parse("postgres://...") or parse(os.environ["DATABASE_URL"]) / parse(os.environ.get(...)) / parse(env("..."))
+            if (Literal(first) is { } url) return url;
+            if (EnvCall.Match(first) is { Success: true } c) return Value(c.Groups["var"].Value) ?? (c.Groups["default"].Success ? c.Groups["default"].Value.Trim('\'', '"') : null);
+            if (EnvIndex.Match(first) is { Success: true } i) return Value(i.Groups["var"].Value);
+            return null;
+        }
+        // env.db("VAR", default=...) / env.db_url(...): the variable first; dj_database_url.config(env="VAR", default=...)
+        string variable = call.StartsWith("dj_database_url") ? Keyword("env") ?? "DATABASE_URL"
+            : (positional ? Literal(first) : null) ?? Keyword("var") ?? "DATABASE_URL";
+        return Value(variable) ?? Keyword("default");
+    }
+
+    /// <summary>A PostgreSQL or MySQL database URL as dj-database-url and django-environ read it (<c>postgres://user:pw@host:5432/name?sslmode=require</c>): the server form's fields; null for another kind (sqlite://) or no URL.</summary>
+    public static (string Kind, Dictionary<string, string> Fields)? DatabaseUrl(string url)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(url.Trim(), @"^(?<scheme>[\w+.-]+)://(?:(?<user>[^:@/]*)(?::(?<password>[^@/]*))?@)?(?<host>\[[^\]]*\]|[^:/?#]*)(?::(?<port>\d+))?(?:/(?<name>[^?#]*))?(?:\?(?<query>[^#]*))?");
+        if (!m.Success) return null;
+        string scheme = m.Groups["scheme"].Value.ToLowerInvariant();
+        string? kind = scheme is "postgres" or "postgresql" or "pgsql" or "psql" or "postgis" or "timescale" or "timescalegis" || scheme.StartsWith("postgres+") ? "postgres"
+            : scheme is "mysql" or "mysql2" or "mysqlgis" or "mysql-connector" or "mariadb" || scheme.StartsWith("mysql+") ? "mysql" : null;
+        if (kind == null) return null;
+        string D(string group) => Uri.UnescapeDataString(m.Groups[group].Value);
+        string host = D("host").Trim('[', ']');
+        var fields = new Dictionary<string, string>
+        {
+            ["host"] = host.Length > 0 ? host : "localhost",
+            ["port"] = m.Groups["port"].Success ? m.Groups["port"].Value : (kind == "postgres" ? "5432" : "3306"),
+            ["user"] = D("user"), ["password"] = D("password"), ["database"] = D("name"),
+        };
+        foreach (var pair in m.Groups["query"].Value.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var (key, value) = (pair.Split('=')[0].ToLowerInvariant(), Uri.UnescapeDataString(pair.Contains('=') ? pair[(pair.IndexOf('=') + 1)..] : ""));
+            if ((key is "sslmode" or "ssl-mode") && DbServers.SslModes.Contains(value.ToLowerInvariant().Replace('_', '-'))) fields["sslMode"] = value.ToLowerInvariant().Replace('_', '-');
+        }
+        return (kind, fields);
+    }
+
+    // KEY=value lines of the project's .env (beside manage.py, or at the project's top), as django-environ's read_env takes them
+    static Dictionary<string, string> DotEnv(string baseDir, string root)
+    {
+        var values = new Dictionary<string, string>();
+        foreach (var dir in new[] { baseDir, root }.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            string file = System.IO.Path.Combine(dir, ".env");
+            string[] lines;
+            try { lines = File.ReadAllLines(file); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            foreach (var raw in lines)
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(raw, @"^\s*(?:export\s+)?(?<key>\w+)\s*=\s*(?<value>.*?)\s*$");
+                if (!m.Success) continue;
+                string value = m.Groups["value"].Value;
+                if (value.Length >= 2 && (value[0] is '"' or '\'') && value[^1] == value[0]) value = value[1..^1];
+                else if (value.IndexOf(" #", StringComparison.Ordinal) is var hash and >= 0) value = value[..hash].TrimEnd();
+                values.TryAdd(m.Groups["key"].Value, value);
+            }
+        }
+        return values;
     }
 
     // the entries of DATABASES = {...}: "alias": {...} or dict(...), with what is inside each (nested braces and parentheses counted)

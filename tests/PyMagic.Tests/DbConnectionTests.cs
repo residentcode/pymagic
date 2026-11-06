@@ -160,6 +160,8 @@ print(json.dumps({"pg": pg, "myHost": my["host"], "myPort": my["port"], "myVerif
         Assert.Equal("verify-full", o["pg"]!["sslmode"]!.GetValue<string>());
         Assert.Equal("ca.pem", o["pg"]!["sslrootcert"]!.GetValue<string>());
         Assert.True(o["pg"]!["sslcert"] == null, "an empty file is not passed");
+        // text comes as text from a database made as SQL_ASCII too (psycopg gives bytes for that encoding otherwise)
+        Assert.Equal("UTF8", o["pg"]!["client_encoding"]!.GetValue<string>());
         Assert.Equal("127.0.0.1", o["myHost"]!.GetValue<string>());
         Assert.Equal(50123, o["myPort"]!.GetValue<int>());
         Assert.Equal(0, o["myVerify"]!.GetValue<int>());   // require: encrypted, the certificate not checked

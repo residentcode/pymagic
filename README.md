@@ -171,7 +171,6 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Python console: Not built: Attach Debugger with an interpreter elsewhere than this computer (WSL, Docker, SSH); the history list is kept while PyMagic runs, not across restarts (item 317).
 - Notebooks: Not checked: Debug Cell on a Jupyter server on another computer against a real ipykernel (item 326 was checked with a small Jupyter server of the tests).
 - Compared on 1 November 2026 (item 224; what was "Not compared yet"), PyMagic had none of these unless said:
-  - Database tools and SQL (item 312): Not read: django-environ's `env.db()` and DATABASE_URL settings. Not checked: PostgreSQL's and MySQL's routines, a server's other databases, TLS and SSH tunnels against real servers (they need downloads).
   - HTTP client (item 313): Not built: PyCharm's newer extras: `jsonPath`, `client.global` kept across restarts, WebSocket, GraphQL and gRPC requests.
   - Run Anything and the Services window (item 314): one member of a compound at a time is debugged (the Run panel has one debug session; PyCharm opens a debugger tab per member).
   - Deployment (item 324): Not checked: implicit FTPS and a trusted self-signed certificate against a real FTPS server (checked with a small FTPS server of the tests).
@@ -199,4 +198,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 369 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 370 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
