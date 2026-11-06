@@ -65,12 +65,12 @@ public class DeploymentTests
             Assert.Equal("web", server.Mappings[0].Local);
             Assert.Equal("public", server.Mappings[0].Remote);
             Assert.Equal("*.log", string.Join(",", server.Excluded));
-            DeployStore.Save(root, server, "s3cret");
-            Assert.True(!File.ReadAllText(Path.Combine(root, ".pymagic", "deployment.json")).Contains("s3cret"));
-            Assert.Equal("s3cret", DeployStore.PasswordOf(root, server.Id));
+            DeployStore.Save(root, server, Fake.Password);
+            Assert.True(!File.ReadAllText(Path.Combine(root, ".pymagic", "deployment.json")).Contains(Fake.Password));
+            Assert.Equal(Fake.Password, DeployStore.PasswordOf(root, server.Id));
             // saved again without a password: the password stays
             DeployStore.Save(root, server with { Name = "renamed" }, null);
-            Assert.Equal("s3cret", DeployStore.PasswordOf(root, server.Id));
+            Assert.Equal(Fake.Password, DeployStore.PasswordOf(root, server.Id));
             Assert.Equal("renamed", DeployStore.Find(root, server.Id)!.Name);
             DeployStore.Remove(root, server.Id);
             Assert.Equal(0, DeployStore.Load(root).Count);

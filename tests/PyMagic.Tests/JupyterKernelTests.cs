@@ -18,7 +18,7 @@ public class JupyterKernelTests
 {
     sealed class FakeJupyter : IDisposable
     {
-        public const string Token = "s3cret";
+        public static readonly string Token = Fake.Token;
         public readonly HttpListener Listener = new();
         public readonly string Url;
         public readonly List<string> Calls = new();

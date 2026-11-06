@@ -75,7 +75,7 @@ while True:
 
     static JsonObject Form(string sshHost = "jump.example", int port = 5432) => new()
     {
-        ["kind"] = "postgres", ["host"] = "127.0.0.1", ["port"] = port.ToString(), ["user"] = "me", ["password"] = "db-secret", ["database"] = "shop",
+        ["kind"] = "postgres", ["host"] = "127.0.0.1", ["port"] = port.ToString(), ["user"] = "me", ["password"] = Fake.Password, ["database"] = "shop",
         ["sshHost"] = sshHost, ["sshPort"] = "2222", ["sshUser"] = "admin", ["sshKey"] = "keys/id_ed25519",
     };
 
@@ -194,7 +194,7 @@ print(json.dumps({"pg": pg, "myHost": my["host"], "myPort": my["port"], "myVerif
         try
         {
             var server = DbServers.Parse(Form(port: echoPort));
-            DbServers.Save(root, server, "db-secret", "ssh-secret");
+            DbServers.Save(root, server, Fake.Password, Fake.OtherPassword);
             var c = DbServers.Connection(root, DbServers.PathOf(server.Id))!;
             int port = c["via"]!["port"]!.GetValue<int>();
             Assert.Equal("127.0.0.1", c["via"]!["host"]!.GetValue<string>());
@@ -216,8 +216,8 @@ print(json.dumps({"pg": pg, "myHost": my["host"], "myPort": my["port"], "myVerif
             Assert.Equal(1, File.ReadAllLines(log).Length);
             var started = JsonNode.Parse(File.ReadAllLines(log)[0])!;
             string args = string.Join(" ", started["args"]!.AsArray().Select(a => a!.GetValue<string>()));
-            Assert.True(!args.Contains("ssh-secret"), "the password is no argument");
-            Assert.Equal("ssh-secret", started["password"]!.GetValue<string>());
+            Assert.True(!args.Contains(Fake.OtherPassword), "the password is no argument");
+            Assert.Equal(Fake.OtherPassword, started["password"]!.GetValue<string>());
             Assert.Contains("pm_askpass.cmd", started["askpass"]!.GetValue<string>());
             Assert.Equal("force", started["require"]!.GetValue<string>());
             Assert.Contains("-i " + Path.Combine(root, "keys", "id_ed25519"), args);   // the key file from the project's folder
@@ -267,7 +267,7 @@ print(json.dumps({"pg": pg, "myHost": my["host"], "myPort": my["port"], "myVerif
         psi.ArgumentList.Add("/c");
         psi.ArgumentList.Add(Helper("pm_askpass.cmd"));
         psi.ArgumentList.Add("me@host's password:");
-        psi.Environment["PYMAGIC_SSH_PASSWORD"] = "a&b!c|d\"e%PATH%<f>";
+        psi.Environment["PYMAGIC_SSH_PASSWORD"] = Fake.ShellPassword;
         using var p = Process.Start(psi)!;
         string output = p.StandardOutput.ReadToEnd();
         p.WaitForExit();

@@ -383,23 +383,23 @@ public class PackageToolsTests
         using var t = new Temp();
         var s = new PackageSettings
         {
-            IndexUrl = "https://me:s3cret@pkgs.example.org/simple",
+            IndexUrl = $"https://me:{Fake.Password}@pkgs.example.org/simple",
             ExtraIndexUrls = { "https://TOKEN123@extra.example.org/simple", "https://open.example.org/simple" },
             Proxy = "http://proxyuser:pw@proxy.example.org:3128",
         };
         PackageSettings.Save(t.Root, s);
 
         string saved = File.ReadAllText(Path.Combine(t.Root, ".pymagic", "packages.json"));
-        A.False(saved.Contains("s3cret") || saved.Contains("TOKEN123") || saved.Contains(":pw@"), saved);
+        A.False(saved.Contains(Fake.Password) || saved.Contains("TOKEN123") || saved.Contains(":pw@"), saved);
         A.Contains("https://me:***@pkgs.example.org/simple", saved);
         A.Contains("https://***@extra.example.org/simple", saved);
         A.Contains("http://proxyuser:***@proxy.example.org:3128", saved);
-        A.Contains("s3cret", File.ReadAllText(Path.Combine(t.Root, ".pymagic", "packages.private.json")));
+        A.Contains(Fake.Password, File.ReadAllText(Path.Combine(t.Root, ".pymagic", "packages.private.json")));
         A.Contains("packages.private.json", File.ReadAllText(Path.Combine(t.Root, ".pymagic", ".gitignore")));
 
         // pip gets the whole address, the page the masked one
         var loaded = PackageSettings.Load(t.Root);
-        Assert.Equal("https://me:s3cret@pkgs.example.org/simple", loaded.IndexUrl);
+        Assert.Equal($"https://me:{Fake.Password}@pkgs.example.org/simple", loaded.IndexUrl);
         A.Contains("https://TOKEN123@extra.example.org/simple", loaded.PipArgs());
         var shown = loaded.Masked();
         Assert.Equal("https://me:***@pkgs.example.org/simple", shown.IndexUrl);
@@ -408,7 +408,7 @@ public class PackageToolsTests
         // the page sends the masked addresses back (another setting changed): the passwords stay
         shown.TrustedHosts.Add("open.example.org");
         PackageSettings.Save(t.Root, shown);
-        Assert.Equal("https://me:s3cret@pkgs.example.org/simple", PackageSettings.Load(t.Root).IndexUrl);
+        Assert.Equal($"https://me:{Fake.Password}@pkgs.example.org/simple", PackageSettings.Load(t.Root).IndexUrl);
         Assert.Equal("http://proxyuser:pw@proxy.example.org:3128", PackageSettings.Load(t.Root).Proxy);
 
         // a new password replaces the old one; no passwords left removes the private file

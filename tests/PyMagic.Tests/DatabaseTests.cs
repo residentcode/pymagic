@@ -111,13 +111,13 @@ public class DatabaseTests
     {
         string root = Path.Combine(Path.GetTempPath(), "pm_dj_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "shop"));
-        Environment.SetEnvironmentVariable("PM_TEST_REPORTS_URL", "mysql://reporter:r3p@reports.internal:3307/reports");
+        Environment.SetEnvironmentVariable("PM_TEST_REPORTS_URL", $"mysql://reporter:{Fake.OtherPassword}@reports.internal:3307/reports");
         try
         {
             File.WriteAllText(Path.Combine(root, "manage.py"), "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'shop.settings')\n");
             File.WriteAllText(Path.Combine(root, "shop", "__init__.py"), "");
             // DATABASE_URL in the project's .env, as environ.Env.read_env(BASE_DIR / ".env") reads it
-            File.WriteAllText(Path.Combine(root, ".env"), "# the database\nDEBUG=on\nexport DATABASE_URL=\"postgres://shopper:s3cret@db.internal:5433/shop\"\n");
+            File.WriteAllText(Path.Combine(root, ".env"), "# the database\nDEBUG=on\nexport DATABASE_URL=\"postgres://shopper:" + Fake.Password + "@db.internal:5433/shop\"\n");
             File.WriteAllText(Path.Combine(root, "shop", "settings.py"), """
                 import environ, dj_database_url
                 env = environ.Env()
@@ -136,7 +136,7 @@ public class DatabaseTests
                 + "legacy:postgres:legacy.internal:5544/legacy,reports:mysql:reports.internal:3307/reports",
                 string.Join(",", offers.Select(s => $"{s.Offer!["alias"]}:{s.Server}:{s.Detail}").OrderBy(x => x, StringComparer.Ordinal)));
             var main = offers.Single(o => o.Offer!["alias"] == "default");
-            Assert.Equal("shopper|s3cret", main.Offer!["user"] + "|" + main.Offer["password"]);
+            Assert.Equal("shopper|" + Fake.Password, main.Offer!["user"] + "|" + main.Offer["password"]);
             Assert.Equal("require", offers.Single(o => o.Offer!["alias"] == "archive").Offer!["sslMode"]);
             Assert.Equal("reporter", offers.Single(o => o.Offer!["alias"] == "reports").Offer!["user"]);
             // the environment comes before the .env

@@ -13,9 +13,9 @@ public class DbServerTests
 {
     static string Root() { string r = Path.Combine(Path.GetTempPath(), "pm_dbs_" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(r); return r; }
 
-    static JsonObject Form(string kind = "postgres", string host = "db.example.org", string port = "5433", string user = "me", string password = "s3cret", string database = "shop", string name = "") => new()
+    static JsonObject Form(string kind = "postgres", string host = "db.example.org", string port = "5433", string user = "me", string? password = null, string database = "shop", string name = "") => new()
     {
-        ["kind"] = kind, ["host"] = host, ["port"] = port, ["user"] = user, ["password"] = password, ["database"] = database, ["name"] = name,
+        ["kind"] = kind, ["host"] = host, ["port"] = port, ["user"] = user, ["password"] = password ?? Fake.Password, ["database"] = database, ["name"] = name,
     };
 
     [Fact]
@@ -28,13 +28,13 @@ public class DbServerTests
             Assert.Equal("postgres", server.Kind);
             Assert.Equal(5433, server.Port);
             Assert.Equal("me@db.example.org/shop", server.Name);
-            DbServers.Save(root, server, "s3cret");
+            DbServers.Save(root, server, Fake.Password);
             string settings = File.ReadAllText(Path.Combine(root, ".pymagic", "db-servers.json"));
             Assert.Contains("db.example.org", settings);
-            Assert.True(!settings.Contains("s3cret"), "the settings file has no password");
-            Assert.Contains("s3cret", File.ReadAllText(Path.Combine(root, ".pymagic", "db-servers.private.json")));
+            Assert.True(!settings.Contains(Fake.Password), "the settings file has no password");
+            Assert.Contains(Fake.Password, File.ReadAllText(Path.Combine(root, ".pymagic", "db-servers.private.json")));
             var connection = DbServers.Connection(root, DbServers.PathOf(server.Id))!;
-            Assert.Equal("s3cret", connection["password"]!.GetValue<string>());
+            Assert.Equal(Fake.Password, connection["password"]!.GetValue<string>());
             Assert.Equal(5433, connection["port"]!.GetValue<int>());
             // it is listed among the data sources, without its password
             var source = Databases.Find(root).Single(s => s.Server != null);
@@ -42,7 +42,7 @@ public class DbServerTests
             Assert.Equal("db.example.org:5433/shop", source.Detail);
             DbServers.Remove(root, server.Id);
             Assert.Equal(0, Databases.Find(root).Count(s => s.Server != null));
-            Assert.True(!File.ReadAllText(Path.Combine(root, ".pymagic", "db-servers.private.json")).Contains("s3cret"), "the password goes with the server");
+            Assert.True(!File.ReadAllText(Path.Combine(root, ".pymagic", "db-servers.private.json")).Contains(Fake.Password), "the password goes with the server");
             Assert.True(DbServers.Connection(root, "server:nothing") == null);
         }
         finally { Directory.Delete(root, true); }
