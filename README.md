@@ -150,49 +150,6 @@ desktop/e2e               the page in PyMagic.exe, driven over the DevTools prot
 The test project is a plain console runner because this machine's NuGet only has an offline source
 (no xunit). Switch to xunit once nuget.org is configured.
 
-## Open work
-
-Everything that is known to be left, in one place, gathered on 30 October 2026 from the "Not done" and "Still open" notes of items 2 to 154 (the item a line comes from is in brackets), and from PyCharm's own dialogs and menus (what PyMagic's notes never named). **How it is kept:** when an item does one of these, its line goes from here; a new item's own "Not done" note is added here too. Code signing, auto-update and anything else for selling PyMagic are left out on purpose.
-
-**Editor**
-
-**Run, debug and tests**
-
-**Installer**
-- Not seen on screen: the sidebar picture (item 331), shown only on the finish page after an install and in the uninstaller; the folder page's refusal of a folder that is not PyMagic's (only its rule's tests and the silent installs ran).
-
-**Type engine**
-
-**Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
-
-**Django compared with PyCharm** (from PyCharm's Django help pages and its 17 Django inspections, checked against the code on 30 October 2026)
-
-**Compared with PyCharm's help, area by area** (from its help contents of about 1,000 pages and its 103 Python inspections, checked against the code on 30 October 2026; areas not compared yet are at the end)
-- Python console: Not checked: Attach Debugger with an interpreter in WSL or a container (item 375 was checked over SSH).
-- Compared on 1 November 2026 (item 224; what was "Not compared yet"), PyMagic had none of these unless said:
-  - HTTP client (item 313): Not built: PyCharm's newer extras: WebSocket, GraphQL and gRPC requests (item 378 did `jsonPath` and `client.global` kept across restarts).
-
-
-### Different from PyCharm on purpose
-
-Not work left: choices made and kept, noted where they were made.
-
-- Left as it is: ruff writes `from m import B as b` before `from m import a` (by name), PyMagic writes the plain one first.
-- Measured and left out: keeping the types of unchanged files across edits (the files they depend on are only about a fifth of an edit's time) and parsing only the edited region (10 ms of a 450 ms check); the peak while the problems are computed is still about 2.6 GB.
-- New project: unlike PyCharm, a project made with a venv lists the packages of its kind (FastAPI, Flask, Jupyter) in requirements.txt without installing them; Django is installed, so that its own startproject writes the project, and with uv every kind's packages are added with uv add (items 285 and 287).
-- Editor menu: Left as they are: *Paste as Plain Text* (every paste into the editor is plain already) and submenus in the editor's right-click menu (Monaco's menu has none; Refactor… and Generate… open PyMagic's own menus, which have them)
-- Diagrams: Simpler than PyCharm's: no editing, notes or other layouts, and a model's relations come from its own fields.
-- Open Project: no Attach (a second project folder in the same window): the user does not want it; a project opens in this window or a new one (item 301).
-- Debug of a compound (item 377): every member is debugged under the Run panel's one debug server, and one member's stop is shown at a time, by its name (PyCharm opens a debugger tab per member).
-- Debugger: left on purpose: attaching to programs of Python 3.13 and earlier, which have no `sys.remote_exec` (PyCharm injects native code into the process; antivirus programs such as Kaspersky quarantine programs that do, so PyMagic attaches to 3.14 and later only)
-- Editor: PyMagic's keys differ where PyCharm's are already taken here: next / previous method is Ctrl+Shift+Down / Up (Alt+Down moves the line), the block's start / end is Alt+[ / Alt+] (Ctrl+[ indents)
-- Refactoring: Simpler than PyCharm's: Introduce Parameter gives the parameter a default instead of passing the value at each call, Invert Boolean works on variables (not on functions that return one), and moved members do not bring the imports they need.
-- Search: Simpler than PyCharm's: the conditions on a variable are a regular expression on its text (no type or count conditions), and duplicates are compared statement by statement.
-- Inspections PyMagic has and PyCharm does not (items 341 and 348): *Patch target that does not exist*, *Attribute a mock does not have* and *Name defined in a later cell*, kept; *Incorrect number of parameters for @patch decorated function* reports too few parameters only, since pytest fills extra ones with fixtures (PyCharm also reports too many).
-- JSON Schemas (items 360 and 364): no *Load SchemaStore Mappings*: PyCharm downloads SchemaStore's schemas when asked; PyMagic bundles SchemaStore's catalog and its own schemas (up to 500 KB each) and uses them at once; the catalog's entries whose schema is on another site are not used, and a mapping can name a schema file of the project.
-- Project tree (item 361): no *Jupyter Connection* under New (a notebook chooses its Jupyter server in its own toolbar) and no *Repair IDE on File* (PyMagic keeps no per-file index to repair; Reload from disk reads the file again).
-- Python inspections that PyCharm has and PyMagic does not: Left on purpose: advertising stub packages that could be installed, since PyMagic ships typeshed's third-party stubs and already has those types.
-
 ## License
 
 PyMagic is source-available, not open source: you may read the source, build it and use it, change it for your own use, and propose changes, but you may not sell it or distribute it, changed or not. Only its owner, [residentcode](https://github.com/residentcode), may distribute or sell PyMagic. The terms are in [LICENSE](LICENSE). The parts of other projects it contains or is built with keep their own licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

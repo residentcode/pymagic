@@ -1,7 +1,7 @@
 # Making a plugin for PyMagic
 
 A PyMagic plugin is a feature that comes with the app and can be switched on and off in **Settings > Plugins**, like PyCharm's bundled
-plugins (items 289 to 291). Nothing is downloaded or loaded from outside: a plugin is code in this repository. When it is off:
+plugins. Nothing is downloaded or loaded from outside: a plugin is code in this repository. When it is off:
 
 - **In the window**, its setup does not run when the window opens. Its commands, keys, checks and editor features are not there, and its panel
   tab, buttons and menu entries are hidden.
@@ -94,7 +94,7 @@ The engine has one language service per window, so the caches it builds are new 
 
 ## 4. Data the plugin needs
 
-Ship it with the app, never download it when the feature is used (the JSON Schemas, item 288). Put the files in the engine project and embed them:
+Ship it with the app, never download it when the feature is used (as the JSON Schemas are). Put the files in the engine project and embed them:
 
 ```xml
 <EmbeddedResource Include="Schemas\*.json" LogicalName="schema-%(Filename).json" />
