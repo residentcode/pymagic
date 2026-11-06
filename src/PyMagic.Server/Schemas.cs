@@ -21,7 +21,7 @@ public static class Schemas
         ("jsonschema-6", "JSON Schema 6"), ("jsonschema-7", "JSON Schema 7"), ("kustomization", "Kustomization"),
         ("markdown-frontmatter", "Markdown Front Matter Generic Schema"), ("mermaid", "Mermaid Config"), ("mkdocs", "MkDocs"),
         ("openapi", "OpenAPI 3.0"), ("openapi31", "OpenAPI 3.1"), ("package", "package"), ("precommit", "pre-commit"), ("prettierrc", "Prettier"),
-        ("pyproject", "pyproject.toml"), ("renovate", "Renovate"), ("stylelintrc", "StyleLint"), ("swagger", "Swagger 2.0"), ("tox", "tox"),
+        ("pyproject", "pyproject.toml"), ("stylelintrc", "StyleLint"), ("swagger", "Swagger 2.0"), ("tox", "tox"),
         ("tsconfig", "TSConfig"), ("tsd", "TSD"), ("tslint", "TSLint"), ("typings", "Typings"),
     ];
 
@@ -37,7 +37,11 @@ public static class Schemas
     static readonly System.Text.RegularExpressions.Regex KubernetesName = new("^k8s-[a-z0-9]+(-[a-z0-9]+){0,2}$");
 
     /// <summary>Whether the name is one of the fixed schemas or the schema of a Kubernetes kind.</summary>
-    public static bool IsKnown(string name) => Names.Contains(name) || KubernetesName.IsMatch(name) || StoreStem(name) is { } stem && Store.Value.Files.Contains(stem);
+    public static bool IsKnown(string name) => Names.Contains(name) || ProjectOnly.Contains(name) || KubernetesName.IsMatch(name) || StoreStem(name) is { } stem && Store.Value.Files.Contains(stem);
+
+    /// <summary>Schemas the page knows a file by but PyMagic does not carry: only a project's own copy in .pymagic/schemas is used. Renovate's
+    /// project is under the GNU AGPL 3.0, whose terms do not fit PyMagic's license.</summary>
+    public static readonly IReadOnlyList<string> ProjectOnly = new[] { "renovate" };
 
     // ------------------------------------------------------------ SchemaStore.org
 

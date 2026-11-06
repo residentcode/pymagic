@@ -1,4 +1,4 @@
-// package.json, pyproject.toml, GitHub workflows, docker-compose, GitLab CI, pre-commit, mkdocs, dependabot, codecov, tox, Renovate, OpenAPI 3.1 / 3.0 / Swagger 2.0,
+// package.json, pyproject.toml, GitHub workflows, docker-compose, GitLab CI, pre-commit, mkdocs, dependabot, codecov, tox, Renovate (with a project copy of its schema), OpenAPI 3.1 / 3.0 / Swagger 2.0,
 // Kustomization and Kubernetes manifests checked against their JSON Schema; a custom resource against the CustomResourceDefinition of the project that declares it.
 // The schemas are built into PyMagic (a project's own copy in .pymagic/schemas is used instead): nothing is downloaded and nothing is asked (schema-model.js validates).
 // A Kubernetes manifest is any YAML file with an apiVersion and a kind (several documents in one file are each checked); its schema is the one of that kind.

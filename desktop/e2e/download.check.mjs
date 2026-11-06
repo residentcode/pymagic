@@ -5,9 +5,8 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { launch, project, sleep } from './app.mjs';
 
-const NAMES = ['package', 'pyproject', 'workflow', 'compose', 'gitlab', 'precommit', 'mkdocs', 'dependabot', 'codecov', 'tox', 'renovate', 'openapi', 'k8s-deployment-apps-v1', 'k8s-service-v1'];
+const NAMES = ['package', 'pyproject', 'workflow', 'compose', 'gitlab', 'precommit', 'mkdocs', 'dependabot', 'codecov', 'tox', 'openapi', 'k8s-deployment-apps-v1', 'k8s-service-v1'];
 const FILES = {
-    'renovate.json': '{\n  "extends": ["config:recommended"],\n  "labels": 5\n}\n',
     'openapi.yaml': 'openapi: 3.0.3\ninfo:\n  title: 5\npaths: {}\n',
     'deploy.yaml': 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: x\nspec:\n  replicas: three\n  selector:\n    matchLabels:\n      a: b\n  template:\n    spec:\n      containers:\n        - name: c\n',
     'stack.yaml': 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: x\nspec:\n  selector:\n    matchLabels:\n      a: b\n  template:\n    spec:\n      containers:\n        - name: c\n---\napiVersion: v1\nkind: Service\nspec:\n  ports:\n    - port: http\n',
@@ -50,7 +49,7 @@ async function session(answer) {
         }
         result.model = await page.evaluate('window.pymagic.editor.getModel().uri.toString()');
         result.workflow = await page.evaluate(markers);
-        for (const file of ['docker-compose.yml', '.gitlab-ci.yml', '.pre-commit-config.yaml', 'mkdocs.yml', '.github/dependabot.yml', 'codecov.yml', 'tox.toml', 'renovate.json', 'openapi.yaml', 'deploy.yaml', 'stack.yaml']) {
+        for (const file of ['docker-compose.yml', '.gitlab-ci.yml', '.pre-commit-config.yaml', 'mkdocs.yml', '.github/dependabot.yml', 'codecov.yml', 'tox.toml', 'openapi.yaml', 'deploy.yaml', 'stack.yaml']) {
             for (let i = 0; i < 4; i++) {
                 await page.evaluate(`window.pymagic.openFile('${file}')`);
                 await sleep(3500);
@@ -72,7 +71,6 @@ assert.match(yes.text, /schemastore\.org/);
 assert.ok(yes.first.some((m) => m.startsWith('4: ')), 'scripts.t marked');
 assert.ok(yes.first.some((m) => m.startsWith('6: ')), 'private marked');
 assert.deepEqual(yes.kept, Array(NAMES.length).fill(true));
-assert.deepEqual(yes.more['renovate.json'], ['3: Should be array, not integer']);
 assert.deepEqual(yes.more['openapi.yaml'], ['2: The property version is required', '3: Should be string, not integer']);
 assert.deepEqual(yes.more['deploy.yaml'], ['6: Should be integer or null, not string']);
 assert.deepEqual(yes.more['stack.yaml'], ['17: Should be integer, not string'], 'the second document of a file is checked against its own kind, at its own line');

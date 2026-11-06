@@ -167,7 +167,7 @@ export function validate(data, schema, limit = 200, registry = null) {
         if (node.$recursiveRef === '#') merge(walk(value, schema, path, depth + 1));
         // not: the value must not fit; if/then/else: what fits `if` is held to `then`, the rest to `else`
         if (node.not !== undefined && node.not !== false && problemsOf(value, node.not, path, depth + 1).length === 0) {
-            // `not` of properties that may not be given (Renovate's options of the global config): each one given is named
+            // `not` of properties that may not be given (as Renovate's schema has its options of the global config): each one given is named
             const forms = node.not && typeof node.not === 'object' ? [node.not, ...(node.not.anyOf ?? [])] : [];
             const banned = forms.flatMap((f) => (Array.isArray(f.required) && Object.keys(f).every((k) => k === 'required') ? f.required : []));
             const given = value && typeof value === 'object' && !Array.isArray(value) ? banned.filter((k) => k in value) : [];

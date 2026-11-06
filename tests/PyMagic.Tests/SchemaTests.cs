@@ -78,11 +78,30 @@ public class SchemaTests
     }
 
     [Fact]
+    public void RenovatesSchemaIsOnlyAProjectsOwnCopy()
+    {
+        // not carried by PyMagic (its project is under the AGPL), nor in SchemaStore's bundle; a project's own copy is used
+        Assert.True(Schemas.Builtin("renovate") == null, "not built in");
+        Assert.True(Schemas.IsKnown("renovate"), "still a schema a file is known by");
+        Assert.True(!Schemas.IsKnown("renovate-43") && !Schemas.IsKnown("renovate-global-schema"), "SchemaStore's copies are not bundled");
+        string root = Path.Combine(Path.GetTempPath(), "pm_renovate_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Assert.True(Schemas.Of(root, "renovate") == null, "nothing to check against without a copy");
+            Directory.CreateDirectory(Schemas.FolderOf(root));
+            File.WriteAllText(Schemas.PathOf(root, "renovate"), "{\"type\":\"object\"}");
+            Assert.Equal("{\"type\":\"object\"}", Schemas.Of(root, "renovate"));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void EverySchemaIsBuiltIn()
     {
         // the registered ones (the status bar's list, PyCharm's and the earlier ones) and the vocabularies of the 2019-09 and 2020-12 meta-schemas
-        Assert.Equal(38, Schemas.Registered.Count);
-        Assert.Equal(38 + 13, Schemas.Names.Count);
+        Assert.Equal(37, Schemas.Registered.Count);   // Renovate's is not built in (its project is under the AGPL)
+        Assert.Equal(37 + 13, Schemas.Names.Count);
         foreach (var name in Schemas.Names)
         {
             string text = Schemas.Builtin(name) ?? throw new AssertionException(name + " is not built in");

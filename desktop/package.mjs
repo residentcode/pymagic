@@ -1,8 +1,8 @@
 // Builds a self-contained Windows app, desktop/out/PyMagic-win32-x64/PyMagic.exe (nothing else needs to be installed),
 // and its installer, desktop/out/PyMagic-Setup-<version>.exe. `--no-installer` stops after the app folder.
 import { execFileSync } from 'node:child_process';
-import { cpSync, rmSync, mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { cpSync, rmSync, mkdirSync, readdirSync, existsSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { packager } from '@electron/packager';
 import { Arch, Platform, build } from 'electron-builder';
@@ -42,6 +42,33 @@ await fetchModel(resolve(repo, 'models'));
 mkdirSync(resolve(stage, 'models'), { recursive: true });
 cpSync(resolve(repo, 'models', MODEL.file), resolve(stage, 'models', MODEL.file));
 cpSync(resolve(repo, 'models', 'NOTICE.md'), resolve(stage, 'models', 'NOTICE.md'));
+console.log('== licenses');
+// PyMagic's own license and the notices of what it carries (THIRD-PARTY-NOTICES.md), with the license text of every part: the schemas',
+// the NuGet packages' and .NET's (licenses/), and those of every npm package the page is built from (its dependencies too, which the
+// bundle holds). typeshed's and the model's are in their own folders already; Electron puts its own and Chromium's beside PyMagic.exe.
+const licenses = resolve(stage, 'licenses');
+mkdirSync(resolve(licenses, 'npm'), { recursive: true });
+for (const f of ['LICENSE', 'THIRD-PARTY-NOTICES.md']) cpSync(resolve(repo, f), resolve(licenses, f));
+cpSync(resolve(repo, 'licenses'), resolve(licenses, 'packages'), { recursive: true });
+cpSync(resolve(repo, 'src', 'PyMagic.Server', 'Schemas', 'LICENSES'), resolve(licenses, 'schemas'), { recursive: true });
+cpSync(resolve(repo, 'src', 'PyMagic.Server', 'Schemas', 'README.md'), resolve(licenses, 'schemas', 'README.md'));
+cpSync(resolve(repo, 'src', 'PyMagic.Server', 'SchemaStore', 'LICENSE.txt'), resolve(licenses, 'schemas', 'schemastore.txt'));
+cpSync(resolve(repo, 'src', 'PyMagic.Server', 'Gherkin', 'LICENSE.txt'), resolve(licenses, 'packages', 'gherkin.txt'));
+const tree = JSON.parse(execFileSync('npm', ['ls', '--omit=dev', '--all', '--long', '--json'], { cwd: resolve(repo, 'web'), shell: true, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
+const seen = new Set();
+(function walk(node) {
+  for (const [name, dep] of Object.entries(node.dependencies ?? {})) {
+    const key = `${name}@${dep.version}`;
+    if (seen.has(key) || !dep.path) continue;
+    seen.add(key);
+    const files = existsSync(dep.path) ? readdirSync(dep.path).filter((f) => /^(licen[cs]e|copying|notice|third[-_]?party)/i.test(f)) : [];
+    for (const f of files) cpSync(join(dep.path, f), resolve(licenses, 'npm', `${key.replace('/', '__')}-${f}`));
+    if (!files.length) console.log(`   (no license file in ${key}: see its package.json, license ${dep.license ?? 'not given'})`);
+    walk(dep);
+  }
+})(tree);
+console.log(`   ${seen.size} npm packages`);
+
 // llama.cpp's builds for other systems, which a Windows app never loads
 for (const other of ['win-arm64', 'linux-x64', 'linux-arm64', 'linux-musl-x64', 'osx-x64', 'osx-arm64'])
   rmSync(resolve(stage, 'host', 'runtimes', other), { recursive: true, force: true });

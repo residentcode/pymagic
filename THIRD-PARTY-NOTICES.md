@@ -9,7 +9,7 @@ which keeps its own license. Nothing in PyMagic's license limits what these lice
 |---|---|---|
 | typeshed (the standard library's and third-party packages' type stubs) | `typeshed/` | Apache License 2.0, see [typeshed/LICENSE](typeshed/LICENSE) |
 | SchemaStore's catalog and schemas | `src/PyMagic.Server/SchemaStore/` | Apache License 2.0, see [LICENSE.txt](src/PyMagic.Server/SchemaStore/LICENSE.txt) |
-| JSON Schemas of other projects (compose-spec, GitLab CI, Kubernetes, the JSON Schema meta-schemas and others) | `src/PyMagic.Server/Schemas/` | each under its own project's license; where each comes from is in [Schemas/README.md](src/PyMagic.Server/Schemas/README.md) |
+| JSON Schemas of other projects: compose-spec, OpenAPI, AsyncAPI, kubernetes-json-schema (Apache License 2.0); GitLab CI, tox, Mermaid (MIT License); the JSON Schema meta-schemas (BSD 3-Clause License); the Development Containers specification (CC BY 4.0) | `src/PyMagic.Server/Schemas/` | each under its own project's license: which file is under which, and where it comes from, in [Schemas/README.md](src/PyMagic.Server/Schemas/README.md); the license texts in [Schemas/LICENSES](src/PyMagic.Server/Schemas/LICENSES) |
 | The Gherkin languages of Cucumber | `src/PyMagic.Server/Gherkin/` | MIT License, see [LICENSE.txt](src/PyMagic.Server/Gherkin/LICENSE.txt) |
 
 ## Fetched when PyMagic is built (not in this repository)
@@ -31,4 +31,14 @@ which keeps its own license. Nothing in PyMagic's license limits what these lice
 | LLamaSharp and LLamaSharp.Backend.Cpu (with llama.cpp) | MIT License |
 | .NET runtime and ASP.NET Core | MIT License |
 
-Their license texts come with each package (in `node_modules`, the NuGet cache, and the built app).
+The page is built from these and from what they depend on (126 npm packages when this was written, nearly all under the MIT, ISC, Apache 2.0
+or BSD licenses). Two of them offer a choice, and PyMagic takes:
+
+- **DOMPurify** (in Mermaid) under the **Apache License 2.0** (it is offered under MPL 2.0 or Apache 2.0).
+- **elkjs** (Mermaid's ELK layout) under the **Eclipse Public License 2.0** (it is offered under EPL 2.0 or GPL 3.0 or later). Its source is at
+  https://github.com/kieler/elkjs; PyMagic carries it unchanged, inside its bundled `mermaid.js`.
+
+The built app (and its installer) has a `licenses` folder beside its other resources: PyMagic's LICENSE and this file, the license text of
+every npm package the page is built from, of the bundled schemas, and of the NuGet packages and .NET (kept in [licenses](licenses) here).
+typeshed's and the model's are in their own folders of the app, and Electron puts its own and Chromium's (`LICENSE`,
+`LICENSES.chromium.html`) beside PyMagic.exe.

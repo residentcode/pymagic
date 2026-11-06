@@ -202,12 +202,20 @@ test('OpenAPI 3.1 is checked against its own schema (its $dynamicRef followed)',
     assert.ok(bad.some((m) => /description is required/.test(m)), bad.join(' | '));
 });
 
-test('Kustomization files and Renovate\'s if/then and global-only options', () => {
+test('Kustomization files, and if/then and a not of properties that may not be given', () => {
     for (const f of ['kustomization.yaml', 'overlays/prod/kustomization.yml', 'base/Kustomization']) assert.equal(schemaOf(f), 'kustomization', f);
     const k = bundled('kustomization');
     assert.deepEqual(msgs({ apiVersion: 'kustomize.config.k8s.io/v1beta1', kind: 'Kustomization', resources: ['a.yaml'], namePrefix: 'dev-' }, k), []);
     assert.ok(msgs({ resources: 'a.yaml' }, k).some((m) => /^resources: Should be array/.test(m)), msgs({ resources: 'a.yaml' }, k).join(' | '));
-    const r = bundled('renovate');
+    // the forms Renovate's schema has (it is not bundled: its project is under the AGPL), written here
+    const r = {
+        type: 'object',
+        properties: {
+            customManagers: { type: 'array', items: { type: 'object', if: { properties: { customType: { const: 'jsonata' } }, required: ['customType'] }, then: { required: ['fileFormat'] } } },
+            extends: { type: 'array', items: { type: 'string' } },
+        },
+        not: { anyOf: [{ required: ['allowedHeaders'] }, { required: ['binarySource'] }] },
+    };
     // a jsonata custom manager needs its fileFormat (if/then)
     const manager = { customType: 'jsonata', managerFilePatterns: ['/x/'], matchStrings: ['a'] };
     assert.ok(msgs({ customManagers: [manager] }, r).some((m) => /fileFormat is required/.test(m)), msgs({ customManagers: [manager] }, r).join(' | '));
