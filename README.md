@@ -193,10 +193,6 @@ Not work left: choices made and kept, noted where they were made.
 - Project tree (item 361): no *Jupyter Connection* under New (a notebook chooses its Jupyter server in its own toolbar) and no *Repair IDE on File* (PyMagic keeps no per-file index to repair; Reload from disk reads the file again).
 - Python inspections that PyCharm has and PyMagic does not: Left on purpose: advertising stub packages that could be installed, since PyMagic ships typeshed's third-party stubs and already has those types.
 
-## Work done
-
-PyMagic has been built in 378 steps so far. What is left is in [Open work](#open-work).
-
 ## License
 
 PyMagic is source-available, not open source: you may read the source, build it and use it, change it for your own use, and propose changes, but you may not sell it or distribute it, changed or not. Only its owner, [residentcode](https://github.com/residentcode), may distribute or sell PyMagic. The terms are in [LICENSE](LICENSE). The parts of other projects it contains or is built with keep their own licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
