@@ -395,6 +395,15 @@ public sealed class FtpsRemote : IRemote
             ssl.AuthenticateAsClient(_host);
             result = work(ssl);
             try { ssl.ShutdownAsync().Wait(5000); } catch (Exception x) when (x is IOException or AggregateException or ObjectDisposedException) { /* the server closed it first */ }
+            // then the server's end of TLS: what it still sends (TLS 1.3's session tickets) is read, since Windows resets a connection closed
+            // with bytes not read, and a real server (vsftpd) takes that reset as a failed upload ("426 Failure reading network stream")
+            try
+            {
+                data.ReceiveTimeout = 5000;
+                var rest = new byte[4096];
+                while (ssl.Read(rest, 0, rest.Length) > 0) { }
+            }
+            catch (Exception x) when (x is IOException or ObjectDisposedException or InvalidOperationException or System.Security.Authentication.AuthenticationException) { /* gone already */ }
         }
         data.Close();
         Expect(Reply(), 2);

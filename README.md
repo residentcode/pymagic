@@ -172,7 +172,6 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Compared on 1 November 2026 (item 224; what was "Not compared yet"), PyMagic had none of these unless said:
   - HTTP client (item 313): Not built: PyCharm's newer extras: `jsonPath`, `client.global` kept across restarts, WebSocket, GraphQL and gRPC requests.
   - Run Anything and the Services window (item 314): one member of a compound at a time is debugged (the Run panel has one debug session; PyCharm opens a debugger tab per member).
-  - Deployment (item 324): Not checked: implicit FTPS and a trusted self-signed certificate against a real FTPS server (checked with a small FTPS server of the tests).
   - Remote interpreters over SSH and Docker in depth (item 325): Not checked: a Compose service's libraries against a real Docker engine (checked with recorded docker answers).
 
 
@@ -197,4 +196,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 371 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 372 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

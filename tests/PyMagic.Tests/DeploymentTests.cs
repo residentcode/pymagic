@@ -247,8 +247,23 @@ public class DeploymentTests
                     {
                         string f = Map(cwd, arg);
                         Reply("150 receiving");
-                        using (var dc = data!.AcceptTcpClient()) { using var ms = new MemoryStream(); { using var ds = Data(dc); try { ds.CopyTo(ms); } catch (IOException) { /* a client that closes its TLS data connection without a goodbye */ } }; Interlocked.Increment(ref StoredFiles); Directory.CreateDirectory(Path.GetDirectoryName(f)!); File.WriteAllBytes(f, ms.ToArray()); }
-                        Reply("226 done");
+                        // as vsftpd: a data connection that ends without TLS's own end (reset, or closed with the server's bytes unread) is a failed upload
+                        bool failed = false;
+                        using (var dc = data!.AcceptTcpClient())
+                        {
+                            using var ms = new MemoryStream();
+                            {
+                                using var ds = Data(dc);
+                                try
+                                {
+                                    ds.CopyTo(ms);
+                                    if (ds is System.Net.Security.SslStream tls) { tls.ShutdownAsync().Wait(5000); Thread.Sleep(200); dc.Client.Send(Array.Empty<byte>()); }
+                                }
+                                catch (Exception x) when (x is IOException or AggregateException or SocketException) { failed = true; }
+                            }
+                            if (!failed) { Interlocked.Increment(ref StoredFiles); Directory.CreateDirectory(Path.GetDirectoryName(f)!); File.WriteAllBytes(f, ms.ToArray()); }
+                        }
+                        Reply(failed ? "426 Failure reading network stream." : "226 done");
                         break;
                     }
                     case "MKD": { string d = Map(cwd, arg); if (Directory.Exists(d)) Reply("550 exists"); else { Directory.CreateDirectory(d); Reply($"257 \"{arg}\" made"); } break; }
