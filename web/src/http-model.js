@@ -410,11 +410,118 @@ export function prettyBody(body, contentType) {
  * client.global.set/get/isEmpty/clear/clearAll (variables kept for the next requests, used as {{name}}), client.test(name, fn),
  * client.assert(condition, message), client.log(...), client.exit(); response.body (parsed when it is JSON), response.headers.valueOf/valuesOf,
  * response.status, response.contentType {mimeType, charset}; request.variables.set/get (for this request, before it is sent),
- * request.environment.get, request.method, request.url. `input` is {script, response?, request?, globals, environment, variables}.
+ * request.environment.get, request.method, request.url; jsonPath(value, "$.path") (see jsonPath below). `input` is {script, response?, request?, globals, environment, variables}.
  * Answers {globals, variables, tests: [{name, passed, error?}], log: [text], error?}. Self-contained: the page runs it in a Worker
  * (its source is this function's text), away from the page and without network.
  */
 export function runScript(input) {
+    // (inside runScript, which the page runs in a Worker from its own text)
+    /**
+     * jsonPath(value, path) as the response handlers of PyCharm's HTTP client have it: `$` the value, `.name` or `['name']` a member, `[2]` an
+     * item (`[-1]` from the end), `[*]` / `.*` every member or item, `..name` a member at any depth, `[1:3]` a slice, `[0,2]` / `['a','b']` several.
+     * A path that picks one place (no wildcard, recursion, slice or list) gives its value, null when it is not there; any other gives the list
+     * of the values found. A string that is JSON (a body that was not parsed) is read first. Throws on a path it cannot read.
+     */
+    function jsonPath(value, path) {
+        if (typeof value === 'string') { try { value = JSON.parse(value); } catch { /* a string is a value too */ } }
+        const p = String(path ?? '').trim();
+        if (!p.startsWith('$')) throw new Error(`a JSON path starts with $: ${p}`);
+        let at = 1, many = false;
+        const steps = [];
+        const name = /^[A-Za-z_$][\w$-]*/;
+        const closing = (text, open) => {
+            let quote = '';
+            for (let i = open + 1; i < text.length; i++) {
+                const c = text[i];
+                if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; }
+                else if (c === "'" || c === '"') quote = c;
+                else if (c === ']') return i;
+            }
+            throw new Error(`a [ without its ] in ${text}`);
+        };
+        const split = (text) => {
+            const out = [];
+            let quote = '', from = 0;
+            for (let i = 0; i < text.length; i++) {
+                const c = text[i];
+                if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; }
+                else if (c === "'" || c === '"') quote = c;
+                else if (c === ',') { out.push(text.slice(from, i)); from = i + 1; }
+            }
+            out.push(text.slice(from));
+            return out;
+        };
+        while (at < p.length) {
+            if (p.startsWith('..', at)) {
+                at += 2;
+                many = true;
+                if (p[at] === '*') { steps.push({ kind: 'deep', key: null }); at++; continue; }
+                if (p[at] === '[') { steps.push({ kind: 'deep', key: null, then: true }); continue; }
+                const m = name.exec(p.slice(at));
+                if (!m) throw new Error(`a name after .. in ${p}`);
+                steps.push({ kind: 'deep', key: m[0] });
+                at += m[0].length;
+            }
+            else if (p[at] === '.') {
+                at++;
+                if (p[at] === '*') { steps.push({ kind: 'all' }); many = true; at++; continue; }
+                const m = name.exec(p.slice(at));
+                if (!m) throw new Error(`a name after . in ${p}`);
+                steps.push({ kind: 'keys', keys: [m[0]] });
+                at += m[0].length;
+            }
+            else if (p[at] === '[') {
+                const end = closing(p, at);
+                const inner = p.slice(at + 1, end).trim();
+                at = end + 1;
+                if (inner === '*') { steps.push({ kind: 'all' }); many = true; continue; }
+                const slice = /^(-?\d*)\s*:\s*(-?\d*)$/.exec(inner);
+                if (slice) { steps.push({ kind: 'slice', from: slice[1], to: slice[2] }); many = true; continue; }
+                const parts = split(inner).map((s) => s.trim());
+                if (parts.length > 1) many = true;
+                steps.push({
+                    kind: 'keys', keys: parts.map((s) => {
+                        if (/^-?\d+$/.test(s)) return Number(s);
+                        const q = /^(['"])(.*)\1$/s.exec(s);
+                        if (q) return q[2].replace(/\\(['"\\])/g, '$1');
+                        throw new Error(`cannot read [${inner}] in ${p}`);
+                    }),
+                });
+            }
+            else throw new Error(`cannot read ${p.slice(at)} in ${p}`);
+        }
+        const isObj = (v) => v !== null && typeof v === 'object';
+        const children = (v) => (Array.isArray(v) ? v : isObj(v) ? Object.values(v) : []);
+        const descend = (v, out) => { out.push(v); for (const c of children(v)) descend(c, out); return out; };
+        let found = [value];
+        for (const s of steps) {
+            const next = [];
+            for (const v of found) {
+                if (s.kind === 'all') next.push(...children(v));
+                else if (s.kind === 'keys') {
+                    for (const k of s.keys) {
+                        if (Array.isArray(v) && typeof k === 'number') { const i = k < 0 ? v.length + k : k; if (i >= 0 && i < v.length) next.push(v[i]); }
+                        else if (isObj(v) && !Array.isArray(v) && Object.prototype.hasOwnProperty.call(v, String(k))) next.push(v[String(k)]);
+                    }
+                }
+                else if (s.kind === 'slice') {
+                    if (!Array.isArray(v)) continue;
+                    const n = v.length, f = s.from === '' ? 0 : Number(s.from), t = s.to === '' ? n : Number(s.to);
+                    next.push(...v.slice(f < 0 ? Math.max(0, n + f) : f, t < 0 ? n + t : t));
+                }
+                else {
+                    for (const d of descend(v, [])) {
+                        if (s.key === null) { if (!s.then) next.push(...children(d)); else next.push(d); }
+                        else if (isObj(d) && !Array.isArray(d) && Object.prototype.hasOwnProperty.call(d, s.key)) next.push(d[s.key]);
+                    }
+                }
+            }
+            found = next;
+        }
+        return many ? found : found.length ? found[0] : null;
+    }
+    if (input.jsonPathOnly) return jsonPath(input.value, input.path);   // for the tests of jsonPath by itself
+
     const globals = { ...(input.globals ?? {}) };
     const variables = { ...(input.variables ?? {}) };
     const environment = input.environment ?? {};
@@ -481,7 +588,7 @@ export function runScript(input) {
     };
     let error;
     try {
-        new Function('client', 'response', 'request', `"use strict";\n${input.script}`)(client, response, request);
+        new Function('client', 'response', 'request', 'jsonPath', `"use strict";\n${input.script}`)(client, response, request, jsonPath);
     }
     catch (e) {
         if (e !== EXIT)

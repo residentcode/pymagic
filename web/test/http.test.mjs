@@ -176,6 +176,30 @@ test('bodyParts: the files of < lines sent as they are, a multipart body with CR
     assert.deepEqual(bodyParts(null, 'text/plain'), []);
 });
 
+test('jsonPath in a response handler: members, items, wildcards, any depth, slices and lists; one place gives its value, others a list', () => {
+    const body = { store: { book: [{ title: 'A', price: 8 }, { title: 'B', price: 12 }, { title: 'C', price: 5 }], 'odd key': 1, bike: { price: 20 } }, n: null };
+    const at = (path, value = body) => runScript({ jsonPathOnly: true, value, path });
+    assert.equal(at('$.store.book[0].title'), 'A');
+    assert.equal(at("$['store']['odd key']"), 1);
+    assert.equal(at('$.store.book[-1].title'), 'C');
+    assert.deepEqual(at('$.store.book[*].title'), ['A', 'B', 'C']);
+    assert.deepEqual(at('$..price'), [8, 12, 5, 20]);
+    assert.deepEqual(at('$.store.book[0:2].price'), [8, 12]);
+    assert.deepEqual(at('$.store.book[0,2].title'), ['A', 'C']);
+    assert.equal(at('$.store.nothing'), null);
+    assert.equal(at('$.store.bike.price', JSON.stringify(body)), 20);   // a body that is still text
+    assert.equal(at('$.store.*').length, 3);
+    assert.throws(() => at('store.book'), /starts with \$/);
+    // in a handler, as PyCharm's newer HTTP client has it
+    const r = runScript({
+        script: 'client.global.set("token", jsonPath(response.body, "$.auth.token")); client.log(jsonPath(response.body, "$.items[*].id").join("+"));',
+        response: { status: 200, headers: { 'Content-Type': 'application/json' }, body: '{"auth": {"token": "t0k"}, "items": [{"id": 1}, {"id": 2}]}' },
+    });
+    assert.equal(r.error, undefined);
+    assert.deepEqual(r.globals, { token: 't0k' });
+    assert.deepEqual(r.log, ['1+2']);
+});
+
 test('runScript: client, response and request as PyCharm gives them to a handler', () => {
     const response = { status: 201, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': 'a=1, b=2', Date: 'Mon, 03 Nov 2026 10:00:00 GMT' }, body: '{"id": 42, "tags": ["x"]}' };
     const r = runScript({

@@ -295,6 +295,36 @@ app.MapPut("/api/console-history", async (HttpRequest req) =>
     return Results.NoContent();
 });
 
+// the HTTP client's client.global variables, kept for the next start (.pymagic/http-globals.json, out of version control): {name: value}
+app.MapGet("/api/http-globals", () =>
+{
+    string file = Path.Combine(root, ".pymagic", "http-globals.json");
+    try { return File.Exists(file) ? Results.Text(File.ReadAllText(file), "application/json") : Results.Text("{}", "application/json"); }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.Text("{}", "application/json"); }
+});
+app.MapPut("/api/http-globals", async (HttpRequest req) =>
+{
+    using var reader = new StreamReader(req.Body, Encoding.UTF8);
+    string text = await reader.ReadToEndAsync();
+    if (text.Length > 4_000_000) return Results.StatusCode(413);
+    try
+    {
+        if (JsonNode.Parse(text) is not JsonObject o || o.Any(kv => kv.Value is not JsonValue v || !v.TryGetValue<string>(out _)))
+            return Results.BadRequest("names with text values");
+    }
+    catch (System.Text.Json.JsonException) { return Results.BadRequest("not JSON"); }
+    string file = Path.Combine(root, ".pymagic", "http-globals.json");
+    try
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        await File.WriteAllTextAsync(file, text, new UTF8Encoding(false));
+        // a login's token is often kept here: it is the person's, not the project's
+        PymagicFolder.IgnoreInGit(Path.Combine(root, ".pymagic"), "http-globals.json");
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.StatusCode(500); }
+    return Results.NoContent();
+});
+
 // Deployment: servers the project is uploaded to (a folder, FTP or SFTP), and upload, download, compare and sync
 object ServerJson(DeployServer sv) => new { id = sv.Id, name = sv.Name, type = sv.Type, host = sv.Host, port = sv.Port, user = sv.User, root = sv.Root, keyFile = sv.KeyFile, uploadOnSave = sv.UploadOnSave, mappings = sv.Mappings, excluded = sv.Excluded, hostKey = sv.HostKey, deleteOnDelete = sv.DeleteOnDelete, implicitTls = sv.ImplicitTls, hasPassword = DeployStore.PasswordOf(root, sv.Id).Length > 0, hasPassphrase = DeployStore.PassphraseOf(root, sv.Id).Length > 0 };
 IResult DeployFail(Exception e) => Results.Json(new { error = e is ServiceException ? e.Message : e is System.Net.WebException we && we.Response is System.Net.FtpWebResponse fr ? fr.StatusDescription.Trim() : e.Message });

@@ -173,8 +173,20 @@ export function setupHttpClient(deps) {
     $('http-env-edit').onclick = () => void editEnvironments();
 
     // ------------------------------------------------------------ the scripts: in a Worker, away from the page, without network
-    // client.global's variables: kept for the next requests while PyMagic runs (as PyCharm keeps them until it restarts)
+    // client.global's variables: kept for the next requests, and for the next start of PyMagic too (.pymagic/http-globals.json, out of version
+    // control: they often hold a token a login request gave)
     const globals = {};
+    void fetch('/api/http-globals').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((kept) => {
+        if (kept && typeof kept === 'object' && !Array.isArray(kept))
+            for (const [k, v] of Object.entries(kept)) if (typeof v === 'string' && !(k in globals)) globals[k] = v;
+    });
+    let globalsTimer = 0;
+    function keepGlobals() {
+        clearTimeout(globalsTimer);
+        globalsTimer = setTimeout(() => {
+            void fetch('/api/http-globals', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(globals) }).catch(() => { /* kept next time */ });
+        }, 300);
+    }
     let sandboxUrl = null;
     function sandboxed(input, ms = 5000) {
         sandboxUrl ??= URL.createObjectURL(new Blob([
@@ -239,6 +251,7 @@ export function setupHttpClient(deps) {
             preResult = await sandboxed({ script: request.pre, request: { method: request.method, url: request.url, headers: request.headers, body: request.body }, globals, environment: envVars, variables: {} });
             Object.assign(globals, preResult.globals);
             for (const k of Object.keys(globals)) if (!(k in preResult.globals)) delete globals[k];
+            keepGlobals();
             vars = { ...envVars, ...globals, ...fileVariables(text), ...preResult.variables };
         }
         const { request: r, missing } = resolve(request, vars);
@@ -294,6 +307,7 @@ export function setupHttpClient(deps) {
                 });
                 for (const k of Object.keys(globals)) if (!(k in out.globals)) delete globals[k];
                 Object.assign(globals, out.globals);
+                keepGlobals();
                 tests.push(...out.tests);
                 log.push(...out.log);
                 if (out.error)

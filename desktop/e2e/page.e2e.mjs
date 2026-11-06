@@ -3383,6 +3383,20 @@ describe('the Open work of 3 November: the HTTP client\'s scripts, Before launch
         await page.waitFor(`document.getElementById('http-body').textContent.includes('/again?m=GET')`, 15000, 'the global in the next request');
     });
 
+    test('HTTP client: jsonPath in a handler, and client.global kept for the next start of PyMagic, out of git', async () => {
+        put('jsonpath.http', 'POST {{host}}/login\nContent-Type: application/json\n\n{"user": "ada"}\n\n> {% client.global.set("who", jsonPath(response.body, "$.method") + ":" + jsonPath(response.body, "$.path")); %}\n');
+        await open('jsonpath.http');
+        await runAt(1);
+        const file = join(app.root, '.pymagic', 'http-globals.json');
+        for (let i = 0; i < 60 && !(existsSync(file) && readFileSync(file, 'utf8').includes('"who"')); i++) await sleep(250);
+        const kept = JSON.parse(readFileSync(file, 'utf8'));
+        assert.equal(kept.who, 'POST:/login', JSON.stringify(kept));
+        assert.equal(kept.seen, 'GET', 'the global of the test before is kept too');
+        assert.ok(readFileSync(join(app.root, '.pymagic', '.gitignore'), 'utf8').split(/\r?\n/).includes('http-globals.json'), 'kept out of version control');
+        // what the next start reads back
+        assert.deepEqual(await page.evaluate(`fetch('/api/http-globals').then((r) => r.json())`), kept);
+    });
+
     test('HTTP client: >> file keeps the response in the project, under a new name the second time', async () => {
         put('saved.http', 'GET {{host}}/items\n>> out/r.json\n');
         await open('saved.http');
