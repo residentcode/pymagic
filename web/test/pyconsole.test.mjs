@@ -4,7 +4,24 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/pyconsole-model.js', import.meta.url), 'utf8');
-const { consoleName, queueLabel, CommandQueue, historyMatches } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const { consoleName, queueLabel, CommandQueue, historyMatches, withCommand, historyKind, keptHistories, HISTORY_MAX } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+
+test('the history kept across restarts: each command once and last, empty ones left out, at most 200, the Django console apart', () => {
+    let h = withCommand([], 'x = 1');
+    h = withCommand(h, 'print(x)');
+    h = withCommand(h, 'x = 1');
+    assert.deepEqual(h, ['print(x)', 'x = 1']);
+    assert.deepEqual(withCommand(h, '   '), h);
+    let many = [];
+    for (let i = 0; i < HISTORY_MAX + 5; i++) many = withCommand(many, `n = ${i}`);
+    assert.equal(many.length, HISTORY_MAX);
+    assert.equal(many[0], 'n = 5');
+    assert.equal(historyKind({ django: true }), 'django');
+    assert.equal(historyKind({ django: false }), 'python');
+    // what is read back from .pymagic/console-history.json: only lists of commands, by kind
+    assert.deepEqual(keptHistories({ python: ['a', 2, '', 'b'], django: 'not a list', other: ['c'] }), { python: ['a', 'b'], django: [] });
+    assert.deepEqual(keptHistories(null), { python: [], django: [] });
+});
 
 test('a new console takes the lowest free number', () => {
     assert.equal(consoleName([]), 'Python console');

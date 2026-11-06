@@ -3383,6 +3383,25 @@ describe('the Open work of 3 November: the HTTP client\'s scripts, Before launch
         await page.evaluate(`document.getElementById('pyc-input').value = ''`);
     });
 
+    test('Python console: the history is kept for the next start of PyMagic, and a new console starts with it', async () => {
+        // the commands of the test before are written to .pymagic/console-history.json
+        const file = join(app.root, '.pymagic', 'console-history.json');
+        for (let i = 0; i < 40 && !(existsSync(file) && readFileSync(file, 'utf8').includes('print(hx)')); i++) await sleep(250);
+        const kept = JSON.parse(readFileSync(file, 'utf8'));
+        assert.ok(kept.python.includes('print(hx)') && kept.python.includes('hx = 1'), JSON.stringify(kept));
+        assert.equal(kept.python.filter((h) => h === 'hx = 1').length, 1);
+        assert.ok(readFileSync(join(app.root, '.pymagic', '.gitignore'), 'utf8').split(/\r?\n/).includes('console-history.json'), 'kept out of version control');
+        // what the next start reads back
+        const read = await page.evaluate(`fetch('/api/console-history').then((r) => r.json())`);
+        assert.deepEqual(read.python, kept.python);
+        // a new console has it: Up gives the last command run in the other one
+        await page.evaluate(`document.getElementById('pyc-new').click()`);
+        await page.waitFor(`document.querySelectorAll('.pyc-out').length >= 2`, 10000, 'the new console');
+        const up = await page.evaluate(`(() => { const i = document.getElementById('pyc-input'); i.value = ''; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })); return i.value; })()`);
+        assert.equal(up, 'hx = 1');
+        await page.evaluate(`document.getElementById('pyc-input').value = ''`);
+    });
+
     test('Profiler: the whole program\'s graph draws every function in columns by depth, and a click picks a box', async () => {
         // the file in the editor, not a configuration an earlier test chose (the debug server's)
         await page.evaluate(`document.getElementById('run-config').click()`);

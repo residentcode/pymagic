@@ -168,7 +168,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 **Django compared with PyCharm** (from PyCharm's Django help pages and its 17 Django inspections, checked against the code on 30 October 2026)
 
 **Compared with PyCharm's help, area by area** (from its help contents of about 1,000 pages and its 103 Python inspections, checked against the code on 30 October 2026; areas not compared yet are at the end)
-- Python console: Not built: the history list is kept while PyMagic runs, not across restarts (item 317). Not checked: Attach Debugger with an interpreter in WSL or a container (item 375 was checked over SSH).
+- Python console: Not checked: Attach Debugger with an interpreter in WSL or a container (item 375 was checked over SSH).
 - Compared on 1 November 2026 (item 224; what was "Not compared yet"), PyMagic had none of these unless said:
   - HTTP client (item 313): Not built: PyCharm's newer extras: `jsonPath`, `client.global` kept across restarts, WebSocket, GraphQL and gRPC requests.
   - Run Anything and the Services window (item 314): one member of a compound at a time is debugged (the Run panel has one debug session; PyCharm opens a debugger tab per member).
@@ -195,4 +195,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 375 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 376 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

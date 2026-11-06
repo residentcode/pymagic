@@ -10,7 +10,7 @@
 import * as monaco from 'monaco-editor';
 import { RunClient } from './runclient';
 import { showTab } from './panel';
-import { CommandQueue, consoleName, historyMatches, queueLabel } from './pyconsole-model.js';
+import { CommandQueue, consoleName, historyMatches, historyKind, keptHistories, queueLabel, withCommand } from './pyconsole-model.js';
 import { defineCommand } from './commands.js';
 import { toast } from './toast';
 
@@ -36,8 +36,30 @@ export function setupPythonConsole(deps) {
     let active = null;
     let lastId = 0;
 
+    // the history of the project's consoles, kept across restarts in .pymagic/console-history.json (one for the Python console, one for the
+    // Django console): a new console starts with it, and a command run in any of them is added to it
+    let kept = { python: [], django: [] };
+    let saveTimer = null;
+    void fetch('/api/console-history').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((data) => {
+        kept = keptHistories(data);
+        // a console made before it was read (the one of the panel) starts with it too, its own commands after
+        for (const c of consoles) {
+            c.history = kept[historyKind(c)].filter((h) => !c.history.includes(h)).concat(c.history);
+            c.at = c.history.length;
+        }
+    });
+    function remember(c, code) {
+        kept[historyKind(c)] = withCommand(kept[historyKind(c)], code);
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+            void fetch('/api/console-history', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(kept) }).catch(() => { /* kept next time */ });
+        }, 400);
+    }
+
     function make(name, django = false) {
         const c = { id: ++lastId, name, django, ipython: ipythonWanted, client: null, ready: null, pending: '', history: [], at: 0, vars: [], out: document.createElement('pre'), tab: null, ipythonSeen: null };
+        c.history = [...kept[historyKind(c)]];
+        c.at = c.history.length;
         c.out.className = 'body pyc-out';
         c.out.hidden = true;
         c.queue = new CommandQueue((item) => runOne(c, item), () => { if (c === active) paintQueue(); renderTabs(); });
@@ -239,8 +261,10 @@ export function setupPythonConsole(deps) {
             e.preventDefault();
             const code = c.pending + input.value;
             input.value = '';
-            if (code.trim())
-                c.history = [...c.history.filter((h) => h !== code), code].slice(-200);
+            if (code.trim()) {
+                c.history = withCommand(c.history, code);
+                remember(c, code);
+            }
             c.at = c.history.length;
             const answer = await execute(code, true, c);
             // a block that goes on (after "def f():") waits for more lines; an empty line ends it

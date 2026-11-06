@@ -74,6 +74,29 @@ export class CommandQueue {
 }
 
 /** The console's history as the list of Ctrl+Alt+E shows it: the newest first, each command once, only the ones that have `filter` in them (any case). */
+/** How many commands a console's history keeps (each once, the newest last). */
+export const HISTORY_MAX = 200;
+
+/** The history with this command last (once; an empty one is not kept), at most HISTORY_MAX long. */
+export function withCommand(history, code, max = HISTORY_MAX) {
+    if (!code.trim()) return history;
+    return [...history.filter((h) => h !== code), code].slice(-max);
+}
+
+/** The kind of a console whose history it shares: the Python console's and the Django console's are kept apart, as PyCharm keeps them. */
+export function historyKind(console) {
+    return console.django ? 'django' : 'python';
+}
+
+/** The kept histories (.pymagic/console-history.json) as they are read back: lists of strings by kind, anything else left out. */
+export function keptHistories(data) {
+    const out = { python: [], django: [] };
+    if (!data || typeof data !== 'object') return out;
+    for (const kind of Object.keys(out))
+        if (Array.isArray(data[kind])) out[kind] = data[kind].filter((h) => typeof h === 'string' && h.trim()).slice(-HISTORY_MAX);
+    return out;
+}
+
 export function historyMatches(history, filter = '') {
     const want = filter.trim().toLowerCase();
     const seen = new Set();
