@@ -236,7 +236,8 @@ public sealed class JupyterKernel : INotebookKernel
             + "        _pm_mod.__file__ = _pm_name + '.py'\n"
             + "        _pm_sys.modules[_pm_name] = _pm_mod\n"
             + "        exec(compile(_pm_b64.b64decode(_pm_src).decode('utf-8'), _pm_name + '.py', 'exec'), _pm_mod.__dict__)\n"
-            + $"_pm_sys.modules['pm_jdebug'].run_debugged({Lit(code)}, {Lit(file)}, {Lit(host)}, {port}, {Lit(token)}, globals(), get_ipython(){(ViaKernel(debug) ? ", channel=True" : "")})\n";
+            + $"_pm_sys.modules['pm_jdebug'].run_debugged({Lit(code)}, {Lit(file)}, {Lit(host)}, {port}, {Lit(token)}, globals(), get_ipython()"
+            + (ViaKernel(debug) ? ", channel=True" + (debug["root"]?.GetValue<string>() is { Length: > 0 } ideRoot ? $", ide_root={Lit(ideRoot)}" : "") : "") + ")\n";
     }
 
     static bool ViaKernel(JsonNode? debug) => debug?["via"]?.GetValue<string>() == "kernel";

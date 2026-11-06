@@ -34,10 +34,18 @@ public class JupyterDebugChannelTests
         class Kernel:
             session = Session()
             iopub_socket = object()
-            _parent_ident = {"shell": b"ident"}
+            # ipykernel 7 keeps the idents per channel in a LazyDict: a Mapping that is not a dict
+            class LazyDict:
+                def __init__(self, d): self._d = d
+                def __getitem__(self, key): return self._d[key]
+                def __iter__(self): return iter(self._d)
+                def __len__(self): return len(self._d)
+            _parent_ident = LazyDict({"shell": b"ident"})
             def get_parent(self, channel="shell"):
                 return {"header": {"msg_id": current["id"]}}
             def _input_request(self, prompt, ident, parent, password=False):
+                if ident != b"ident":
+                    raise TypeError("the shell's ident was not given: %r" % (ident,))
                 emit({"op": "input_request", "prompt": prompt, "parent": parent["header"]["msg_id"]})
                 return replies.get()
         class Shell:
@@ -241,10 +249,13 @@ public class JupyterDebugChannelTests
     {
         if (!HavePython()) return;
         string root = Path.Combine(Path.GetTempPath(), "pm_jdbgchan_" + Guid.NewGuid().ToString("N"));
+        // the kernel has the project in a folder of its own, as one on another computer does
+        string kernelRoot = root + "_kernel";
         Directory.CreateDirectory(root);
+        Directory.CreateDirectory(kernelRoot);
         try
         {
-            using var server = new Server(root);
+            using var server = new Server(kernelRoot);
             Current = server;
             var kernelEvents = new BlockingCollection<JsonNode>();
             using var k = new JupyterKernel(kernelEvents.Add);
@@ -259,15 +270,16 @@ public class JupyterDebugChannelTests
 
             k.Execute("seed", "seed = 100");
             Wait(kernelEvents, e => Is(e, "done") && e["id"]!.GetValue<string>() == "seed");
-            var debug = new JsonObject { ["host"] = "127.0.0.1", ["port"] = listening["port"]!.GetValue<int>(), ["token"] = listening["token"]!.GetValue<string>(), ["file"] = file, ["via"] = "kernel" };
+            var debug = new JsonObject { ["host"] = "127.0.0.1", ["port"] = listening["port"]!.GetValue<int>(), ["token"] = listening["token"]!.GetValue<string>(), ["file"] = file, ["via"] = "kernel", ["root"] = root };
             k.Execute("dbg1", "x = 5\ny = x * 2 + seed\nz = y + 1\nprint('z', z)\n", debug);
 
-            // the debug server sees an ordinary program, which stops at the breakpoint of the cell
+            // the debug server sees an ordinary program, which stops at the breakpoint of the cell: the breakpoint named as the kernel
+            // has the file, the stop as this side has it
             Wait(ide, e => Is(e, "connected"));
             var stopped = Wait(ide, e => Is(e, "stopped"), 60);
             var top = stopped["frames"]![0]!;
             Assert.Equal(2, top["line"]!.GetValue<int>());
-            Assert.True(top["file"]!.GetValue<string>().Replace('\\', '/').EndsWith(file), "the stop is in the file that stands for the cell: " + top["file"]);
+            Assert.Equal(Path.GetFullPath(Path.Combine(root, file)), top["file"]!.GetValue<string>());
             session.Handle(new JsonObject { ["type"] = "evaluate", ["id"] = 1, ["frameId"] = 0, ["expression"] = "x + seed" });
             Assert.Equal("105", Wait(ide, e => Is(e, "evaluated"))["result"]!.GetValue<string>());
             session.Handle(new JsonObject { ["type"] = "next" });
@@ -294,7 +306,11 @@ public class JupyterDebugChannelTests
             Assert.Equal("110\n", string.Concat(after.Where(e => Is(e, "stream")).Select(e => e["text"]!.GetValue<string>())));
             lock (server.Seen) Assert.Equal("execute allow_stdin=false", server.Seen.Last(s => s.StartsWith("execute", StringComparison.Ordinal)));
         }
-        finally { try { Directory.Delete(root, true); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+        finally
+        {
+            foreach (var dir in new[] { root, kernelRoot })
+                try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
     }
 
     [Fact]

@@ -26,13 +26,19 @@ class KernelChannel:
     The ident and the parent of the cell's execute request are taken here, on the cell's thread, because the kernel keeps them for
     the message it is working on; the reader thread asks with them."""
 
-    def __init__(self, ipython):
+    def __init__(self, ipython, paths=None):
         kernel = ipython.kernel
         self.kernel = kernel
+        self.paths = paths   # PathMap: the IDE's project folder and the kernel's, or None when they are the same
         get_parent = getattr(kernel, "get_parent", None)
         self.parent = get_parent("shell") if get_parent is not None else kernel._parent_header
         ident = kernel._parent_ident
-        self.ident = ident["shell"] if isinstance(ident, dict) else ident
+        # per channel in ipykernel 6.10 and later: a dict, or ipykernel 7's LazyDict (a Mapping, not a dict); a list of idents before
+        try:
+            ident = ident["shell"]
+        except (KeyError, TypeError, IndexError):
+            pass
+        self.ident = ident
         self.closed = False
         self.reader = None
 
@@ -56,7 +62,10 @@ class KernelChannel:
     def sendall(self, data):
         if self.closed:
             raise OSError("the channel to the IDE is closed")
-        self.publish(data.decode("utf-8"))
+        text = data.decode("utf-8")
+        if self.paths is not None:
+            text = "".join(self.paths.rewrite(line, self.paths.to_ide) for line in text.splitlines(True))
+        self.publish(text)
 
     def makefile(self, *args, **kwargs):
         return self.lines()
@@ -72,7 +81,7 @@ class KernelChannel:
             if not value:
                 return
             for line in value.splitlines():
-                yield line + "\n"
+                yield (self.paths.rewrite(line, self.paths.to_kernel) if self.paths is not None else line) + "\n"
 
     def close(self):
         if self.closed:
@@ -93,7 +102,55 @@ class KernelChannel:
             reader.join(seconds)
 
 
-def run_debugged(code, file, host, port, token, user_ns, ipython=None, channel=False):
+class PathMap:
+    """The project as the IDE names it (C:\\Users\\me\\shop) and as the kernel on another computer has it (its working folder,
+    /home/me/shop): the files in what the IDE sends (breakpoints, Run to Cursor) are named as the kernel has them, and the files in
+    what the debugger sends (the frames of a stop) as the IDE has them. A file outside the project is left as it is."""
+
+    def __init__(self, ide_root, kernel_root):
+        self.ide = ide_root.replace("\\", "/").rstrip("/")
+        self.ide_sep = "\\" if "\\" in ide_root or (len(ide_root) > 1 and ide_root[1] == ":") else "/"
+        self.kernel = kernel_root.replace("\\", "/").rstrip("/")
+        self.kernel_sep = os.sep
+
+    @staticmethod
+    def _under(path, root, fold):
+        p = path.replace("\\", "/")
+        a, b = (p.lower(), root.lower()) if fold else (p, root)
+        if a == b:
+            return ""
+        if a.startswith(b + "/"):
+            return p[len(root) + 1:]
+        return None
+
+    def to_kernel(self, path):
+        rest = self._under(path, self.ide, self.ide_sep == "\\")
+        return path if rest is None else (self.kernel + ("/" + rest if rest else "")).replace("/", self.kernel_sep)
+
+    def to_ide(self, path):
+        rest = self._under(path, self.kernel, os.name == "nt")
+        return path if rest is None else (self.ide + ("/" + rest if rest else "")).replace("/", self.ide_sep)
+
+    def rewrite(self, line, change):
+        """A line of the debugger's protocol (a JSON object) with every "file" in it changed; any other line as it is."""
+        import json
+        stripped = line.rstrip("\r\n")
+        try:
+            msg = json.loads(stripped)
+        except ValueError:
+            return line
+
+        def walk(node):
+            if isinstance(node, dict):
+                return {k: (change(v) if k == "file" and isinstance(v, str) and v else walk(v)) for k, v in node.items()}
+            if isinstance(node, list):
+                return [walk(v) for v in node]
+            return node
+
+        return json.dumps(walk(msg)) + line[len(stripped):]
+
+
+def run_debugged(code, file, host, port, token, user_ns, ipython=None, channel=False, ide_root=None):
     import pm_debug
     root = os.getcwd()
     filename = os.path.normpath(os.path.join(root, file))
@@ -110,7 +167,8 @@ def run_debugged(code, file, host, port, token, user_ns, ipython=None, channel=F
             last = ast.Expression(tree.body.pop().value)
         body = compile(tree, filename, "exec")
         final = compile(last, filename, "eval") if last is not None else None
-        sock = KernelChannel(ipython) if channel and ipython is not None else None
+        paths = PathMap(ide_root, root) if ide_root and PathMap(ide_root, root).ide != root.replace("\\", "/").rstrip("/") else None
+        sock = KernelChannel(ipython, paths) if channel and ipython is not None else None
         dbg = pm_debug.connect(host, int(port), token, root, sock=sock)
         exec(body, user_ns)
         if final is not None:

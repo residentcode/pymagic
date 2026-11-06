@@ -1850,7 +1850,11 @@ app.Map("/nb", async (HttpContext ctx) =>
             switch (msg?["type"]?.GetValue<string>())
             {
                 case "useServer" when remote && kernel == null: UseServer(msg["url"]?.GetValue<string>() ?? "", msg["token"]?.GetValue<string>() ?? "", msg["kernel"]?.GetValue<string>()); break;
-                case "execute": kernel?.Execute(msg["id"]?.GetValue<string>() ?? "", msg["code"]?.GetValue<string>() ?? "", msg["debug"]); break;
+                case "execute":
+                    // a kernel on another computer has the project in a folder of its own: the debugger there maps the IDE's paths to it
+                    if (msg["debug"] is JsonObject debugOf && debugOf["via"]?.GetValue<string>() == "kernel") debugOf["root"] = root;
+                    kernel?.Execute(msg["id"]?.GetValue<string>() ?? "", msg["code"]?.GetValue<string>() ?? "", msg["debug"]);
+                    break;
                 case "inspect": kernel?.Inspect(msg["id"]?.GetValue<string>() ?? "", msg["path"]); break;
                 case "complete": kernel?.Complete(msg["id"]?.GetValue<string>() ?? "", msg["prefix"]?.GetValue<string>() ?? ""); break;
                 case "interrupt": kernel?.Interrupt(); break;

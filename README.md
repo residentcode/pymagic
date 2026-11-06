@@ -169,7 +169,6 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 
 **Compared with PyCharm's help, area by area** (from its help contents of about 1,000 pages and its 103 Python inspections, checked against the code on 30 October 2026; areas not compared yet are at the end)
 - Python console: Not built: Attach Debugger with an interpreter elsewhere than this computer (WSL, Docker, SSH); the history list is kept while PyMagic runs, not across restarts (item 317).
-- Notebooks: Not checked: Debug Cell on a Jupyter server on another computer against a real ipykernel (item 326 was checked with a small Jupyter server of the tests).
 - Compared on 1 November 2026 (item 224; what was "Not compared yet"), PyMagic had none of these unless said:
   - HTTP client (item 313): Not built: PyCharm's newer extras: `jsonPath`, `client.global` kept across restarts, WebSocket, GraphQL and gRPC requests.
   - Run Anything and the Services window (item 314): one member of a compound at a time is debugged (the Run panel has one debug session; PyCharm opens a debugger tab per member).
@@ -198,4 +197,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 370 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 371 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
