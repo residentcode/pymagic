@@ -110,7 +110,7 @@ Open `PyMagic.sln` in Visual Studio 2022, version 17.12 or later (17.14 is what 
   engine with the page in the browser. The status bar of the page shows which build is running.
 - **Tests**: `PyMagic.Tests` is a console program. Set it as the startup project and press F5 or Ctrl+F5 to run the engine's tests. Set the
   environment variable `PYMAGIC_TEST_ONLY` in its debug properties to run one class.
-- **Solution Items** holds this README, `work_done.md`, the plugin guide and the build settings.
+- **Solution Items** holds this README, the license, the plugin guide and the build settings.
 
 Visual Studio Code works too: open the folder, and use `dotnet build` and `node` from its terminal.
 
@@ -152,7 +152,7 @@ The test project is a plain console runner because this machine's NuGet only has
 
 ## Open work
 
-Everything that is known to be left, in one place, gathered on 30 October 2026 from the "Not done" and "Still open" notes of items 2 to 154 (the item a line comes from is in brackets), and from PyCharm's own dialogs and menus (what PyMagic's notes never named). **How it is kept:** when an item does one of these, the line goes from here to [work_done.md](work_done.md#done-from-the-open-work-list) and the item says so; a new item's own "Not done" note is added here too. Code signing, auto-update and anything else for selling PyMagic are left out on purpose.
+Everything that is known to be left, in one place, gathered on 30 October 2026 from the "Not done" and "Still open" notes of items 2 to 154 (the item a line comes from is in brackets), and from PyCharm's own dialogs and menus (what PyMagic's notes never named). **How it is kept:** when an item does one of these, its line goes from here; a new item's own "Not done" note is added here too. Code signing, auto-update and anything else for selling PyMagic are left out on purpose.
 
 **Editor**
 
@@ -161,7 +161,7 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 **Installer**
 - Not seen on screen: the sidebar picture (item 331), shown only on the finish page after an install and in the uninstaller; the folder page's refusal of a folder that is not PyMagic's (only its rule's tests and the silent installs ran).
 
-**Type engine** (ibnbolbna's area until 31 October 2026, ours from then on; what ibnbolbna did and left is in [docs/ibnbolbna-work.md](docs/ibnbolbna-work.md))
+**Type engine**
 
 **Compared with PyCharm** (its own dialogs and menus, from screenshots of 30 October 2026; none of this was in any item's notes)
 
@@ -195,4 +195,8 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 378 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+PyMagic has been built in 378 steps so far. What is left is in [Open work](#open-work).
+
+## License
+
+PyMagic is source-available, not open source: you may read the source, build it and use it, change it for your own use, and propose changes, but you may not sell it or distribute it, changed or not. Only its owner, [residentcode](https://github.com/residentcode), may distribute or sell PyMagic. The terms are in [LICENSE](LICENSE). The parts of other projects it contains or is built with keep their own licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

@@ -1,0 +1,65 @@
+PyMagic Source-Available License, version 1.0
+
+Copyright (c) 2026 residentcode (https://github.com/residentcode). All rights reserved.
+
+This license covers PyMagic: the source code, documentation, images and other files in this repository, except the
+third-party parts named in THIRD-PARTY-NOTICES.md, which keep their own licenses. The copyright holder is
+residentcode (the "Owner").
+
+PyMagic is source-available software. It is not open-source software: the source can be read, built and used as
+described below, but it may not be passed on or sold by anyone but the Owner.
+
+1. What you may do
+
+   a. Read the source, and clone or download this repository.
+   b. Build PyMagic from the source and run it on computers you own or control, for your own use, including work
+      you do for others (your projects, your employer's projects).
+   c. Change the source for your own use.
+   d. Propose changes to the Owner, for example as a pull request or an issue on the Owner's repository.
+   e. Fork this repository on GitHub, as far as GitHub's Terms of Service allow, to view it and to propose changes
+      to the Owner. A fork may not be used to do anything section 2 forbids.
+
+2. What you may not do
+
+   Without the Owner's written permission you may not:
+
+   a. Sell PyMagic, or any copy, part or changed version of it, or charge for it in any way.
+   b. Distribute, publish, share or make available PyMagic, or any copy, part or changed version of it, in source or
+      built form (an installer, an executable, a package, an image, a download), other than a fork on GitHub as
+      allowed in 1.e.
+   c. Sublicense, rent, lease or lend PyMagic, or offer it to others as a hosted or online service.
+   d. Put PyMagic, or a part or changed version of it, into another product or service that is distributed, sold or
+      offered to others.
+   e. Remove or change this license, the copyright notice, or the notices of the third-party parts.
+
+   Only the Owner may distribute or sell PyMagic.
+
+3. Contributions
+
+   If you send the Owner a contribution (code, documentation, images or anything else, for example in a pull
+   request), you confirm that you have the right to send it, and you grant the Owner a perpetual, worldwide,
+   irrevocable, royalty-free right to use, change, distribute, sell and sublicense it as part of PyMagic, under this
+   license or any other terms the Owner chooses. You keep the copyright in your contribution; you may not use it in
+   a way that would distribute PyMagic against section 2.
+
+4. Third-party parts
+
+   PyMagic contains, and uses, software of others under their own licenses (see THIRD-PARTY-NOTICES.md). This
+   license does not change those licenses, and nothing in it limits what those licenses allow for those parts.
+
+5. Ending
+
+   This license ends at once for anyone who breaks it. When it ends you must stop using PyMagic and delete the
+   copies you have, including changed versions.
+
+6. No warranty
+
+   PyMagic is provided "as is", without warranty of any kind, express or implied, including the warranties of
+   merchantability, fitness for a particular purpose and non-infringement. In no event shall the Owner be liable for
+   any claim, damages or other liability, whether in an action of contract, tort or otherwise, arising from, out of
+   or in connection with PyMagic or its use.
+
+7. Permission
+
+   To ask for anything this license does not allow (for example to distribute or sell PyMagic), contact the Owner
+   through https://github.com/residentcode.

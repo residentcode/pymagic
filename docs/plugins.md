@@ -132,4 +132,4 @@ Run all three, rebuild the app (`node desktop/package.mjs --no-installer`) and r
 3. Its elements in `tab` / `owns`, and its menu entries and dialogs asking `pluginOn`.
 4. `Plugins.On(id)` where the engine starts its work, and no external program run while it is off.
 5. Data shipped with the app, settings on a page of the app.
-6. Page, engine and browser tests; an item in `work_done.md`.
+6. Page, engine and browser tests.

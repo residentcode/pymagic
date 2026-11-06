@@ -1,7 +1,7 @@
 # A check of the built setup (desktop\out\PyMagic-Setup-0.1.0.exe): silent installs into folders of the temp folder, the shortcut on the desktop and its removal, a folder with other files refused,
 # a parent folder with other files redirected to its PyMagic sub folder. It makes and removes a shortcut on the real desktop (and stops if one is there). Run: powershell -File desktop\installer\check-installer.ps1
 $ErrorActionPreference = 'Stop'
-$setup = 'C:\Users\latch\pymagic\desktop\out\PyMagic-Setup-0.1.0.exe'
+$setup = Join-Path $PSScriptRoot '..\out\PyMagic-Setup-0.1.0.exe'
 $desk = [Environment]::GetFolderPath('Desktop')
 $lnk = Join-Path $desk 'PyMagic.lnk'
 "desktop shortcut before: $(Test-Path $lnk)"
