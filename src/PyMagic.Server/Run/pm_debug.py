@@ -684,7 +684,10 @@ class Debugger(bdb.Bdb):
             return True
         if self.run_to is not None and self.canonic(frame.f_code.co_filename) == self.run_to[0]:
             return True
-        return super().break_anywhere(frame)
+        # a breakpoint anywhere in the frame's file, as bdb had it up to Python 3.13; 3.14's bdb asks for one within the function's own
+        # lines, and a function it does not trace never reaches trace_dispatch again: a thread spinning in it would run on through a stop
+        # that suspends every thread, and a breakpoint added to it while it runs would not be hit
+        return self.canonic(frame.f_code.co_filename) in self.breaks
 
     def dispatch_exception(self, frame, arg):
         # bdb only reports exceptions of the frame it is stepping in; "break on raised" wants every one in user code
