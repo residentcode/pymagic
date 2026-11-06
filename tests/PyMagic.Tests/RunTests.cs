@@ -218,6 +218,76 @@ public class RunTests
     }
 
     /// <summary>
+    /// Debug of a compound: every member runs under the debugger as a program of the Run panel's one debug server (DebugServer), each started by
+    /// a session of its own as the page starts them. The breakpoints stop both; their stops come up one at a time, told by the members' names;
+    /// each member's output stays on its own session.
+    /// </summary>
+    [Fact]
+    public void EveryMemberOfACompoundIsDebuggedUnderOneDebugServer()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("api.py", "import time\ntime.sleep(0.2)\nport = 8000\nprint('api on', port)\n");
+        h.Script("worker.py", "jobs = [1, 2, 3]\ndone = sum(jobs)\nprint('worker did', done)\n");
+        var events = new BlockingCollection<JsonNode>();
+        using var server = new RunSession(events.Add);
+        server.Listen(h.Root, "127.0.0.1", 0, "", Array.Empty<(string, string)>(), new Dictionary<string, JsonArray> { ["api.py"] = new JsonArray(3), ["worker.py"] = new JsonArray(2) });
+        var seen = new List<string>();
+        JsonNode Next(string type)
+        {
+            while (true)
+            {
+                if (!events.TryTake(out var e, TimeSpan.FromSeconds(30))) throw new AssertionException("timed out waiting for " + type + "; the debugger said: " + string.Join(" | ", seen));
+                seen.Add(e.ToJsonString());
+                if (e["type"]?.GetValue<string>() == type) return e;
+            }
+        }
+        var listening = Next("listening");
+        int port = listening["port"]!.GetValue<int>();
+        string token = listening["token"]!.GetValue<string>();
+
+        var apiOut = new BlockingCollection<JsonNode>();
+        var workerOut = new BlockingCollection<JsonNode>();
+        using var api = new RunSession(apiOut.Add) { DebugServer = (port, token, "api") };
+        using var worker = new RunSession(workerOut.Add) { DebugServer = (port, token, "worker") };
+        api.StartWithBreakpoints(h.Root, "api.py", false, Array.Empty<string>(), null);
+        worker.StartWithBreakpoints(h.Root, "worker.py", false, Array.Empty<string>(), null);
+
+        // both connect, by their names
+        var froms = new HashSet<string> { Next("connected")["from"]!.GetValue<string>(), Next("connected")["from"]!.GetValue<string>() };
+        Assert.True(froms.SetEquals(new[] { "api", "worker" }), string.Join(",", froms));
+        // the worker stops first (the api sleeps before its line); the api's stop waits and comes up once the worker goes on
+        var first = Next("stopped");
+        Assert.Equal(Path.Combine(h.Root, "worker.py"), first["frames"]![0]!["file"]!.GetValue<string>());
+        Assert.Equal(2, first["frames"]![0]!["line"]!.GetValue<int>());
+        server.Handle(new JsonObject { ["type"] = "evaluate", ["id"] = 1, ["frameId"] = 0, ["expression"] = "len(jobs)" });
+        Assert.Equal("3", Next("evaluated")["result"]!.GetValue<string>());
+        Thread.Sleep(600);   // the api reaches its breakpoint meanwhile, and waits
+        server.Handle(new JsonObject { ["type"] = "continue" });
+        var second = Next("stopped");
+        Assert.Equal(Path.Combine(h.Root, "api.py"), second["frames"]![0]!["file"]!.GetValue<string>());
+        Assert.Equal(3, second["frames"]![0]!["line"]!.GetValue<int>());
+        Assert.True(seen.Any(s => s.Contains("worker") && s.Contains("connected")), "the stops are told by the members' names");
+        server.Handle(new JsonObject { ["type"] = "continue" });
+
+        string OutputOf(BlockingCollection<JsonNode> q)
+        {
+            var text = new System.Text.StringBuilder();
+            var until = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < until && q.TryTake(out var e, TimeSpan.FromSeconds(30)))
+            {
+                if (e["type"]?.GetValue<string>() == "output") text.Append(e["text"]!.GetValue<string>());
+                if (e["type"]?.GetValue<string>() == "exited") break;
+            }
+            return text.ToString();
+        }
+        string apiText = OutputOf(apiOut), workerText = OutputOf(workerOut);
+        Assert.Contains("api on 8000", apiText);
+        Assert.True(!apiText.Contains("worker did"), "each member's output is its own: " + apiText);
+        Assert.Contains("worker did 6", workerText);
+    }
+
+    /// <summary>
     /// Attach Debugger of a console whose interpreter is on another machine over SSH (the Open work's "with an interpreter elsewhere than this
     /// computer"): the project is copied there, the console runs in Python 3.14 there, and the debugger goes over the console's own connection to
     /// the debug server of this computer, with the files named as each side has them. Runs only when PYMAGIC_CT_HOST, PYMAGIC_CT_KEY and

@@ -1372,7 +1372,8 @@ def main():
         folder = os.path.normcase(os.path.dirname(os.path.abspath(options.script)))
         if not (folder + os.sep).startswith(dbg.root + os.sep):
             dbg.also_mine.append(folder)
-    dbg.send({"type": "hello", "token": options.token})
+    # a member of a compound debugged with the others under one debug server says which one it is
+    dbg.send({"type": "hello", "token": options.token, **({"name": os.environ["PYMAGIC_DEBUG_NAME"]} if os.environ.get("PYMAGIC_DEBUG_NAME") else {})})
     reader = threading.Thread(target=dbg.read_loop, daemon=True, name="pymagic-debugger")
     reader.start()
     dbg.reader_ident = reader.ident

@@ -87,6 +87,7 @@ public sealed partial class RunSession : IDisposable
         if (!RunConfigurations.IsModuleName(module)) { Error($"'{module}' is not a module name"); return; }
         IsDebug = debug;
         if (debug) Launch(root, true, AllCode ? new[] { "--all-code", "--module", module, "--" } : new[] { "--module", module, "--" }, args, breakpoints);
+        else if (IntoDebugServer(root, new[] { "--module", module, "--" }) is { } into) Launch(root, false, into, args, null);
         else Launch(root, false, new[] { "-m", module }, args, null);
     }
 
@@ -100,7 +101,32 @@ public sealed partial class RunSession : IDisposable
         IsDebug = debug;
 
         if (debug) Launch(root, true, AllCode ? new[] { "--all-code", "--script", scriptPath, "--" } : new[] { "--script", scriptPath, "--" }, args, breakpoints);
+        else if (IntoDebugServer(root, new[] { "--script", scriptPath, "--" }) is { } into) Launch(root, false, into, args, null);
         else Launch(root, false, new[] { scriptPath }, args, null);
+    }
+
+    /// <summary>
+    /// The Run panel's debug server (Listen) that this run's program connects to under the debugger, as one of the programs it holds: the members of a
+    /// compound debugged together. Its port and token on this computer, and the name its stops are told by. Null: the program runs as it is.
+    /// </summary>
+    public (int Port, string Token, string Name)? DebugServer { get; set; }
+
+    // the leading arguments that start the program in pm_debug.py connected to DebugServer; null when there is none (or the program is
+    // elsewhere than this computer, which cannot reach the server: it runs without the debugger, and says so)
+    string[]? IntoDebugServer(string root, string[] start)
+    {
+        if (DebugServer is not { } server) return null;
+        if (!Target.IsLocal)
+        {
+            _emit(new JsonObject { ["type"] = "output", ["stream"] = "stderr", ["text"] = $"{server.Name}: its interpreter is not on this computer, so it runs without the debugger.\n" });
+            return null;
+        }
+        var env = new Dictionary<string, string>(ExtraEnvironment ?? new Dictionary<string, string>()) { ["PYMAGIC_DEBUG_NAME"] = server.Name };
+        ExtraEnvironment = env;
+        var lead = new List<string> { ExtractHelper("pm_debug.py"), "--port", server.Port.ToString(), "--token", server.Token, "--root", root };
+        if (AllCode) lead.Add("--all-code");
+        lead.AddRange(start);
+        return lead.ToArray();
     }
 
     /// <summary>

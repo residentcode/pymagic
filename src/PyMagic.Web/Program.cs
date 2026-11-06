@@ -1983,6 +1983,10 @@ app.Map("/run", async (HttpContext ctx) =>
                 session.PythonPath = content && sources ? null
                     : (content ? new[] { root } : Array.Empty<string>()).Concat(sources ? ProjectFolders.Load(root).Sources.Select(s => Path.Combine(root, s)) : Array.Empty<string>()).ToList();
                 session.AllCode = msg["allCode"]?.GetValue<bool>() == true;
+                // a member of a compound debugged with the others: it connects to the Run panel's debug server as one of its programs
+                session.DebugServer = msg["debugServer"] is JsonObject into && into["port"] is JsonValue ip && ip.TryGetValue<int>(out int intoPort) && intoPort is > 0 and < 65536
+                    && into["token"]?.GetValue<string>() is { Length: > 0 } intoToken && intoToken.All(char.IsAsciiLetterOrDigit)
+                    ? (intoPort, intoToken, into["name"]?.GetValue<string>() is { Length: > 0 } intoName ? intoName : "a member") : null;
                 session.UvProgram = msg["uv"]?.GetValue<bool>() == true ? (msg["uvPath"]?.GetValue<string>() is { Length: > 0 } uvPath ? uvPath : "uv") : null;
                 if (debugTests != null)
                     session.StartDebugTests(root, (debugTests["ids"] as JsonArray)?.Select(i => i!.GetValue<string>()).ToList() ?? new List<string>(),

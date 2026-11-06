@@ -885,6 +885,7 @@ export function setupRun(deps) {
                     cellHook = null;
                     cellMode = hookFor;
                     append(hookFor === 'console' ? 'The debugger is attached to the Python console: the breakpoints of the project stop the code it runs. Detach Debugger (or Stop) ends it; the console goes on.\n'
+                        : hookFor === 'compound' ? `Debugging ${compoundDebugged}: every member runs under the debugger, each with its own output in the Services window. The breakpoints stop each of them; one member's stop is shown at a time, by its name, and the next comes up when it goes on. Stop ends them all.\n`
                         : 'Debugging a notebook cell: the cell runs in the notebook\'s kernel, under the debugger.\n', 'info');
                     hook({ host: m.host, port: m.port, token: m.token, end: () => { if (run && run === mine) run.send({ type: 'stop' }); } });
                     break;
@@ -966,7 +967,7 @@ export function setupRun(deps) {
                 void refreshWatches();
                 break;
             case 'exited':
-                append(cellMode === 'console' ? '\nThe debugger is detached from the Python console.\n' : cellMode ? '\nThe cell is done; the debugger is detached.\n' : m.detached ? (serving ? '\nDebug server stopped; a program that was connected goes on running.\n' : '\nDetached; the program goes on running.\n') : `\nProcess finished with exit code ${m.code}\n`, 'info');
+                append(cellMode === 'console' ? '\nThe debugger is detached from the Python console.\n' : cellMode === 'compound' ? `\nThe debugger of ${compoundDebugged} is stopped.\n` : cellMode ? '\nThe cell is done; the debugger is detached.\n' : m.detached ? (serving ? '\nDebug server stopped; a program that was connected goes on running.\n' : '\nDetached; the program goes on running.\n') : `\nProcess finished with exit code ${m.code}\n`, 'info');
                 clearInterval(logTimer);
                 openBrowser = false;
                 if (lastLaunch?.extra?.member) lastLaunch.extra.member.code = m.code ?? null;
@@ -989,6 +990,8 @@ export function setupRun(deps) {
         run?.close();
         run = null;
         serving = connected = false;
+        // the debug server of a compound is gone: its members that still run do so without the debugger
+        if (cellMode === 'compound') for (const e of sides.values()) e.debugged = false;
         cellMode = false;
         testsRun = false;
         dataBreaks = [];
@@ -1293,13 +1296,21 @@ export function setupRun(deps) {
         entry.code = code;
         entry.client?.close();
         entry.client = null;
+        // the last member debugged under the Run panel's debug server has ended: the server goes too
+        if (entry.debugged) {
+            entry.debugged = false;
+            if (cellMode === 'compound' && run !== null && !groupOf(entry.group).some((o) => o.debugged && o.live)) run.send({ type: 'stop' });
+        }
         setButtons();
     }
-    function launchSide(entry) {
+    /** Starts a member on a connection of its own; with `server` (the Run panel's debug server) under the debugger, as one of its programs. */
+    function launchSide(entry, server = null) {
         if (inPanel(entry)) return;
         const s = startOf(entry.config);
         const client = new RunClient({ type: 'start', file: s.file, module: s.module, args: s.args, env: s.env, cwd: s.cwd, envFiles: s.envFiles, interpreter: s.interpreter,
-            uv: s.uv, uvPath: s.uvPath, contentRoots: s.contentRoots, sourceRoots: s.sourceRoots, allCode: s.allCode, debug: false, profile: false, breakpoints: {}, exceptionBreak: 'uncaught' });
+            uv: s.uv, uvPath: s.uvPath, contentRoots: s.contentRoots, sourceRoots: s.sourceRoots, allCode: s.allCode, debug: false, profile: false, breakpoints: {}, exceptionBreak: 'uncaught',
+            ...(server ? { debugServer: { port: server.port, token: server.token, name: entry.name } } : {}) });
+        entry.debugged = !!server;
         entry.client = client;
         entry.live = true;
         entry.code = null;
@@ -1359,6 +1370,10 @@ export function setupRun(deps) {
         if (!members.length) { append(`${compound.name}: there is no configuration to start.\n`, 'err'); return; }
         await deps.saveAll();
         for (const [name, e] of sides) if (e.group === compound.name && !e.live && !members.some((m) => m.name === name)) sides.delete(name);
+        // debugged: every member runs under the debugger, as a program of one debug server in the Run panel (its breakpoints stop each of them;
+        // one member's stop is shown at a time, by its name). Without the Run panel free, the first member goes there, as before.
+        const server = debug && !profile && run === null ? await debugServerFor('compound', compound.name) : null;
+        if (server) debug = false;
         for (const c of members) {
             if (c.kind === 'http') { window.dispatchEvent(new CustomEvent('pymagic:runHttp', { detail: startOf(c).http })); continue; }
             let entry = sides.get(c.name);
@@ -1371,7 +1386,7 @@ export function setupRun(deps) {
                 append(`${compound.name}: ${c.name} runs under the ${profile ? 'profiler' : 'debugger'} in the Run panel, the others without it (Debug or Profile of a row in the Services window moves another one there).\n`, 'info');
                 if (await debugSide(entry, profile)) { debug = profile = false; continue; }
             }
-            launchSide(entry);
+            launchSide(entry, server);
         }
     }
     /** The members of compounds, as rows of the Services window: each stopped or restarted by itself, the group started or stopped as a whole. */
@@ -1382,8 +1397,8 @@ export function setupRun(deps) {
             const live = e.live || panel;
             return {
                 id: 'side:' + e.name, group: 'Compound ' + e.group, name: e.name,
-                state: panel ? (paused ? 'paused' : profiling ? 'profiling' : 'debugging') : e.live ? 'running' : 'finished', started: live ? e.started : undefined,
-                detail: panel ? 'in the Run panel' : e.live ? undefined : e.code === null || e.code === undefined ? 'did not run' : `exit code ${e.code}`, done: !live,
+                state: panel ? (paused ? 'paused' : profiling ? 'profiling' : 'debugging') : e.live ? (e.debugged ? 'debugging' : 'running') : 'finished', started: live ? e.started : undefined,
+                detail: panel ? 'in the Run panel' : e.live ? (e.debugged ? 'under the debugger of the Run panel' : undefined) : e.code === null || e.code === undefined ? 'did not run' : `exit code ${e.code}`, done: !live,
                 // its own output beside the list; the one that ran in the Run panel has the Run panel's
                 output: () => (ranInPanel ? output.textContent : e.text ?? ''),
                 show: () => { if (panel) showTab(debugging ? 'debug' : 'output'); else window.dispatchEvent(new CustomEvent('pymagic:showService', { detail: 'side:' + e.name })); },
@@ -1799,12 +1814,14 @@ export function setupRun(deps) {
         void launch(null, false, true, [], { profileTests: e.detail });
     });
     window.addEventListener('pymagic:stopDebugTests', () => { if (run && testsRun) run.send({ type: 'stop' }); });
-    /** A debug server on a free port for a notebook cell ('cell', Debug Cell) or the Python console ('console', Attach Debugger): resolves with
-     * { host, port, token, end } once it listens, null when another run is going. */
-    async function debugServerFor(kind) {
+    /** A debug server on a free port for a notebook cell ('cell', Debug Cell), the Python console ('console', Attach Debugger) or the members of a
+     * compound ('compound', its name): resolves with { host, port, token, end } once it listens, null when another run is going. */
+    let compoundDebugged = '';
+    async function debugServerFor(kind, name = '') {
         if (run)
             return null;
         hookFor = kind;
+        compoundDebugged = name;
         const got = new Promise((resolve) => { cellHook = resolve; });
         if (!(await startDebugServer({ host: '127.0.0.1', port: 0, connectHost: '', mappings: [] }, true))) {
             cellHook = null;

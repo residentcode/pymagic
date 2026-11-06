@@ -1320,6 +1320,37 @@ describe('a compound run configuration in the Services window', () => {
         await head('Close');
         await page.waitFor(`document.querySelectorAll('#services-list .svc-row').length === 0`, 10000, 'the group to be gone');
     });
+
+    test('Debug puts every member under the debugger: both stop at a breakpoint, one stop at a time by its name, and Stop ends them all', async () => {
+        await open('loop.py');
+        assert.equal(await clickMargin(7), true, 'a breakpoint on `count += 1`');
+        await page.evaluate(`${$('output')}.textContent = ''`);
+        await page.evaluate(`${$('b-debug')}.click()`);   // the compound is the chosen configuration
+        await page.waitFor(`${$('output')}.textContent.includes('every member runs under the debugger')`, 30000, 'the debug server of the compound');
+        await page.waitFor(`/connected from loop a/.test(${$('output')}.textContent) && /connected from loop b/.test(${$('output')}.textContent)`, 30000, 'both members connected by name');
+        assert.equal(await page.waitFor(`!${$('b-over')}.disabled && document.querySelector('#frames div.sel')?.textContent`, 30000, 'a stop'), 'spin loop.py:7');
+        await page.evaluate(`${$('t-services')}.click()`);
+        // the members' rows (the Run panel's debug server is a row of its own)
+        const members = async () => (await rows()).filter((r) => r.startsWith('loop ')).sort();
+        for (let i = 0; i < 40 && (await members()).length < 2; i++) await sleep(250);
+        assert.deepEqual(await members(), ['loop a|debugging', 'loop b|debugging']);
+        // the other member waits at the breakpoint too: with the breakpoint gone, Resume brings its stop up
+        await open('loop.py');
+        assert.equal(await clickMargin(7), false, 'the breakpoint taken away');
+        await page.evaluate(`${$('output')}.textContent = ''`);
+        await page.evaluate(`${$('b-debug')}.click()`);   // Resume
+        await page.waitFor(`/Program \\d \\(loop [ab]\\) is stopped/.test(${$('output')}.textContent)`, 20000, "the other member's stop, by its name");
+        assert.equal(await page.waitFor(`!${$('b-over')}.disabled && document.querySelector('#frames div.sel')?.textContent`, 20000, 'the second stop'), 'spin loop.py:7');
+        await page.evaluate(`${$('b-debug')}.click()`);   // Resume: both run on
+        await page.waitFor(`${$('b-over')}.disabled`, 10000, 'both running');
+        // Stop ends the debugger and every member, as for a compound that runs
+        await page.evaluate(`${$('b-stop')}.click()`);
+        await page.waitFor(`${$('output')}.textContent.includes('The debugger of loop pair is stopped')`, 20000, 'the debugger stopped');
+        await page.evaluate(`${$('t-services')}.click()`);
+        for (let i = 0; i < 80 && (await members()).join() !== 'loop a|finished,loop b|finished'; i++) await sleep(250);
+        assert.deepEqual(await members(), ['loop a|finished', 'loop b|finished']);
+        await head('Close');
+    });
 });
 
 // last: this chooses the debug server configuration, which stays chosen

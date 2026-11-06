@@ -171,7 +171,6 @@ Everything that is known to be left, in one place, gathered on 30 October 2026 f
 - Python console: Not checked: Attach Debugger with an interpreter in WSL or a container (item 375 was checked over SSH).
 - Compared on 1 November 2026 (item 224; what was "Not compared yet"), PyMagic had none of these unless said:
   - HTTP client (item 313): Not built: PyCharm's newer extras: `jsonPath`, `client.global` kept across restarts, WebSocket, GraphQL and gRPC requests.
-  - Run Anything and the Services window (item 314): one member of a compound at a time is debugged (the Run panel has one debug session; PyCharm opens a debugger tab per member).
 
 
 ### Different from PyCharm on purpose
@@ -184,6 +183,7 @@ Not work left: choices made and kept, noted where they were made.
 - Editor menu: Left as they are: *Paste as Plain Text* (every paste into the editor is plain already) and submenus in the editor's right-click menu (Monaco's menu has none; Refactor… and Generate… open PyMagic's own menus, which have them)
 - Diagrams: Simpler than PyCharm's: no editing, notes or other layouts, and a model's relations come from its own fields.
 - Open Project: no Attach (a second project folder in the same window): the user does not want it; a project opens in this window or a new one (item 301).
+- Debug of a compound (item 377): every member is debugged under the Run panel's one debug server, and one member's stop is shown at a time, by its name (PyCharm opens a debugger tab per member).
 - Debugger: left on purpose: attaching to programs of Python 3.13 and earlier, which have no `sys.remote_exec` (PyCharm injects native code into the process; antivirus programs such as Kaspersky quarantine programs that do, so PyMagic attaches to 3.14 and later only)
 - Editor: PyMagic's keys differ where PyCharm's are already taken here: next / previous method is Ctrl+Shift+Down / Up (Alt+Down moves the line), the block's start / end is Alt+[ / Alt+] (Ctrl+[ indents)
 - Refactoring: Simpler than PyCharm's: Introduce Parameter gives the parameter a default instead of passing the value at each call, Invert Boolean works on variables (not on functions that return one), and moved members do not bring the imports they need.
@@ -195,4 +195,4 @@ Not work left: choices made and kept, noted where they were made.
 
 ## Work done
 
-The 376 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).
+The 377 steps built so far, each with its notes, are in [work_done.md](work_done.md). What is left is in [Open work](#open-work).

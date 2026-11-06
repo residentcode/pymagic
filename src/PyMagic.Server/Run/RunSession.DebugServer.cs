@@ -191,7 +191,14 @@ public sealed partial class RunSession
             string? hello;
             try { hello = reader.ReadLine(); } catch (IOException) { hello = null; }
             bool ok = false;
-            try { ok = hello != null && JsonNode.Parse(hello)?["token"]?.GetValue<string>() == token; } catch (System.Text.Json.JsonException) { }
+            try
+            {
+                var said = hello != null ? JsonNode.Parse(hello) : null;
+                ok = said?["token"]?.GetValue<string>() == token;
+                // a member of a compound is told by its name rather than by its address
+                if (ok && said?["name"]?.GetValue<string>() is { Length: > 0 and <= 200 } name) who = name;
+            }
+            catch (Exception e) when (e is System.Text.Json.JsonException or InvalidOperationException) { }
             if (!ok)
             {
                 client.Dispose();
