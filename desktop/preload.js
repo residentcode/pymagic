@@ -16,5 +16,11 @@ contextBridge.exposeInMainWorld('pymagicDesktop', {
   closeProject: () => ipcRenderer.invoke('pymagic:close-project'),
   // the welcome screen's New project, and back to the welcome screen from it
   newProject: () => ipcRenderer.invoke('pymagic:new-project'),
+  plugins: () => ipcRenderer.invoke('pymagic:plugins'),
+  // Get from VCS: git clone into a new folder, its progress line by line, and Cancel
+  cloneNear: (url) => ipcRenderer.invoke('pymagic:clone-near', String(url ?? '')),
+  cloneRepository: (url, folder) => ipcRenderer.invoke('pymagic:clone', String(url), String(folder)),
+  cancelClone: () => ipcRenderer.invoke('pymagic:clone-cancel'),
+  onCloneProgress: (fn) => { const on = (_e, line) => fn(String(line)); ipcRenderer.on('pymagic:clone-progress', on); return () => ipcRenderer.off('pymagic:clone-progress', on); },
   showWelcome: () => ipcRenderer.invoke('pymagic:show-welcome'),
 });

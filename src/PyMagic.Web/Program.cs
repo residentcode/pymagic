@@ -961,6 +961,48 @@ app.MapPost("/api/http", async (HttpRequest req) =>
     catch (InvalidOperationException e) { return Results.BadRequest(new { error = e.Message }); }
 });
 
+// a WEBSOCKET request of an .http file: its messages sent in turn, and the talk returned (WebSocketRequests)
+app.MapPost("/api/ws", async (HttpRequest req) =>
+{
+    var b = await JsonNode.ParseAsync(req.Body);
+    if (!Uri.TryCreate(b?["url"]?.GetValue<string>() ?? "", UriKind.Absolute, out var url) || url.Scheme is not ("ws" or "wss"))
+        return Results.BadRequest(new { error = "a ws:// or wss:// address" });
+    if (!url.IsLoopback && b?["fromFile"]?.GetValue<bool>() != true) return Results.BadRequest(new { error = "only servers on this computer (localhost, 127.0.0.1)" });
+    var headers = (b?["headers"] as JsonObject ?? new JsonObject()).Select(kv => new KeyValuePair<string, string>(kv.Key, kv.Value?.GetValue<string>() ?? "")).ToList();
+    var messages = (b?["messages"] as JsonArray ?? new JsonArray()).Select(m => new WebSocketRequests.Message(m?["text"]?.GetValue<string>() ?? "", m?["wait"]?.GetValue<bool>() == true)).ToList();
+    try
+    {
+        var r = await WebSocketRequests.Run(url, headers, messages, quiet: TimeSpan.FromMilliseconds(1500), waitLimit: TimeSpan.FromSeconds(10), limit: TimeSpan.FromSeconds(30));
+        return Results.Json(new
+        {
+            transcript = r.Transcript.Select(l => new { dir = l.Dir, text = l.Text, ms = l.Ms }),
+            closed = r.Closed ? new { status = r.CloseStatus, description = r.CloseDescription } : null,
+            headers = r.Headers, ms = r.Ms,
+        });
+    }
+    catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or OperationCanceledException or ArgumentException)
+    {
+        return Results.BadRequest(new { error = (e is OperationCanceledException ? "no connection in 30 seconds" : e.Message) + (url.IsLoopback ? " (is the server running?)" : "") });
+    }
+});
+
+// a GRPC request of an .http file: the service described by the server's reflection, the JSON sent as protobuf (GrpcRequests)
+app.MapPost("/api/grpc", async (HttpRequest req) =>
+{
+    var b = await JsonNode.ParseAsync(req.Body);
+    if (!Uri.TryCreate(b?["address"]?.GetValue<string>() ?? "", UriKind.Absolute, out var address) || address.Scheme is not ("http" or "https"))
+        return Results.BadRequest(new { error = "a gRPC address: host:port/package.Service/Method" });
+    if (!address.IsLoopback && b?["fromFile"]?.GetValue<bool>() != true) return Results.BadRequest(new { error = "only servers on this computer (localhost, 127.0.0.1)" });
+    string service = b?["service"]?.GetValue<string>() ?? "", method = b?["method"]?.GetValue<string>() ?? "";
+    var metadata = (b?["metadata"] as JsonObject ?? new JsonObject()).Select(kv => new KeyValuePair<string, string>(kv.Key, kv.Value?.GetValue<string>() ?? "")).ToList();
+    try
+    {
+        var r = await GrpcRequests.Call(address.GetLeftPart(UriPartial.Authority), service, method, b?["body"]?.GetValue<string>() ?? "", metadata);
+        return Results.Json(new { status = r.Status, reason = r.StatusName, message = r.Message, body = r.Message != null && r.Body.Length == 0 ? r.Message : r.Body, headers = r.Headers, ms = r.Ms });
+    }
+    catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
+});
+
 // the live preview of templates: the server running on this computer, relayed under /preview/ so the page can show it in a frame
 // (Django forbids frames by default, and its pages link to /static/... of their own server): the frame refusal is dropped and the
 // page's own links are pointed back through /preview/

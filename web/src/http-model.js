@@ -1,7 +1,71 @@
 // The HTTP client's logic that needs no page: the requests of an .http / .rest file (JetBrains' format), their
 // {{variables}}, and cURL commands read and written.
 
-const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS', 'TRACE', 'CONNECT'];
+// besides HTTP's own, PyCharm's three: GRAPHQL (a query and its variables, POSTed as JSON), WEBSOCKET (messages, `===` between them) and GRPC
+const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS', 'TRACE', 'CONNECT', 'GRAPHQL', 'WEBSOCKET', 'GRPC'];
+export const KINDS = { GRAPHQL: 'graphql', WEBSOCKET: 'websocket', GRPC: 'grpc' };
+
+/**
+ * A GRAPHQL request's body as it is sent: {query, variables}. As in PyCharm, the variables are a JSON object written after the query (the
+ * first line from the second on that starts with `{` and from which the rest reads as a JSON object); without one, variables is null.
+ */
+export function graphqlPayload(body) {
+    const lines = (body ?? '').split(/\r?\n/);
+    for (let k = 1; k < lines.length; k++) {
+        if (!lines[k].startsWith('{'))
+            continue;
+        const rest = lines.slice(k).join('\n');
+        try {
+            const v = JSON.parse(rest);
+            if (v && typeof v === 'object' && !Array.isArray(v))
+                return { query: lines.slice(0, k).join('\n').trim(), variables: v };
+        }
+        catch { /* part of the query */ }
+    }
+    return { query: (body ?? '').trim(), variables: null };
+}
+
+/**
+ * A WEBSOCKET request's body: the messages sent in turn, with `===` lines between them; after `=== wait-for-server` the next message waits for
+ * one from the server first. [{text, wait}]; empty messages are left out.
+ */
+export function websocketMessages(body) {
+    const out = [];
+    let text = [];
+    let wait = false;
+    const flush = () => { const t = text.join('\n').trim(); if (t) out.push({ text: t, wait }); text = []; };
+    for (const line of (body ?? '').split(/\r?\n/)) {
+        const sep = /^===\s*(wait-for-server)?\s*$/.exec(line);
+        if (sep) {
+            flush();
+            wait = !!sep[1];
+            continue;
+        }
+        text.push(line);
+    }
+    flush();
+    return out;
+}
+
+/**
+ * A GRPC request line's address: `localhost:50051/helloworld.Greeter/SayHello` (plain text), or with `grpcs://` / `https://` (TLS) or `http://`
+ * before it. {address: 'http://host:port' | 'https://host:port', service, method}, or null when it is not one.
+ */
+export function grpcTarget(url) {
+    const m = /^(?:(grpcs|https|grpc|http):\/\/)?([^/\s]+)\/([\w.]+)\/(\w+)\/?$/.exec(url ?? '');
+    if (!m)
+        return null;
+    const tls = m[1] === 'grpcs' || m[1] === 'https';
+    return { address: `${tls ? 'https' : 'http'}://${m[2]}`, service: m[3], method: m[4] };
+}
+
+/** The talk of a WebSocket request as text: each message sent (→) and received (←), with when it was, from the connection's start. */
+export function websocketTranscript(transcript, closed) {
+    const lines = (transcript ?? []).map((t) => `${t.dir === 'sent' ? '→' : '←'} ${String(t.ms).padStart(5)} ms  ${t.text.replace(/\n/g, '\n            ')}`);
+    if (closed)
+        lines.push(`× closed${closed.status ? ` (${closed.status}${closed.description ? ` ${closed.description}` : ''})` : ''}`);
+    return lines.join('\n');
+}
 const REQUEST_LINE = new RegExp(`^(?:(${METHODS.join('|')})\\s+)?(\\S+?)(?:\\s+(HTTP\\/[\\d.]+))?\\s*$`);
 const comment = (line) => /^\s*(#|\/\/)/.test(line);
 

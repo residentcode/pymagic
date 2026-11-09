@@ -101,7 +101,7 @@ try {
         throw new Error('no page: ' + what);
     };
     const welcomeAt = (u) => u.startsWith('file:') && u.endsWith('welcome.html');
-    const dialogAt = (u) => /\/newproject\.html\?near=/.test(u);
+    const dialogAt = (u) => /\/welcome-tool\.html\?tool=newproject&near=/.test(u);
     ask(`document.getElementById('new').click()`);
     let np = await target(dialogAt, 'the New project dialog');
     const suggested = await np.until(`document.getElementById('np-location')?.value`, 'the location');

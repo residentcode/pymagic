@@ -3,10 +3,13 @@
 // a pasted cURL command turned into a request, and a request copied as cURL. The engine sends them (/api/http). A body's `< file` lines are sent
 // as the files' bytes (multipart bodies too), `>> file` keeps the response in a file, and the scripts of `< {% %}` (before the request) and
 // `> {% %}` (on its response) run in a Worker, with PyCharm's `client`, `request` and `response` objects; their tests show in the Tests part.
+// PyCharm's other kinds of request too: GRAPHQL (the query and its variables POSTed as JSON), WEBSOCKET (messages with `===` between them,
+// `=== wait-for-server`; the talk shown as the body, /api/ws) and GRPC (host:port/package.Service/Method with the message as JSON; the
+// service described by the server's reflection, /api/grpc).
 import * as monaco from 'monaco-editor';
 import { showTab } from './panel';
 import { toast } from './toast';
-import { parseRequests, requestAt, fileVariables, environment, resolve, substitute, parseCurl, formatRequest, toCurl, prettyBody, environmentRows, environmentFiles, SHARED_LABEL, bodyParts, runScript } from './http-model';
+import { parseRequests, requestAt, fileVariables, environment, resolve, substitute, parseCurl, formatRequest, toCurl, prettyBody, environmentRows, environmentFiles, SHARED_LABEL, bodyParts, runScript, KINDS, graphqlPayload, websocketMessages, websocketTranscript, grpcTarget } from './http-model';
 
 const $ = (id) => document.getElementById(id);
 const HISTORY = '.pymagic/http-history.json';
@@ -23,7 +26,8 @@ monaco.languages.setMonarchTokensProvider('http', {
             [/^###.*$/, 'comment.doc'],
             [/^\s*(#|\/\/).*$/, 'comment'],
             [/^@\w+/, 'variable', '@assign'],
-            [/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE|CONNECT)(?=\s)/, 'keyword', '@url'],
+            [/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE|CONNECT|GRAPHQL|WEBSOCKET|GRPC)(?=\s)/, 'keyword', '@url'],
+            [/^===(\s*wait-for-server)?\s*$/, 'keyword'],
             [/^[\w-]+(?=\s*:)/, 'type.identifier'],
             [/\{\{[^}]*\}\}/, 'variable'],
             [/^<\s.*$/, 'string'],
@@ -285,10 +289,30 @@ export function setupHttpClient(deps) {
         head.textContent = `${r.method} ${r.url} …`;
         bodyView.textContent = '';
         const saveTo = r.output ? { file: pathFrom(rel, substitute(r.output.file, vars).text), overwrite: r.output.overwrite } : undefined;
-        const answer = await fetch('/api/http', {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ method: r.method, url: r.url, headers: Object.fromEntries(r.headers), parts, saveTo, fromFile: true }),
-        }).then(async (res) => (res.ok ? res.json() : { error: (await res.json().catch(() => null))?.error ?? `HTTP ${res.status}` })).catch((e) => ({ error: String(e) }));
+        const post = (path, payload) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+            .then(async (res) => (res.ok ? res.json() : { error: (await res.json().catch(() => null))?.error ?? `HTTP ${res.status}` })).catch((e) => ({ error: String(e) }));
+        const kind = KINDS[r.method] ?? 'http';
+        let answer;
+        if (kind === 'graphql') {
+            // POSTed as JSON, {query, variables}, as PyCharm sends it; the request's own Content-Type stays when it has one
+            const headers = Object.fromEntries(r.headers);
+            if (!Object.keys(headers).some((k) => k.toLowerCase() === 'content-type'))
+                headers['Content-Type'] = 'application/json';
+            answer = await post('/api/http', { method: 'POST', url: r.url, headers, parts: [{ text: JSON.stringify(graphqlPayload(r.body)) }], saveTo, fromFile: true });
+        }
+        else if (kind === 'websocket') {
+            const ws = await post('/api/ws', { url: r.url, headers: Object.fromEntries(r.headers), messages: websocketMessages(r.body), fromFile: true });
+            answer = ws.error ? ws : { status: 101, reason: 'Switching Protocols', headers: ws.headers ?? {}, ms: ws.ms, body: websocketTranscript(ws.transcript, ws.closed), transcript: ws.transcript, size: (ws.transcript ?? []).reduce((n, t) => n + t.text.length, 0) };
+        }
+        else if (kind === 'grpc') {
+            const target = grpcTarget(r.url);
+            answer = !target ? { error: 'a gRPC address: host:port/package.Service/Method' }
+                : await post('/api/grpc', { ...target, metadata: Object.fromEntries(r.headers), body: r.body ?? '{}', fromFile: true });
+            if (!answer.error)
+                answer = { ...answer, size: (answer.body ?? '').length };
+        }
+        else
+            answer = await post('/api/http', { method: r.method, url: r.url, headers: Object.fromEntries(r.headers), parts, saveTo, fromFile: true });
         // the response handlers, in order: `> {% script %}` and `> handler.js`
         const tests = [...(preResult?.tests ?? [])];
         const log = [...(preResult?.log ?? [])];
@@ -316,6 +340,7 @@ export function setupHttpClient(deps) {
         const entry = {
             when: new Date().toISOString(), file: rel, line: request.line, name: request.name, method: r.method, url: r.url,
             request: { headers: r.headers, body: shownBody ?? null },
+            ...(kind !== 'http' ? { kind } : {}),
             ...(answer.error ? { error: answer.error } : { status: answer.status, reason: answer.reason, ms: answer.ms, size: answer.size, headers: answer.headers, body: (answer.body ?? '').slice(0, 64 * 1024), truncated: answer.truncated || (answer.body ?? '').length > 64 * 1024 }),
             ...(tests.length || log.length || scriptErrors.length ? { tests, log, scriptErrors } : {}),
             ...(answer.savedTo ? { savedTo: answer.savedTo } : {}),
@@ -334,14 +359,16 @@ export function setupHttpClient(deps) {
 
     // ------------------------------------------------------------ the HTTP tab
     const sizeText = (n) => (n >= 1024 * 1024 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`);
+    // a gRPC answer's status is gRPC's code (0 OK, 5 NOT_FOUND, ...), an HTTP one's 4xx and 5xx are failures
+    const failed = (entry) => (entry.kind === 'grpc' ? entry.status !== 0 : entry.status >= 400);
     function show(entry) {
         shown = entry;
-        head.className = entry.error ? 'err' : entry.status >= 400 ? 'bad' : 'ok';
+        head.className = entry.error ? 'err' : failed(entry) ? 'bad' : 'ok';
         const passed = (entry.tests ?? []).filter((x) => x.passed).length;
         const testText = entry.tests?.length || entry.scriptErrors?.length
             ? ` · tests ${passed}/${entry.tests.length}${entry.scriptErrors?.length ? ', script failed' : ''}` : '';
         head.textContent = entry.error ? `${entry.method} ${entry.url}: ${entry.error}`
-            : `${entry.status} ${entry.reason ?? ''} · ${entry.ms} ms · ${sizeText(entry.size ?? 0)}${testText} · ${entry.method} ${entry.url}`;
+            : `${entry.kind === 'grpc' ? 'gRPC ' : ''}${entry.status} ${entry.reason ?? ''} · ${entry.ms} ms · ${sizeText(entry.size ?? 0)}${testText} · ${entry.method} ${entry.url}`;
         if (!entry.error && (entry.scriptErrors?.length || entry.tests?.some((x) => !x.passed)))
             head.className = 'bad';
         paintPart();
@@ -379,7 +406,7 @@ export function setupHttpClient(deps) {
             const row = document.createElement('div');
             row.className = 'http-item' + (entry === shown ? ' sel' : '');
             const status = document.createElement('span');
-            status.className = 'http-code ' + (entry.error ? 'err' : entry.status >= 400 ? 'bad' : 'ok');
+            status.className = 'http-code ' + (entry.error ? 'err' : failed(entry) ? 'bad' : 'ok');
             status.textContent = entry.error ? '✕' : String(entry.status);
             const what = document.createElement('span');
             what.className = 'http-what';

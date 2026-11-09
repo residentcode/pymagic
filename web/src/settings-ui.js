@@ -580,7 +580,8 @@ const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections',
 
 let isOpen = false;
 
-export function openSettings(start = 'appearance') {
+/** `onClose`: called when the dialog closes (the welcome screen's Plugins goes back to the welcome screen then). */
+export function openSettings(start = 'appearance', { onClose = null } = {}) {
     if (isOpen) return;
     isOpen = true;
     const shade = document.createElement('div');
@@ -611,7 +612,7 @@ export function openSettings(start = 'appearance') {
     box.append(nav, body);
     shade.append(box);
 
-    const close = () => { shade.remove(); isOpen = false; document.removeEventListener('keydown', onKey, true); };
+    const close = () => { shade.remove(); isOpen = false; document.removeEventListener('keydown', onKey, true); onClose?.(); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
     const buttons = new Map();
     function show(id) {

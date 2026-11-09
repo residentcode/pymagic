@@ -3,22 +3,28 @@
 <head>
 <meta charset="utf-8">
 <title>PyMagic</title>
-<!-- The welcome screen of a window without a project (after Close Project): New project, Open folder, the demo and the recent projects. -->
+<!-- The welcome screen of a window without a project (after Close Project), as PyCharm's: Projects (New project, Open folder, Get from VCS, the
+     recent projects), Plugins (Settings at its Plugins page) and Learn (the demo project and PyMagic's guides). -->
 <style>
-  :root { --bg: #0f111a; --panel: #161925; --line: #262b3d; --text: #bcc1d6; --dim: #7c839c; --accent: #82aaff; --hover: #1f2335; }
+  :root { --bg: #0f111a; --panel: #161925; --line: #262b3d; --text: #bcc1d6; --dim: #7c839c; --accent: #82aaff; --hover: #1f2335; --red: #f07178; --green: #c3e88d; }
   @media (prefers-color-scheme: light) {
-    :root { --bg: #f5f6f8; --panel: #ffffff; --line: #dde0e6; --text: #23262f; --dim: #6b7080; --accent: #2f6fdb; --hover: #eceef3; }
+    :root { --bg: #f5f6f8; --panel: #ffffff; --line: #dde0e6; --text: #23262f; --dim: #6b7080; --accent: #2f6fdb; --hover: #eceef3; --red: #c62828; --green: #2e7d32; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; height: 100vh; background: var(--bg); color: var(--text); font: 14px "Segoe UI", system-ui, sans-serif; display: flex; }
-  aside { width: 260px; padding: 28px 22px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
-  h1 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
-  .version { color: var(--dim); font-size: 12px; margin-bottom: 18px; }
+  aside { width: 230px; padding: 28px 16px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+  h1 { margin: 0 6px 4px; font-size: 20px; font-weight: 600; }
+  .version { color: var(--dim); font-size: 12px; margin: 0 6px 18px; }
+  nav button { border: 0; background: none; width: 100%; }
+  nav button.active { background: var(--hover); color: var(--accent); }
   button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; text-align: left; cursor: pointer; }
-  button:hover { background: var(--hover); }
+  button:hover:not(:disabled) { background: var(--hover); }
+  button:disabled { opacity: .5; cursor: default; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   main { flex: 1; padding: 28px 32px; overflow: auto; }
+  section[hidden] { display: none; }
   h2 { margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
   input { width: 100%; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 12px; }
   ul { list-style: none; margin: 0; padding: 0; }
   li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
@@ -28,31 +34,85 @@
   .text { flex: 1; min-width: 0; }
   .remove { visibility: hidden; border: 0; background: none; color: var(--dim); padding: 2px 6px; }
   li:hover .remove, li:focus .remove { visibility: visible; }
-  .empty { color: var(--dim); }
+  .empty { color: var(--dim); cursor: default; }
+  .vcs { border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 22px; background: var(--panel); }
+  .vcs label { display: block; color: var(--dim); font-size: 12px; margin-bottom: 4px; }
+  .row { display: flex; gap: 8px; }
+  .row input { flex: 1; }
+  .row button { margin-bottom: 12px; }
+  .progress { font: 12px Consolas, monospace; color: var(--dim); white-space: pre-wrap; max-height: 120px; overflow: auto; margin: 0 0 10px; }
+  .error { color: var(--red); margin-bottom: 10px; }
+  .learn li { align-items: flex-start; }
+  .learn .text div:last-child { color: var(--dim); font-size: 13px; }
+  p.note { color: var(--dim); margin: 0 0 16px; max-width: 640px; line-height: 1.5; }
 </style>
 </head>
 <body>
 <aside>
   <h1>PyMagic</h1>
-  <div class="version">No project is open in this window.</div>
-  <button class="primary" id="new">New project…</button>
-  <button id="open">Open folder…</button>
-  <button id="demo">Open the demo project</button>
+  <div class="version" id="status">No project is open in this window.</div>
+  <nav>
+    <button data-page="projects" class="active">Projects</button>
+    <button data-page="plugins">Plugins</button>
+    <button data-page="learn">Learn</button>
+  </nav>
 </aside>
 <main>
-  <h2>Recent projects</h2>
-  <input id="filter" placeholder="Search the recent projects" aria-label="Search the recent projects">
-  <ul id="recent"></ul>
+  <section id="projects">
+    <div class="actions">
+      <button class="primary" id="new">New project…</button>
+      <button id="open">Open folder…</button>
+      <button id="vcs">Get from VCS…</button>
+    </div>
+    <div class="vcs" id="vcs-form" hidden>
+      <h2>Get from version control</h2>
+      <label for="vcs-url">The repository's address</label>
+      <input id="vcs-url" placeholder="https://github.com/owner/name.git or git@github.com:owner/name.git" spellcheck="false">
+      <label for="vcs-dir">The folder it goes in (a new one)</label>
+      <div class="row"><input id="vcs-dir" spellcheck="false"><button id="vcs-browse">Browse…</button></div>
+      <div class="error" id="vcs-error" hidden></div>
+      <pre class="progress" id="vcs-progress" hidden></pre>
+      <div class="row"><button class="primary" id="vcs-clone">Clone</button><button id="vcs-cancel">Cancel</button></div>
+    </div>
+    <h2>Recent projects</h2>
+    <input id="filter" placeholder="Search the recent projects" aria-label="Search the recent projects">
+    <ul id="recent"></ul>
+  </section>
+  <section id="plugins" hidden>
+    <h2>Plugins</h2>
+    <p class="note">PyMagic's optional parts (Django, Flask, FastAPI, Jupyter, Docker, Git, the HTTP client, the database tools and the others) are
+      built-in plugins, each switched on or off. The choices are yours, not a project's: the next project opened uses them.</p>
+    <button class="primary" id="plugins-open">Choose the plugins…</button>
+  </section>
+  <section id="learn" hidden>
+    <h2>Learn</h2>
+    <ul class="learn">
+      <li tabindex="0" data-run="demo"><div class="text"><div class="name">Try the editor on the demo project</div><div>A small Python project with mistakes left in on purpose: inspections, quick fixes, refactorings, running and debugging.</div></div></li>
+      <li tabindex="0" data-link="https://github.com/residentcode/pymagic#readme"><div class="text"><div class="name">What PyMagic does</div><div>The README: editing, frameworks, running, environments and the tools, in short.</div></div></li>
+      <li tabindex="0" data-link="https://github.com/residentcode/pymagic/blob/master/docs/plugins.md"><div class="text"><div class="name">Making a plugin</div><div>How the optional parts are built, and how to add one.</div></div></li>
+      <li tabindex="0" data-link="https://github.com/residentcode/pymagic/issues"><div class="text"><div class="name">Report a problem or ask</div><div>PyMagic's issues on GitHub.</div></div></li>
+    </ul>
+  </section>
 </main>
 <script>
   const desktop = window.pymagicDesktop;
+  const $ = (id) => document.getElementById(id);
   let recent = [];
   const nameOf = (p) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p;
   const open = (folder) => { if (folder) void desktop.openProject(folder, 'this'); };
+  const busy = (text) => { $('status').textContent = text; };
 
+  // ---- the pages
+  function page(id) {
+    for (const b of document.querySelectorAll('nav button')) b.classList.toggle('active', b.dataset.page === id);
+    for (const s of document.querySelectorAll('main section')) s.hidden = s.id !== id;
+  }
+  for (const b of document.querySelectorAll('nav button')) b.addEventListener('click', () => page(b.dataset.page));
+
+  // ---- the recent projects
   function show() {
-    const list = document.getElementById('recent');
-    const q = document.getElementById('filter').value.trim().toLowerCase();
+    const list = $('recent');
+    const q = $('filter').value.trim().toLowerCase();
     const shown = recent.filter((p) => !q || p.toLowerCase().includes(q));
     list.replaceChildren();
     if (shown.length === 0) {
@@ -87,14 +147,71 @@
     }
   }
 
-  document.getElementById('new').addEventListener('click', () => {
-    document.getElementById('new').disabled = true;
-    document.querySelector('.version').textContent = 'Starting the New project dialog…';
-    void desktop.newProject();
+  $('new').addEventListener('click', () => { $('new').disabled = true; busy('Starting the New project dialog…'); void desktop.newProject(); });
+  $('open').addEventListener('click', async () => open(await desktop.chooseFolder()));
+  $('filter').addEventListener('input', show);
+
+  // ---- Get from VCS: git clone into a new folder, then the project opens here
+  let dirTouched = false;
+  const suggest = async () => { if (!dirTouched) $('vcs-dir').value = await desktop.cloneNear($('vcs-url').value); };
+  $('vcs').addEventListener('click', async () => {
+    $('vcs-form').hidden = false;
+    $('vcs-error').hidden = true;
+    await suggest();
+    $('vcs-url').focus();
   });
-  document.getElementById('open').addEventListener('click', async () => open(await desktop.chooseFolder()));
-  document.getElementById('demo').addEventListener('click', async () => open(await desktop.demoFolder()));
-  document.getElementById('filter').addEventListener('input', show);
+  $('vcs-url').addEventListener('input', () => void suggest());
+  $('vcs-dir').addEventListener('input', () => { dirTouched = true; });
+  $('vcs-browse').addEventListener('click', async () => {
+    const chosen = await desktop.pickFolder($('vcs-dir').value);
+    if (chosen) { $('vcs-dir').value = chosen; dirTouched = true; }
+  });
+  let cloning = false;
+  $('vcs-cancel').addEventListener('click', () => {
+    if (cloning) { void desktop.cancelClone(); return; }
+    $('vcs-form').hidden = true;
+  });
+  const progress = $('vcs-progress');
+  desktop.onCloneProgress?.((line) => {
+    progress.hidden = false;
+    // git rewrites one line as it counts: the newest state of a line replaces the one before with the same start
+    const lines = progress.textContent ? progress.textContent.split('\n') : [];
+    const head = line.split(':')[0];
+    if (lines.length && lines[lines.length - 1].split(':')[0] === head) lines[lines.length - 1] = line; else lines.push(line);
+    progress.textContent = lines.slice(-8).join('\n');
+    progress.scrollTop = progress.scrollHeight;
+  });
+  $('vcs-clone').addEventListener('click', async () => {
+    const url = $('vcs-url').value.trim(), dir = $('vcs-dir').value.trim();
+    $('vcs-error').hidden = true;
+    progress.textContent = '';
+    progress.hidden = true;
+    if (!url) { $('vcs-error').textContent = 'The repository’s address is needed.'; $('vcs-error').hidden = false; return; }
+    cloning = true;
+    $('vcs-clone').disabled = true;
+    busy('Cloning ' + url + '…');
+    const r = await desktop.cloneRepository(url, dir);
+    cloning = false;
+    $('vcs-clone').disabled = false;
+    if (r?.error || r?.cancelled) {
+      busy('No project is open in this window.');
+      $('vcs-error').textContent = r.cancelled ? 'The clone was cancelled; what it had written is removed.' : r.error;
+      $('vcs-error').hidden = false;
+    }
+    // done: the project opens in this window
+  });
+
+  // ---- Plugins and Learn
+  $('plugins-open').addEventListener('click', () => { $('plugins-open').disabled = true; busy('Starting Settings…'); void desktop.plugins(); });
+  for (const li of document.querySelectorAll('.learn li')) {
+    const go = async () => {
+      if (li.dataset.run === 'demo') open(await desktop.demoFolder());
+      else if (li.dataset.link) window.open(li.dataset.link, '_blank');
+    };
+    li.addEventListener('click', go);
+    li.addEventListener('keydown', (e) => { if (e.key === 'Enter') void go(); });
+  }
+
   // the app's own menu (File > Open Folder…, Open the demo project) runs these in the window in front
   window.pymagic = {
     projectDesktop: () => ({

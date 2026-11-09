@@ -9,6 +9,7 @@ const os = require('node:os');
 const { hostEnvironment } = require('./host-env');
 const { remember, existing, forget } = require('./recent-projects');
 const { missingWebPackages } = require('./web-packages');
+const { cloneAddressOk, repositoryName } = require('./clone-model');
 
 const repo = path.resolve(__dirname, '..');
 const packaged = app.isPackaged;
@@ -165,20 +166,67 @@ async function showWelcome(w) {
   await w.win.loadFile(path.join(__dirname, 'welcome.html'));
 }
 
+/** The folder a new project or a clone is suggested beside: the last project, or PyMagicProjects in the home folder. */
+const nearFolder = () => existing(readSettings().recent, fs.existsSync, null)[0] ?? path.join(os.homedir(), 'PyMagicProjects', 'project');
+
 /**
- * The welcome screen's New project: the New project dialog alone (the page's newproject.html), on an engine started for it in a folder of
- * PyMagic's own that is never a recent project. The location is suggested beside the last project (or in PyMagicProjects in the home folder);
- * the project made opens in this window, and Cancel goes back to the welcome screen.
+ * The welcome screen's New project and Plugins: their dialog alone (the page's welcome-tool.html), on an engine started for it in a folder of
+ * PyMagic's own that is never a recent project. New project's location is suggested beside the last project; the project made opens in this
+ * window. Plugins is Settings at its Plugins page. Closing either goes back to the welcome screen.
  */
-async function newProjectFromWelcome(w) {
+async function welcomeTool(w, tool) {
   const room = path.join(app.getPath('userData'), 'new-project');
   fs.mkdirSync(room, { recursive: true });
-  const last = existing(readSettings().recent, fs.existsSync, null)[0];
-  const near = last ?? path.join(os.homedir(), 'PyMagicProjects', 'project');
   w.project = null;
-  w.win.setTitle('PyMagic - New project');
+  w.win.setTitle(tool === 'plugins' ? 'PyMagic - Plugins' : 'PyMagic - New project');
   await startHost(w, hostDll, room);
-  await w.win.loadURL(`http://127.0.0.1:${w.port}/newproject.html?near=${encodeURIComponent(near)}`);
+  await w.win.loadURL(`http://127.0.0.1:${w.port}/welcome-tool.html?tool=${tool}&near=${encodeURIComponent(nearFolder())}`);
+}
+
+/**
+ * The welcome screen's Get from VCS: `git clone` of an address into a new folder, its progress told to the page as git writes it; the folder
+ * opens in this window when the clone is done. One clone at a time per window; Cancel stops it and removes what it had written.
+ */
+const clones = new Map();   // window -> { child, folder }
+function cloneRepository(w, sender, url, folder) {
+  return new Promise((resolve) => {
+    if (clones.has(w)) { resolve({ error: 'A clone is already running in this window.' }); return; }
+    if (!cloneAddressOk(url)) {
+      resolve({ error: 'An address of a repository: https://…, ssh://… or git@host:owner/name.git' });
+      return;
+    }
+    if (typeof folder !== 'string' || !path.isAbsolute(folder)) { resolve({ error: 'A full path for the folder it goes in.' }); return; }
+    const target = path.resolve(folder);
+    if (fs.existsSync(target) && fs.readdirSync(target).length > 0) { resolve({ error: `${target} is there already and not empty.` }); return; }
+    // no shell; `--` before the address, so it is never taken for an option of git
+    const child = spawn('git', ['clone', '--progress', '--', url.trim(), target], { windowsHide: true });
+    clones.set(w, { child, folder: target });
+    let tail = '';
+    const tell = (chunk) => {
+      const text = chunk.toString();
+      tail = (tail + text).slice(-2000);
+      for (const line of text.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean))
+        if (!sender.isDestroyed()) sender.send('pymagic:clone-progress', line);
+    };
+    child.stdout.on('data', tell);
+    child.stderr.on('data', tell);
+    child.on('error', (e) => { clones.delete(w); resolve({ error: e.code === 'ENOENT' ? 'Git is not installed (git was not found on the PATH).' : String(e.message) }); });
+    child.on('close', (code, signal) => {
+      clones.delete(w);
+      if (code === 0) { resolve({ folder: target }); return; }
+      if (signal || code === null) {
+        try { fs.rmSync(target, { recursive: true, force: true }); } catch { /* left as it is */ }
+        resolve({ cancelled: true });
+        return;
+      }
+      const last = tail.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean).reverse().find((l) => /fatal|error/i.test(l)) ?? `git clone ended with code ${code}`;
+      resolve({ error: last.replace(/^fatal:\s*/i, '') });
+    });
+  });
+}
+function cancelClone(w) {
+  const c = clones.get(w);
+  if (c) spawnSync('taskkill', ['/PID', String(c.child.pid), '/T', '/F'], { windowsHide: true });
 }
 
 /**
@@ -265,7 +313,18 @@ app.whenReady().then(async () => {
   ipcMain.handle('pymagic:demo-folder', () => demo);
   ipcMain.handle('pymagic:close-project', (e) => closeProject(windowOf(e.sender)));
   // the welcome screen: its New project, and the way back from that dialog when it is cancelled (a window without a project only)
-  ipcMain.handle('pymagic:new-project', (e) => { const w = windowOf(e.sender); if (!w.project) return newProjectFromWelcome(w); });
+  ipcMain.handle('pymagic:new-project', (e) => { const w = windowOf(e.sender); if (!w.project) return welcomeTool(w, 'newproject'); });
+  ipcMain.handle('pymagic:plugins', (e) => { const w = windowOf(e.sender); if (!w.project) return welcomeTool(w, 'plugins'); });
+  // Get from VCS: where the clone is suggested, the clone itself (its progress as pymagic:clone-progress), and Cancel
+  ipcMain.handle('pymagic:clone-near', (_e, url) => path.join(path.dirname(nearFolder()), repositoryName(url) || 'repository'));
+  ipcMain.handle('pymagic:clone', async (e, url, folder) => {
+    const w = windowOf(e.sender);
+    if (w.project) return { error: 'Get from VCS is on the welcome screen.' };
+    const r = await cloneRepository(w, e.sender, url, folder);
+    if (r.folder) await openProjectIn(w, r.folder, 'this');
+    return r;
+  });
+  ipcMain.handle('pymagic:clone-cancel', (e) => cancelClone(windowOf(e.sender)));
   ipcMain.handle('pymagic:show-welcome', (e) => { const w = windowOf(e.sender); if (!w.project) return showWelcome(w); });
   // the New Project dialog's Browse: a folder's path, which the page sends back to the engine to make the project in
   ipcMain.handle('pymagic:pick-folder', async (e, start) => {

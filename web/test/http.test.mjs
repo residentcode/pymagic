@@ -6,7 +6,7 @@ const FAKE_TOKEN = ['fake', 'token'].join('-');
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/http-model.js', import.meta.url), 'utf8');
-const { parseRequests, requestAt, fileVariables, environment, substitute, resolve, parseCurl, formatRequest, toCurl, prettyBody, environmentRows, environmentFiles, bodyParts, runScript } =
+const { parseRequests, requestAt, fileVariables, environment, substitute, resolve, parseCurl, formatRequest, toCurl, prettyBody, environmentRows, environmentFiles, bodyParts, runScript, graphqlPayload, websocketMessages, websocketTranscript, grpcTarget } =
     await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const FILE = [
@@ -232,4 +232,35 @@ test('runScript: client, response and request as PyCharm gives them to a handler
     assert.deepEqual(runScript({ script: 'request.variables.set("n", 5)' }).variables, { n: '5' });
     // a body that is not JSON stays text
     assert.equal(runScript({ script: 'client.log(typeof response.body)', response: { status: 200, headers: {}, body: 'plain' } }).log[0], 'string');
+});
+
+test('GRAPHQL, WEBSOCKET and GRPC requests are read as PyCharm writes them', () => {
+    const [g, w, r] = parseRequests([
+        '### a query', 'GRAPHQL http://localhost:8000/graphql', 'Authorization: Bearer x', '', 'query ($id: ID!) {', '  item(id: $id) { name }', '}', '', '{', '  "id": "7"', '}',
+        '### a socket', 'WEBSOCKET ws://localhost:8000/ws', '', '{"hello": 1}', '=== wait-for-server', 'two', '===', 'three',
+        '### a call', 'GRPC localhost:50051/demo.Greeter/SayHello', '', '{"name": "Ada"}',
+    ].join('\n'));
+    assert.deepEqual([g.method, g.url, g.headers], ['GRAPHQL', 'http://localhost:8000/graphql', [['Authorization', 'Bearer x']]]);
+    assert.deepEqual(graphqlPayload(g.body), { query: 'query ($id: ID!) {\n  item(id: $id) { name }\n}', variables: { id: '7' } });
+    assert.deepEqual([w.method, w.url], ['WEBSOCKET', 'ws://localhost:8000/ws']);
+    assert.deepEqual(websocketMessages(w.body), [{ text: '{"hello": 1}', wait: false }, { text: 'two', wait: true }, { text: 'three', wait: false }]);
+    assert.deepEqual([r.method, r.url, r.body], ['GRPC', 'localhost:50051/demo.Greeter/SayHello', '{"name": "Ada"}']);
+});
+
+test('a GraphQL query without variables, and one that is only braces', () => {
+    assert.deepEqual(graphqlPayload('{ items { id } }'), { query: '{ items { id } }', variables: null });
+    // the query's own lines that start with { are not taken for the variables
+    assert.deepEqual(graphqlPayload('{\n  items { id }\n}'), { query: '{\n  items { id }\n}', variables: null });
+    assert.deepEqual(graphqlPayload(null), { query: '', variables: null });
+});
+
+test('a gRPC address: plain text by default, TLS with grpcs:// or https://', () => {
+    assert.deepEqual(grpcTarget('localhost:50051/demo.Greeter/SayHello'), { address: 'http://localhost:50051', service: 'demo.Greeter', method: 'SayHello' });
+    assert.deepEqual(grpcTarget('grpcs://api.example.com:443/pkg.v1.Store/Put'), { address: 'https://api.example.com:443', service: 'pkg.v1.Store', method: 'Put' });
+    assert.equal(grpcTarget('localhost:50051/SayHello'), null);
+});
+
+test('the talk of a WebSocket request as text', () => {
+    assert.equal(websocketTranscript([{ dir: 'sent', text: 'hi', ms: 3 }, { dir: 'received', text: 'a\nb', ms: 12 }], { status: 1000, description: 'bye' }),
+        '→     3 ms  hi\n←    12 ms  a\n            b\n× closed (1000 bye)');
 });
