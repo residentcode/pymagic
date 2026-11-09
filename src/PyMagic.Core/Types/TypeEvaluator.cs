@@ -166,6 +166,7 @@ public sealed partial class TypeEvaluator
             var dec = def.Decorators[i];
             string? name = dec switch { CallExpr { Func: NameExpr cn } => cn.Name, CallExpr { Func: AttributeExpr ca } => ca.Attr, _ => DecoratorBaseName(m, dec) };
             if (name != null && FlagDecorators.Contains(name)) continue;
+            if (name is "shared_task" or "task" && CeleryTask(m, dec) is { } task) { current = task; continue; }
             var decType = TypeOf(m, dec);
             if (decType.IsDynamic || !(decType.Members.All(x => x is FunctionType { Info: var fi } && DeclaredReturn(fi) != null
                                                               || x is OverloadedType || x is ClassType { IsInstance: false } || x is SignatureType
@@ -183,6 +184,20 @@ public sealed partial class TypeEvaluator
         }
         return current;
     }
+
+    /// <summary>
+    /// `@shared_task`, `@shared_task(bind=True)`, `@app.task`: Celery's own source builds the task through a Proxy the engine cannot follow, so
+    /// the function becomes what Celery makes of it, a `celery.app.task.Task` (`.delay`, `.apply_async`). celery-types' stubs say this themselves.
+    /// </summary>
+    PyType? CeleryTask(ModuleInfo m, Expr dec)
+    {
+        var target = dec is CallExpr c ? c.Func : dec;
+        bool celery = TypeOf(m, target).Members.Any(x => x is FunctionType { Info: var fi } && fi.Name is "shared_task" or "task"
+                                                         && !fi.Module.IsStub && (fi.Module.Name == "celery" || fi.Module.Name.StartsWith("celery.", StringComparison.Ordinal)));
+        if (!celery || _ws.GetModule("celery.app.task") is not { IsStub: false } taskModule) return null;
+        return ModuleClass(_celeryClasses, taskModule, "Task")?.AsInstance();
+    }
+    readonly Dictionary<string, ClassType?> _celeryClasses = new();
 
     /// <summary>
     /// An instance used as a decorator whose `__call__` says what it returns (`@patch("os.getcwd")`, whose `_patch_pass_arg.__call__` gives a

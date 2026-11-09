@@ -26,6 +26,8 @@ test('the list shown has the folders that are still there, without the open one'
   const there = new Set(['C:/a', 'C:/c']);
   assert.deepEqual(existing(['C:/a', 'C:/b', 'C:/c'], (p) => there.has(p), 'c:/C'), ['C:/a']);
   assert.deepEqual(existing(undefined, () => true), []);
+  // the welcome screen after Close Project: no project open (null), every folder still there is shown
+  assert.deepEqual(existing(['C:/a', 'C:/b', 'C:/c'], (p) => there.has(p), null), ['C:/a', 'C:/c']);
 });
 
 test('a project removed from the list, and the list cleared but for the projects open in a window', () => {

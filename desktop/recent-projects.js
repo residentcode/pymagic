@@ -12,10 +12,11 @@ function remember(list, folder, max = MAX) {
   return [folder, ...rest].slice(0, max);
 }
 
-/** The folders of the list that are still there, the one that is open left out. */
+/** The folders of the list that are still there, the one that is open left out (none on the welcome screen: `open` null). */
 function existing(list, exists, open = '') {
   const key = (p) => p.replace(/[\\/]+$/, '').toLowerCase();
-  return (Array.isArray(list) ? list : []).filter((p) => typeof p === 'string' && key(p) !== key(open) && exists(p));
+  const shown = typeof open === 'string' ? key(open) : null;
+  return (Array.isArray(list) ? list : []).filter((p) => typeof p === 'string' && key(p) !== shown && exists(p));
 }
 
 /** The list without this folder, or, for none given (Clear recent projects), without all but the folders open in a window (`open`). */

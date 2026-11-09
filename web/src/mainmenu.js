@@ -63,7 +63,7 @@ export function refactorMenu(editor, refactor) {
     ];
 }
 
-export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, split, currentFile, search, refactor, breakpoints, debug, nav, recent, chrome, bookmarks, runConfigs }) {
+export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, split, currentFile, search, refactor, breakpoints, debug, nav, recent, chrome, bookmarks, runConfigs, closeProject }) {
     // the desktop app lets the page open another folder (preload.js); in a browser the engine is started with its folder and these stay dim
     const desktop = projectDesktop();
     let recentProjects = [];
@@ -104,6 +104,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 { label: 'Open folder…', key: 'Ctrl+Shift+O', run: () => void desktop.openFolder(), disabled: !desktop },
                 { label: 'Recent projects', disabled: !desktop, submenu: desktop ? recentItems('No recent projects') : [] },
                 { label: 'Open the demo project', run: () => void desktop.openDemo(), disabled: !desktop },
+                { label: 'Close project', run: () => void closeProject?.(), disabled: !desktop?.closeProject },
                 { label: 'Recent files', submenu: files.length ? files.map((rel) => ({ label: rel, run: () => void openFile(rel) })) : [{ label: 'No recent files', disabled: true }] },
                 '-',
                 { label: 'Save', key: 'Ctrl+S', run: () => void save() },
@@ -322,6 +323,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
             ...recentItems('No other recent projects'),
             '-',
             { label: 'Open the demo project', run: () => void desktop.openDemo() },
+            ...(desktop.closeProject ? ['-', { label: 'Close project', run: () => void closeProject?.() }] : []),
         ]); };
     }
     // the branch next to the project: the branches to switch to, and the Git commands people reach for first

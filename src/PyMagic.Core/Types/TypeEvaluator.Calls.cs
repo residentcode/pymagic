@@ -266,7 +266,9 @@ public sealed partial class TypeEvaluator
                 return Single(new CallTarget(callee, target, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
         }
 
-        if (callee is ClassType { IsInstance: false } tvc && tvc.Info.QualifiedName is "typing.TypeVar" or "typing_extensions.TypeVar"
+        // the real typing_extensions.py binds TypeVar in both arms of a version check (typing's, or its own backport): a union of the two
+        static bool IsTypeVarClass(PyType t) => t is ClassType { IsInstance: false } c && c.Info.QualifiedName is "typing.TypeVar" or "typing_extensions.TypeVar";
+        if ((IsTypeVarClass(callee) || callee is UnionType tvu && tvu.MemberList.All(IsTypeVarClass))
             && call.Args.FirstOrDefault() is { Name: null, Stars: 0, Value: ConstExpr tvName })
             return Single(new CallTarget(callee, TypeVarFromCall(m, call, tvName), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 
@@ -348,7 +350,9 @@ public sealed partial class TypeEvaluator
         var variance = flags.Count == 0 ? Variance.Invariant
             : flags is [{ Name: not "infer_variance", Value: ConstExpr { Kind: ConstKind.True } } f] ? (f.Name == "covariant" ? Variance.Covariant : Variance.Contravariant)
             : Variance.Unknown;
-        return new TypeVarType(name.Text.Trim('"', '\''), bound, constraints.Count > 0 ? constraints : null, variance);
+        var dflt = call.Args.FirstOrDefault(a => a.Name == "default") is { } d ? Annotation(m, d.Value, null) : null;
+        if (dflt is UnknownType) dflt = null;
+        return new TypeVarType(name.Text.Trim('"', '\''), bound, constraints.Count > 0 ? constraints : null, variance, dflt);
     }
 
     static CallResolution Single(CallTarget t) => new(t.Returns, new[] { t });

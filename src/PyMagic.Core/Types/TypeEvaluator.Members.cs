@@ -33,6 +33,7 @@ public sealed partial class TypeEvaluator
                         foreach (var name in ac.Info.Scope.Symbols.Keys) Add(name, ac.Info.Name, false);
                     }
                     if (IsDjangoModel(c.Info)) foreach (var name in DjangoImplicitNames(c)) Add(name, c.Info.Name, c.IsInstance);
+                    else if (!c.IsInstance && IsDjangoStubModel(c.Info)) Add("objects", c.Info.Name, false);
                     else if (c.IsInstance && IsDjangoSettingsObject(c.Info)) foreach (var name in DjangoSettingNames()) Add(name, "settings", false);
                     if (c.Info.Name != "type" || c.Info.Module.Name != "builtins")
                     {

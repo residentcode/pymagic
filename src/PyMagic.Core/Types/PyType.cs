@@ -144,7 +144,8 @@ public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool 
 /// <param name="Bound">The bound= of TypeVar(...): an argument for the variable must be assignable to it.</param>
 /// <param name="Constraints">The constraints of TypeVar('T', str, bytes): the variable is solved to the one an argument matches.</param>
 /// <param name="Variance">covariant= / contravariant= of TypeVar(...); Unknown for a PEP 695 parameter or infer_variance=True.</param>
-public sealed record TypeVarType(string Name, PyType? Bound = null, IReadOnlyList<PyType>? Constraints = null, Variance Variance = Variance.Unknown) : PyType
+/// <param name="Default">What the variable stands for when a subscript leaves it out (PEP 696: `TypeVar("_Row", default=_Model)`).</param>
+public sealed record TypeVarType(string Name, PyType? Bound = null, IReadOnlyList<PyType>? Constraints = null, Variance Variance = Variance.Unknown, PyType? Default = null) : PyType
 {
     // a variable is its name: the T a TypeVar call made and the T written elsewhere are one variable
     public bool Equals(TypeVarType? o) => o != null && Name == o.Name;

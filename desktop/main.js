@@ -131,6 +131,7 @@ async function openProject(w, folder) {
   w.project = folder;
   const s = readSettings();
   s.last = folder;
+  delete s.closed;
   s.recent = remember(s.recent, folder);
   writeSettings(s);
   w.win.setTitle(`PyMagic - ${folder}`);
@@ -153,6 +154,27 @@ async function openProjectIn(w, folder, where) {
     return;
   }
   await openProject(w, folder);
+}
+
+/** The welcome screen of a window without a project: the recent projects, Open folder and the demo (welcome.html). */
+async function showWelcome(w) {
+  stopHost(w);
+  w.project = null;
+  w.port = 0;
+  w.win.setTitle('PyMagic');
+  await w.win.loadFile(path.join(__dirname, 'welcome.html'));
+}
+
+/**
+ * Close Project, as PyCharm's: with another project window open, this one closes; the last one shows the welcome screen, and so does the
+ * next start (until a project is opened).
+ */
+async function closeProject(w) {
+  if (windows.size > 1) { w.win.close(); return; }
+  const s = readSettings();
+  s.closed = true;
+  writeSettings(s);
+  await showWelcome(w);
 }
 
 async function chooseFolder(w) {
@@ -199,6 +221,7 @@ function menu() {
     { label: 'File', submenu: [
       { label: 'Open Folder...', accelerator: 'CmdOrCtrl+Shift+O', click: () => inPage('window.pymagic?.projectDesktop()?.openFolder()') },
       { label: 'Open the demo project', click: () => inPage('window.pymagic?.projectDesktop()?.openDemo()') },
+      { label: 'Close Project', click: () => inPage('window.pymagic?.closeProject?.()') },
       { type: 'separator' },
       { role: 'quit' },
     ] },
@@ -224,6 +247,7 @@ app.whenReady().then(async () => {
       await openProjectIn(windowOf(e.sender), path.resolve(folder), where === 'new' ? 'new' : 'this');
   });
   ipcMain.handle('pymagic:demo-folder', () => demo);
+  ipcMain.handle('pymagic:close-project', (e) => closeProject(windowOf(e.sender)));
   // the New Project dialog's Browse: a folder's path, which the page sends back to the engine to make the project in
   ipcMain.handle('pymagic:pick-folder', async (e, start) => {
     const r = await dialog.showOpenDialog(windowOf(e.sender).win, { title: 'Where the new project goes', properties: ['openDirectory', 'createDirectory', 'promptToCreate'], defaultPath: typeof start === 'string' && start ? start : undefined });
@@ -253,6 +277,8 @@ app.whenReady().then(async () => {
     await splash(first, 'Starting PyMagic...');
     hostDll = await new Promise((resolve, reject) => setImmediate(() => { try { resolve(prepare(report)); } catch (e) { reject(e); } }));
     let folder = process.argv.slice(packaged ? 1 : 2).find(a => !a.startsWith('--') && fs.existsSync(a));
+    // the project was closed last time: the welcome screen, as PyCharm starts
+    if (!folder && readSettings().closed) { await showWelcome(first); return; }
     if (!folder) {
       const last = readSettings().last;
       folder = last && fs.existsSync(last) ? last : demo;

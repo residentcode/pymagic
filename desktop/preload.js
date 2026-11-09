@@ -1,7 +1,7 @@
 'use strict';
 
 // What the page may ask of the desktop app: choose a project folder, open a project (in this window or a new one), the demo's folder, the recent
-// projects (and remove one from them, or clear them), choose a folder for a new project, show a project file in Explorer. Nothing else of Electron or of the computer reaches the page.
+// projects (and remove one from them, or clear them), choose a folder for a new project, show a project file in Explorer, close the project. Nothing else of Electron or of the computer reaches the page.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('pymagicDesktop', {
@@ -12,4 +12,6 @@ contextBridge.exposeInMainWorld('pymagicDesktop', {
   recentProjects: () => ipcRenderer.invoke('pymagic:recent'),
   forgetRecentProject: (folder) => ipcRenderer.invoke('pymagic:recent-forget', folder == null ? null : String(folder)),
   reveal: (rel) => ipcRenderer.invoke('pymagic:reveal', String(rel)),
+  // Close Project: the window closes when another one is open, else it shows the welcome screen
+  closeProject: () => ipcRenderer.invoke('pymagic:close-project'),
 });

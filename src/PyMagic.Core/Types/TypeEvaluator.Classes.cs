@@ -222,7 +222,10 @@ public sealed partial class TypeEvaluator
         int v = ps.FindIndex(p => p is TypeVarTupleType);
         if (v < 0 || args.Count == 0)
         {
-            for (int i = 0; i < ps.Count; i++) map[TypeParamName(ps[i])] = i < args.Count ? args[i] : PyType.Unknown;
+            // a parameter a subscript leaves out takes its default, which may name the ones before it: `QuerySet[Book]` is `QuerySet[Book, Book]`
+            for (int i = 0; i < ps.Count; i++)
+                map[TypeParamName(ps[i])] = i < args.Count ? args[i]
+                    : args.Count > 0 && ps[i] is TypeVarType { Default: { } dflt } ? Substitute(dflt, map) : PyType.Unknown;
             return map;
         }
         // Array[int, str, bytes] for (T, *Ts, U): T and U take the ends, Ts the arguments between them
@@ -717,6 +720,7 @@ public sealed partial class TypeEvaluator
         }
         // what Django's metaclass adds to a model (objects, DoesNotExist, id, reverse relations), and the project's settings
         if (IsDjangoModel(c.Info) && DjangoImplicitMember(c, name, instance) is { } djangoMember) { types.Add(djangoMember); return; }
+        if (name == "objects" && !instance && DjangoStubManager(c) is { } stubManager) { types.Add(stubManager); return; }
         if (instance && IsDjangoSettingsObject(c.Info) && DjangoSettingSymbol(name) is { } setting)
         {
             types.Add(TypeOfSymbol(setting));
@@ -764,8 +768,45 @@ public sealed partial class TypeEvaluator
                 var th = FindMember(typeClass.AsInstance(), name, true, null, out _);
                 if (th != null) { types.Add(BoundMember(th, typeClass.AsInstance(), true)); return; }
             }
+            // the metaclass's own __getattr__ answers what nothing else has: django-stubs' ModelBase gives
+            // `def __getattr__(cls: type[_Self], name: Literal["objects"]) -> Manager[_Self]`, so `Address.objects` is a Manager[Address]
+            if (meta != null && FindMember(meta.AsInstance(), "__getattr__", true, null, out _) is { } mga
+                && !(mga.Owner.Info.Name == "type" && mga.Owner.Info.Module.Name == "builtins") && GetattrTakes(mga, name))
+            {
+                // called as Python calls it, `type(C).__getattr__(C, name)`, so `cls: type[_Self]` is solved to the class itself
+                PyType result = PyType.Unknown;
+                if (mga.ClassSymbol != null && TypeOfSymbol(mga.ClassSymbol) is var getattr && !getattr.IsDynamic)
+                {
+                    var classObject = c.AsClassObject();
+                    var targets = CallValue(getattr, new[] { new ArgInfo(null, null, 0, () => classObject), new ArgInfo(null, null, 0, () => Inst("str")) }, null);
+                    if (targets.Count > 0) result = PyType.Union(targets.Select(t => t.Returns));
+                }
+                types.Add(result.IsDynamic ? CallResultNoArgs(BoundMember(mga, c, true)) : result);
+                return;
+            }
         }
         missing.Add(c);
+    }
+
+    /// <summary>
+    /// A `__getattr__` whose name parameter is typed `Literal["objects", ...]` answers only those names; any other annotation, or none, answers every name.
+    /// </summary>
+    static bool GetattrTakes(MemberHit hit, string name)
+    {
+        if (hit.ClassSymbol == null) return true;
+        foreach (var d in hit.ClassSymbol.Declarations)
+        {
+            if (d.Node is not FunctionDef fd || fd.Params.Count < 2) continue;
+            var ann = fd.Params[1].Annotation;
+            if (ann is SubscriptExpr { Value: NameExpr { Name: "Literal" } or AttributeExpr { Attr: "Literal" } } lit)
+            {
+                var items = lit.Index is TupleExpr t ? t.Items : new List<Expr> { lit.Index };
+                if (items.Any(i => StringValue(i) == name)) return true;
+                continue;
+            }
+            return true;
+        }
+        return false;
     }
 
     void ModuleMember(ModuleType mt, string name, List<PyType> types, List<PyType> missing, List<Declaration> decls)

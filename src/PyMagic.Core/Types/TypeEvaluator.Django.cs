@@ -246,13 +246,22 @@ public sealed partial class TypeEvaluator
         AddSyntheticMember(target, "__bool__", Method(Inst("bool")));
         AddSyntheticMember(target, "model", new ClassType(model, false));
         AddSyntheticMember(target, "iterator", Method(TypingInst("Iterator", element)));
+        // the async forms give the same, awaited: `await Book.objects.afirst()` is a Book | None
+        SignatureType Async(PyType returns) => Method(TypingInst("Coroutine", PyType.Unknown, PyType.Unknown, returns));
+        foreach (var name in new[] { "aget", "aearliest", "alatest" }) AddSyntheticMember(target, name, Async(element));
+        AddSyntheticMember(target, "acreate", Async(modelInstance));
+        foreach (var name in new[] { "afirst", "alast" }) AddSyntheticMember(target, name, Async(optionalModel));
+        foreach (var name in new[] { "aget_or_create", "aupdate_or_create" })
+            AddSyntheticMember(target, name, Async(TupleOf(new PyType[] { modelInstance, Inst("bool") })));
+        foreach (var name in new[] { "acount", "aupdate" }) AddSyntheticMember(target, name, Async(Inst("int")));
+        foreach (var name in new[] { "aexists", "acontains" }) AddSyntheticMember(target, name, Async(Inst("bool")));
+        AddSyntheticMember(target, "abulk_create", Async(Inst("list", modelInstance)));
         // the rest of what a QuerySet offers; what they give is not a model (dicts, tuples, counts), so it is left unknown rather than guessed wrong
         foreach (var name in new[]
         {
             "aggregate", "in_bulk", "bulk_update", "delete", "dates", "datetimes", "explain", "raw", "complex_filter", "contains",
             "resolve_expression", "db_manager", "check",
-            "aget", "acreate", "aget_or_create", "aupdate_or_create", "afirst", "alast", "acount", "aexists", "aaggregate", "aupdate", "adelete", "aiterator",
-            "abulk_create", "abulk_update", "aearliest", "alatest", "ain_bulk", "acontains", "aexplain",
+            "aaggregate", "adelete", "aiterator", "abulk_update", "ain_bulk", "aexplain",
         }) AddSyntheticMember(target, name, Method(PyType.Unknown));
         // what values() and values_list() give depends on the call (DjangoSpecialCall); where it cannot be told it stays unknown
         foreach (var name in new[] { "values", "values_list" }) AddSyntheticMember(target, name, Method(PyType.Unknown));
@@ -375,6 +384,26 @@ public sealed partial class TypeEvaluator
             if (reverse == name)
                 return source.Kind == "one-to-one" ? InstanceOfClass(source.Owner) : InstanceOfClass(DjangoManagerOf(source.Owner, null, related: true));
         return null;
+    }
+
+    /// <summary>A model of the user's code built on django-stubs' Model: stubs leave `objects` to their mypy plugin.</summary>
+    bool IsDjangoStubModel(ClassInfo c)
+    {
+        if (c.Module.IsStub) return false;
+        foreach (var entry in Mro(c))
+            if (entry is ClassType e && e.Info.Name == "Model" && e.Info.Module.IsStub && e.Info.Module.Name.StartsWith("django.db.models", StringComparison.Ordinal)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// `Address.objects` on a model built on django-stubs: the stubs declare no `objects` (their mypy plugin adds it), only
+    /// `_default_manager: ClassVar[Manager[Self]]`, which is what the default `objects` is.
+    /// </summary>
+    PyType? DjangoStubManager(ClassType model)
+    {
+        if (!IsDjangoStubModel(model.Info)) return null;
+        var hit = FindMember(model, "_default_manager", false, null, out _);
+        return hit == null ? null : BoundMember(hit, model, false);
     }
 
     /// <summary>Names offered after the dot on a model that the class body does not declare.</summary>

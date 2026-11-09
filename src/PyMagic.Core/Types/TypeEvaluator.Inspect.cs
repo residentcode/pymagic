@@ -103,6 +103,10 @@ public sealed partial class TypeEvaluator
         // a receiver that may be something unknown (`1 if c else x`, an unannotated parameter narrowed by isinstance)
         // may have any attribute: as PyCharm, nothing is reported on it, not even for its known members
         if (recv.Members.Any(x => x is UnknownType)) return;
+        // `@some_decorator def f`, the decorator not understood (not installed, or untyped): it may have made f anything, as Celery's
+        // `@shared_task` gives a task with `.delay`; as PyCharm, nothing is reported on it
+        if (recv.Members.Any(x => x is FunctionType { Info: { Node: FunctionDef fd } fi } && fd.Decorators.Any(d => DecoratorBaseName(fi.Module, d) is not { } n || !FlagDecorators.Contains(n))))
+            return;
         var res = AttributeType(recv, attr.Attr);
         var missing = res.Missing.Where(x => IsReportableMiss(x, attr.Attr, includeNone)).ToList();
         // one class defined two ways under a condition (`if os.name == "nt": class P: ... else: class P: ...`): as PyCharm, only what

@@ -1042,6 +1042,15 @@ async function main() {
             window.dispatchEvent(new Event('pymagic:saved'));
         },
     };
+    // Close Project (the project folder's menu in the tree, File, the app's menu): the files are saved first, as PyCharm does; the window then
+    // closes, or shows the welcome screen when it is the last one
+    const closeProject = async () => {
+        const desktop = window.pymagicDesktop;
+        if (!desktop?.closeProject) { toast('Close Project works in the PyMagic window; in a browser, close the tab.', true); return; }
+        await common.saveAll();
+        await desktop.closeProject();
+    };
+    window.pymagic.closeProject = closeProject;
     runConfigs = setupRunConfigurations({ currentFile: () => currentRel });
     runHooks = setupRun({ ...common, root: info.root, scratches: info.scratches, runConfig: () => runConfigs.current(), runConfigByName: (name) => runConfigs.byName(name), showDiff: (...a) => git.showDiff(...a), askText: (...a) => explorer.askText(...a),
         // a notebook's cells are debugged as files of their own: their breakpoints and the stops in them
@@ -1104,7 +1113,7 @@ async function main() {
     });
     setupMainMenu({
         editor, save, saveAll: common.saveAll, reload: reloadFromDisk, openFile, tabs: () => tabs, split: () => split, currentFile: () => currentRel, search, refactor,
-        breakpoints: runHooks.breakpoints, debug: runHooks.debug, nav: editorNav.commands, recent: (current) => recents.list(current), chrome, bookmarks, runConfigs,
+        breakpoints: runHooks.breakpoints, debug: runHooks.debug, nav: editorNav.commands, recent: (current) => recents.list(current), chrome, bookmarks, runConfigs, closeProject,
     });
     const git = setupGit({
         editor,
@@ -1333,6 +1342,7 @@ async function main() {
     knownFiles = new Set(files);
     explorer = setupExplorer({
         items: (path, isDir) => fileActions.treeItems(path, isDir),
+        closeProject: window.pymagicDesktop?.closeProject ? closeProject : null,
         // the project folder as the tree's first row; New's entries that are other windows' (a scratch file, a data source)
         root: info.root, plugin: (name) => plugin(name),
         newScratch: () => runById('pymagic.scratch.new'),

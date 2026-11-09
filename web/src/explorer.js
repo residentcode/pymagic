@@ -584,6 +584,8 @@ export function setupExplorer(deps) {
         // find, inspect, format, tests, history, Open In, .gitignore: the same as the tabs' (fileactions.js)
         if (deps.items) items.push('-', ...deps.items(path, isDir));
         items.push('-', { label: 'Refresh', icon: 'refresh', run: () => refresh() });
+        // the project folder's menu ends with Close project (the desktop app only)
+        if (isDir && path === '' && deps.closeProject) items.push('-', { label: 'Close project', run: () => void deps.closeProject() });
         openMenu({ x, y }, items);
     }
     $('sidebar').oncontextmenu = (e) => { e.preventDefault(); menu(e.clientX, e.clientY, '', true); };
