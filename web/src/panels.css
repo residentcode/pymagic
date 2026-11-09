@@ -498,6 +498,7 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 #pyc-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 #pyc-views { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .pyc-out { flex: 1; margin: 0; padding: 6px 10px; overflow: auto; white-space: pre-wrap; font: 12px Consolas, monospace; }
+.pyc-out:focus { outline: none; }
 .pyc-out[hidden] { display: none; }
 .pyc-out .pyc-echo { color: var(--accent); }
 .pyc-out .err { color: var(--red); }

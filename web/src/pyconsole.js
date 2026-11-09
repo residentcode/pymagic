@@ -6,6 +6,7 @@
 // (a waiting command can be taken out with its x). With IPython ticked, the console is IPython's shell when the project's Python has it.
 // Ctrl+Alt+E (History) lists the commands run so far, newest first, to filter and put one back in the input. Attach Debugger connects the
 // console to the debugger of the Run panel (a debug server, as Debug Cell's): the project's breakpoints stop the code the console runs.
+// The output and the input have a right-click menu of their own: Cut, Copy, Paste (into the input), Select all, Copy the whole output, Clear.
 // The engine runs pm_console.py (RunSession.StartConsole).
 import * as monaco from 'monaco-editor';
 import { RunClient } from './runclient';
@@ -13,6 +14,7 @@ import { showTab } from './panel';
 import { CommandQueue, consoleName, historyMatches, historyKind, keptHistories, queueLabel, withCommand } from './pyconsole-model.js';
 import { defineCommand } from './commands.js';
 import { toast } from './toast';
+import { openMenu } from './menu';
 
 const $ = (id) => document.getElementById(id);
 const STARTUP = '.pymagic/console-startup.py';
@@ -62,11 +64,60 @@ export function setupPythonConsole(deps) {
         c.at = c.history.length;
         c.out.className = 'body pyc-out';
         c.out.hidden = true;
+        // focusable, so a click in the output takes the keys: Ctrl+C copies what is selected there, Ctrl+V pastes into the input
+        c.out.tabIndex = -1;
+        c.out.oncontextmenu = (e) => textMenu(e, c);
+        c.out.onkeydown = (e) => {
+            const ctrl = e.ctrlKey && !e.altKey && !e.shiftKey;
+            if (ctrl && (e.key === 'v' || e.key === 'V')) { e.preventDefault(); void pasteIntoInput(); }
+            else if (ctrl && (e.key === 'a' || e.key === 'A')) { e.preventDefault(); selectOutput(c); }
+        };
         c.queue = new CommandQueue((item) => runOne(c, item), () => { if (c === active) paintQueue(); renderTabs(); });
         views.append(c.out);
         consoles.push(c);
         return c;
     }
+
+    // ---- copy and paste: the right-click menu of the output and of the input, as PyCharm's console has one
+    /** The text selected in a console's output, with Windows line ends made plain. */
+    const outputSelection = (c) => {
+        const s = getSelection();
+        return s && s.rangeCount && c.out.contains(s.anchorNode) ? s.toString().replace(/\r\n/g, '\n') : '';
+    };
+    const inputSelection = () => input.value.slice(input.selectionStart, input.selectionEnd);
+    async function copyText(text) {
+        try { await navigator.clipboard.writeText(text); }
+        catch { toast('The clipboard cannot be written here.', true); }
+    }
+    async function pasteIntoInput() {
+        let text = '';
+        try { text = await navigator.clipboard.readText(); }
+        catch { toast('The clipboard cannot be read here: press Ctrl+V in the input.', true); return; }
+        input.focus();
+        input.setRangeText(text.replace(/\r\n/g, '\n'), input.selectionStart, input.selectionEnd, 'end');
+    }
+    function selectOutput(c) {
+        const range = document.createRange();
+        range.selectNodeContents(c.out);
+        const s = getSelection();
+        s.removeAllRanges();
+        s.addRange(range);
+    }
+    function textMenu(e, c = active) {
+        e.preventDefault();
+        const inInput = e.currentTarget === input;
+        const selected = inInput ? inputSelection() : outputSelection(c);
+        openMenu({ x: e.clientX, y: e.clientY }, [
+            ...(inInput ? [{ label: 'Cut', key: 'Ctrl+X', icon: 'cut', disabled: !selected, run: () => { void copyText(selected); input.setRangeText('', input.selectionStart, input.selectionEnd, 'end'); input.focus(); } }] : []),
+            { label: 'Copy', key: 'Ctrl+C', icon: 'copy', disabled: !selected, run: () => void copyText(selected) },
+            { label: 'Paste', key: 'Ctrl+V', icon: 'paste', run: () => void pasteIntoInput() },
+            { label: 'Select all', key: 'Ctrl+A', run: () => { if (inInput) { input.focus(); input.select(); } else selectOutput(c); } },
+            '-',
+            { label: 'Copy the whole output', disabled: !c.out.textContent, run: () => void copyText(c.out.textContent.replace(/\r\n/g, '\n')) },
+            { label: 'Clear', disabled: !c.out.textContent, run: () => { c.out.textContent = ''; } },
+        ]);
+    }
+    input.oncontextmenu = (e) => textMenu(e);
 
     function append(c, text, cls = '') {
         const span = document.createElement('span');

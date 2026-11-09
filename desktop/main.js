@@ -309,6 +309,19 @@ app.whenReady().then(async () => {
   }
 });
 
+// Electron shows no menu of its own on a right-click: a text box or selected text that the page gives no menu of its own (the dialogs'
+// fields, the search boxes, the welcome screen) gets Cut, Copy, Paste and Select all, as everywhere else in Windows
+app.on('web-contents-created', (_e, contents) => {
+  contents.on('context-menu', (_ev, p) => {
+    if (!p.isEditable && !p.selectionText) return;
+    const f = p.editFlags;
+    const items = p.isEditable
+      ? [{ role: 'cut', enabled: f.canCut }, { role: 'copy', enabled: f.canCopy }, { role: 'paste', enabled: f.canPaste }, { type: 'separator' }, { role: 'selectAll', enabled: f.canSelectAll }]
+      : [{ role: 'copy', enabled: f.canCopy }, { role: 'selectAll' }];
+    Menu.buildFromTemplate(items).popup({ window: BrowserWindow.fromWebContents(contents) ?? undefined });
+  });
+});
+
 app.on('window-all-closed', () => app.quit());
 const stopAll = () => { for (const w of windows) stopHost(w); };
 app.on('before-quit', stopAll);

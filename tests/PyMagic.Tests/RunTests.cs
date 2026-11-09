@@ -299,14 +299,59 @@ public class RunTests
         string? V(string name) => Environment.GetEnvironmentVariable(name) is { Length: > 0 } v ? v : null;
         if (V("PYMAGIC_CT_HOST") is not { } host || V("PYMAGIC_CT_KEY") is not { } key || V("PYMAGIC_CT_KNOWN_HOSTS") is not { } known) return;
         using var h = new Harness();
-        h.Script("lib.py", "import sys\ndef double(n):\n    m = n * 2\n    return m\n");
         var target = new SshTarget(host, "root", 22, key, known) { Project = h.Root };
+        ConsoleAttachesOver(h, target, "/usr/local/bin/python3.14", () => "(3, 14) " + target.ProjectDir);
+    }
+
+    /// <summary>
+    /// The same in a distribution of WSL (the project read through /mnt/c): runs only when PYMAGIC_TEST_WSL_DISTRO names one with python3
+    /// (Ubuntu-24.04, say); WSL is not started otherwise.
+    /// </summary>
+    [Fact]
+    public void TheConsoleOfAnInterpreterInWslAttachesToTheDebugger()
+    {
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_WSL_DISTRO") is not { Length: > 0 } distro) return;
+        using var h = new Harness();
+        var target = new WslTarget(distro);
+        ConsoleAttachesOver(h, target, "python3", () => target.ToTarget(h.Root));
+    }
+
+    /// <summary>
+    /// The same in a Docker container (`docker run` of an image, the project shared as /workspace): runs only when PYMAGIC_TEST_DOCKER_IMAGE
+    /// names an image with python (python:3.13-slim, say) and docker answers; Docker is not used otherwise.
+    /// </summary>
+    [Fact]
+    public void TheConsoleOfAnInterpreterInAContainerAttachesToTheDebugger()
+    {
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_DOCKER_IMAGE") is not { Length: > 0 } image) return;
+        using var h = new Harness();
+        var target = new DockerTarget(image) { Project = h.Root };
+        ConsoleAttachesOver(h, target, "python", () => DockerTarget.Workspace);
+    }
+
+    /// <summary>
+    /// A console started in <paramref name="target"/> attaches to the debug server of this computer over its own connection: a breakpoint of a
+    /// project file stops a function the console calls, the stop named as this computer has the file, values evaluated in the Python there,
+    /// a step, the end, and Detach. <paramref name="where"/> is what the console prints as its working folder (after the Python's version, for SSH).
+    /// </summary>
+    static void ConsoleAttachesOver(Harness h, ExecutionTarget target, string python, Func<string> where)
+    {
+        h.Script("lib.py", "import sys\ndef double(n):\n    m = n * 2\n    return m\n");
         h.Session.Target = target;
-        h.Session.Python = "/usr/local/bin/python3.14";
+        h.Session.Python = python;
         h.Session.StartConsole(h.Root, null);
-        h.Next(e => e["type"]?.GetValue<string>() == "consoleReady", 90000);
+        h.Next(e => e["type"]?.GetValue<string>() == "consoleReady", 180000);
+        // what a command prints comes on the process's output, its end on the console's connection: through wsl.exe or docker the text can come
+        // after the end, so the text itself is waited for
+        void Printed(string text)
+        {
+            if (h.AllOutput().Contains(text)) return;
+            try { h.Next(_ => h.AllOutput().Contains(text), 30000); }
+            catch (AssertionException) { throw new AssertionException($"'{text}' was not printed; the console said: {h.AllOutput()}"); }
+        }
         h.Request("consoleExec", new JsonObject { ["code"] = "import sys, os; print('console on', sys.platform, sys.version_info[:2], os.getcwd())" });
-        Assert.Contains("console on linux (3, 14) " + target.ProjectDir, h.AllOutput());
+        Printed("console on linux");
+        Printed(where());
 
         var events = new BlockingCollection<JsonNode>();
         using var server = new RunSession(events.Add);
@@ -340,11 +385,11 @@ public class RunTests
         Assert.Equal(4, Next("stopped")["frames"]![0]!["line"]!.GetValue<int>());
         server.Handle(new JsonObject { ["type"] = "continue" });
         h.Next(e => e["type"]?.GetValue<string>() == "consoleDone" && e["id"]?.GetValue<int>() == 900, 60000);
-        Assert.Contains("got 42", h.AllOutput());
+        Printed("got 42");
         h.Request("consoleDetach", new JsonObject());
         Next("disconnected");
         h.Request("consoleExec", new JsonObject { ["code"] = "print('again', double(5))" });   // no stop now
-        Assert.Contains("again 10", h.AllOutput());
+        Printed("again 10");
     }
 
     [Fact]
