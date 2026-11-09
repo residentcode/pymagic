@@ -14,4 +14,7 @@ contextBridge.exposeInMainWorld('pymagicDesktop', {
   reveal: (rel) => ipcRenderer.invoke('pymagic:reveal', String(rel)),
   // Close Project: the window closes when another one is open, else it shows the welcome screen
   closeProject: () => ipcRenderer.invoke('pymagic:close-project'),
+  // the welcome screen's New project, and back to the welcome screen from it
+  newProject: () => ipcRenderer.invoke('pymagic:new-project'),
+  showWelcome: () => ipcRenderer.invoke('pymagic:show-welcome'),
 });

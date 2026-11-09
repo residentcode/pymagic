@@ -166,6 +166,22 @@ async function showWelcome(w) {
 }
 
 /**
+ * The welcome screen's New project: the New project dialog alone (the page's newproject.html), on an engine started for it in a folder of
+ * PyMagic's own that is never a recent project. The location is suggested beside the last project (or in PyMagicProjects in the home folder);
+ * the project made opens in this window, and Cancel goes back to the welcome screen.
+ */
+async function newProjectFromWelcome(w) {
+  const room = path.join(app.getPath('userData'), 'new-project');
+  fs.mkdirSync(room, { recursive: true });
+  const last = existing(readSettings().recent, fs.existsSync, null)[0];
+  const near = last ?? path.join(os.homedir(), 'PyMagicProjects', 'project');
+  w.project = null;
+  w.win.setTitle('PyMagic - New project');
+  await startHost(w, hostDll, room);
+  await w.win.loadURL(`http://127.0.0.1:${w.port}/newproject.html?near=${encodeURIComponent(near)}`);
+}
+
+/**
  * Close Project, as PyCharm's: with another project window open, this one closes; the last one shows the welcome screen, and so does the
  * next start (until a project is opened).
  */
@@ -248,6 +264,9 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle('pymagic:demo-folder', () => demo);
   ipcMain.handle('pymagic:close-project', (e) => closeProject(windowOf(e.sender)));
+  // the welcome screen: its New project, and the way back from that dialog when it is cancelled (a window without a project only)
+  ipcMain.handle('pymagic:new-project', (e) => { const w = windowOf(e.sender); if (!w.project) return newProjectFromWelcome(w); });
+  ipcMain.handle('pymagic:show-welcome', (e) => { const w = windowOf(e.sender); if (!w.project) return showWelcome(w); });
   // the New Project dialog's Browse: a folder's path, which the page sends back to the engine to make the project in
   ipcMain.handle('pymagic:pick-folder', async (e, start) => {
     const r = await dialog.showOpenDialog(windowOf(e.sender).win, { title: 'Where the new project goes', properties: ['openDirectory', 'createDirectory', 'promptToCreate'], defaultPath: typeof start === 'string' && start ? start : undefined });

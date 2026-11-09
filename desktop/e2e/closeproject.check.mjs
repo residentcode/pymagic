@@ -1,11 +1,13 @@
 // Items 379 and 380 in the built PyMagic.exe: a Django view and a Celery task with Django and Celery installed in the project's .venv (no false
 // "Cannot find reference" on `Address.objects` or `.delay`, and `await ....afirst()` an Address | None), then Close project from the project
-// folder's menu: the last window shows the welcome screen, and the project opens again from its recent projects.
+// folder's menu: the last window shows the welcome screen; its New project (Cancel back, then a project made and opened in this window); and
+// the project opens again from its recent projects.
 // Run: node desktop/e2e/closeproject.check.mjs   (needs uv on the PATH, and the internet the first time for Django and Celery)
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
-import { launch, project, sleep } from './app.mjs';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { launch, project, removeTree, sleep } from './app.mjs';
 
 const root = project({
     'shop/__init__.py': '',
@@ -74,8 +76,68 @@ try {
     for (let i = 0; i < 40 && !rows?.length; i++) { await sleep(250); rows = await ask(`[...document.querySelectorAll('#recent li .path')].map((x) => x.textContent)`); }
     console.log('welcome screen, recent projects:', rows);
     assert.ok(rows.some((p) => p.toLowerCase() === root.toLowerCase()), 'the closed project is in the recent projects');
-    // and it opens again from there, in this window
-    ws.send(JSON.stringify({ id: 9999, method: 'Runtime.evaluate', params: { expression: `[...document.querySelectorAll('#recent li')].find((li) => li.title.toLowerCase() === ${JSON.stringify(root.toLowerCase())}).click()` } }));
+
+    // New project from the welcome screen: the dialog alone, its location beside the last project; Cancel goes back to the welcome screen
+    const target = async (test, what) => {
+        for (let i = 0; i < 120; i++) {
+            const list = await (await fetch(`http://127.0.0.1:${app.port}/json`)).json().catch(() => []);
+            const t = list.find((x) => x.type === 'page' && test(x.url));
+            if (t) {
+                const s = new WebSocket(t.webSocketDebuggerUrl);
+                await new Promise((ok, fail) => { s.addEventListener('open', ok); s.addEventListener('error', fail); });
+                let k = 0;
+                const run = (expression) => new Promise((ok) => {
+                    const id = ++k;
+                    const on = (e) => { const m = JSON.parse(e.data); if (m.id === id) { s.removeEventListener('message', on); ok(m.result?.result?.value); } };
+                    s.addEventListener('message', on);
+                    s.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }));
+                });
+                const fire = (expression) => s.send(JSON.stringify({ id: 9000 + ++k, method: 'Runtime.evaluate', params: { expression } }));
+                const until = async (expression, label) => { for (let j = 0; j < 120; j++) { const v = await run(expression).catch(() => null); if (v) return v; await sleep(250); } throw new Error('timed out: ' + label); };
+                return { run, fire, until, close: () => s.close() };
+            }
+            await sleep(500);
+        }
+        throw new Error('no page: ' + what);
+    };
+    const welcomeAt = (u) => u.startsWith('file:') && u.endsWith('welcome.html');
+    const dialogAt = (u) => /\/newproject\.html\?near=/.test(u);
+    ask(`document.getElementById('new').click()`);
+    let np = await target(dialogAt, 'the New project dialog');
+    const suggested = await np.until(`document.getElementById('np-location')?.value`, 'the location');
+    console.log('New project from the welcome screen, location suggested:', suggested);
+    assert.equal(suggested.toLowerCase(), join(dirname(root), 'untitled').toLowerCase());
+    assert.equal(await np.run(`document.querySelectorAll('#files, #editor').length`), 0, 'the dialog alone, no project behind it');
+    np.fire(`document.getElementById('np-cancel').click()`);
+    np.close();
+    let back = await target(welcomeAt, 'the welcome screen after Cancel');
+    await back.until(`document.querySelectorAll('#recent li .path').length`, 'the recent projects');
+    console.log('Cancel went back to the welcome screen');
+    // and a project made from it opens in this window
+    back.fire(`document.getElementById('new').click()`);
+    back.close();
+    np = await target(dialogAt, 'the New project dialog again');
+    const made = root + '-new';
+    await np.until(`document.getElementById('np-location')?.value`, 'the location');
+    await np.run(`(() => { document.getElementById('np-location').value = ${JSON.stringify(made)}; document.querySelector('input[name="np-env"][value="none"]').checked = true; document.querySelector('input[name="np-env"][value="none"]').dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    np.fire(`document.getElementById('np-create').click()`);
+    np.close();
+    const madeOpen = await target((u) => /^http:\/\/127\.0\.0\.1:\d+\/$/.test(u), 'the new project open');
+    const madeRoot = await madeOpen.until(`window.pymagic?.editor && fetch('/api/info').then((r) => r.json()).then((i) => i.root)`, "the new project's engine");
+    console.log('the project made from the welcome screen is open:', madeRoot);
+    assert.equal(madeRoot.replace(/[\\/]+$/, '').toLowerCase(), made.toLowerCase());
+    assert.ok(existsSync(join(made, 'main.py')), 'its welcome script');
+    // Close project once more: the welcome screen lists both
+    madeOpen.fire(`window.pymagic.closeProject()`);
+    madeOpen.close();
+    back = await target(welcomeAt, 'the welcome screen again');
+    const both = await back.until(`(() => { const r = [...document.querySelectorAll('#recent li .path')].map((x) => x.textContent); return r.length >= 2 ? r : null; })()`, 'both projects listed');
+    console.log('welcome screen, recent projects:', both);
+    back.fire(`[...document.querySelectorAll('#recent li')].find((li) => li.title.toLowerCase() === ${JSON.stringify(root.toLowerCase())}).click()`);
+    back.close();
+    removeTree(made);
+
+    // and the first project opens again from there, in this window
     let again = null;
     for (let i = 0; i < 120 && !again; i++) {
         await sleep(500);

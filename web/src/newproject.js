@@ -38,7 +38,11 @@ export const suggestedLocation = (root, name = 'untitled') => {
     return `${parent}${sep}${name}`;
 };
 
-export async function openNewProject() {
+/**
+ * The New project dialog. From the welcome screen (newproject-page.js) `near` is the folder the location is suggested beside (the last
+ * project), `onCancel` goes back to the welcome screen, and `openHere` opens the project made in this window without asking.
+ */
+export async function openNewProject({ near = null, onCancel = null, openHere = false } = {}) {
     const desktop = projectDesktop();
     const info = await fetch('/api/info').then((r) => r.json()).catch(() => ({}));
     const interpreters = await fetch('/api/interpreters').then((r) => r.json()).catch(() => []);
@@ -99,7 +103,7 @@ export async function openNewProject() {
     document.body.append(shade);
     const $ = (id) => box.querySelector('#' + id);
     const location = $('np-location');
-    location.value = info.root ? suggestedLocation(info.root) : '';
+    location.value = near ? suggestedLocation(near) : info.root ? suggestedLocation(info.root) : '';
     let kind = 'python';
     // Settings > Plugins: the kinds of the plugins that are off (Django, Jupyter) are not offered, nor Git when its plugin is off
     const offKinds = kindsOff(pluginsAtStart());
@@ -213,7 +217,8 @@ export async function openNewProject() {
         if (chosen)
             location.value = chosen;
     };
-    const close = () => shade.remove();
+    let made = false;
+    const close = () => { shade.remove(); if (!made) onCancel?.(); };
     $('np-cancel').onclick = close;
     shade.onmousedown = (e) => { if (e.target === shade) close(); };
     box.onkeydown = (e) => { if (e.key === 'Escape') close(); };
@@ -248,10 +253,13 @@ export async function openNewProject() {
             $('np-create').disabled = false;
             return;
         }
+        made = true;
         close();
         for (const note of answer.notes ?? [])
             toast(note);
-        if (desktop?.openProject)
+        if (openHere && window.pymagicDesktop?.openProject)
+            await window.pymagicDesktop.openProject(answer.folder, 'this');
+        else if (desktop?.openProject)
             await desktop.openProject(answer.folder);
         else
             toast(`The project is in ${answer.folder}; start PyMagic there to open it.`);

@@ -6,6 +6,7 @@ import { execSync } from 'node:child_process';
 const watch = process.argv.includes('--watch');
 mkdirSync('dist', { recursive: true });
 cpSync('src/index.html', 'dist/index.html');
+cpSync('src/newproject.html', 'dist/newproject.html');
 cpSync('src/panels.css', 'dist/panels.css');
 cpSync('src/look.css', 'dist/look.css');
 
@@ -24,6 +25,8 @@ const options = {
   define: { __BUILD__: JSON.stringify(stamp()) },
   entryPoints: {
     main: 'src/main.js',
+    // the welcome screen's New project: the dialog alone (newproject.html)
+    'newproject-page': 'src/newproject-page.js',
     'editor.worker': 'node_modules/monaco-editor/esm/vs/editor/editor.worker.js',
     // the language services of HTML (templates), CSS and JavaScript / TypeScript / JSON
     'html.worker': 'node_modules/monaco-editor/esm/vs/language/html/html.worker.js',

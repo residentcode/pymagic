@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>PyMagic</title>
-<!-- The welcome screen of a window without a project (after Close Project): the recent projects, Open folder and the demo. -->
+<!-- The welcome screen of a window without a project (after Close Project): New project, Open folder, the demo and the recent projects. -->
 <style>
   :root { --bg: #0f111a; --panel: #161925; --line: #262b3d; --text: #bcc1d6; --dim: #7c839c; --accent: #82aaff; --hover: #1f2335; }
   @media (prefers-color-scheme: light) {
@@ -35,7 +35,8 @@
 <aside>
   <h1>PyMagic</h1>
   <div class="version">No project is open in this window.</div>
-  <button class="primary" id="open">Open folder…</button>
+  <button class="primary" id="new">New project…</button>
+  <button id="open">Open folder…</button>
   <button id="demo">Open the demo project</button>
 </aside>
 <main>
@@ -86,6 +87,11 @@
     }
   }
 
+  document.getElementById('new').addEventListener('click', () => {
+    document.getElementById('new').disabled = true;
+    document.querySelector('.version').textContent = 'Starting the New project dialog…';
+    void desktop.newProject();
+  });
   document.getElementById('open').addEventListener('click', async () => open(await desktop.chooseFolder()));
   document.getElementById('demo').addEventListener('click', async () => open(await desktop.demoFolder()));
   document.getElementById('filter').addEventListener('input', show);
