@@ -396,6 +396,15 @@ export function setupRun(deps) {
         if (v.ref > 0)
             attachChildren(head, li, v.ref, false, undefined, { expr, type: v.type });
         const val = head.querySelector('.val');
+        // a value longer than its row shows: View opens the whole of it (as PyCharm's "View")
+        if (!v.lazy && (v.value ?? '').length > 80) {
+            const view = document.createElement('a');
+            view.className = 'view-link';
+            view.textContent = 'View';
+            view.title = 'The whole value';
+            view.onclick = (e) => { e.stopPropagation(); void viewValue(expr, v.value); };
+            head.appendChild(view);
+        }
         if (v.lazy) {
             // loaded on demand: the value is asked for when clicked
             val.textContent = '… show';
@@ -1563,21 +1572,89 @@ export function setupRun(deps) {
             }
             if (!expression)
                 return null;
+            // the same value shown already: the popup stays as it is (opened nodes, the selection)
+            if (valuePopup && valuePopup.expression === expression && valuePopup.model === model && valuePopup.line === position.lineNumber)
+                return null;
             const r = await run.ask({ type: 'evaluate', frameId: selectedFrame, expression, evalOnly: true });
             if (r.error)
                 return sel && !sel.isEmpty() ? { range, contents: [{ value: '`' + r.error + '`' }] } : null;
-            const contents = [{ value: '```python\n' + expression + ' = ' + r.result + '\n```' }];
-            // the members of an object, a list or a dict, one level down (View value shows the whole of it)
-            if (r.ref > 0) {
-                const items = (await run.ask({ type: 'variables', ref: r.ref })).items ?? [];
-                if (items.length)
-                    contents.push({ value: '```python\n' + items.slice(0, 12).map((m) => `${m.name} = ${m.value ?? '…'}`).join('\n') + (items.length > 12 ? `\n… ${items.length - 12} more` : '') + '\n```' });
-            }
-            const arg = encodeURIComponent(JSON.stringify([expression]));
-            contents.push({ value: `${r.valueType} · [View value](command:pymagic.debug.view?${arg}) · [View as table](command:pymagic.debug.table?${arg}) · [Add to watches](command:pymagic.debug.watch?${arg})`, isTrusted: true });
-            return { range, contents };
+            showValuePopup(ed ?? editor, model, range, expression, r);
+            return null;
         },
     });
+    /** Whether the language's own hover should stand aside: the program is stopped and the mouse is on a value the debugger shows. */
+    function debugValueAt(model, position) {
+        return !!(run && paused && deps.relOf(model) && expressionAt(model.getLineContent(position.lineNumber), position.column));
+    }
+
+    // ------------------------------------------------------------ the value popup, as PyCharm's: the value under the mouse as a tree to open
+    let valuePopup = null;   // { el, expression, model, line, watch }
+    function closeValuePopup() {
+        if (!valuePopup)
+            return;
+        clearInterval(valuePopup.watch);
+        clearTimeout(valuePopup.leave?.());
+        valuePopup.moved?.dispose();
+        valuePopup.el.remove();
+        document.removeEventListener('mousedown', valuePopup.outside, true);
+        document.removeEventListener('keydown', valuePopup.escape, true);
+        valuePopup = null;
+    }
+    /**
+     * The value of an expression under the mouse (or Quick Evaluate's) in a popup below it: the value and its type, and when it has members its
+     * tree, opened one level at a time as in the Variables panel (F2 sets a member's value, a right-click gives View value, Copy value, Add to
+     * watches and the rest, View opens a long value whole). It stays while the mouse is on the value or in the popup, and closes with Escape,
+     * a click elsewhere, or when the program goes on.
+     */
+    function showValuePopup(ed, model, range, expression, r) {
+        closeValuePopup();
+        const el = document.createElement('div');
+        el.className = 'value-popup';
+        const tree = document.createElement('ul');
+        tree.className = 'vars value-popup-tree';
+        // the expression itself is the tree's first row, open; a name of the frame can be set with F2 too
+        const root = variableNode({ name: expression, value: r.result, type: r.valueType ?? '', ref: r.ref ?? 0 }, undefined, { expr: null, type: '' });
+        tree.appendChild(root);
+        root.querySelector('.caret')?.click();
+        const rootHead = root.querySelector('div');
+        if (/^[A-Za-z_]\w*$/.test(expression)) {
+            rootHead.addEventListener('keydown', (e) => { if (e.key === 'F2') { e.preventDefault(); closeValuePopup(); void setName(expression); } });
+            rootHead.title = 'F2 sets the value of this name in the frame';
+        }
+        const foot = document.createElement('div');
+        foot.className = 'value-popup-foot';
+        foot.textContent = 'F2 sets the selected value · right-click for more · Esc closes';
+        el.append(tree, foot);
+        document.body.appendChild(el);
+        // below the value, kept inside the window
+        const box = ed.getContainerDomNode().getBoundingClientRect();
+        const at = ed.getScrolledVisiblePosition({ lineNumber: range?.startLineNumber ?? 1, column: range?.startColumn ?? 1 });
+        const x = box.left + (at?.left ?? 40), y = box.top + (at?.top ?? 0) + (at?.height ?? 18) + 2;
+        el.style.left = `${Math.max(8, Math.min(x, window.innerWidth - Math.min(720, window.innerWidth - 16) - 8))}px`;
+        el.style.top = `${Math.min(y, window.innerHeight - 120)}px`;
+        el.style.maxHeight = `${Math.max(120, window.innerHeight - Math.min(y, window.innerHeight - 120) - 16)}px`;
+        rootHead.focus({ preventScroll: true });
+        // it goes when the mouse leaves both the value and the popup for a moment, on Escape, on a click elsewhere, and when the program goes on
+        let leaveTimer = 0;
+        // a value being set (its input open) keeps the popup
+        const leaveSoon = () => {
+            clearTimeout(leaveTimer);
+            leaveTimer = window.setTimeout(() => { if (valuePopup?.el === el && !el.matches(':hover') && !el.querySelector('input.edit')) closeValuePopup(); }, 600);
+        };
+        el.addEventListener('mouseenter', () => clearTimeout(leaveTimer));
+        el.addEventListener('mouseleave', leaveSoon);
+        const moved = ed.onMouseMove((e) => {
+            const p = e.target.position;
+            if (p && range && range.containsPosition(p)) clearTimeout(leaveTimer);
+            else leaveSoon();
+        });
+        const outside = (e) => { if (!el.contains(e.target) && !e.target.closest?.('.ctx-menu') && !e.target.closest?.('#sigdialog')) closeValuePopup(); };
+        const escape = (e) => { if (e.key === 'Escape' && valuePopup?.el === el && !el.querySelector('input.edit')) { e.preventDefault(); e.stopPropagation(); closeValuePopup(); ed.focus(); } };
+        document.addEventListener('mousedown', outside, true);
+        document.addEventListener('keydown', escape, true);
+        const watch = window.setInterval(() => { if (!run || !paused || !el.isConnected) closeValuePopup(); }, 250);
+        valuePopup = { el, expression, model, line: range?.startLineNumber, watch, outside, escape, moved, leave: () => leaveTimer };
+    }
     /** Evaluate Expression (Alt+F8): a window that stays open beside the editor, for an expression or several lines of
      * code run in the selected frame (Ctrl+Enter). Each Alt+F8 opens another one. */
     function evaluateWindow(initial = '') {
@@ -1830,6 +1907,8 @@ export function setupRun(deps) {
         return got;
     }
     return {
+        /** Stopped on a value the debugger shows in its popup: the language's own hover stands aside. */
+        debugValueAt,
         onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null,
         /** A file run under the profiler (the tree's More Run/Debug > Profile). */
         profileScript: (rel) => launch(rel, false, true, ''),

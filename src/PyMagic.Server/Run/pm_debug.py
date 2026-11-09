@@ -56,9 +56,54 @@ def short_repr(value, limit=200):
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
+class _Unopened:
+    """A value whose members are not read yet (Debugger.ref_for)."""
+
+    def __init__(self, value):
+        self.value = value
+
+
+class Unreadable:
+    """A member whose reading failed (a property that raises): shown as why, as PyCharm shows "Unable to get repr"."""
+
+    def __init__(self, error):
+        self.error = error
+
+    def __repr__(self):
+        return "<cannot be read: %s: %s>" % (type(self.error).__name__, self.error)
+
+
+# what an object's members leave out: its methods (PyCharm lists them nowhere either); a class held by an attribute stays
+_CALLABLE = (types.MethodType, types.FunctionType, types.BuiltinFunctionType, types.BuiltinMethodType,
+             type(object.__init__), type(str.join), type("".join), type(object().__str__), classmethod, staticmethod)
+
+
+def expandable(value):
+    """Whether a value has members to open, told without reading them (an object's properties are read only when it is opened)."""
+    if isinstance(value, ATOMIC + (Unreadable,)):
+        return False
+    try:
+        if isinstance(value, (dict, list, tuple, set, frozenset)):
+            return len(value) > 0
+    except BaseException:
+        return False
+    return True
+
+
+def attribute_names(value):
+    """An object's attributes as PyCharm lists them: every name dir() gives that is not a dunder, by name, the public ones first and
+    the _protected ones after them."""
+    try:
+        names = [n for n in dir(value) if isinstance(n, str) and not (n.startswith("__") and n.endswith("__"))]
+    except BaseException:
+        names = list(getattr(value, "__dict__", {}) or {})
+    return sorted(names, key=lambda n: (n.startswith("_"), n))
+
+
 def children(value):
-    """Expandable members of a value as (name, value) pairs, or None for leaf values."""
-    if isinstance(value, ATOMIC):
+    """Expandable members of a value as (name, value) pairs, or None for leaf values. An object's are its attributes and properties
+    (read now; one that raises is shown as an Unreadable), without its methods."""
+    if not expandable(value):
         return None
     try:
         if isinstance(value, dict):
@@ -67,13 +112,22 @@ def children(value):
             return [(str(i), v) for i, v in enumerate(value[:MAX_ITEMS])] or None
         if isinstance(value, (set, frozenset)):
             return [(str(i), v) for i, v in enumerate(list(value)[:MAX_ITEMS])] or None
-        members = getattr(value, "__dict__", None)
-        if isinstance(members, (dict, types.MappingProxyType)):
-            shown = [(k, v) for k, v in list(members.items())[:MAX_ITEMS] if not (k.startswith("__") and k.endswith("__"))]
-            return shown or None
+        shown = []
+        for name in attribute_names(value):
+            if len(shown) >= MAX_ITEMS:
+                break
+            try:
+                member = getattr(value, name)
+            except BaseException as e:  # a property that raises, a descriptor only for the class (Django's Model.objects)
+                if isinstance(e, AttributeError):
+                    continue
+                member = Unreadable(e)
+            if isinstance(member, _CALLABLE):
+                continue
+            shown.append((name, member))
+        return shown or None
     except BaseException:
         return None
-    return None
 
 
 def member_keys(value, count):
@@ -813,14 +867,26 @@ class Debugger(bdb.Bdb):
                 self.resumed.set()
 
     def ref_for(self, value):
-        members = children(value)
-        if not members:
+        """A reference to a value that has members; they are read when it is opened (members()), not now."""
+        if not expandable(value):
             return 0
         ref = self.next_ref
         self.next_ref += 1
-        self.refs[ref] = members
-        self.owners[ref] = (value, member_keys(value, len(members)))
+        self.refs[ref] = _Unopened(value)
         return ref
+
+    def members(self, ref):
+        """The members of a reference, read the first time they are asked for (an object's properties run then)."""
+        held = self.refs.get(ref)
+        if isinstance(held, _Unopened):
+            value = held.value
+            members = children(value) or []
+            self.refs[ref] = members
+            # what Set Value assigns to: a container's keys or indexes, an object's attribute names (not read a second time)
+            container = isinstance(value, (dict, list, tuple, set, frozenset))
+            self.owners[ref] = (value, member_keys(value, len(members)) if container else [n for n, _ in members])
+            return members
+        return held or []
 
     def set_member(self, ref, name, expression, frame_id):
         """Set Value on a member of an object, a dict, a list: its attribute, its key or its index is assigned the value
@@ -855,7 +921,7 @@ class Debugger(bdb.Bdb):
         return {"name": name, "value": short_repr(value), "type": type(value).__name__, "ref": self.ref_for(value)}
 
     def repr_of(self, ref, index):
-        members = self.refs.get(ref) or []
+        members = self.members(ref)
         if not 0 <= index < len(members):
             return {"error": "That value is gone; the program has moved on."}
         return {"value": short_repr(members[index][1])}
@@ -1176,7 +1242,7 @@ class Debugger(bdb.Bdb):
                 self.send({"type": "scopes", "id": rid, "scopes": self.scopes(int(msg.get("frameId", 0)))})
                 continue
             elif kind == "variables":
-                members = self.refs.get(int(msg.get("ref", 0)), [])
+                members = self.members(int(msg.get("ref", 0)))
                 self.send({"type": "variables", "id": rid, "ref": msg.get("ref"),
                            "items": [self.describe(n, v) for n, v in members]})
                 continue
@@ -1273,7 +1339,7 @@ class Debugger(bdb.Bdb):
             elif kind == "jump":
                 self.send({"type": "jumped", "id": rid, "error": "The program has ended with this exception; it cannot go on."})
             elif kind == "variables":
-                members = self.refs.get(int(msg.get("ref", 0)), [])
+                members = self.members(int(msg.get("ref", 0)))
                 self.send({"type": "variables", "id": rid, "ref": msg.get("ref"),
                            "items": [self.describe(n, v) for n, v in members]})
             elif kind == "evaluate":

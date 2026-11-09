@@ -22,6 +22,20 @@
 #vars li > div { padding: 0 4px; white-space: nowrap; }
 #vars .caret { display: inline-block; width: 12px; color: var(--dim); cursor: pointer; user-select: none; }
 #vars .name { color: var(--sym); } #vars .type { color: var(--dim); } #vars .scope { color: var(--amber); font-family: system-ui, sans-serif; }
+/* the debugger's value popup (hover on a value while stopped): the Variables panel's tree in a box below the value */
+.value-popup { position: fixed; z-index: 60; min-width: 320px; max-width: min(720px, calc(100vw - 16px)); overflow: auto; background: var(--panel, var(--bg)); border: 1px solid var(--line-strong, var(--line)); border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.35); font: 12.5px Consolas, monospace; padding: 4px 0 0; display: flex; flex-direction: column; }
+.value-popup ul { list-style: none; margin: 0; padding-left: 14px; } .value-popup > ul { padding-left: 4px; overflow: auto; }
+.value-popup li > div { padding: 1px 6px; white-space: nowrap; border-radius: 3px; cursor: default; }
+.value-popup li > div:hover { background: var(--hover); } .value-popup li > div:focus { outline: none; background: var(--accent); color: #fff; }
+.value-popup li > div:focus .name, .value-popup li > div:focus .type, .value-popup li > div:focus .view-link { color: inherit; }
+.value-popup .caret { display: inline-block; width: 12px; color: var(--dim); cursor: pointer; user-select: none; }
+.value-popup .name { color: var(--sym); } .value-popup .type { color: var(--dim); }
+/* a long value is cut, so its type and View stay in sight (View shows the whole of it) */
+.value-popup .val { display: inline-block; max-width: 70ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; white-space: pre; }
+.value-popup input.edit { background: var(--bg); color: var(--fg); border: 1px solid var(--accent); font: inherit; padding: 0 3px; width: 18em; }
+.value-popup-foot { padding: 3px 10px; margin-top: 4px; border-top: 1px solid var(--line); color: var(--dim); font: 11.5px var(--ui, system-ui), sans-serif; }
+.view-link { margin-left: 8px; color: var(--accent); cursor: pointer; font-family: var(--ui, system-ui), sans-serif; }
+.view-link:hover { text-decoration: underline; }
 #watch-log div { padding: 1px 8px; white-space: pre-wrap; word-break: break-all; }
 #watch-log .q { color: var(--dim); } #watch-log .e { color: var(--red); }
 #watch-in { border: 0; border-top: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 5px 8px; font: 12.5px Consolas, monospace; outline: none; }

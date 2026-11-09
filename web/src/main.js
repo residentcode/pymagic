@@ -457,6 +457,9 @@ function registerProviders() {
     });
     monaco.languages.registerHoverProvider(CODE_LANGUAGES, {
         async provideHover(model, position, token) {
+            // stopped in the debugger on a value: its popup (run.js) shows it instead, as PyCharm's does
+            if (runHooks?.debugValueAt?.(model, position))
+                return null;
             const cell = notebook?.targetOf(model, position); // a notebook cell: the position is in the notebook's file
             const uri = cell ? cell.uri : serverUri.get(model);
             if (!uri)

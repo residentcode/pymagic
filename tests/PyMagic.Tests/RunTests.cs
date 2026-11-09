@@ -233,13 +233,18 @@ public class RunTests
         using var server = new RunSession(events.Add);
         server.Listen(h.Root, "127.0.0.1", 0, "", Array.Empty<(string, string)>(), new Dictionary<string, JsonArray> { ["api.py"] = new JsonArray(3), ["worker.py"] = new JsonArray(2) });
         var seen = new List<string>();
+        // events passed over while waiting for another kind are kept for later: the worker may stop before the api has connected
+        var skipped = new List<JsonNode>();
         JsonNode Next(string type)
         {
+            var kept = skipped.FirstOrDefault(e => e["type"]?.GetValue<string>() == type);
+            if (kept != null) { skipped.Remove(kept); return kept; }
             while (true)
             {
                 if (!events.TryTake(out var e, TimeSpan.FromSeconds(30))) throw new AssertionException("timed out waiting for " + type + "; the debugger said: " + string.Join(" | ", seen));
                 seen.Add(e.ToJsonString());
                 if (e["type"]?.GetValue<string>() == type) return e;
+                skipped.Add(e);
             }
         }
         var listening = Next("listening");
@@ -578,6 +583,62 @@ public class RunTests
         "items = [1, 2, {'k': 'v'}]\n" +  // 6
         "y = add(x, 5)\n" +           // 7
         "print('y =', y)\n";          // 8
+
+    /// <summary>
+    /// An object's members as PyCharm lists them (a Django request's COOKIES, GET, POST, body are properties, not in its __dict__): its
+    /// attributes, its properties and the classes it holds, by name with the _protected ones last, without its methods; a property that
+    /// raises shows why; and nothing is read before the object is opened (a property's code runs then, once).
+    /// </summary>
+    [Fact]
+    public void AnObjectOpensToItsAttributesAndPropertiesAsPyCharmListsThem()
+    {
+        if (!HavePython) return;
+        using var h = new Harness();
+        h.Script("req.py",
+            "reads = []\n\n\n" +
+            "class Request:\n" +
+            "    parser_class = dict\n" +
+            "    def __init__(self):\n" +
+            "        self.path = '/contact/'\n" +
+            "        self._stream = 'raw'\n" +
+            "    @property\n" +
+            "    def COOKIES(self):\n" +
+            "        reads.append('COOKIES')\n" +
+            "        return {'sessionid': 'abc'}\n" +
+            "    @property\n" +
+            "    def body(self):\n" +
+            "        raise ValueError('read once only')\n" +
+            "    def get_host(self):\n" +
+            "        return 'x'\n\n\n" +
+            "request = Request()\n" +
+            "print(len(reads))\n");   // 21
+        h.Session.Start(h.Root, "req.py", true, Array.Empty<string>(), new Dictionary<string, List<int>> { ["req.py"] = new() { 21 } });
+        Assert.Equal(21, Line(h.Type("stopped")));
+        var r = h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "request", ["evalOnly"] = true });
+        Assert.True(r["ref"]!.GetValue<int>() > 0, "it opens");
+        // shown, not opened yet: its property has not run
+        Assert.Equal("[]", h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "reads", ["evalOnly"] = true })["result"]!.GetValue<string>());
+        var members = h.Request("variables", new JsonObject { ["ref"] = r["ref"]!.GetValue<int>() })["items"]!.AsArray();
+        string Row(JsonNode? m) => $"{m!["name"]} = {m["value"]} ({m["type"]})";
+        Assert.Equal(string.Join(" | ", new[]
+        {
+            "COOKIES = {'sessionid': 'abc'} (dict)",
+            "body = <cannot be read: ValueError: read once only> (Unreadable)",
+            "parser_class = <class 'dict'> (type)",
+            "path = '/contact/' (str)",
+            "_stream = 'raw' (str)",
+        }), string.Join(" | ", members.Select(Row)));
+        // opened: the property ran once
+        Assert.Equal("['COOKIES']", h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "reads", ["evalOnly"] = true })["result"]!.GetValue<string>());
+        // a member found this way can be set (F2), as one of the __dict__
+        var cookiesRef = members.First(m => m!["name"]!.GetValue<string>() == "COOKIES")!["ref"]!.GetValue<int>();
+        var set = h.Request("setVariable", new JsonObject { ["ref"] = r["ref"]!.GetValue<int>(), ["frameId"] = 0, ["name"] = "path", ["expression"] = "'/other/'" });
+        Assert.True(set["error"] == null, set.ToJsonString());
+        Assert.Equal("'/other/'", h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "request.path", ["evalOnly"] = true })["result"]!.GetValue<string>());
+        Assert.Equal("'abc'", h.Request("variables", new JsonObject { ["ref"] = cookiesRef })["items"]![0]!["value"]!.GetValue<string>());
+        h.Command("continue");
+        h.Type("exited");
+    }
 
     [Fact]
     public void DebugStopsAtBreakpointAndInspectsVariables()
