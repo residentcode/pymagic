@@ -10,6 +10,7 @@ export const EXTRA_EXTENSIONS = {
     '.hjs': 'handlebars', '.mustache': 'handlebars',                 // Hogan.js and Mustache: Handlebars' {{ }} without its helpers
     '.vash': 'razor',                                               // Vash is Razor's @ syntax for Node
     '.njk': 'twig', '.nunjucks': 'twig',                            // Nunjucks is Jinja's syntax, as Twig's
+    '.blade.php': 'blade',                                          // Laravel's templates (PyMagic's own language, blade-language.js)
     '.vue': 'html', '.svelte': 'html', '.astro': 'html',            // a component: markup with <script> and <style>
     '.webmanifest': 'json', '.jsonc': 'json', '.json5': 'json', '.code-workspace': 'json', '.map': 'json',
     '.gradle': 'kotlin',                                            // Gradle's build scripts (Groovy's syntax is closest to Kotlin's here)
@@ -29,7 +30,7 @@ export function languageOfShebang(firstLine) {
     const m = /^#!\s*(?:\/usr\/bin\/env\s+(?:-\S+\s+)*)?(?:\S*\/)?(\S+)/.exec(firstLine ?? '');
     if (!m) return null;
     const program = m[1].replace(/[\d.]+$/, '');
-    return { node: 'javascript', deno: 'typescript', bun: 'javascript', python: 'python', bash: 'shell', sh: 'shell', zsh: 'shell', ruby: 'ruby', pwsh: 'powershell' }[program] ?? null;
+    return { node: 'javascript', deno: 'typescript', bun: 'javascript', python: 'python', bash: 'shell', sh: 'shell', zsh: 'shell', ruby: 'ruby', pwsh: 'powershell', php: 'php' }[program] ?? null;
 }
 
 /**

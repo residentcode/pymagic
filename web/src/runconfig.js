@@ -2,7 +2,7 @@
 // Run, Debug and Profile start; with none chosen they start the file in the editor. They are kept in the project, in .pymagic/run-configurations.json.
 import { openMenu } from './menu';
 import { parseRequests } from './http-model.js';
-import { BEFORE_TASKS, KINDS, NODE_KINDS, blank, firstConfiguration, formatEnv, parseEnv, read, splitShared, toStored, uniqueName } from './runconfig-model.js';
+import { BEFORE_TASKS, KINDS, NODE_KINDS, PHP_KINDS, blank, firstConfiguration, formatEnv, parseEnv, read, splitShared, toStored, uniqueName } from './runconfig-model.js';
 
 const $ = (id) => document.getElementById(id);
 const FILE = '.pymagic/run-configurations.json';
@@ -73,6 +73,8 @@ export function setupRunConfigurations({ currentFile }) {
         const httpFiles = files.filter((f) => /\.(http|rest)$/i.test(f));
         // JavaScript and TypeScript files Node runs, and the folders whose package.json has scripts ('' is the project's own)
         const jsFiles = files.filter((f) => /\.(m|c)?(js|ts)$/i.test(f) && !/(^|\/)node_modules\//.test(f) && !/\.d\.ts$/i.test(f));
+        // PHP files that run as they are (not Blade templates, not Composer's vendor)
+        const phpFiles = files.filter((f) => /\.php$/i.test(f) && !/\.blade\.php$/i.test(f) && !/(^|\/)vendor\//.test(f));
         const packageDirs = files.filter((f) => /(^|\/)package\.json$/.test(f) && !/(^|\/)node_modules\//.test(f)).map((f) => f.slice(0, Math.max(0, f.lastIndexOf('/'))));
         const folders = [...new Set(files.map((f) => f.slice(0, Math.max(0, f.lastIndexOf('/')))).filter((d) => d))].sort();
         const draft = list.map((c) => ({ ...c, env: { ...c.env } }));
@@ -294,6 +296,39 @@ export function setupRunConfigurations({ currentFile }) {
                     check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'), check('Open the Run panel when started', 'openPanel'));
                 return;
             }
+            if (PHP_KINDS.has(c.kind)) {
+                // PHP: Laravel's server (php artisan serve), an Artisan command, or a .php file, with the PHP of Settings > PHP
+                const phpFields = [];
+                if (c.kind === 'laravel') phpFields.push(field('Host', text('host', '127.0.0.1')), field('Port', text('port', '8000')));
+                else if (c.kind === 'artisan') {
+                    const command = text('command', 'migrate --seed');
+                    const names = document.createElement('datalist');
+                    names.id = 'rc-artisan-commands';
+                    command.setAttribute('list', names.id);
+                    void fetch('/api/artisan/commands').then((r) => (r.ok ? r.json() : [])).then((list) => {
+                        names.replaceChildren(...list.map((x) => Object.assign(document.createElement('option'), { value: x.name, label: x.description ?? '' })));
+                    }).catch(() => { });
+                    const box = document.createElement('div');
+                    box.append(command, names);
+                    phpFields.push(field('Command', box, 'An Artisan command and its arguments, as after php artisan: migrate, make:model Post -m, queue:work.'));
+                }
+                else {
+                    const file = document.createElement('select');
+                    file.add(new Option('Choose a file…', ''));
+                    for (const f of phpFiles) file.add(new Option(f, f));
+                    if (c.script && !phpFiles.includes(c.script)) file.add(new Option(c.script + ' (not found)', c.script));
+                    file.value = c.script;
+                    file.onchange = () => { c.script = file.value; };
+                    phpFields.push(field('File', file));
+                }
+                form.append(field('Name', name), field('Kind', kind), ...phpFields,
+                    field(c.kind === 'php' ? 'Parameters' : 'More options', args, c.kind === 'laravel' ? 'Given to php artisan serve after host and port.' : 'Typed as on a command line.'),
+                    ...(c.kind === 'php' ? [field('Working folder', cwd)] : []),
+                    field('Environment variables', env, 'Over the project\'s .env for this run (Laravel reads its .env itself).'),
+                    check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'),
+                    check('Open the Run panel when started', 'openPanel'));
+                return;
+            }
             if (NODE_KINDS.has(c.kind)) {
                 // Node.js: a .js or .ts file; npm: a script of a package.json (dev, start, …), its list read from the file chosen
                 const nodeFields = [];
@@ -400,6 +435,7 @@ export function setupRunConfigurations({ currentFile }) {
                 if (k === 'script') c.script = currentFile() ?? '';
                 // Node.js: the JavaScript or TypeScript file in the editor, if that is one
                 if (k === 'node' && /\.(m|c)?(js|ts)$/i.test(currentFile() ?? '')) c.script = currentFile();
+                if (k === 'php' && /\.php$/i.test(currentFile() ?? '') && !/\.blade\.php$/i.test(currentFile() ?? '')) c.script = currentFile();
                 draft.push(c);
                 at = draft.length - 1;
                 chosen = draft[at];

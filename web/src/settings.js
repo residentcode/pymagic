@@ -21,6 +21,9 @@ export const DEFAULTS = {
     stickyScroll: false,
     ruler: 0,                 // the column of a vertical guide, 0 for none
     autoSave: 'off',          // off | blur (when the window is left) | delay (a second after the last change)
+    phpPath: '',              // Settings > PHP: php.exe (or its folder); empty: the one found (PATH, C:\php, XAMPP, Laragon, WAMP, Herd, Scoop)
+    composerPath: '',         // Composer: composer.bat / .exe / .phar; empty: the one found
+    xdebugPath: '',           // Xdebug's DLL for Debug; empty: php.ini's own, or php_xdebug*.dll in PHP's ext folder
     tailwindIn: 'project',    // project (one that uses Tailwind) | all: where the Tailwind CSS plugin completes its classes
     openProjectIn: 'ask',     // ask | this (replaces the project of the window) | new (a window of its own): the desktop app's Open Project
     confirmGit: true,         // the bar's update and push ask first

@@ -22,6 +22,13 @@
 #vars li > div { padding: 0 4px; white-space: nowrap; }
 #vars .caret { display: inline-block; width: 12px; color: var(--dim); cursor: pointer; user-select: none; }
 #vars .name { color: var(--sym); } #vars .type { color: var(--dim); } #vars .scope { color: var(--amber); font-family: system-ui, sans-serif; }
+/* Run Artisan command (laravel.js): the project's commands, filtered */
+.artisan-box { width: min(680px, 92vw); }
+.artisan-list { max-height: 50vh; overflow: auto; margin-top: 8px; }
+.artisan-row { display: flex; gap: 12px; padding: 4px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.artisan-row:hover { background: var(--hover); } .artisan-row.sel { background: var(--accent); color: #fff; }
+.artisan-name { font-family: var(--mono, Consolas, monospace); min-width: 200px; } .artisan-about { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.artisan-row.sel .artisan-about { color: inherit; opacity: .85; }
 /* the debugger's value popup (hover on a value while stopped): the Variables panel's tree in a box below the value */
 .value-popup { position: fixed; z-index: 60; min-width: 320px; max-width: min(720px, calc(100vw - 16px)); overflow: auto; background: var(--panel, var(--bg)); border: 1px solid var(--line-strong, var(--line)); border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.35); font: 12.5px Consolas, monospace; padding: 4px 0 0; display: flex; flex-direction: column; }
 .value-popup ul { list-style: none; margin: 0; padding-left: 14px; } .value-popup > ul { padding-left: 4px; overflow: auto; }

@@ -10,7 +10,10 @@ What it does, in short:
   Python inspections and PyMagic's own), Emmet in HTML, templates, stylesheets and JSX, Tailwind CSS classes, tag pairs renamed together, full line completion by a small code model that runs on your computer, code vision and inlay hints, formatting (black and ruff style), VS Code's colours for code, a keymap you can change.
 - **Frameworks**: Django (models, URLs, templates, settings, REST framework, New Project through Django's own `startproject`), Flask, FastAPI,
   Jinja, pytest. New Project also makes the other kinds PyCharm has: HTML5 Boilerplate, Bootstrap, Vite, React Native, Next.js, Node.js and
-  Express, each by its own generator (Node.js needed).
+  Express, each by its own generator (Node.js needed), and Laravel by Composer (PHP needed).
+- **Laravel and PHP**: Blade templates coloured (Emmet and Tailwind in them), Run Artisan Command (Ctrl+Shift+X) with the project's own
+  commands, run configurations for Laravel's server, an Artisan command and a PHP script, and PHP debugged with Xdebug in the same panes
+  (a request of `artisan serve` stops at a breakpoint of a route or a controller).
 - **Running**: run configurations, a debugger, tests with coverage, a profiler, a Python console, Jupyter notebooks, a terminal.
   JavaScript and TypeScript too: Node.js files and npm scripts (▶ Run and Debug above each script of a package.json), debugged with the
   same panes (the processes a dev server starts included, TypeScript and Next.js through their source maps), and JavaScript Debug of a page

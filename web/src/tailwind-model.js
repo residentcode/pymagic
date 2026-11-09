@@ -92,4 +92,4 @@ export function tailwindOffered(use, where) {
 }
 
 /** The languages whose markup has class attributes (and JavaScript / TypeScript for JSX and the class helpers). */
-export const TAILWIND_LANGUAGES = ['html', 'django-html', 'ejs', 'handlebars', 'twig', 'razor', 'php', 'javascript', 'typescript'];
+export const TAILWIND_LANGUAGES = ['html', 'django-html', 'ejs', 'handlebars', 'twig', 'razor', 'php', 'blade', 'javascript', 'typescript'];

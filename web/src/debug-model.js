@@ -83,6 +83,37 @@ export function expressionAt(line, column) {
         return null;
     return text;
 }
+/**
+ * PHP's expression under the mouse: a variable and the properties after it, to the one pointed at (`$user->profile->name` on name gives
+ * that; on profile, `$user->profile`); a method's call is not one (it would run it). Null elsewhere.
+ */
+export function phpExpressionAt(line, column) {
+    const i = column - 1;
+    if (i < 0 || i >= line.length || !/[$A-Za-z0-9_]/.test(line[i]))
+        return null;
+    let end = i;
+    while (end < line.length && /[A-Za-z0-9_]/.test(line[end]))
+        end++;
+    if (line[i] === '$' && end === i)
+        end = i + 1 + (/^[A-Za-z_]\w*/.exec(line.slice(i + 1))?.[0].length ?? 0);
+    if (/^\s*\(/.test(line.slice(end)))
+        return null;
+    let start = i;
+    while (start > 0 && /[A-Za-z0-9_]/.test(line[start - 1]))
+        start--;
+    if (line[start] !== '$' && start > 0 && line[start - 1] === '$')
+        start--;
+    // the chain before it: ->name and ?->name back to the variable it starts from
+    while (true) {
+        const before = line.slice(0, start);
+        const m = /(\$?[A-Za-z_]\w*)\??->$/.exec(before);
+        if (!m)
+            break;
+        start = before.length - m[0].length;
+    }
+    const text = line.slice(start, end);
+    return /^\$[A-Za-z_]\w*(\??->[A-Za-z_]\w*)*$/.test(text) ? text : null;
+}
 /** A breakpoint on a `def` line is a function breakpoint: {function, codeLine} where codeLine is the first decorator's line. */
 export function functionBreakpoint(lineText, line) {
     const m = /^(\s*)(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(lineText(line) ?? '');

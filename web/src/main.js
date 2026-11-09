@@ -22,6 +22,7 @@ import { setLiveTemplateSource, openSettings } from './settings-ui';
 import { setupHierarchy } from './hierarchy';
 import { setupRoutes } from './routes';
 import { setupDjango } from './django';
+import { setupLaravel } from './laravel';
 import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
@@ -36,6 +37,7 @@ import { setupProfiler } from './profiler';
 import { setupDatabase } from './database';
 import { setupHttpClient } from './http';
 import './ejs-language';
+import './blade-language';
 import './gherkin-language';
 import './toml-language';
 import { languageFor as languageForFile } from './file-language';
@@ -1186,6 +1188,9 @@ async function main() {
             run: runHooks, lsp, relOfUri, modelFor: ensureModel, askText: (...a) => explorer.askText(...a),
             openFile: (rel, line) => openFile(rel, line ? new monaco.Range(line, 1, line, 1) : undefined),
         });
+    // Laravel: Run Artisan command (Ctrl+Shift+X) in a Laravel project
+    if (plugin('laravel'))
+        setupLaravel({ run: runHooks, askText: (...a) => explorer.askText(...a) });
     const problems = setupProblems({ editor, lsp, openFile, relOfUri });
     setupTodo({ editor, lsp, openFile, relOfUri });
     const terminal = setupTerminal();

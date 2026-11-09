@@ -21,7 +21,11 @@ const KINDS = [
     ['nextjs', 'Next.js', 'A Next.js app made by create-next-app with the choices below. The folder name must be in lower case.', 'other'],
     ['nodejs', 'Node.js', 'package.json and index.js; nothing is downloaded.', 'other'],
     ['express', 'Express', 'An Express app made by express-generator with the view engine chosen, its packages installed with npm.', 'other'],
+    // PHP's, made by Composer
+    ['laravel', 'Laravel', 'A Laravel app made by Composer (composer create-project laravel/laravel), with its .env, app key and SQLite database. It needs PHP 8.2 or later and Composer: found by themselves, or named in Settings > PHP.', 'php'],
 ];
+/** Whether a kind is PHP's (made by Composer, no Python environment, no Node options). */
+export const isPhpKind = (kind) => KINDS.some(([id, , , group]) => id === kind && group === 'php');
 
 const VITE_TEMPLATES = ['vanilla', 'vanilla-ts', 'vue', 'vue-ts', 'react', 'react-ts', 'react-swc', 'react-swc-ts', 'preact', 'preact-ts', 'lit', 'lit-ts', 'svelte', 'svelte-ts', 'solid', 'solid-ts', 'qwik', 'qwik-ts'];
 const EXPRESS_VIEWS = [['dust', 'Dust'], ['ejs', 'EJS'], ['hbs', 'Handlebars'], ['hjs', 'Hogan.js'], ['pug', 'Pug (Jade)'], ['twig', 'Twig'], ['vash', 'Vash'], ['none', 'None']];
@@ -172,7 +176,7 @@ export async function openNewProject({ near = null, onCancel = null, openHere = 
         const other = isOtherKind(id);
         $('np-welcome-row').style.display = id === 'python' ? '' : 'none';
         $('np-django').style.display = id === 'django' ? '' : 'none';
-        $('np-python-env').style.display = other ? 'none' : '';
+        $('np-python-env').style.display = other || isPhpKind(id) ? 'none' : '';
         $('np-js').style.display = other ? '' : 'none';
         if (!other)
             return;
@@ -192,7 +196,7 @@ export async function openNewProject({ near = null, onCancel = null, openHere = 
         b.textContent = label;
         b.dataset.kind = id;
         b.onclick = () => pick(id, note, b);
-        $(group === 'other' ? 'np-kinds-other' : 'np-kinds').append(b);
+        $(group === 'other' || group === 'php' ? 'np-kinds-other' : 'np-kinds').append(b);
     }
     // a group with no kind left (Settings > Plugins) is not shown
     $('np-other-head').style.display = $('np-kinds-other').childElementCount ? '' : 'none';
@@ -224,7 +228,8 @@ export async function openNewProject({ near = null, onCancel = null, openHere = 
     box.onkeydown = (e) => { if (e.key === 'Escape') close(); };
     $('np-create').onclick = async () => {
         const other = isOtherKind(kind);
-        const environment = other ? 'none' : box.querySelector('input[name="np-env"]:checked').value;
+        const php = isPhpKind(kind);
+        const environment = other || php ? 'none' : box.querySelector('input[name="np-env"]:checked').value;
         const body = {
             location: location.value.trim(), kind, git: $('np-git').checked, welcome: $('np-welcome').checked, environment,
             python: environment === 'venv' ? $('np-base').value : environment === 'interpreter' ? $('np-existing').value : undefined,
@@ -239,7 +244,7 @@ export async function openNewProject({ near = null, onCancel = null, openHere = 
             django: kind === 'django' ? { templateLanguage: $('np-dj-lang').value, templatesFolder: $('np-dj-folder').value.trim() || 'templates', appName: $('np-dj-app').value.trim() || undefined, admin: $('np-dj-admin').checked } : undefined,
         };
         $('np-create').disabled = true;
-        $('np-status').textContent = other ? (kind === 'nodejs' ? 'Creating…' : 'Creating it with npm (this can take a few minutes)…') : environment === 'none' ? 'Creating…' : 'Creating the project and its environment…';
+        $('np-status').textContent = php ? 'Creating it with Composer (it downloads Laravel: a few minutes)…' : other ? (kind === 'nodejs' ? 'Creating…' : 'Creating it with npm (this can take a few minutes)…') : environment === 'none' ? 'Creating…' : 'Creating the project and its environment…';
         let res;
         try {
             res = await fetch('/api/newproject', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });

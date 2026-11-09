@@ -5,7 +5,7 @@ import * as monaco from 'monaco-editor';
 import { tagPairAt } from './tag-pairs-model.js';
 import { isJsxFile } from './emmet-model.js';
 
-export const TAG_PAIR_LANGUAGES = ['html', 'django-html', 'ejs', 'handlebars', 'twig', 'razor', 'php', 'xml', 'javascript', 'typescript'];
+export const TAG_PAIR_LANGUAGES = ['html', 'django-html', 'ejs', 'handlebars', 'twig', 'razor', 'php', 'blade', 'xml', 'javascript', 'typescript'];
 
 export function setupTagPairs() {
     const provider = {

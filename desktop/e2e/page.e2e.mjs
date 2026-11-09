@@ -3338,7 +3338,7 @@ describe('New Project: the other kinds', () => {
         await page.waitFor(`document.querySelector('#np-kinds-other button')`, 10000, 'New Project');
         assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#np-kinds button')].map((b) => b.textContent)`), ['Pure Python', 'FastAPI', 'Flask', 'Django', 'Jupyter']);
         assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#np-kinds-other button')].map((b) => b.textContent)`),
-            ['HTML5 Boilerplate', 'Bootstrap', 'Vite', 'React Native', 'Next.js', 'Node.js', 'Express']);
+            ['HTML5 Boilerplate', 'Bootstrap', 'Vite', 'React Native', 'Next.js', 'Node.js', 'Express', 'Laravel']);
         const shown = (id) => page.evaluate(`getComputedStyle(document.getElementById('${id}')).display !== 'none'`);
         const pick = (label) => page.evaluate(`[...document.querySelectorAll('#np-kinds-other button, #np-kinds button')].find((b) => b.textContent === '${label}').click()`);
         // Vite: its templates, no interpreter, no version

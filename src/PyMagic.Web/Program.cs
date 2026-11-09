@@ -1292,6 +1292,40 @@ static string ComposeOptions(JsonNode? body)
 
 app.MapDelete("/api/interpreter/remote", (string spec) => { interpreters.ForgetRemote(spec); return Results.NoContent(); });
 
+// PHP of the person's settings (Settings > PHP): the php.exe and Composer they name, empty for the ones found
+string? PhpSetting(string key)
+{
+    try { return JsonNode.Parse(userSettings.Read())?[key]?.GetValue<string>() is { Length: > 0 } v ? v : null; }
+    catch (Exception e) when (e is System.Text.Json.JsonException or InvalidOperationException) { return null; }
+}
+
+// Laravel: the PHP and Composer found, and whether the project is a Laravel one (its version, its routes files)
+app.MapGet("/api/php", () =>
+{
+    string? php = PhpTools.FindPhp(PhpSetting("phpPath"));
+    string? version = null;
+    if (php != null)
+        try { var (code, output, _) = PhpTools.Run(php, new[] { "-r", "echo PHP_VERSION;" }, root, 20); if (code == 0) version = output.Trim(); }
+        catch (Exception e) when (e is ServiceException or System.ComponentModel.Win32Exception) { php = null; }
+    var composer = PhpTools.FindComposer(PhpSetting("composerPath"), php);
+    // Xdebug, which Debug needs: php.ini's own (its version), the DLL found or named, or why there is none
+    object? xdebug = null;
+    if (php != null)
+        try { var x = PhpTools.FindXdebug(php, PhpSetting("xdebugPath")); xdebug = new { loaded = x.Loaded, dll = x.Dll, version = x.Version, error = x.Error }; }
+        catch (Exception e) when (e is ServiceException or System.ComponentModel.Win32Exception) { }
+    return Results.Json(new { php, version, composer = composer == null ? null : string.Join(" ", new[] { composer.Value.Program }.Concat(composer.Value.Prefix)), xdebug, laravel = PhpTools.Laravel(root) });
+});
+
+// Artisan's commands of the project (php artisan list), for Run Artisan Command and the configurations' list
+app.MapGet("/api/artisan/commands", async () =>
+{
+    if (PhpTools.Laravel(root) == null) return Results.BadRequest(new { error = "The project is not a Laravel project (no artisan file and laravel/framework)." });
+    string? php = PhpTools.FindPhp(PhpSetting("phpPath"));
+    if (php == null) return Results.BadRequest(new { error = "PHP was not found: name its php.exe in Settings > PHP." });
+    try { return Results.Json(await Task.Run(() => PhpTools.ArtisanCommands(php, root))); }
+    catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
+});
+
 // New Project: a folder anywhere the person chose, with the starting files of its kind, Git and its environment
 app.MapPost("/api/newproject", async (HttpRequest req) =>
 {
@@ -1305,7 +1339,8 @@ app.MapPost("/api/newproject", async (HttpRequest req) =>
         Js: b?["js"] is JsonObject js ? new JsProjectOptions(js["version"]?.GetValue<string>(), js["template"]?.GetValue<string>(), js["typeScript"]?.GetValue<bool>() != false,
             js["eslint"]?.GetValue<bool>() != false, js["tailwind"]?.GetValue<bool>() != false, js["appRouter"]?.GetValue<bool>() != false, js["srcDir"]?.GetValue<bool>() == true,
             js["view"]?.GetValue<string>(), js["node"]?.GetValue<string>(), js["command"]?.GetValue<string>(), js["generatorVersion"]?.GetValue<string>(),
-            js["css"]?.GetValue<string>()) : null);
+            js["css"]?.GetValue<string>()) : null,
+        Php: PhpSetting("phpPath"), Composer: PhpSetting("composerPath"));
     try { return Results.Json(await Task.Run(() => NewProject.Create(request))); }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.BadRequest(new { error = e.Message }); }
@@ -2027,7 +2062,7 @@ app.Map("/run", async (HttpContext ctx) =>
                 string file0 = msg["file"]?.GetValue<string>() ?? "";
                 var debugTests = msg["tests"] as JsonObject;   // Debug of tests: the test runner under the debugger
                 var profileTests = msg["profileTests"] as JsonObject;   // Profile of tests: pytest or unittest under the profiler
-                bool npmRun = msg["npmScript"]?.GetValue<string>() is { Length: > 0 } || msg["browser"] is JsonObject;   // an npm script or a page names no file
+                bool npmRun = msg["npmScript"]?.GetValue<string>() is { Length: > 0 } || msg["browser"] is JsonObject || msg["artisan"] is JsonArray;   // an npm script, a page or an Artisan command names no file
                 if (module == null && debugTests == null && profileTests == null && !npmRun) ResolveInRoot(file0);   // refuses paths outside the workspace
                 if (Scratches.IsScratchPath(file0)) file0 = Scratches.PathOf(file0);                         // a scratch runs where it is kept, in the project's folder
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
@@ -2072,6 +2107,19 @@ app.Map("/run", async (HttpContext ctx) =>
                     string? web = browser["webRoot"]?.GetValue<string>() is { Length: > 0 } wr ? wr : null;
                     if (web != null) ResolveInRoot(web);
                     session.StartBrowser(root, pageUrl, web, browser["browserPath"]?.GetValue<string>(), bps);
+                    if (msg["exceptionBreak"]?.GetValue<string>() == "raised")
+                        session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised", ["classes"] = msg["exceptionClasses"]?.DeepClone() });
+                    continue;
+                }
+                // PHP: an Artisan command of a Laravel project, or a .php file (not a Blade template), run by the PHP of Settings > PHP
+                var artisanArgs = (msg["artisan"] as JsonArray)?.Select(a => a?.GetValue<string>() ?? "").ToList();
+                if (artisanArgs != null || (module == null && debugTests == null && profileTests == null && RunSession.IsPhpFile(file0)))
+                {
+                    session.Php = msg["php"]?.GetValue<string>() is { Length: > 0 } phpPath ? phpPath : PhpSetting("phpPath");
+                    session.Xdebug = PhpSetting("xdebugPath");
+                    session.Target = ExecutionTarget.Local;
+                    if (msg["profile"]?.GetValue<bool>() == true) { session.Reject("The profiler is for Python; PHP runs without it."); continue; }
+                    session.StartPhp(root, artisanArgs == null ? file0 : null, artisanArgs, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
                     if (msg["exceptionBreak"]?.GetValue<string>() == "raised")
                         session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised", ["classes"] = msg["exceptionClasses"]?.DeepClone() });
                     continue;

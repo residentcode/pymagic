@@ -3,9 +3,13 @@ import { splitArguments } from './django-model.js';
 
 /** The kinds of configuration, as PyCharm's: [kind, label]. */
 export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m)'], ['django', 'Django server'], ['djangoTests', 'Django tests'], ['fastapi', 'FastAPI (uvicorn)'], ['flask', 'Flask server'], ['pytest', 'pytest'], ['debugserver', 'Python Debug Server (a program connects back)'],
-    ['node', 'Node.js (a .js or .ts file)'], ['npm', 'npm script (package.json: dev, start, …)'], ['browser', 'JavaScript Debug (a page in the browser)'], ['http', 'HTTP request (.http file)'], ['compound', 'Compound (several together)']];
+    ['node', 'Node.js (a .js or .ts file)'], ['npm', 'npm script (package.json: dev, start, …)'], ['browser', 'JavaScript Debug (a page in the browser)'],
+    ['laravel', 'Laravel server (php artisan serve)'], ['artisan', 'Artisan command (php artisan …)'], ['php', 'PHP script'],
+    ['http', 'HTTP request (.http file)'], ['compound', 'Compound (several together)']];
 /** The kinds run by Node rather than Python: no interpreter, uv or PYTHONPATH of theirs. */
 export const NODE_KINDS = new Set(['node', 'npm', 'browser']);
+/** The kinds run by PHP: nothing of Python's either. */
+export const PHP_KINDS = new Set(['laravel', 'artisan', 'php']);
 
 /** The settings beside name, script, args, cwd and env, with their defaults (strings and switches). */
 const DEFAULTS = {
@@ -24,12 +28,14 @@ const DEFAULTS = {
     npmScript: '', packageDir: '', node: '',
     // JavaScript Debug: the page to open (a dev server's), and the browser ('' for Edge, else Chrome); packageDir is its web root
     url: '', browserPath: '',
+    // Artisan command: the command and its arguments as typed (migrate --seed, make:model Post -m)
+    command: '',
 };
 
 /** A configuration: { name, kind, script (a file of the project), module, app, host, port, target, reload, args (as typed), cwd (a folder of the project,
  * '' for the project itself), env ({ NAME: value }), envFiles (.env files, comma separated), uv, uvPath, contentRoots, sourceRoots, shared, openPanel }. */
 export const blank = (name = 'New configuration', kind = 'script') => ({ name, script: kind === 'django' ? 'manage.py' : '', args: '', cwd: '', env: {}, ...DEFAULTS, kind,
-    app: kind === 'fastapi' ? 'main:app' : kind === 'flask' ? 'app' : '', port: { django: '8000', fastapi: '8000', flask: '5000', debugserver: '5678' }[kind] ?? '' });
+    app: kind === 'fastapi' ? 'main:app' : kind === 'flask' ? 'app' : '', port: { django: '8000', fastapi: '8000', flask: '5000', debugserver: '5678', laravel: '8000' }[kind] ?? '' });
 
 /** The stored text, as a list of well-formed configurations and the name of the chosen one (or null for "the file in the editor"). */
 export function read(stored) {
@@ -170,9 +176,12 @@ export function startOf(c) {
         case 'node': start = { file: c.script, args: extra, ...(c.node ? { node: c.node } : {}) }; break;
         case 'npm': start = { npmScript: c.npmScript || 'start', ...(c.packageDir ? { packageDir: c.packageDir } : {}), args: extra, ...(c.node ? { node: c.node } : {}) }; break;
         case 'browser': start = { browser: { url: c.url || 'http://localhost:5173/', ...(c.packageDir ? { webRoot: c.packageDir } : {}), ...(c.browserPath ? { browserPath: c.browserPath } : {}) } }; break;
+        case 'laravel': start = { artisan: ['serve', `--host=${host}`, `--port=${c.port || '8000'}`, ...extra] }; break;
+        case 'artisan': start = { artisan: [...splitArguments(c.command || 'list'), ...extra] }; break;
+        case 'php': start = { file: c.script, args: extra }; break;
         default: start = { file: c.script, args: extra };
     }
-    if (NODE_KINDS.has(c.kind)) {
+    if (NODE_KINDS.has(c.kind) || PHP_KINDS.has(c.kind)) {
         // Node's: its variables, folder and the debugger's choice of code; nothing of Python's
         const out = { ...start, env: { ...c.env }, cwd: c.cwd };
         if (c.justMyCode === false) out.allCode = true;

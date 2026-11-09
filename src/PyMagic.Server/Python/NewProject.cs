@@ -10,7 +10,7 @@ namespace PyMagic.Server;
 /// interpreter (an existing one, such as conda's base: <paramref name="Python"/>), or none.</param>
 /// <param name="InstallPackages">In a new environment: install what the project needs (a download from PyPI): Django, so its own startproject writes the project; with uv, the packages its kind needs (uv add).</param>
 public sealed record NewProjectRequest(string Location, string Kind, bool Git, bool Welcome, string Environment, string? Python, string? UvPath, string? PythonVersion,
-    DjangoProjectOptions? Django = null, bool InstallPackages = true, JsProjectOptions? Js = null);
+    DjangoProjectOptions? Django = null, bool InstallPackages = true, JsProjectOptions? Js = null, string? Php = null, string? Composer = null);
 
 /// <summary>The Django choices of New Project: the template language (django or jinja2), the name of the templates folder, a first app, and the admin.</summary>
 public sealed record DjangoProjectOptions(string TemplateLanguage = "django", string TemplatesFolder = "templates", string? AppName = null, bool Admin = true);
@@ -107,6 +107,20 @@ public static class NewProject
         Directory.CreateDirectory(folder);
         // the other kinds are made by their own generators, with no Python environment
         if (JsProjects.IsJs(r.Kind)) return JsProjects.Create(r, folder);
+        if (r.Kind == "laravel")
+        {
+            // Laravel, as its documentation makes one: composer create-project laravel/laravel (its .env, app key and SQLite database too)
+            try { PhpTools.CreateLaravel(folder, r.Php, r.Composer); }
+            catch (ServiceException) { try { if (!Directory.EnumerateFileSystemEntries(folder).Any()) Directory.Delete(folder); } catch (IOException) { } throw; }
+            var laravelFiles = new List<string> { "artisan", "composer.json", ".env" };
+            var laravelNotes = new List<string> { $"Laravel {PhpTools.Laravel(folder)?["version"] ?? ""} was made by Composer. Run it with the Laravel server configuration (php artisan serve)." };
+            if (r.Git && !Directory.Exists(System.IO.Path.Combine(folder, ".git")))
+            {
+                try { using var git = Process.Start(new ProcessStartInfo("git", "init") { WorkingDirectory = folder, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true }); git?.WaitForExit(30000); }
+                catch (System.ComponentModel.Win32Exception) { laravelNotes.Add("Git was not found, so no repository was made."); }
+            }
+            return new NewProjectResult(folder, laravelFiles, null, laravelNotes);
+        }
         var notes = new List<string>();
 
         // the environment first: a Django project is then written by that environment's own Django

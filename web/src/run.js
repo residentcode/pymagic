@@ -7,7 +7,7 @@ import { showTab } from './panel';
 import { editBreakpoint, isPlain } from './bpdialog';
 import { ansiReader } from './ansi';
 import { colouredSpans } from './terminal';
-import { inlineLines, inlineText, callsOn, expressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem, declarationLine, historyStep, framesOfStop, threadHeadings, serverProgramNote } from './debug-model.js';
+import { inlineLines, inlineText, callsOn, expressionAt, phpExpressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem, declarationLine, historyStep, framesOfStop, threadHeadings, serverProgramNote } from './debug-model.js';
 import { openMenu } from './menu';
 import { toast } from './toast';
 import { linkPieces } from './tracelink-model.js';
@@ -1277,12 +1277,14 @@ export function setupRun(deps) {
         openBrowser = !!extra.openBrowser;
         followLogs((extra.logFiles ?? '').split(',').map((s) => s.trim()).filter(Boolean));
         testsRun = !!extra.tests;
-        lastLaunch = { rel, debug, profile, args, extra, started: Date.now(), label: extra.label ?? (extra.module ? `python -m ${extra.module}` : extra.npmScript ? `npm run ${extra.npmScript}` : extra.browser ? `JavaScript Debug ${extra.browser.url}` : extra.tests ? 'tests' : (rel ?? 'a program')) };
+        lastLaunch = { rel, debug, profile, args, extra, started: Date.now(), label: extra.label ?? (extra.module ? `python -m ${extra.module}` : extra.npmScript ? `npm run ${extra.npmScript}` : extra.browser ? `JavaScript Debug ${extra.browser.url}` : extra.artisan ? `php artisan ${extra.artisan.join(' ')}` : extra.tests ? 'tests' : (rel ?? 'a program')) };
         run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, tests: extra.tests, profileTests: extra.profileTests, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
             exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value, functionBreaks: functionNames(),
             envFiles: extra.envFiles, interpreter: extra.interpreter, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots,
             // JavaScript: an npm script of a package.json (its folder), and the Node program a configuration names
-            npmScript: extra.npmScript, packageDir: extra.packageDir, node: extra.node, browser: extra.browser });
+            npmScript: extra.npmScript, packageDir: extra.packageDir, node: extra.node, browser: extra.browser,
+            // PHP: an Artisan command of a Laravel project (php artisan serve, migrate, …)
+            artisan: extra.artisan });
         run.onMessage = handle;
         // only this run's connection counts: an earlier one closing late (Before launch) must not end the next run
         const mine = run;
@@ -1582,8 +1584,13 @@ export function setupRun(deps) {
         const dir = npmFolderOf(rel);
         void launch(null, !!debug, false, [], { npmScript: name, ...(dir ? { packageDir: dir } : {}), label: `npm run ${name}${dir ? ` (${dir})` : ''}` });
     });
-    // Python's values, and JavaScript's and TypeScript's (run by Node, debugged through pm_nodedebug.mjs)
-    monaco.languages.registerHoverProvider(['python', 'javascript', 'typescript'], {
+    /** The expression under a place of the editor, as its language writes one (PHP's $variables and ->properties). */
+    function exprAt(model, line, column) {
+        const text = model.getLineContent(line);
+        return model.getLanguageId() === 'php' ? phpExpressionAt(text, column) : expressionAt(text, column);
+    }
+    // Python's values, JavaScript's and TypeScript's (run by Node, debugged through pm_nodedebug.mjs) and PHP's (Xdebug)
+    monaco.languages.registerHoverProvider(['python', 'javascript', 'typescript', 'php'], {
         async provideHover(model, position) {
             if (!run || !paused || !deps.relOf(model))
                 return null;
@@ -1595,7 +1602,7 @@ export function setupRun(deps) {
                 range = sel;
             }
             else {
-                expression = expressionAt(model.getLineContent(position.lineNumber), position.column);
+                expression = exprAt(model, position.lineNumber, position.column);
                 const word = model.getWordAtPosition(position);
                 if (word)
                     range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
@@ -1614,7 +1621,7 @@ export function setupRun(deps) {
     });
     /** Whether the language's own hover should stand aside: the program is stopped and the mouse is on a value the debugger shows. */
     function debugValueAt(model, position) {
-        return !!(run && paused && deps.relOf(model) && expressionAt(model.getLineContent(position.lineNumber), position.column));
+        return !!(run && paused && deps.relOf(model) && exprAt(model, position.lineNumber, position.column));
     }
 
     // ------------------------------------------------------------ the value popup, as PyCharm's: the value under the mouse as a tree to open
@@ -1747,7 +1754,7 @@ export function setupRun(deps) {
         if (!sel.isEmpty())
             return model.getValueInRange(sel);
         const pos = ed.getPosition();
-        return pos ? expressionAt(model.getLineContent(pos.lineNumber), pos.column) ?? '' : '';
+        return pos ? exprAt(model, pos.lineNumber, pos.column) ?? '' : '';
     }
     // the links of the hover
     monaco.editor.registerCommand('pymagic.debug.view', (_, expr) => void viewValue(expr, ''));
@@ -1944,6 +1951,8 @@ export function setupRun(deps) {
         profileScript: (rel) => launch(rel, false, true, ''),
         /** `python -m module args`; false when a run is going. */
         runModule: (module, args = [], debug = false) => launch(null, debug, false, args, { module }),
+        /** `php artisan command args` of a Laravel project; false when a run is going. */
+        runArtisan: (args, debug = false) => launch(null, debug, false, [], { artisan: args }),
         /** The program that is running, as a service of the Services window: stopped, restarted (started again as it was) or shown. */
         services: () => [...(run === null || !lastLaunch || lastLaunch.extra?.member ? [] : [{
             id: 'run', group: 'Run', name: lastLaunch.label, started: lastLaunch.started,

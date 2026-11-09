@@ -7,7 +7,7 @@ import { emmetHTML, emmetCSS, emmetJSX } from 'emmet-monaco-es';
 import { isJsxFile } from './emmet-model.js';
 
 /** The languages whose markup Emmet writes: HTML (and Vue, Svelte, Astro), Django and Jinja templates, EJS, Handlebars and Hogan.js, Twig and Nunjucks, Razor and Vash, PHP. */
-export const EMMET_HTML = ['html', 'django-html', 'ejs', 'handlebars', 'twig', 'razor', 'php'];
+export const EMMET_HTML = ['html', 'django-html', 'ejs', 'handlebars', 'twig', 'razor', 'php', 'blade'];
 /** And the stylesheets: m10 is margin: 10px; */
 export const EMMET_CSS = ['css', 'scss', 'less'];
 /** And JSX, in the JavaScript and TypeScript files that are JSX. */

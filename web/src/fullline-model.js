@@ -3,7 +3,7 @@
 
 /** The languages whose lines are completed: code, templates and configuration (not prose: plain text, Markdown, reStructuredText). */
 export const FULL_LINE_LANGUAGES = new Set([
-    'python', 'javascript', 'typescript', 'html', 'django-html', 'ejs', 'handlebars', 'twig', 'razor', 'php', 'xml', 'css', 'scss', 'less',
+    'python', 'javascript', 'typescript', 'html', 'django-html', 'ejs', 'handlebars', 'twig', 'razor', 'php', 'blade', 'xml', 'css', 'scss', 'less',
     'json', 'yaml', 'toml', 'ini', 'sql', 'shell', 'powershell', 'bat', 'dockerfile', 'java', 'kotlin', 'c', 'cpp', 'csharp', 'go', 'rust', 'ruby',
 ]);
 
