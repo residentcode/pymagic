@@ -2,7 +2,10 @@
 import { splitArguments } from './django-model.js';
 
 /** The kinds of configuration, as PyCharm's: [kind, label]. */
-export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m)'], ['django', 'Django server'], ['djangoTests', 'Django tests'], ['fastapi', 'FastAPI (uvicorn)'], ['flask', 'Flask server'], ['pytest', 'pytest'], ['debugserver', 'Python Debug Server (a program connects back)'], ['http', 'HTTP request (.http file)'], ['compound', 'Compound (several together)']];
+export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m)'], ['django', 'Django server'], ['djangoTests', 'Django tests'], ['fastapi', 'FastAPI (uvicorn)'], ['flask', 'Flask server'], ['pytest', 'pytest'], ['debugserver', 'Python Debug Server (a program connects back)'],
+    ['node', 'Node.js (a .js or .ts file)'], ['npm', 'npm script (package.json: dev, start, …)'], ['browser', 'JavaScript Debug (a page in the browser)'], ['http', 'HTTP request (.http file)'], ['compound', 'Compound (several together)']];
+/** The kinds run by Node rather than Python: no interpreter, uv or PYTHONPATH of theirs. */
+export const NODE_KINDS = new Set(['node', 'npm', 'browser']);
 
 /** The settings beside name, script, args, cwd and env, with their defaults (strings and switches). */
 const DEFAULTS = {
@@ -17,6 +20,10 @@ const DEFAULTS = {
     connectHost: '', mappings: '',
     // HTTP request: the request of the .http file (its script) by its name or its `METHOD url` line, '' for all of them in turn, and the environment
     request: '', environment: '',
+    // Node.js and npm: the script of package.json to run, the folder of that package.json ('' for the project's), and Node itself ('' for the PATH's)
+    npmScript: '', packageDir: '', node: '',
+    // JavaScript Debug: the page to open (a dev server's), and the browser ('' for Edge, else Chrome); packageDir is its web root
+    url: '', browserPath: '',
 };
 
 /** A configuration: { name, kind, script (a file of the project), module, app, host, port, target, reload, args (as typed), cwd (a folder of the project,
@@ -160,7 +167,16 @@ export function startOf(c) {
         case 'debugserver': start = { debugServer: { host, port: portOf(c.port), connectHost: (c.connectHost ?? '').trim(), mappings: parseMappings(c.mappings) } }; break;
         case 'pytest': start = { module: 'pytest', args: [...(c.target ? [c.target] : []), ...extra] }; break;
         case 'http': start = { http: { file: c.script, request: c.request ?? '', environment: c.environment ?? '' } }; break;
+        case 'node': start = { file: c.script, args: extra, ...(c.node ? { node: c.node } : {}) }; break;
+        case 'npm': start = { npmScript: c.npmScript || 'start', ...(c.packageDir ? { packageDir: c.packageDir } : {}), args: extra, ...(c.node ? { node: c.node } : {}) }; break;
+        case 'browser': start = { browser: { url: c.url || 'http://localhost:5173/', ...(c.packageDir ? { webRoot: c.packageDir } : {}), ...(c.browserPath ? { browserPath: c.browserPath } : {}) } }; break;
         default: start = { file: c.script, args: extra };
+    }
+    if (NODE_KINDS.has(c.kind)) {
+        // Node's: its variables, folder and the debugger's choice of code; nothing of Python's
+        const out = { ...start, env: { ...c.env }, cwd: c.cwd };
+        if (c.justMyCode === false) out.allCode = true;
+        return out;
     }
     const out = { ...start, env: { ...c.env, ...(c.settings && (c.kind === 'django' || c.kind === 'djangoTests') ? { DJANGO_SETTINGS_MODULE: c.settings } : {}) }, cwd: c.cwd };
     if (c.justMyCode === false) out.allCode = true;

@@ -20,6 +20,20 @@ export function folderOf(rel) {
  * A text that is not an object is no dependencies.
  */
 export function dependencyEntries(text) {
+    return entriesOf(text, SECTIONS);
+}
+
+/**
+ * The scripts of a package.json, where each is written: [{ name, spec (its command), section: 'scripts', line, start, end }], for the ▶ Run and
+ * Debug above each one, as PyCharm puts its run icons beside them.
+ */
+export function scriptEntries(text) {
+    return entriesOf(text, ['scripts']);
+}
+
+/** The string members of the top-level objects named `sections`, with where their names are. */
+function entriesOf(text, sections) {
+    const SECTIONS = sections;
     const out = [];
     let i = 0, line = 1, col = 1;
     const stack = [];          // for each open object or array: { type, key } (key: the key it is the value of)

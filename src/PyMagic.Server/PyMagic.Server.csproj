@@ -23,6 +23,8 @@
     <EmbeddedResource Include="Run\pm_profile.py" LogicalName="pm_profile.py" />
     <EmbeddedResource Include="Run\pm_kernel.py" LogicalName="pm_kernel.py" />
     <EmbeddedResource Include="Run\pm_jdebug.py" LogicalName="pm_jdebug.py" />
+    <EmbeddedResource Include="Run\pm_nodedebug.mjs" LogicalName="pm_nodedebug.mjs" />
+    <EmbeddedResource Include="Run\pm_sourcemap.mjs" LogicalName="pm_sourcemap.mjs" />
     <EmbeddedResource Include="Run\shells.json" LogicalName="shells.json" />
     <EmbeddedResource Include="Schemas\*.json" LogicalName="schema-%(Filename).json" />
     <!-- Gherkin's keywords in its languages, from Cucumber (MIT License): the licence goes with the app, in the host folder's Gherkin\ -->

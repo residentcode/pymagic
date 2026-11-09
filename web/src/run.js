@@ -12,6 +12,7 @@ import { openMenu } from './menu';
 import { toast } from './toast';
 import { linkPieces } from './tracelink-model.js';
 import { defineCommand } from './commands.js';
+import { scriptEntries, isPackageJson, folderOf as npmFolderOf } from './npm-model.js';
 const $ = (id) => document.getElementById(id);
 const STORAGE_KEY = 'pymagic.breakpoints';
 const norm = (p) => p.replace(/\\/g, '/').toLowerCase();
@@ -1053,6 +1054,11 @@ export function setupRun(deps) {
                 await startDebugServer(s.debugServer, chosen.openPanel);
                 return;
             }
+            // JavaScript Debug: Debug opens the page in Edge or Chrome under the debugger; Run only opens it in the browser
+            if (s.browser && !debug) {
+                window.open(s.browser.url, '_blank');
+                return;
+            }
             // Django tests (and the like) go to the Tests panel and its tree
             if (s.tests) {
                 window.dispatchEvent(new CustomEvent('pymagic:runTests', { detail: { ...s.tests, debug } }));
@@ -1271,10 +1277,12 @@ export function setupRun(deps) {
         openBrowser = !!extra.openBrowser;
         followLogs((extra.logFiles ?? '').split(',').map((s) => s.trim()).filter(Boolean));
         testsRun = !!extra.tests;
-        lastLaunch = { rel, debug, profile, args, extra, started: Date.now(), label: extra.label ?? (extra.module ? `python -m ${extra.module}` : extra.tests ? 'tests' : (rel ?? 'a program')) };
+        lastLaunch = { rel, debug, profile, args, extra, started: Date.now(), label: extra.label ?? (extra.module ? `python -m ${extra.module}` : extra.npmScript ? `npm run ${extra.npmScript}` : extra.browser ? `JavaScript Debug ${extra.browser.url}` : extra.tests ? 'tests' : (rel ?? 'a program')) };
         run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, tests: extra.tests, profileTests: extra.profileTests, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
             exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value, functionBreaks: functionNames(),
-            envFiles: extra.envFiles, interpreter: extra.interpreter, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots });
+            envFiles: extra.envFiles, interpreter: extra.interpreter, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots,
+            // JavaScript: an npm script of a package.json (its folder), and the Node program a configuration names
+            npmScript: extra.npmScript, packageDir: extra.packageDir, node: extra.node, browser: extra.browser });
         run.onMessage = handle;
         // only this run's connection counts: an earlier one closing late (Before launch) must not end the next run
         const mine = run;
@@ -1553,7 +1561,29 @@ export function setupRun(deps) {
             void showFrame(0).then(() => editor.focus());
     }
     // ------------------------------------------------------------ values under the mouse
-    monaco.languages.registerHoverProvider('python', {
+    // ▶ Run and Debug above each script of a package.json (the project's own, not node_modules'), as PyCharm's run icons beside them:
+    // npm run <script> in that package.json's folder, in the Run panel (and under the debugger, with the processes it starts)
+    monaco.languages.registerCodeLensProvider('json', {
+        provideCodeLenses(model) {
+            const rel = deps.relOf(model);
+            if (!rel || !isPackageJson(rel))
+                return { lenses: [], dispose() { } };
+            const lenses = scriptEntries(model.getValue()).flatMap((s) => {
+                const range = new monaco.Range(s.line, 1, s.line, 1);
+                return [
+                    { range, command: { id: 'pymagic.npm.run', title: '▶ Run', tooltip: `npm run ${s.name}`, arguments: [rel, s.name, false] } },
+                    { range, command: { id: 'pymagic.npm.run', title: 'Debug', tooltip: `npm run ${s.name} under the debugger`, arguments: [rel, s.name, true] } },
+                ];
+            });
+            return { lenses, dispose() { } };
+        },
+    });
+    monaco.editor.registerCommand('pymagic.npm.run', (_, rel, name, debug) => {
+        const dir = npmFolderOf(rel);
+        void launch(null, !!debug, false, [], { npmScript: name, ...(dir ? { packageDir: dir } : {}), label: `npm run ${name}${dir ? ` (${dir})` : ''}` });
+    });
+    // Python's values, and JavaScript's and TypeScript's (run by Node, debugged through pm_nodedebug.mjs)
+    monaco.languages.registerHoverProvider(['python', 'javascript', 'typescript'], {
         async provideHover(model, position) {
             if (!run || !paused || !deps.relOf(model))
                 return null;

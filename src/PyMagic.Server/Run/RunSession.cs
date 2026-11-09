@@ -395,6 +395,15 @@ public sealed partial class RunSession : IDisposable
         var psi = Target.Start(python, root, args2, env, helperDirs.Distinct().ToList());
         _runId = psi.Environment.TryGetValue("PYMAGIC_RUN_ID", out var runId) ? runId : null;
         if (Target.IsLocal && WorkingDirectory != null) psi.WorkingDirectory = WorkingDirectory;
+        StartProcess(psi, root, channel ? token : null, breakpoints);
+    }
+
+    /// <summary>
+    /// Starts a run's process (a Python program, or Node's helper for JavaScript): its output to the page, its debugger's connection accepted
+    /// when <paramref name="token"/> is given, and its end told after the last of both.
+    /// </summary>
+    void StartProcess(ProcessStartInfo psi, string root, string? token, IReadOnlyDictionary<string, JsonArray>? breakpoints)
+    {
         psi.RedirectStandardInput = true;
         psi.RedirectStandardOutput = true;
         psi.RedirectStandardError = true;
@@ -418,7 +427,7 @@ public sealed partial class RunSession : IDisposable
             Pump(_process.StandardOutput, "stdout"),
             Pump(_process.StandardError, "stderr"),
         };
-        Task? channelTask = channel ? Task.Run(() => AcceptDebugger(token!, root, breakpoints)) : null;
+        Task? channelTask = token != null ? Task.Run(() => AcceptDebugger(token, root, breakpoints)) : null;
 
         Task.Run(() =>
         {

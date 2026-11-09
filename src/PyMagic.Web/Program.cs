@@ -2013,6 +2013,9 @@ app.Map("/run", async (HttpContext ctx) =>
 
             var msg = JsonNode.Parse(ms.ToArray());
             if (msg == null) continue;
+            // a request that names a place outside the project is refused with why, and the connection stays (it used to end it, which the
+            // page could only tell as "Connection to the host lost")
+            try {
             if (msg["type"]?.GetValue<string>() == "start")
             {
                 var bps = new Dictionary<string, JsonArray>();
@@ -2024,7 +2027,8 @@ app.Map("/run", async (HttpContext ctx) =>
                 string file0 = msg["file"]?.GetValue<string>() ?? "";
                 var debugTests = msg["tests"] as JsonObject;   // Debug of tests: the test runner under the debugger
                 var profileTests = msg["profileTests"] as JsonObject;   // Profile of tests: pytest or unittest under the profiler
-                if (module == null && debugTests == null && profileTests == null) ResolveInRoot(file0);   // refuses paths outside the workspace
+                bool npmRun = msg["npmScript"]?.GetValue<string>() is { Length: > 0 } || msg["browser"] is JsonObject;   // an npm script or a page names no file
+                if (module == null && debugTests == null && profileTests == null && !npmRun) ResolveInRoot(file0);   // refuses paths outside the workspace
                 if (Scratches.IsScratchPath(file0)) file0 = Scratches.PathOf(file0);                         // a scratch runs where it is kept, in the project's folder
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
                 // a run configuration may name an interpreter of its own (a path, or a spec of WSL, Docker or SSH) instead of the project's
@@ -2060,6 +2064,34 @@ app.Map("/run", async (HttpContext ctx) =>
                     && into["token"]?.GetValue<string>() is { Length: > 0 } intoToken && intoToken.All(char.IsAsciiLetterOrDigit)
                     ? (intoPort, intoToken, into["name"]?.GetValue<string>() is { Length: > 0 } intoName ? intoName : "a member") : null;
                 session.UvProgram = msg["uv"]?.GetValue<bool>() == true ? (msg["uvPath"]?.GetValue<string>() is { Length: > 0 } uvPath ? uvPath : "uv") : null;
+                // JavaScript Debug: a page in Edge or Chrome under the debugger (pm_nodedebug.mjs --browser)
+                if (msg["browser"] is JsonObject browser && browser["url"]?.GetValue<string>() is { Length: > 0 } pageUrl)
+                {
+                    session.Node = msg["node"]?.GetValue<string>() is { Length: > 0 } nodeForBrowser ? nodeForBrowser : null;
+                    session.Target = ExecutionTarget.Local;
+                    string? web = browser["webRoot"]?.GetValue<string>() is { Length: > 0 } wr ? wr : null;
+                    if (web != null) ResolveInRoot(web);
+                    session.StartBrowser(root, pageUrl, web, browser["browserPath"]?.GetValue<string>(), bps);
+                    if (msg["exceptionBreak"]?.GetValue<string>() == "raised")
+                        session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised", ["classes"] = msg["exceptionClasses"]?.DeepClone() });
+                    continue;
+                }
+                // JavaScript and TypeScript: a .js / .ts file, or an npm script of a package.json, run by Node (pm_nodedebug.mjs)
+                string? npmScript = msg["npmScript"]?.GetValue<string>() is { Length: > 0 } ns ? ns : null;
+                if (npmScript != null || (module == null && debugTests == null && profileTests == null && RunSession.IsNodeFile(file0)))
+                {
+                    session.Node = msg["node"]?.GetValue<string>() is { Length: > 0 } nodePath ? nodePath : null;
+                    session.Target = ExecutionTarget.Local;
+                    string? packageDir = msg["packageDir"]?.GetValue<string>() is { Length: > 0 } pd ? pd : null;
+                    if (packageDir != null) ResolveInRoot(packageDir);   // refuses folders outside the workspace
+                    if (msg["profile"]?.GetValue<bool>() == true) { session.Reject("The profiler is for Python; JavaScript runs without it."); continue; }
+                    session.StartNode(root, npmScript == null ? file0 : null, npmScript, packageDir, msg["debug"]?.GetValue<bool>() ?? false, args, bps);
+                    if (msg["exceptionBreak"]?.GetValue<string>() == "raised")
+                        session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised", ["classes"] = msg["exceptionClasses"]?.DeepClone() });
+                    if (msg["muted"]?.GetValue<bool>() == true)
+                        session.Handle(new JsonObject { ["type"] = "mute", ["on"] = true });
+                    continue;
+                }
                 if (debugTests != null)
                     session.StartDebugTests(root, (debugTests["ids"] as JsonArray)?.Select(i => i!.GetValue<string>()).ToList() ?? new List<string>(),
                         debugTests["framework"]?.GetValue<string>() ?? "auto", bps);   // pm_tests checks the name
@@ -2274,10 +2306,11 @@ app.Map("/run", async (HttpContext ctx) =>
                 if (msg["file"] is JsonValue fileValue && fileValue.TryGetValue<string>(out var named) && Scratches.IsScratchPath(named)) msg["file"] = DebugFile(named);
                 session.Handle(msg);
             }
+            }
+            catch (UnauthorizedAccessException) { session.Reject("That file or folder is outside the project; only the project's own can be run."); }
         }
     }
     catch (WebSocketException) { }
-    catch (UnauthorizedAccessException) { }
     done:
     session.Dispose();
     outbox.CompleteAdding();

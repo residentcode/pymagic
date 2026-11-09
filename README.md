@@ -12,6 +12,9 @@ What it does, in short:
   Jinja, pytest. New Project also makes the other kinds PyCharm has: HTML5 Boilerplate, Bootstrap, Vite, React Native, Next.js, Node.js and
   Express, each by its own generator (Node.js needed).
 - **Running**: run configurations, a debugger, tests with coverage, a profiler, a Python console, Jupyter notebooks, a terminal.
+  JavaScript and TypeScript too: Node.js files and npm scripts (▶ Run and Debug above each script of a package.json), debugged with the
+  same panes (the processes a dev server starts included, TypeScript and Next.js through their source maps), and JavaScript Debug of a page
+  in Edge or Chrome (Vite, Next.js).
 - **Environments**: venv, uv projects (`uv add` / `uv remove`), conda, and interpreters in WSL, Docker and on SSH hosts.
 - **Tools**: Git (commit, log graph, rebase, three-way merge, changelists, shelf, pull requests), a database tool, an HTTP client, deployment
   to servers, JSON Schema checks of config files, local history.

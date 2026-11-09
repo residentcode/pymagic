@@ -2,7 +2,7 @@
 // Run, Debug and Profile start; with none chosen they start the file in the editor. They are kept in the project, in .pymagic/run-configurations.json.
 import { openMenu } from './menu';
 import { parseRequests } from './http-model.js';
-import { BEFORE_TASKS, KINDS, blank, firstConfiguration, formatEnv, parseEnv, read, splitShared, toStored, uniqueName } from './runconfig-model.js';
+import { BEFORE_TASKS, KINDS, NODE_KINDS, blank, firstConfiguration, formatEnv, parseEnv, read, splitShared, toStored, uniqueName } from './runconfig-model.js';
 
 const $ = (id) => document.getElementById(id);
 const FILE = '.pymagic/run-configurations.json';
@@ -71,6 +71,9 @@ export function setupRunConfigurations({ currentFile }) {
         const files = await fetch('/api/files').then((r) => r.json()).catch(() => []);
         const scripts = files.filter((f) => f.endsWith('.py'));
         const httpFiles = files.filter((f) => /\.(http|rest)$/i.test(f));
+        // JavaScript and TypeScript files Node runs, and the folders whose package.json has scripts ('' is the project's own)
+        const jsFiles = files.filter((f) => /\.(m|c)?(js|ts)$/i.test(f) && !/(^|\/)node_modules\//.test(f) && !/\.d\.ts$/i.test(f));
+        const packageDirs = files.filter((f) => /(^|\/)package\.json$/.test(f) && !/(^|\/)node_modules\//.test(f)).map((f) => f.slice(0, Math.max(0, f.lastIndexOf('/'))));
         const folders = [...new Set(files.map((f) => f.slice(0, Math.max(0, f.lastIndexOf('/')))).filter((d) => d))].sort();
         const draft = list.map((c) => ({ ...c, env: { ...c.env } }));
         let at = Math.max(0, draft.findIndex((c) => c.name === selected));
@@ -291,6 +294,67 @@ export function setupRunConfigurations({ currentFile }) {
                     check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'), check('Open the Run panel when started', 'openPanel'));
                 return;
             }
+            if (NODE_KINDS.has(c.kind)) {
+                // Node.js: a .js or .ts file; npm: a script of a package.json (dev, start, …), its list read from the file chosen
+                const nodeFields = [];
+                if (c.kind === 'browser') {
+                    // a page of a dev server (npm run dev first, as its own configuration or in the terminal), opened in Edge or Chrome
+                    const root = document.createElement('select');
+                    root.add(new Option('The project folder', ''));
+                    for (const d of [...new Set([...packageDirs.filter(Boolean), ...folders])]) root.add(new Option(d, d));
+                    root.value = c.packageDir ?? '';
+                    root.onchange = () => { c.packageDir = root.value; };
+                    form.append(field('Name', name), field('Kind', kind),
+                        field('URL', text('url', 'http://localhost:5173/'), 'The page to open: the address the dev server says (Vite: 5173, Next.js: 3000). Start the dev server first (npm run dev).'),
+                        field('Web root', root, 'The folder of the app (its package.json): the page\'s addresses and its source maps name its files.'),
+                        field('Browser', text('browserPath', 'Microsoft Edge (or Google Chrome)'), 'Empty: Edge, else Chrome; or the path to the browser. It opens with a profile of its own, and closing it ends the debugging.'),
+                        check('Debug only my code', 'justMyCode', 'Off lets the debugger stop in the libraries\' code too.'),
+                        check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'),
+                        check('Open the Run panel when started', 'openPanel'));
+                    return;
+                }
+                if (c.kind === 'node') {
+                    const file = document.createElement('select');
+                    file.add(new Option('Choose a file…', ''));
+                    for (const f of jsFiles) file.add(new Option(f, f));
+                    if (c.script && !jsFiles.includes(c.script)) file.add(new Option(c.script + ' (not found)', c.script));
+                    file.value = c.script;
+                    file.onchange = () => { c.script = file.value; };
+                    nodeFields.push(field('File', file, 'Run as node file; a .ts file by Node 22.18 or later itself, its types left out.'));
+                }
+                else {
+                    const dir = document.createElement('select');
+                    for (const d of packageDirs.length ? packageDirs : ['']) dir.add(new Option(d ? `${d}/package.json` : 'package.json (the project folder)', d));
+                    if (c.packageDir && !packageDirs.includes(c.packageDir)) dir.add(new Option(c.packageDir + '/package.json (not found)', c.packageDir));
+                    dir.value = c.packageDir ?? '';
+                    const script = text('npmScript', 'dev');
+                    const names = document.createElement('datalist');
+                    names.id = 'rc-npm-scripts';
+                    script.setAttribute('list', names.id);
+                    const fill = () => {
+                        names.replaceChildren();
+                        void fetch('/api/file?path=' + encodeURIComponent((c.packageDir ? c.packageDir + '/' : '') + 'package.json')).then((r) => (r.ok ? r.json() : null)).then((pkg) => {
+                            const list = Object.entries(pkg?.scripts ?? {});
+                            names.replaceChildren(...list.map(([n, cmd]) => Object.assign(document.createElement('option'), { value: n, label: String(cmd) })));
+                            if (!c.npmScript && list.length) { c.npmScript = list.find(([n]) => n === 'dev')?.[0] ?? list.find(([n]) => n === 'start')?.[0] ?? list[0][0]; script.value = c.npmScript; }
+                        }).catch(() => { });
+                    };
+                    dir.onchange = () => { c.packageDir = dir.value; fill(); };
+                    fill();
+                    const scriptBox = document.createElement('div');
+                    scriptBox.append(script, names);
+                    nodeFields.push(field('package.json', dir), field('Script', scriptBox, 'Run as npm run script; the processes it starts (a dev server and its workers) are debugged too.'));
+                }
+                form.append(field('Name', name), field('Kind', kind), ...nodeFields,
+                    field(c.kind === 'npm' ? 'Arguments' : 'Parameters', args, c.kind === 'npm' ? 'Given to the script after --.' : 'Typed as on a command line.'),
+                    ...(c.kind === 'node' ? [field('Working folder', cwd)] : []),
+                    field('Environment variables', env),
+                    field('Node.js', text('node', 'node (the one on the PATH)'), 'Empty: node of the PATH; or the path to node.exe.'),
+                    check('Debug only my code', 'justMyCode', 'Off lets the debugger step into node_modules and Node\'s own code too.'),
+                    check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'),
+                    check('Open the Run panel when started', 'openPanel'));
+                return;
+            }
             // Before launch: tasks one per line, run in order before this one (another configuration, a manage.py command, the browser), added from + or typed
             const before = document.createElement('textarea');
             before.rows = 3;
@@ -334,6 +398,8 @@ export function setupRunConfigurations({ currentFile }) {
             run: () => {
                 const c = blank(uniqueName(draft, label), k);
                 if (k === 'script') c.script = currentFile() ?? '';
+                // Node.js: the JavaScript or TypeScript file in the editor, if that is one
+                if (k === 'node' && /\.(m|c)?(js|ts)$/i.test(currentFile() ?? '')) c.script = currentFile();
                 draft.push(c);
                 at = draft.length - 1;
                 chosen = draft[at];

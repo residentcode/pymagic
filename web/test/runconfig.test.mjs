@@ -185,3 +185,22 @@ test('an HTTP request kept as a run configuration: the HTTP client is told its f
     assert.deepEqual(compoundMembers({ name: 'All', kind: 'compound', members: 'Server\nGet items' }, find).members.map((m) => m.name), ['Server', 'Get items']);
     assert.equal(beforeSteps({ ...server, before: 'Get items' }, find).skipped[0].why, 'an HTTP request runs in the HTTP tab');
 });
+
+test('Node.js and npm configurations start Node, with nothing of Python', () => {
+    const node = { ...blank('Server', 'node'), script: 'src/server.ts', args: '--port 3000', env: { DEBUG: 'app' }, interpreter: 'C:/py/python.exe', uv: true };
+    assert.deepEqual(startOf(node), { file: 'src/server.ts', args: ['--port', '3000'], env: { DEBUG: 'app' }, cwd: '' });
+    assert.deepEqual(startOf({ ...node, node: 'C:/nodejs/node.exe', justMyCode: false }), { file: 'src/server.ts', args: ['--port', '3000'], node: 'C:/nodejs/node.exe', env: { DEBUG: 'app' }, cwd: '', allCode: true });
+    const npm = { ...blank('Dev', 'npm'), npmScript: 'dev', packageDir: 'web', args: '--host' };
+    assert.deepEqual(startOf(npm), { npmScript: 'dev', packageDir: 'web', args: ['--host'], env: {}, cwd: '' });
+    // no script named: npm start, as npm itself does
+    assert.equal(startOf({ ...blank('S', 'npm') }).npmScript, 'start');
+    // kept and read back as they are
+    const back = read({ configurations: [{ ...npm }, { ...node }] }).configurations;
+    assert.deepEqual(back.map((c) => [c.kind, c.npmScript, c.packageDir, c.script]), [['npm', 'dev', 'web', ''], ['node', '', '', 'src/server.ts']]);
+    assert.ok(KINDS.some(([k]) => k === 'npm') && KINDS.some(([k]) => k === 'node'));
+});
+
+test('JavaScript Debug opens a page of the dev server in the browser, its web root a folder of the project', () => {
+    assert.deepEqual(startOf({ ...blank('Page', 'browser'), url: 'http://localhost:3000/', packageDir: 'web' }), { browser: { url: 'http://localhost:3000/', webRoot: 'web' }, env: {}, cwd: '' });
+    assert.deepEqual(startOf({ ...blank('Page', 'browser'), browserPath: 'C:/chrome.exe' }).browser, { url: 'http://localhost:5173/', browserPath: 'C:/chrome.exe' });
+});
