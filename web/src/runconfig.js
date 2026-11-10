@@ -332,6 +332,22 @@ export function setupRunConfigurations({ currentFile }) {
             if (NODE_KINDS.has(c.kind)) {
                 // Node.js: a .js or .ts file; npm: a script of a package.json (dev, start, …), its list read from the file chosen
                 const nodeFields = [];
+                if (c.kind === 'nodeAttach') {
+                    // a Node program already running with its inspector open (node --inspect, a Docker container's published 9229, …)
+                    const root = document.createElement('select');
+                    root.add(new Option('The project folder', ''));
+                    for (const d of [...new Set([...packageDirs.filter(Boolean), ...folders])]) root.add(new Option(d, d));
+                    root.value = c.packageDir ?? '';
+                    root.onchange = () => { c.packageDir = root.value; };
+                    form.append(field('Name', name), field('Kind', kind),
+                        field('Host', text('host', '127.0.0.1'), 'Where the program\'s inspector listens: this computer, or a machine or container that publishes it.'),
+                        field('Port', text('port', '9229'), 'node --inspect listens on 9229; --inspect=PORT names another. A program of this computer started without it: Run > Attach to process… opens it.'),
+                        field('Source root', root, 'The folder of the app (its package.json): its source maps name its files.'),
+                        check('Debug only my code', 'justMyCode', 'Off lets the debugger stop in the libraries\' code too.'),
+                        check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'),
+                        check('Open the Run panel when started', 'openPanel'));
+                    return;
+                }
                 if (c.kind === 'browser') {
                     // a page of a dev server (npm run dev first, as its own configuration or in the terminal), opened in Edge or Chrome
                     const root = document.createElement('select');

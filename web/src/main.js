@@ -190,6 +190,8 @@ async function loadModel(rel, key) {
         relPathOf.set(key, rel);
         savedText.set(rel, text);
         sharedText.watch(rel, plain, () => plain.getValue() !== savedText.get(rel));
+        // its breakpoints too (a .js, .vue or .php file): the saved ones back, and lines moved by an edit told to a run that goes on
+        runHooks?.onModelCreated(rel, plain);
         plain.onDidChangeContent(() => {
             refreshDirty();
             if (served.has(plain))

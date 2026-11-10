@@ -76,3 +76,10 @@ test('a map in a data: address, and index maps (sections)', async () => {
     assert.deepEqual(originalFor(p, 11, 0), { file: join(ROOT, 'y.ts'), line: 2, column: 0 });
     assert.deepEqual(originalFor(p, 0, 0), { file: join(ROOT, 'x.ts'), line: 1, column: 0 });
 });
+
+test("each source's own text is kept (sourcesContent): a hot reload's old module is told from the file saved since", () => {
+    const map = { version: 3, sources: ['App.vue', 'b.ts'], sourcesContent: ['<script setup>\nconst a = 1\n</script>\n', null], mappings: 'AAAA;AACA' };
+    const prepared = prepare({ map, url: 'http://localhost:5173/src/App.vue' }, ROOT);
+    assert.equal(prepared.contents.get(join(ROOT, 'src', 'App.vue')), '<script setup>\nconst a = 1\n</script>\n');
+    assert.equal(prepared.contents.has(join(ROOT, 'src', 'b.ts')), false);
+});

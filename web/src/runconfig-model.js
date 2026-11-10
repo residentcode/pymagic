@@ -3,11 +3,11 @@ import { splitArguments } from './django-model.js';
 
 /** The kinds of configuration, as PyCharm's: [kind, label]. */
 export const KINDS = [['script', 'Python script'], ['module', 'Python module (-m)'], ['django', 'Django server'], ['djangoTests', 'Django tests'], ['fastapi', 'FastAPI (uvicorn)'], ['flask', 'Flask server'], ['pytest', 'pytest'], ['debugserver', 'Python Debug Server (a program connects back)'],
-    ['node', 'Node.js (a .js or .ts file)'], ['npm', 'npm script (package.json: dev, start, …)'], ['browser', 'JavaScript Debug (a page in the browser)'],
+    ['node', 'Node.js (a .js or .ts file)'], ['npm', 'npm script (package.json: dev, start, …)'], ['browser', 'JavaScript Debug (a page in the browser)'], ['nodeAttach', 'Attach to Node.js (a program running with --inspect)'],
     ['laravel', 'Laravel server (php artisan serve)'], ['artisan', 'Artisan command (php artisan …)'], ['php', 'PHP script'],
     ['http', 'HTTP request (.http file)'], ['compound', 'Compound (several together)']];
 /** The kinds run by Node rather than Python: no interpreter, uv or PYTHONPATH of theirs. */
-export const NODE_KINDS = new Set(['node', 'npm', 'browser']);
+export const NODE_KINDS = new Set(['node', 'npm', 'browser', 'nodeAttach']);
 /** The kinds run by PHP: nothing of Python's either. */
 export const PHP_KINDS = new Set(['laravel', 'artisan', 'php']);
 
@@ -176,6 +176,7 @@ export function startOf(c) {
         case 'node': start = { file: c.script, args: extra, ...(c.node ? { node: c.node } : {}) }; break;
         case 'npm': start = { npmScript: c.npmScript || 'start', ...(c.packageDir ? { packageDir: c.packageDir } : {}), args: extra, ...(c.node ? { node: c.node } : {}) }; break;
         case 'browser': start = { browser: { url: c.url || 'http://localhost:5173/', ...(c.packageDir ? { webRoot: c.packageDir } : {}), ...(c.browserPath ? { browserPath: c.browserPath } : {}) } }; break;
+        case 'nodeAttach': start = { nodeAttach: { host: c.host || '127.0.0.1', port: Number(c.port) || 9229, ...(c.packageDir ? { webRoot: c.packageDir } : {}) } }; break;
         case 'laravel': start = { artisan: ['serve', `--host=${host}`, `--port=${c.port || '8000'}`, ...extra] }; break;
         case 'artisan': start = { artisan: [...splitArguments(c.command || 'list'), ...extra] }; break;
         case 'php': start = { file: c.script, args: extra }; break;

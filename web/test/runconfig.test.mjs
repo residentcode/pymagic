@@ -204,3 +204,9 @@ test('JavaScript Debug opens a page of the dev server in the browser, its web ro
     assert.deepEqual(startOf({ ...blank('Page', 'browser'), url: 'http://localhost:3000/', packageDir: 'web' }), { browser: { url: 'http://localhost:3000/', webRoot: 'web' }, env: {}, cwd: '' });
     assert.deepEqual(startOf({ ...blank('Page', 'browser'), browserPath: 'C:/chrome.exe' }).browser, { url: 'http://localhost:5173/', browserPath: 'C:/chrome.exe' });
 });
+
+test('Attach to Node.js names the inspector to join: 127.0.0.1:9229 unless it says another, its source root a folder of the project', () => {
+    assert.ok(KINDS.some(([k]) => k === 'nodeAttach'));
+    assert.deepEqual(startOf({ ...blank('Attach', 'nodeAttach') }), { nodeAttach: { host: '127.0.0.1', port: 9229 }, env: {}, cwd: '' });
+    assert.deepEqual(startOf({ ...blank('Attach', 'nodeAttach'), host: '192.168.1.5', port: '9230', packageDir: 'api' }).nodeAttach, { host: '192.168.1.5', port: 9230, webRoot: 'api' });
+});

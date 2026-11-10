@@ -33,6 +33,8 @@ for (let i = 0; i < argv.length; i++) {
     else if (a === '--browser') opt.browser = argv[++i];            // a page to debug in Edge or Chrome (JavaScript Debug)
     else if (a === '--browser-path') opt.browserPath = argv[++i];   // the browser to start; empty: Edge, else Chrome
     else if (a === '--web-root') opt.webRoot = argv[++i];           // the folder the page's addresses are files of (a Vite app's)
+    else if (a === '--attach') opt.attach = argv[++i];              // host:port of the inspector of a Node process already running
+    else if (a === '--attach-pid') opt.attachPid = Number(argv[++i]);   // a Node process of this computer whose inspector is opened first
 }
 const debugging = Number.isInteger(opt.port) && opt.port > 0;
 // run as the helper (not imported by a test of its functions)
@@ -101,6 +103,9 @@ let channel = null;
 let inspectFile = null;
 let watchTimer = 0;
 const sessions = new Map();        // pid -> Session
+const flat = new Map();            // sessionId -> Session: the targets reached through another's connection (the browser's tabs, their frames and workers)
+let firstPageSeen = false;         // the browser's first page is "the page in the browser"; the others are tabs
+let childIds = 0;
 let shown = null;                  // the Session shown stopped
 const waiting = [];                // Sessions stopped while another one is shown
 const breakpoints = new Map();     // canonical path -> { file, specs: [{line, condition, hitCondition, logMessage}] }
@@ -135,6 +140,17 @@ if (isMain && debugging) {
     channel.on('close', () => { if (!finished) { if (child) child.kill(); process.exit(0); } });
 }
 
+/** Whether a script's map was made from another text of the file than the one on disk now (the file edited and saved since). */
+/** (Only a script whose text was the file's when it loaded: a map whose text is a preprocessor's is taken as current.) */
+function madeFromOlder(prepared, key) {
+    if (!prepared?.sameAsDisk?.has(key)) return false;
+    return !sameText(key, prepared.contents.get(key));
+}
+function sameText(file, text) {
+    const lf = (t) => t.replace(/\r\n/g, '\n');
+    try { return lf(readFileSync(file, 'utf8')) === lf(text); }
+    catch { return false; }
+}
 const ANSWERS = { scopes: 'scopes', variables: 'variables', evaluate: 'evaluated', setVariable: 'variableSet', values: 'values', table: 'table', jump: 'jumped', setName: 'setName', reprOf: 'reprOf', typeSource: 'typeSource' };
 const answerType = (kind) => ANSWERS[kind] ?? 'evaluated';
 
@@ -161,6 +177,7 @@ async function handle(msg) {
             return;   // what Node's debugger does not have (function breakpoints by name, data breakpoints, values on demand)
         case 'go': {
             if (opt.browser) { await startBrowser(); return; }
+            if (opt.attach) { await startAttach(); return; }
             const dir = mkdtempSync(join(tmpdir(), 'pymagic-node-'));
             inspectFile = join(dir, 'inspect.jsonl');
             writeFileSync(inspectFile, '');
@@ -177,6 +194,13 @@ async function handle(msg) {
             for (const s of sessions.values()) await s.cdp('Debugger.pause').catch(() => {});
             return;
         case 'stop': case 'detach':
+            // a process PyMagic attached to is let go (its breakpoints gone, running on): it is not PyMagic's to end
+            if (opt.attach) {
+                for (const s of [...sessions.values()]) { await s.cdp('Debugger.disable').catch(() => {}); s.close(); }
+                send({ type: 'output', stream: 'stdout', text: 'Detached: the program goes on.\n' });
+                finish(0);
+                return;
+            }
             if (child) killTree(child.pid);
             if (browserProcess) killTree(browserProcess.pid);
             finish(137);
@@ -283,21 +307,74 @@ async function startBrowser() {
         try { port = Number(readFileSync(join(browserProfile, 'DevToolsActivePort'), 'utf8').split('\n')[0]); } catch { /* not yet */ }
     }
     if (!port) { send({ type: 'output', stream: 'stderr', text: 'The browser did not open its DevTools port.\n' }); killTree(browserProcess.pid); finish(1); return; }
-    let target = null;
-    for (let i = 0; i < 100 && !target; i++) {
-        const list = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) => r.json()).catch(() => []);
-        target = list.find((t) => t.type === 'page');
-        if (!target) await new Promise((r) => setTimeout(r, 100));
-    }
-    if (!target) { send({ type: 'output', stream: 'stderr', text: 'The browser has no page to debug.\n' }); killTree(browserProcess.pid); finish(1); return; }
-    const info = { pid: browserProcess.pid, url: target.webSocketDebuggerUrl, argv: ['the browser'], browser: true };
-    const s = new Session(info);
-    sessions.set(info.pid, s);
-    try { await s.open(); }
+    // the browser itself: every page (the first one, the tabs opened later) is reached through its connection, each with its frames of other
+    // sites and its workers, waiting until its breakpoints are set
+    const version = await fetch(`http://127.0.0.1:${port}/json/version`).then((r) => r.json()).catch(() => null);
+    if (!version?.webSocketDebuggerUrl) { send({ type: 'output', stream: 'stderr', text: 'The browser did not answer on its DevTools port.\n' }); killTree(browserProcess.pid); finish(1); return; }
+    const b = new Session({ pid: 'browser', url: version.webSocketDebuggerUrl, browserTarget: true, argv: ['the browser'] });
+    try { await b.open(); }
     catch (e) { send({ type: 'output', stream: 'stderr', text: `PyMagic could not attach the debugger to the browser: ${e.message}\n` }); killTree(browserProcess.pid); finish(1); return; }
+    let page = null;
+    for (let i = 0; i < 100 && !page; i++) {
+        page = [...sessions.values()].find((s) => s.info.first && s.ready && !s.ended);
+        if (!page) await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!page) { send({ type: 'output', stream: 'stderr', text: 'The browser has no page to debug.\n' }); killTree(browserProcess.pid); finish(1); return; }
     // the page last, once the breakpoints are set: its scripts stop at them from the start
-    await s.cdp('Page.navigate', { url: opt.browser }).catch((e) => send({ type: 'output', stream: 'stderr', text: `${opt.browser}: ${e.message}\n` }));
+    await page.cdp('Page.navigate', { url: opt.browser }).catch((e) => send({ type: 'output', stream: 'stderr', text: `${opt.browser}: ${e.message}\n` }));
     browserProcess.on('exit', () => finish(0));
+}
+
+// ------------------------------------------------------------ a Node process already running (Attach to Node.js)
+// Its inspector answers at host:port (node --inspect, --inspect=PORT, --inspect-brk); a Node process of this computer started without it gets
+// its inspector opened first (process._debugProcess, as SIGUSR1 does on Linux, on port 9229). Each of its targets is debugged as a process
+// PyMagic started is; Stop lets it go on, and its end (or its inspector closing) ends the run.
+
+/** host and port of "host:port" ("[::1]:9229" too). */
+function hostPort(text) {
+    const m = /^\[?([^\]]*?)\]?:(\d+)$/.exec(String(text ?? '').trim());
+    return m ? { host: m[1] || '127.0.0.1', port: Number(m[2]) } : { host: '127.0.0.1', port: 9229 };
+}
+
+async function startAttach() {
+    const { host, port } = hostPort(opt.attach);
+    const where = host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`;
+    if (opt.attachPid) {
+        try { process._debugProcess(opt.attachPid); }
+        catch (e) {
+            send({ type: 'output', stream: 'stderr', text: `Process ${opt.attachPid} did not open its inspector (${e.message}): is it a Node.js process of this computer?\n` });
+            finish(1);
+            return;
+        }
+        send({ type: 'output', stream: 'stdout', text: `Process ${opt.attachPid} opened its inspector.\n` });
+    }
+    let targets = [];
+    for (let i = 0; i < 100 && !targets.length; i++) {
+        const list = await fetch(`http://${where}/json/list`).then((r) => r.json()).catch(() => []);
+        targets = (Array.isArray(list) ? list : []).filter((t) => t.webSocketDebuggerUrl && (t.type === 'node' || !t.type));
+        if (!targets.length) await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!targets.length) {
+        send({ type: 'output', stream: 'stderr', text: `No Node.js inspector answers at ${where}: start the program with node --inspect (or --inspect=PORT), or give its process ID.\n` });
+        finish(1);
+        return;
+    }
+    for (const t of targets) {
+        // the inspector names its address as it listens (0.0.0.0, localhost): it is reached where it was asked for
+        const url = t.webSocketDebuggerUrl.replace(/^ws:\/\/[^/]+/, `ws://${where}`);
+        const info = { pid: opt.attachPid || t.id, url, argv: [t.title || t.url || 'node'], attached: where };
+        const s = new Session(info);
+        sessions.set(info.pid, s);
+        try {
+            await s.open();
+            send({ type: 'output', stream: 'stdout', text: `Attached to ${s.label()}. Its output stays where it runs; Stop lets it go on.\n` });
+        }
+        catch (e) {
+            sessions.delete(info.pid);
+            send({ type: 'output', stream: 'stderr', text: `PyMagic could not attach to ${where}: ${e.message} (another debugger may be attached to it).\n` });
+        }
+    }
+    if (!sessions.size) finish(1);
 }
 
 let readSoFar = 0;
@@ -353,6 +430,8 @@ class Session {
         else if (info?.sourceMapURL && !/[\\/]node_modules[\\/]/.test(info.url) && !info.url.startsWith('node:')) {
             const loaded = await loadMap(info.sourceMapURL, info.url, (u) => fetch(u).then((r) => r.text())).catch(() => null);
             prepared = prepare(loaded, webRoot(), canonical);
+            // the files whose text the script was made from is the one on disk as it loads (a later save makes it an older one)
+            if (prepared) prepared.sameAsDisk = new Set([...prepared.contents].filter(([k, text]) => sameText(k, text)).map(([k]) => k));
         }
         this.maps.set(scriptId, prepared);
         return prepared;
@@ -390,53 +469,112 @@ class Session {
     }
 
     label() {
-        if (this.info.browser) return 'the page in the browser';
+        if (this.info.browser) {
+            // the first page as before; another tab, a frame or a worker by its kind and its address's last part
+            const where = String(this.info.url ?? '').replace(/[?#].*$/, '').replace(/^[a-z]+:\/\/[^/]*/i, '') || '/';
+            if (this.info.kind === 'page') return this.info.first ? 'the page in the browser' : `tab ${where}`;
+            const kind = { iframe: 'frame', worker: 'worker', shared_worker: 'shared worker', service_worker: 'service worker' }[this.info.kind] ?? this.info.kind;
+            return `${kind} ${where.replace(/^.*\//, '') || where}`;
+        }
         const main = this.info.argv?.[0] ? this.info.argv[0].replace(/^.*[\\/]/, '') : 'node';
+        if (this.info.attached) return `${main} (${typeof this.pid === 'number' ? `pid ${this.pid}, ` : ''}${this.info.attached})`;
         return `${main} (pid ${this.pid})`;
     }
 
+    /** The debugger's settings of a process, page, frame or worker, its breakpoints set, then it runs on (it waited for its debugger). */
+    async setup() {
+        await this.cdp('Runtime.enable');
+        await this.cdp('Debugger.enable', { maxScriptsCacheSize: 10e6 });
+        // Node's own code and the libraries' are stepped over (not PyMagic's preload: V8 would ignore its `debugger` then; a step that
+        // lands in it goes on instead, in onPaused)
+        if (!opt.allCode) await this.cdp('Debugger.setBlackboxPatterns', { patterns: ['^node:', '[\\\\/]node_modules[\\\\/]'] }).catch(() => {});
+        // a script with a source map (TypeScript built by tsc, a Next.js page built by webpack or Turbopack) stops before it runs,
+        // so the breakpoints of the files it was made from are set in it first
+        await this.cdp('Debugger.setInstrumentationBreakpoint', { instrumentation: 'beforeScriptWithSourceMapExecution' }).catch(() => {});
+        await this.applyExceptions();
+        if (muted) await this.cdp('Debugger.setBreakpointsActive', { active: false });
+        for (const { file } of breakpoints.values()) await this.applyBreakpoints(file);
+        await this.tellBreaks();
+        // a page's workers and its frames of other sites are targets of their own, reached through it: each waits until its breakpoints are set
+        // (a frame that waits answers it only once it runs: the run is asked for after it, not after its answer; the browser keeps the order)
+        const auto = this.info.browser ? this.cdp('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }).catch(() => {}) : null;
+        await this.cdp('Runtime.runIfWaitingForDebugger');
+        await auto;
+    }
+
     open() {
+        // a target reached through another's connection (a tab through the browser's, a worker through its page's)
+        if (this.parent) return this.setup();
         return new Promise((ok, fail) => {
             const ws = new WebSocket(this.info.url);
             this.ws = ws;
             ws.onopen = async () => {
                 try {
-                    await this.cdp('Runtime.enable');
-                    await this.cdp('Debugger.enable', { maxScriptsCacheSize: 10e6 });
-                    // Node's own code and the libraries' are stepped over (not PyMagic's preload: V8 would ignore its `debugger` then; a step that
-                    // lands in it goes on instead, in onPaused)
-                    if (!opt.allCode) await this.cdp('Debugger.setBlackboxPatterns', { patterns: ['^node:', '[\\\\/]node_modules[\\\\/]'] }).catch(() => {});
-                    // a script with a source map (TypeScript built by tsc, a Next.js page built by webpack or Turbopack) stops before it runs,
-                    // so the breakpoints of the files it was made from are set in it first
-                    await this.cdp('Debugger.setInstrumentationBreakpoint', { instrumentation: 'beforeScriptWithSourceMapExecution' }).catch(() => {});
-                    await this.applyExceptions();
-                    if (muted) await this.cdp('Debugger.setBreakpointsActive', { active: false });
-                    for (const { file } of breakpoints.values()) await this.applyBreakpoints(file);
-                    await this.tellBreaks();
-                    await this.cdp('Runtime.runIfWaitingForDebugger');
+                    // the browser itself: its pages, the first one and the tabs opened later, each waiting until its breakpoints are set
+                    if (this.info.browserTarget) await this.cdp('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+                    else await this.setup();
                     ok();
                 }
                 catch (e) { fail(e); }
             };
             ws.onerror = () => fail(new Error('the inspector did not answer'));
-            ws.onmessage = (e) => this.onMessage(JSON.parse(typeof e.data === 'string' ? e.data : Buffer.from(e.data).toString('utf8')));
+            // the messages of the targets reached through this connection carry their session's id
+            ws.onmessage = (e) => {
+                const m = JSON.parse(typeof e.data === 'string' ? e.data : Buffer.from(e.data).toString('utf8'));
+                if (m.sessionId) flat.get(m.sessionId)?.onMessage(m);
+                else this.onMessage(m);
+            };
             ws.onclose = () => this.gone();
         });
     }
 
     close() { try { this.ws?.close(); } catch { /* gone */ } }
 
+    /** The connection this target's messages go through: its own, or the one of the target it was reached through. */
+    get socket() { return this.parent ? this.parent.socket : this.ws; }
+
+    /** A target the browser or a page attached (a tab, a frame of another site, a worker): debugged as the page is, through its connection. */
+    async attachChild({ sessionId, targetInfo }) {
+        const kind = targetInfo?.type ?? 'other';
+        // the browser's own (its extensions' pages and workers, its settings pages) are not the app's
+        if (!['page', 'iframe', 'worker', 'shared_worker', 'service_worker'].includes(kind) || /^(chrome-extension|edge|chrome|devtools|extension):/i.test(targetInfo?.url ?? '')) {
+            // a target the debugger has nothing for (an extension's): it goes on, let go of
+            const ws = this.socket;
+            if (ws?.readyState === 1) {
+                ws.send(JSON.stringify({ id: 900000000 + (childIds++), method: 'Runtime.runIfWaitingForDebugger', params: {}, sessionId }));
+                ws.send(JSON.stringify({ id: 900000000 + (childIds++), method: 'Target.detachFromTarget', params: { sessionId }, ...(this.sessionId ? { sessionId: this.sessionId } : {}) }));
+            }
+            return;
+        }
+        const first = kind === 'page' && !firstPageSeen;
+        if (first) firstPageSeen = true;
+        const s = new Session({ pid: sessionId, browser: true, kind, url: targetInfo.url, first, targetId: targetInfo.targetId });
+        s.parent = this;
+        s.sessionId = sessionId;
+        flat.set(sessionId, s);
+        sessions.set(sessionId, s);
+        try { await s.open(); s.ready = true; }
+        catch (e) {
+            flat.delete(sessionId);
+            sessions.delete(sessionId);
+            if (!/ended|closed|not found/i.test(e.message)) send({ type: 'output', stream: 'stderr', text: `PyMagic could not debug ${s.label()}: ${e.message}\n` });
+        }
+    }
+
     /** Tells the process's preload whether to stop before a module with a source map runs (only while there are breakpoints). */
     async tellBreaks() {
+        // only Node's preload asks it; a frame or page waiting for its debugger has no context to evaluate in yet, and would wait for it
+        if (this.info.browser) return;
         await this.cdp('Runtime.evaluate', { expression: `globalThis.__pymagicBreaks = ${anyBreaks()}`, silent: true }).catch(() => {});
     }
 
     cdp(method, params = {}) {
         return new Promise((ok, fail) => {
-            if (!this.ws || this.ws.readyState !== 1) { fail(new Error('The process has ended.')); return; }
+            const ws = this.socket;
+            if (!ws || ws.readyState !== 1 || this.ended) { fail(new Error('The process has ended.')); return; }
             const id = this.nextId++;
             this.pending.set(id, { ok, fail });
-            this.ws.send(JSON.stringify({ id, method, params }));
+            ws.send(JSON.stringify(this.sessionId ? { id, method, params, sessionId: this.sessionId } : { id, method, params }));
         });
     }
 
@@ -454,6 +592,12 @@ class Session {
             if (m.params.sourceMapURL) (this.parsed ??= new Map()).set(m.params.scriptId, { url: m.params.url, sourceMapURL: m.params.sourceMapURL });
         }
         else if (m.method === 'Debugger.paused') void this.onPaused(m.params);
+        else if (m.method === 'Target.attachedToTarget') void this.attachChild(m.params);
+        else if (m.method === 'Target.detachedFromTarget') flat.get(m.params.sessionId)?.gone();
+        else if (m.method === 'Target.targetInfoChanged' && this.info.browserTarget) {
+            // a tab that went to another address: its label says the new one
+            for (const s of flat.values()) if (s.info.targetId === m.params.targetInfo?.targetId) s.info.url = m.params.targetInfo.url;
+        }
         else if (m.method === 'Runtime.executionContextDestroyed' && !this.info.browser) {
             // the program has ended: Node waits for its debugger to let go ("Waiting for the debugger to disconnect"), so it lets go
             if (this.paused) { this.paused = null; if (shown === this) { shown = null; dropRefs(this); } }
@@ -462,9 +606,14 @@ class Session {
     }
 
     gone() {
+        if (this.ended) return;
+        this.ended = true;
         for (const p of this.pending.values()) p.fail(new Error('The process has ended.'));
         this.pending.clear();
         sessions.delete(this.pid);
+        if (this.sessionId) flat.delete(this.sessionId);
+        // the targets reached through it go with it (a closed tab's workers)
+        for (const c of [...flat.values()]) if (c.parent === this) c.gone();
         const i = waiting.indexOf(this);
         if (i >= 0) waiting.splice(i, 1);
         if (shown === this) {
@@ -473,8 +622,14 @@ class Session {
             showNext();
             if (!shown) send({ type: 'running' });
         }
-        // the browser's page closed: the run ends with it
-        if (this.info.browser) { if (browserProcess) killTree(browserProcess.pid); finish(0); }
+        // the browser closed, or its last page did: the run ends with it (a worker, a frame or one tab of several ending does not end it)
+        const pageLeft = [...sessions.values()].some((s) => s.info.browser && s.info.kind === 'page');
+        if (this.info.browserTarget || (this.info.browser && this.info.kind === 'page' && !pageLeft)) { if (browserProcess) killTree(browserProcess.pid); finish(0); }
+        // a process attached to has ended (or closed its inspector): the run ends when none is left
+        if (this.info.attached && !finished && ![...sessions.values()].some((s) => s.info.attached)) {
+            send({ type: 'output', stream: 'stdout', text: `${this.label()} ended, or let its debugger go.\n` });
+            finish(0);
+        }
     }
 
     async applyExceptions() {
@@ -511,7 +666,8 @@ class Session {
         }
         this.bpIds.set(key, ids);
         // the compiled scripts made from this file: their breakpoints through their maps again
-        for (const [scriptId, prepared] of this.maps) if (prepared?.bySource.has(key) || this.mapIds.get(scriptId)?.length) await this.applyMapped(scriptId);
+        // (not a script made from an earlier text of the file: a hot reload's old module keeps its breakpoints on the lines of that text)
+        for (const [scriptId, prepared] of this.maps) if ((prepared?.bySource.has(key) || this.mapIds.get(scriptId)?.length) && !madeFromOlder(prepared, key)) await this.applyMapped(scriptId);
     }
 
     async onPaused(params) {
@@ -580,12 +736,23 @@ class Session {
             : hitIds.length ? 'breakpoint' : this.lastCommand && this.lastCommand !== 'Debugger.resume' ? 'step' : params.reason === 'other' ? 'breakpoint' : 'pause';
         this.message = this.reason === 'exception' ? (params.data?.description ?? params.data?.value ?? 'an exception').split('\n')[0] : null;
         this.lastCommand = null;
+        await this.refreshAddress();
         if (shown && shown !== this) {
             if (!waiting.includes(this)) waiting.push(this);
             send({ type: 'output', stream: 'stdout', text: `${this.label()} stopped too; it is shown when ${shown.label()} goes on.\n` });
             return;
         }
         this.show();
+    }
+
+    /** A tab's or frame's address as it is now (it is attached before it has one, and a tab goes to others): the browser says it. */
+    async refreshAddress() {
+        if (!this.info.browser || !this.info.targetId) return;
+        let root = this;
+        while (root.parent) root = root.parent;
+        if (!root.info.browserTarget) return;
+        const r = await root.cdp('Target.getTargetInfo', { targetId: this.info.targetId }).catch(() => null);
+        if (r?.targetInfo?.url) this.info.url = r.targetInfo.url;
     }
 
     show() {

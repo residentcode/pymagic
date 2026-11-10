@@ -84,9 +84,12 @@ export function setupRun(deps) {
     const fileOf = (model) => deps.relOf(model) ?? deps.cellFileOf?.(model) ?? null;
     function sendBreakpoints(model) {
         const rel = fileOf(model);
-        if (rel && run)
+        if (rel && run) {
+            sentLines.set(model, breakpointsOf(model).map((b) => b.line).join(','));
             run.send({ type: 'setBreakpoints', file: rel, lines: wire(model, breakpointsOf(model)) });
+        }
     }
+    const sentLines = new WeakMap();
     function placeBreakpoint(model, line, meta) {
         const [id] = model.deltaDecorations([], [{ range: new monaco.Range(line, 1, line, 1), options: optionsFor(meta) }]);
         if (meta && !isPlain(meta))
@@ -181,7 +184,20 @@ export function setupRun(deps) {
                 placeBreakpoint(model, bp.line, bp);
         }
         model.onDidChangeDecorations(() => { });
-        model.onDidChangeContent(() => { persist(); });
+        model.onDidChangeContent(() => { persist(); sendMoved(model); });
+    }
+    // lines added or removed above a breakpoint while a run goes on: the run is told its new line (the file saved and reloaded, as a dev
+    // server's hot reload does, stops there and not on the line that was there before)
+    const movedTimers = new WeakMap();
+    function sendMoved(model) {
+        if (!run || !fileOf(model))
+            return;
+        clearTimeout(movedTimers.get(model));
+        movedTimers.set(model, setTimeout(() => {
+            const lines = breakpointsOf(model).map((b) => b.line).join(',');
+            if (lines !== sentLines.get(model))
+                sendBreakpoints(model);
+        }, 250));
     }
     let run = null;
     // the members of compounds that are running or have run (name -> entry), each with a run of its own beside the Run panel's one
@@ -1118,8 +1134,8 @@ export function setupRun(deps) {
         holder.className = 'attach-list';
         const note = document.createElement('div');
         note.className = 'dim';
-        note.textContent = list.length ? 'The program and the selected interpreter must be Python 3.14 or later. Stop detaches and leaves the program running.'
-            : 'No Python program is running on this computer.';
+        note.textContent = list.length ? 'A Python program and the selected interpreter must be Python 3.14 or later; a Node.js program has its inspector opened (or the one it opened with --inspect used). Stop detaches and leaves the program running.'
+            : 'No Python or Node.js program is running on this computer.';
         holder.appendChild(note);
         let close = () => { };
         for (const p of list) {
@@ -1127,7 +1143,8 @@ export function setupRun(deps) {
             row.className = 'attach-row';
             row.textContent = `${p.pid}  ${p.name}${p.title ? ' — ' + p.title : ''}${p.started ? '  (started ' + p.started + ')' : ''}`;
             row.title = p.path ?? '';
-            row.onclick = () => { close(); void startAttach(p.pid); };
+            // a Node.js program: its inspector, through the helper (Attach to Node.js)
+            row.onclick = () => { close(); void (p.kind === 'node' ? launch(null, true, false, [], { nodeAttach: { host: '127.0.0.1', port: p.inspectPort ?? 9229, pid: p.pid } }) : startAttach(p.pid)); };
             holder.appendChild(row);
         }
         dialog('Attach to Process', holder);
@@ -1255,6 +1272,9 @@ export function setupRun(deps) {
     async function launch(rel, debug, profile, args, extra = {}) {
         if (run)
             return false;
+        // an attach is the debugger's alone: Run of it debugs too
+        if (extra.nodeAttach)
+            debug = true;
         await deps.saveAll();
         const breakpoints = {};
         for (const m of monaco.editor.getModels()) {
@@ -1277,12 +1297,12 @@ export function setupRun(deps) {
         openBrowser = !!extra.openBrowser;
         followLogs((extra.logFiles ?? '').split(',').map((s) => s.trim()).filter(Boolean));
         testsRun = !!extra.tests;
-        lastLaunch = { rel, debug, profile, args, extra, started: Date.now(), label: extra.label ?? (extra.module ? `python -m ${extra.module}` : extra.npmScript ? `npm run ${extra.npmScript}` : extra.browser ? `JavaScript Debug ${extra.browser.url}` : extra.artisan ? `php artisan ${extra.artisan.join(' ')}` : extra.composer ? `composer ${extra.composer.join(' ')}` : extra.tests ? 'tests' : (rel ?? 'a program')) };
+        lastLaunch = { rel, debug, profile, args, extra, started: Date.now(), label: extra.label ?? (extra.module ? `python -m ${extra.module}` : extra.npmScript ? `npm run ${extra.npmScript}` : extra.browser ? `JavaScript Debug ${extra.browser.url}` : extra.nodeAttach ? `Attach to Node.js ${extra.nodeAttach.pid ? 'process ' + extra.nodeAttach.pid : (extra.nodeAttach.host ?? '127.0.0.1') + ':' + (extra.nodeAttach.port ?? 9229)}` : extra.artisan ? `php artisan ${extra.artisan.join(' ')}` : extra.composer ? `composer ${extra.composer.join(' ')}` : extra.tests ? 'tests' : (rel ?? 'a program')) };
         run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, tests: extra.tests, profileTests: extra.profileTests, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
             exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value, functionBreaks: functionNames(),
             envFiles: extra.envFiles, interpreter: extra.interpreter, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots,
             // JavaScript: an npm script of a package.json (its folder), and the Node program a configuration names
-            npmScript: extra.npmScript, packageDir: extra.packageDir, node: extra.node, browser: extra.browser,
+            npmScript: extra.npmScript, packageDir: extra.packageDir, node: extra.node, browser: extra.browser, nodeAttach: extra.nodeAttach,
             // PHP: an Artisan command of a Laravel project (php artisan serve, migrate, …)
             artisan: extra.artisan,
             // Composer: a command of the project's composer.json (install, require …, a script)

@@ -108,4 +108,75 @@ public sealed partial class RunSession
         _runId = null;
         StartProcess(psi, root, token, breakpoints);
     }
+
+    /// <summary>
+    /// The Node.js programs running on this computer, for Attach to Process: pid, its script (from its command line), the inspector's port it
+    /// opened itself (--inspect=PORT; 9229 when it names none, or when it has none: PyMagic opens it there); PyMagic's own helpers left out.
+    /// </summary>
+    public static List<JsonObject> NodeProcesses()
+    {
+        var list = new List<JsonObject>();
+        var commandLines = new Dictionary<int, string>();
+        if (OperatingSystem.IsWindows())
+            try
+            {
+                var psi = new ProcessStartInfo("powershell", "-NoProfile -NonInteractive -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='node.exe'\\\" | ForEach-Object { [string]$_.ProcessId + [char]9 + $_.CommandLine }\"")
+                { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+                using var p = Process.Start(psi);
+                string output = p?.StandardOutput.ReadToEnd() ?? "";
+                p?.WaitForExit(15_000);
+                foreach (var line in output.Split('\n'))
+                    if (line.Split('\t', 2) is [var id, var cmd] && int.TryParse(id.Trim(), out int pid)) commandLines[pid] = cmd.Trim();
+            }
+            catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+        foreach (var p in Process.GetProcessesByName("node"))
+        {
+            try
+            {
+                string command = commandLines.TryGetValue(p.Id, out var c) ? c : "";
+                if (command.Contains("pm_nodedebug.mjs") || command.Contains("pm_nodeboot") || command.Contains("pymagic-node-")) continue;
+                var inspect = System.Text.RegularExpressions.Regex.Match(command, @"--inspect(?:-brk|-wait)?(?:=(?:[\w.\-]+:)?(\d+))?(?=\s|$)");
+                // the script: the first argument after node's own options that names a file
+                string? script = System.Text.RegularExpressions.Regex.Matches(command, @"""([^""]+)""|(\S+)").Select(m => m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)
+                    .Skip(1).FirstOrDefault(a => !a.StartsWith('-'));
+                string? started = null;
+                try { started = p.StartTime.ToString("HH:mm:ss"); } catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+                list.Add(new JsonObject
+                {
+                    ["pid"] = p.Id, ["name"] = "node", ["kind"] = "node", ["title"] = script != null ? Path.GetFileName(script) : null, ["path"] = command.Length > 0 ? command : null, ["started"] = started,
+                    ["inspectPort"] = inspect.Success ? (inspect.Groups[1].Success ? int.Parse(inspect.Groups[1].Value) : 9229) : null,
+                });
+            }
+            catch (InvalidOperationException) { }
+            finally { p.Dispose(); }
+        }
+        return list.OrderByDescending(o => o["pid"]!.GetValue<int>()).ToList();
+    }
+
+    /// <summary>
+    /// Attach to Node.js: the debugger joins a Node process already running, through its inspector at <paramref name="host"/>:<paramref name="port"/>
+    /// (started with --inspect, or opened by PyMagic in the process <paramref name="pid"/> of this computer first). Stop lets go of it and the
+    /// program goes on; its output stays where it runs. <paramref name="webRoot"/> is the folder its source maps' files are of.
+    /// </summary>
+    public void StartNodeAttach(string root, string host, int port, int? pid, string? webRoot, IReadOnlyDictionary<string, JsonArray>? breakpoints)
+    {
+        _root = root;
+        IsDebug = true;
+        _attached = true;   // Stop asks the helper to let go (the program is not PyMagic's to end)
+        if (string.IsNullOrWhiteSpace(host) || !System.Text.RegularExpressions.Regex.IsMatch(host, @"^[\w.\-:\[\]]+$")) { Error("the address of the inspector: 127.0.0.1"); return; }
+        if (port is <= 0 or > 65535) { Error("the port of the inspector: 9229 unless the program says another (--inspect=PORT)"); return; }
+        string web = webRoot != null ? Path.GetFullPath(Path.Combine(root, webRoot)) : root;
+        string helper = ExtractHelper("pm_nodedebug.mjs");
+        ExtractBeside("pm_sourcemap.mjs", Path.GetDirectoryName(helper)!);
+        string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+        _listener = new TcpListener(IPAddress.Loopback, 0);
+        _listener.Start();
+        var psi = new ProcessStartInfo(string.IsNullOrWhiteSpace(Node) ? "node" : Node!) { WorkingDirectory = web };
+        foreach (var a in new[] { helper, "--port", ((IPEndPoint)_listener.LocalEndpoint).Port.ToString(), "--token", token, "--root", root, "--web-root", web, "--attach", $"{host}:{port}" })
+            psi.ArgumentList.Add(a);
+        if (pid is > 0) { psi.ArgumentList.Add("--attach-pid"); psi.ArgumentList.Add(pid.Value.ToString()); }
+        if (AllCode) psi.ArgumentList.Add("--all-code");
+        _runId = null;
+        StartProcess(psi, root, token, breakpoints);
+    }
 }

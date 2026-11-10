@@ -447,4 +447,206 @@ public class NodeRunTests
         Assert.Equal(0, h.Type("exited")["code"]!.GetValue<int>());
         Assert.Contains("hi Ada", h.AllOutput());
     }
+
+    // ------------------------------------------------------------ the browser's tabs, frames and workers
+
+    static bool HaveBrowser() => new[]
+    {
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Google", "Chrome", "Application", "chrome.exe"),
+    }.Any(File.Exists);
+
+    /// <summary>
+    /// JavaScript Debug of a page with a worker and a frame of another site (127.0.0.1 and localhost are two sites: the frame runs in a process
+    /// of its own), and a tab opened later: each stops at its breakpoint, named by what it is. Served by the test itself.
+    /// </summary>
+    [Fact]
+    public void JavaScriptDebugReachesTheWorkersFramesAndTabsOfThePage()
+    {
+        if (!HaveNode || !OperatingSystem.IsWindows() || !HaveBrowser()) return;
+        using var h = new Harness();
+        h.Script("site/index.html", "<!doctype html><html><body><h1>main</h1><script src=\"main.js\"></script></body></html>");
+        h.Script("site/main.js", "const worker = new Worker('worker.js');\nworker.onmessage = (e) => { document.title = 'worker said ' + e.data; };\nconst frame = document.createElement('iframe');\nframe.src = location.href.replace('127.0.0.1', 'localhost').replace('index.html', 'frame.html');\ndocument.body.appendChild(frame);\n");
+        h.Script("site/worker.js", "let total = 0;\nfor (let i = 1; i <= 3; i++) {\n    total += i;\n}\npostMessage(total);\n");
+        h.Script("site/frame.html", "<!doctype html><html><body><script src=\"frame.js\"></script></body></html>");
+        h.Script("site/frame.js", "const where = location.hostname;\ndocument.body.textContent = 'frame on ' + where;\n");
+        h.Script("site/tab.html", "<!doctype html><html><body><script src=\"tab.js\"></script></body></html>");
+        h.Script("site/tab.js", "const opened = 'tab';\ndocument.title = opened;\n");
+        int port;
+        using (var l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0)) { l.Start(); port = ((System.Net.IPEndPoint)l.LocalEndpoint).Port; l.Stop(); }
+        using var server = new System.Net.HttpListener();
+        server.Prefixes.Add($"http://127.0.0.1:{port}/");
+        server.Prefixes.Add($"http://localhost:{port}/");
+        server.Start();
+        _ = Task.Run(() =>
+        {
+            while (server.IsListening)
+            {
+                System.Net.HttpListenerContext c;
+                try { c = server.GetContext(); } catch (Exception) { return; }
+                string file = Path.Combine(h.Root, "site", c.Request.Url!.AbsolutePath.TrimStart('/'));
+                if (File.Exists(file))
+                {
+                    c.Response.ContentType = file.EndsWith(".js") ? "text/javascript" : "text/html";
+                    var bytes = File.ReadAllBytes(file);
+                    c.Response.OutputStream.Write(bytes);
+                }
+                else c.Response.StatusCode = 404;
+                c.Response.Close();
+            }
+        });
+        var bps = new Dictionary<string, JsonArray>
+        {
+            [Path.Combine("site", "worker.js")] = new JsonArray(new JsonObject { ["line"] = 5 }),
+            [Path.Combine("site", "frame.js")] = new JsonArray(new JsonObject { ["line"] = 2 }),
+            [Path.Combine("site", "tab.js")] = new JsonArray(new JsonObject { ["line"] = 2 }),
+        };
+        var before = Directory.GetDirectories(Path.GetTempPath(), "pymagic-browser-*").ToHashSet();
+        h.Session.StartBrowser(h.Root, $"http://127.0.0.1:{port}/index.html", "site", null, bps);
+        try
+        {
+            // the worker and the frame stop, in either order: each is named by what it is, in its file, its values read there
+            var stops = new Dictionary<string, JsonNode>();
+            while (stops.Keys.Count(k => !k.EndsWith(":value")) < 2)
+            {
+                var stop = h.Type("stopped", 60000);
+                string file = Path.GetFileName(stop["frames"]![0]!["file"]!.GetValue<string>());
+                stops[file] = stop;
+                string expression = file == "worker.js" ? "total" : "where";
+                stops[file + ":value"] = h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = expression });
+                h.Command("continue");
+            }
+            Assert.True(stops.ContainsKey("worker.js") && stops.ContainsKey("frame.js"), "stops: " + string.Join(" | ", stops.Where(kv => !kv.Key.EndsWith(":value")).Select(kv => kv.Value.ToJsonString())));
+            Assert.Equal("worker worker.js", stops["worker.js"]["thread"]!.GetValue<string>());
+            Assert.Equal(5, stops["worker.js"]["frames"]![0]!["line"]!.GetValue<int>());
+            Assert.Equal("6", stops["worker.js:value"]["result"]!.GetValue<string>());
+            Assert.Equal("frame frame.html", stops["frame.js"]["thread"]!.GetValue<string>());
+            Assert.Equal("'localhost'", stops["frame.js:value"]["result"]!.GetValue<string>().Replace('"', '\''));
+
+            // a tab opened in the browser (as a person opens one): it stops at its breakpoint before its script runs on
+            string profile = Directory.GetDirectories(Path.GetTempPath(), "pymagic-browser-*").Single(d => !before.Contains(d));
+            int devtools = int.Parse(File.ReadAllLines(Path.Combine(profile, "DevToolsActivePort"))[0]);
+            using (var http = new HttpClient()) http.PutAsync($"http://127.0.0.1:{devtools}/json/new?http://127.0.0.1:{port}/tab.html", null).GetAwaiter().GetResult();
+            var tab = h.Type("stopped", 60000);
+            Assert.Equal("tab /tab.html", tab["thread"]!.GetValue<string>());
+            Assert.True(tab["frames"]![0]!["file"]!.GetValue<string>().EndsWith("tab.js", StringComparison.OrdinalIgnoreCase), tab.ToJsonString());
+            Assert.Equal("'tab'", h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "opened" })["result"]!.GetValue<string>().Replace('"', '\''));
+            h.Command("continue");
+        }
+        finally
+        {
+            h.Command("stop");
+            h.Type("exited", 30000);
+            server.Stop();
+        }
+    }
+
+    // ------------------------------------------------------------ Attach to Node.js
+
+    /// <summary>A Node program of the test's own, running on its own (not started by PyMagic): it counts, a line at a time.</summary>
+    static Process StartCounter(string root, params string[] nodeArgs)
+    {
+        File.WriteAllText(Path.Combine(root, "counter.js"), "let count = 0;\nfunction tick() {\n    count += 1;\n    return count;\n}\nsetInterval(tick, 50);\n");
+        var psi = new ProcessStartInfo("node") { WorkingDirectory = root, RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in nodeArgs) psi.ArgumentList.Add(a);
+        psi.ArgumentList.Add("counter.js");
+        return Process.Start(psi)!;
+    }
+
+    [Fact]
+    public void AttachToANodeProgramStartedWithInspectStopsAtABreakpointAndLetsItGoOn()
+    {
+        if (!HaveNode) return;
+        using var h = new Harness();
+        using var counter = StartCounter(h.Root, "--inspect=127.0.0.1:0");
+        try
+        {
+            // the port the inspector took: "Debugger listening on ws://127.0.0.1:PORT/…"
+            int port = 0;
+            for (var until = DateTime.UtcNow.AddSeconds(20); port == 0 && DateTime.UtcNow < until;)
+                if (counter.StandardError.ReadLine() is { } line && System.Text.RegularExpressions.Regex.Match(line, @"ws://127\.0\.0\.1:(\d+)/") is { Success: true } m) port = int.Parse(m.Groups[1].Value);
+            Assert.True(port > 0, "the inspector's port");
+            var bps = new Dictionary<string, JsonArray> { ["counter.js"] = new JsonArray(new JsonObject { ["line"] = 4 }) };
+            h.Session.StartNodeAttach(h.Root, "127.0.0.1", port, null, null, bps);
+            var stop = h.Type("stopped");
+            Assert.Equal(4, stop["frames"]![0]!["line"]!.GetValue<int>());
+            Assert.True(stop["frames"]![0]!["file"]!.GetValue<string>().EndsWith("counter.js", StringComparison.OrdinalIgnoreCase), stop.ToJsonString());
+            Assert.Contains("counter.js", stop["thread"]!.GetValue<string>());
+            Assert.Contains($"127.0.0.1:{port}", stop["thread"]!.GetValue<string>());
+            Assert.True(int.Parse(h.Request("evaluate", new JsonObject { ["frameId"] = 0, ["expression"] = "count" })["result"]!.GetValue<string>()) >= 1, "count");
+            h.Command("continue");
+            h.Type("stopped");   // the next tick
+            // Stop lets go of it: the run ends, the program goes on counting
+            h.Command("stop");
+            Assert.Equal(0, h.Type("exited")["code"]!.GetValue<int>());
+            Assert.Contains("Detached: the program goes on.", h.AllOutput());
+            Thread.Sleep(500);
+            Assert.True(!counter.HasExited, "the program was let go, not ended");
+        }
+        finally { try { counter.Kill(true); } catch (InvalidOperationException) { } }
+    }
+
+    [Fact]
+    public void TheNodeProgramsOfThisComputerAreListedWithTheirScriptAndInspector()
+    {
+        if (!HaveNode || !OperatingSystem.IsWindows()) return;
+        using var h = new Harness();
+        using var plain = StartCounter(h.Root);
+        using var inspected = StartCounter(h.Root, "--inspect=127.0.0.1:9339");
+        try
+        {
+            Thread.Sleep(800);
+            var list = RunSession.NodeProcesses();
+            var a = list.FirstOrDefault(p => p["pid"]!.GetValue<int>() == plain.Id);
+            var b = list.FirstOrDefault(p => p["pid"]!.GetValue<int>() == inspected.Id);
+            Assert.True(a != null && b != null, string.Join(" | ", list.Select(p => p.ToJsonString())));
+            Assert.Equal("counter.js", a!["title"]!.GetValue<string>());
+            Assert.True(a["inspectPort"] == null, "no inspector of its own");
+            Assert.Equal(9339, b!["inspectPort"]!.GetValue<int>());
+            Assert.Equal("node", b["kind"]!.GetValue<string>());
+        }
+        finally
+        {
+            try { plain.Kill(true); } catch (InvalidOperationException) { }
+            try { inspected.Kill(true); } catch (InvalidOperationException) { }
+        }
+    }
+
+    [Fact]
+    public void AttachToANodeProcessByItsIdOpensItsInspectorFirst()
+    {
+        if (!HaveNode) return;
+        // Node opens the inspector of a process asked by its id on 9229: not when something else has that port
+        using (var probe = new System.Net.Sockets.TcpClient())
+            try { probe.Connect("127.0.0.1", 9229); return; } catch (System.Net.Sockets.SocketException) { }
+        using var h = new Harness();
+        using var counter = StartCounter(h.Root);
+        try
+        {
+            Thread.Sleep(500);
+            var bps = new Dictionary<string, JsonArray> { ["counter.js"] = new JsonArray(new JsonObject { ["line"] = 4 }) };
+            h.Session.StartNodeAttach(h.Root, "127.0.0.1", 9229, counter.Id, null, bps);
+            var stop = h.Type("stopped");
+            Assert.Equal(4, stop["frames"]![0]!["line"]!.GetValue<int>());
+            Assert.Contains($"pid {counter.Id}", stop["thread"]!.GetValue<string>());
+            Assert.Contains($"Process {counter.Id} opened its inspector.", h.AllOutput());
+            h.Command("stop");
+            h.Type("exited");
+            Assert.True(!counter.HasExited, "the program goes on");
+            // the program ends: an attach to it ends with it
+            using var again = new Harness();
+            again.Session.StartNodeAttach(again.Root, "127.0.0.1", 9229, null, null, new Dictionary<string, JsonArray>());
+            again.Next(e => e["type"]?.GetValue<string>() == "output" && e["text"]!.GetValue<string>().Contains("Attached to"));
+            counter.Kill(true);
+            Assert.Equal(0, again.Type("exited")["code"]!.GetValue<int>());
+            Assert.Contains("ended, or let its debugger go", again.AllOutput());
+            // nothing answers: why
+            using var none = new Harness();
+            none.Session.StartNodeAttach(none.Root, "127.0.0.1", 9, null, null, null);
+            Assert.Equal(1, none.Type("exited", 60000)["code"]!.GetValue<int>());
+            Assert.Contains("No Node.js inspector answers at 127.0.0.1:9", none.AllOutput());
+        }
+        finally { try { counter.Kill(true); } catch (InvalidOperationException) { } }
+    }
 }

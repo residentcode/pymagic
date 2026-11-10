@@ -632,6 +632,7 @@ public sealed partial class RunSession : IDisposable
     {
         EndConsoleRelay();
         _teamCity = null;
+        _attached = false;
         lock (_gate)
         {
             try { _listener?.Stop(); } catch (SocketException) { }

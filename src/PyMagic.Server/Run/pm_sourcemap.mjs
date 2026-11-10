@@ -94,12 +94,14 @@ export async function loadMap(sourceMapURL, scriptUrl, fetchText) {
 
 /**
  * A script's source map made ready to look up: its sections flattened, each source a file of the project.
- * { files: [file|null], segments sorted by generated position, bySource: Map(fileKey -> segments sorted by original position) }.
+ * { files: [file|null], segments sorted by generated position, bySource: Map(fileKey -> segments sorted by original position),
+ *   contents: Map(fileKey -> the source's text, from sourcesContent) }.
  */
 export function prepare(loaded, root, key = (f) => f) {
     if (!loaded) return null;
     const files = [];
     const segments = [];
+    const contents = new Map();   // fileKey -> the source's text the script was made from (the map's sourcesContent), when it has it
     const add = (map, offsetLine, offsetColumn) => {
         if (map.sections) {
             for (const s of map.sections) if (s.map) add(s.map, offsetLine + (s.offset?.line ?? 0), (s.offset?.line ?? 0) === 0 ? offsetColumn + (s.offset?.column ?? 0) : s.offset?.column ?? 0);
@@ -107,6 +109,7 @@ export function prepare(loaded, root, key = (f) => f) {
         }
         const base = files.length;
         for (const name of map.sources ?? []) files.push(name == null ? null : sourceFile(name, map.sourceRoot, loaded.url, root));
+        (map.sourcesContent ?? []).forEach((text, i) => { const f = files[base + i]; if (f && typeof text === 'string') contents.set(key(f), text); });
         for (const seg of decodeMappings(map.mappings ?? '')) {
             segments.push({ line: seg.line + offsetLine, column: seg.line === 0 ? seg.column + offsetColumn : seg.column, source: base + seg.source, sourceLine: seg.sourceLine, sourceColumn: seg.sourceColumn });
         }
@@ -122,7 +125,7 @@ export function prepare(loaded, root, key = (f) => f) {
         bySource.get(k).push(seg);
     }
     for (const list of bySource.values()) list.sort((a, b) => a.sourceLine - b.sourceLine || a.sourceColumn - b.sourceColumn || a.line - b.line || a.column - b.column);
-    return { files, segments, bySource };
+    return { files, segments, bySource, contents };
 }
 
 /** Where a line of a source (1-based) runs: the first generated position of that line, or of the nearest line after it within 3 lines. */

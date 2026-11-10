@@ -128,8 +128,8 @@ string ResolveInRoot(string rel)
 // the file the debugger is told of: a scratch's is where it is kept, not in the project
 string DebugFile(string file) { try { return Scratches.IsScratchPath(file) ? Scratches.PathOf(file) : file; } catch (UnauthorizedAccessException) { return file; } }
 
-// Attach to Process: the Python programs running on this computer
-app.MapGet("/api/processes", () => Results.Json(RunSession.PythonProcesses()));
+// Attach to Process: the Python and Node.js programs running on this computer
+app.MapGet("/api/processes", () => Results.Json(RunSession.PythonProcesses().Concat(RunSession.NodeProcesses()).ToList()));
 
 // scratch files: kept outside the project, opened as .scratches/name (see Scratches)
 app.MapGet("/api/scratches", () => Results.Json(Scratches.List().Select(f => new { name = f.Name, size = f.Size, modified = f.Modified.ToString("o") }).ToList()));
@@ -2156,7 +2156,7 @@ app.Map("/run", async (HttpContext ctx) =>
                 string file0 = msg["file"]?.GetValue<string>() ?? "";
                 var debugTests = msg["tests"] as JsonObject;   // Debug of tests: the test runner under the debugger
                 var profileTests = msg["profileTests"] as JsonObject;   // Profile of tests: pytest or unittest under the profiler
-                bool npmRun = msg["npmScript"]?.GetValue<string>() is { Length: > 0 } || msg["browser"] is JsonObject || msg["artisan"] is JsonArray || msg["composer"] is JsonArray;   // an npm script, a page or an Artisan command names no file
+                bool npmRun = msg["npmScript"]?.GetValue<string>() is { Length: > 0 } || msg["browser"] is JsonObject || msg["nodeAttach"] is JsonObject || msg["artisan"] is JsonArray || msg["composer"] is JsonArray;   // an npm script, a page or an Artisan command names no file
                 if (module == null && debugTests == null && profileTests == null && !npmRun) ResolveInRoot(file0);   // refuses paths outside the workspace
                 if (Scratches.IsScratchPath(file0)) file0 = Scratches.PathOf(file0);                         // a scratch runs where it is kept, in the project's folder
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
@@ -2193,6 +2193,20 @@ app.Map("/run", async (HttpContext ctx) =>
                     && into["token"]?.GetValue<string>() is { Length: > 0 } intoToken && intoToken.All(char.IsAsciiLetterOrDigit)
                     ? (intoPort, intoToken, into["name"]?.GetValue<string>() is { Length: > 0 } intoName ? intoName : "a member") : null;
                 session.UvProgram = msg["uv"]?.GetValue<bool>() == true ? (msg["uvPath"]?.GetValue<string>() is { Length: > 0 } uvPath ? uvPath : "uv") : null;
+                // Attach to Node.js: a Node process already running, through its inspector (pm_nodedebug.mjs --attach)
+                if (msg["nodeAttach"] is JsonObject attach)
+                {
+                    session.Node = msg["node"]?.GetValue<string>() is { Length: > 0 } nodeForAttach ? nodeForAttach : null;
+                    session.Target = ExecutionTarget.Local;
+                    string? attachRoot = attach["webRoot"]?.GetValue<string>() is { Length: > 0 } ar ? ar : null;
+                    if (attachRoot != null) ResolveInRoot(attachRoot);
+                    int attachPort = int.TryParse(attach["port"]?.ToString(), out var ap) ? ap : 9229;
+                    int? attachPid = int.TryParse(attach["pid"]?.ToString(), out var apid) && apid > 0 ? apid : null;
+                    session.StartNodeAttach(root, attach["host"]?.GetValue<string>() is { Length: > 0 } ah ? ah : "127.0.0.1", attachPort, attachPid, attachRoot, bps);
+                    if (msg["exceptionBreak"]?.GetValue<string>() == "raised")
+                        session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised", ["classes"] = msg["exceptionClasses"]?.DeepClone() });
+                    continue;
+                }
                 // JavaScript Debug: a page in Edge or Chrome under the debugger (pm_nodedebug.mjs --browser)
                 if (msg["browser"] is JsonObject browser && browser["url"]?.GetValue<string>() is { Length: > 0 } pageUrl)
                 {
