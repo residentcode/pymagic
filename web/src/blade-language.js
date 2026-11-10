@@ -30,6 +30,19 @@ const bladeOpen = [
     [/\{\{/, { token: 'delimiter.blade', next: '@echo' }],
 ];
 
+// a tag's attributes and their values (Blade's echoes and directives among them); the tag's own > is its state's
+const attributes = () => [
+    ...bladeOpen,
+    [/([@][A-Za-z_]\w*)(\s*)(\()/, ['keyword.blade', '', { token: 'delimiter', next: '@directiveArgs' }]],
+    [/[@][A-Za-z_]\w*/, 'keyword.blade'],
+    [/(:[\w\-:.]+)(\s*)(=)(\s*)(")/, ['attribute.name', '', 'delimiter', '', { token: 'attribute.value', next: '@phpAttribute' }]],
+    [/"/, 'attribute.value', '@doubleQuoted'],
+    [/'/, 'attribute.value', '@singleQuoted'],
+    [/[\w\-:.@]+/, 'attribute.name'],
+    [/=/, 'delimiter'],
+    [/[ \t\r\n]+/, ''],
+];
+
 // a fault in the grammar costs Blade its colours, not the page (Monaco checks a grammar as it is set, and an error there would stop the start)
 try { monaco.languages.setMonarchTokensProvider('blade', {
     defaultToken: '',
@@ -46,6 +59,9 @@ try { monaco.languages.setMonarchTokensProvider('blade', {
             [/[@][A-Za-z_]\w*/, 'keyword.blade'],
             [/<!DOCTYPE/i, 'metatag', '@doctype'],
             [/<!--/, 'comment', '@comment'],
+            // <script> and <style>: their insides coloured as JavaScript and CSS, as Monaco's HTML does
+            [/(<)(script)(?=[\s>])/i, ['delimiter', { token: 'tag', next: '@scriptTag' }]],
+            [/(<)(style)(?=[\s>])/i, ['delimiter', { token: 'tag', next: '@styleTag' }]],
             [/(<)((?:[\w-]+:)?[\w.-]+)/, ['delimiter', { token: 'tag', next: '@tag' }]],
             [/(<\/)((?:[\w-]+:)?[\w.-]+)(\s*)(>)/, ['delimiter', 'tag', '', 'delimiter']],
             [/</, 'delimiter'],
@@ -57,17 +73,31 @@ try { monaco.languages.setMonarchTokensProvider('blade', {
         bladeComment: [[/--\}\}/, 'comment', '@pop'], [/[^-]+/, 'comment'], [/./, 'comment']],
         // inside <tag …>: attributes, their values; :prop="…" of a component is PHP
         tag: [
-            ...bladeOpen,
-            [/([@][A-Za-z_]\w*)(\s*)(\()/, ['keyword.blade', '', { token: 'delimiter', next: '@directiveArgs' }]],
-            [/[@][A-Za-z_]\w*/, 'keyword.blade'],
             [/\/?>/, 'delimiter', '@pop'],
-            [/(:[\w\-:.]+)(\s*)(=)(\s*)(")/, ['attribute.name', '', 'delimiter', '', { token: 'attribute.value', next: '@phpAttribute' }]],
-            [/"/, 'attribute.value', '@doubleQuoted'],
-            [/'/, 'attribute.value', '@singleQuoted'],
-            [/[\w\-:.@]+/, 'attribute.name'],
-            [/=/, 'delimiter'],
-            [/[ \t\r\n]+/, ''],
+            ...attributes(),
         ],
+        // the attributes of <script …> / <style …>, then their text as the embedded language up to the closing tag
+        scriptTag: [
+            [/\/>/, 'delimiter', '@pop'],
+            [/>/, { token: 'delimiter', switchTo: '@scriptBody', nextEmbedded: 'text/javascript' }],
+            ...attributes(),
+        ],
+        scriptBody: [
+            [/<\/script\s*>/i, { token: '@rematch', switchTo: '@endTag', nextEmbedded: '@pop' }],
+            [/[^<]+/, ''],
+            [/</, ''],
+        ],
+        styleTag: [
+            [/\/>/, 'delimiter', '@pop'],
+            [/>/, { token: 'delimiter', switchTo: '@styleBody', nextEmbedded: 'text/css' }],
+            ...attributes(),
+        ],
+        styleBody: [
+            [/<\/style\s*>/i, { token: '@rematch', switchTo: '@endTag', nextEmbedded: '@pop' }],
+            [/[^<]+/, ''],
+            [/</, ''],
+        ],
+        endTag: [[/(<\/)(script|style)(\s*)(>)/i, ['delimiter', 'tag', '', { token: 'delimiter', next: '@pop' }]]],
         doubleQuoted: [...bladeOpen, [/"/, 'attribute.value', '@pop'], [/[^"{]+/, 'attribute.value'], [/\{/, 'attribute.value']],
         singleQuoted: [...bladeOpen, [/'/, 'attribute.value', '@pop'], [/[^'{]+/, 'attribute.value'], [/\{/, 'attribute.value']],
         echo: php([/\}\}/, { token: 'delimiter.blade', next: '@pop' }]),

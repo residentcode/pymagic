@@ -68,6 +68,11 @@ try {
         return [...new Set(t.flat().map((x) => x.type))]; })()`);
     console.log('Blade tokens:', tokens.join(', '));
     for (const t of ['keyword.blade.html', 'delimiter.blade.html', 'function.html', 'string.html', 'tag.html', 'comment.html']) assert.ok(tokens.includes(t), `${t} in ${tokens}`);
+    // <script> and <style> in a template: JavaScript and CSS (their tokenizers load on first use: asked again until they have)
+    const embedded = await page.waitFor(`(() => { const t = window.pymagic.monaco.editor.tokenize("<script defer>\\n// note\\nif (a) { x = 'b' }\\n</script>\\n<style>\\n.dark { color: red }\\n</style>\\n<p>{{ $x }}</p>", 'blade');
+        const types = [...new Set(t.flat().map((x) => x.type))]; return types.includes('keyword.js') && types.some((x) => x.endsWith('.css')) ? types : null; })()`, 20000, 'JavaScript and CSS in Blade');
+    console.log('script and style tokens:', embedded.join(', '));
+    for (const t of ['keyword.js', 'comment.js', 'string.js', 'tag.html', 'attribute.name.html', 'delimiter.blade.html']) assert.ok(embedded.includes(t), `${t} in ${embedded}`);
 
     // Settings > PHP: what is found
     await page.evaluate(`window.pymagic.changeSetting && 0`);
