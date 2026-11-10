@@ -1173,6 +1173,8 @@ async function main() {
         if (word) void diagrams.openModel(word);
     });
     setupEmbedded();
+    // Ctrl+Shift+/ comments the selection as one block ({{-- --}} in Blade, /* */ in CSS and JavaScript, <!-- --> in HTML), as PhpStorm's key
+    monaco.editor.addKeybindingRule({ keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Slash, command: 'editor.action.blockComment', when: 'editorTextFocus && !editorReadonly' });
     setupTemplatePreview({ editor, lsp, uriOf: (model) => serverUri.get(model) });
     setupTemplateLinks({
         editor, lsp, relOfUri, uriOf: (model) => serverUri.get(model), refreshTree: async () => { await explorer?.refresh(); },

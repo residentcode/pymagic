@@ -129,6 +129,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
                 '-',
                 { label: 'Lines', submenu: [
                     { label: 'Comment or uncomment', key: 'Ctrl+/', run: act('editor.action.commentLine') },
+                    { label: 'Block comment', key: 'Ctrl+Shift+/', run: act('editor.action.blockComment') },
                     { label: 'Duplicate', key: 'Shift+Alt+Down', run: act('editor.action.copyLinesDownAction') },
                     { label: 'Delete', key: 'Ctrl+Shift+K', run: act('editor.action.deleteLines') },
                     { label: 'Move up', key: 'Alt+Up', run: act('editor.action.moveLinesUpAction') },
