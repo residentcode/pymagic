@@ -22,6 +22,12 @@ public sealed partial class RunSession
         catch (ServiceException e) { Error(e.Message); return; }
         if (xdebug.Error != null) { Error(xdebug.Error); return; }
 
+        // a Laravel server: its Blade templates compiled first as the server compiles them (pm_bladecompile.php), so a breakpoint of a template
+        // is in its compiled file for the first request too
+        if (artisan is { Count: > 0 } && artisan[0] == "serve" && PhpTools.Laravel(root) != null)
+            try { PhpTools.Run(php, new[] { ExtractHelper("pm_bladecompile.php") }, root, 120); }
+            catch (Exception e) when (e is ServiceException or System.ComponentModel.Win32Exception) { }
+
         var bridge = new XdebugBridge(root, AllCode);
         // the settings in a folder of their own that PHP_INI_SCAN_DIR adds: every PHP process of the run reads them (artisan serve's server too)
         string iniDir = Path.Combine(Path.GetTempPath(), "pymagic", "xdebug-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(6)));

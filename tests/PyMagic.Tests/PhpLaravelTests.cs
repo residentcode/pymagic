@@ -205,6 +205,48 @@ public class PhpLaravelTests
     }
 
     [Fact]
+    public void PauseStopsRunningPhpWhereItIs()
+    {
+        if (Php is not { } php || !HasXdebug(php)) return;
+        string dir = Path.Combine(Path.GetTempPath(), "pm_phppause_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "spin.php"), string.Join("\n", new[]
+        {
+            "<?php",                                         // 1
+            "echo 'spinning' . PHP_EOL;",                    // 2
+            "$i = 0;",                                       // 3
+            "while (true) {",                                // 4
+            "    $i++;",                                     // 5
+            "    usleep(2000);",                             // 6
+            "}",
+            "",
+        }));
+        using var run = new Run();
+        run.Session.Php = php;
+        run.Session.StartPhp(dir, "spin.php", null, true, Array.Empty<string>(), new Dictionary<string, JsonArray>());
+        run.Next(_ => run.Output.Contains("spinning"));
+        Thread.Sleep(300);
+
+        // Pause: Xdebug's control socket tells the loop to stop where it is, with no breakpoint there
+        for (int round = 0; round < 2; round++)
+        {
+            run.Session.Handle(new JsonObject { ["type"] = "pause" });
+            var stop = run.Next(e => Is(e, "stopped"), 20000);
+            Assert.Equal("pause", stop["reason"]!.GetValue<string>());
+            int line = stop["frames"]![0]!["line"]!.GetValue<int>();
+            Assert.True(line >= 4 && line <= 6, stop.ToJsonString());
+            run.Session.Handle(new JsonObject { ["type"] = "evaluate", ["id"] = 10 + round, ["frameId"] = 0, ["expression"] = "$i > 0 ? 'on' : 'off'" });
+            Assert.Equal("\"on\"", run.Next(e => Is(e, "evaluated"))["result"]!.GetValue<string>());
+            // and on again: it runs until the next Pause
+            run.Session.Handle(new JsonObject { ["type"] = "continue" });
+            run.Next(e => Is(e, "running"), 10000);
+            Thread.Sleep(300);
+        }
+        run.Session.Handle(new JsonObject { ["type"] = "stop" });
+        run.Next(e => Is(e, "exited"), 30000);
+    }
+
+    [Fact]
     public void ARequestOfArtisanServeStopsAtARouteBreakpoint()
     {
         if (Php is not { } php || LaravelDir is not { } dir || !HasXdebug(php)) return;
@@ -236,6 +278,164 @@ public class PhpLaravelTests
             serve.Session.Handle(new JsonObject { ["type"] = "stop" });
             serve.Next(e => Is(e, "exited"), 30000);
         }
+    }
+
+    [Fact]
+    public void ABladeTemplatesBreakpointStopsInTheTemplate()
+    {
+        if (Php is not { } php || LaravelDir is not { } dir || !HasXdebug(php)) return;
+        string template = Path.Combine(dir, "resources", "views", "welcome.blade.php");
+        var lines = File.ReadAllLines(template);
+        int at = Array.FindIndex(lines, l => l.Contains("@if (Route::has('login'))")) + 1;
+        Assert.True(at > 0, "welcome.blade.php has its @if (Route::has('login'))");
+        int port;
+        using (var l = new TcpListener(System.Net.IPAddress.Loopback, 0)) { l.Start(); port = ((System.Net.IPEndPoint)l.LocalEndpoint).Port; l.Stop(); }
+        using var serve = new Run();
+        serve.Session.Php = php;
+        var bps = new Dictionary<string, JsonArray> { [Path.Combine("resources", "views", "welcome.blade.php")] = new JsonArray(new JsonObject { ["line"] = at }) };
+        serve.Session.StartPhp(dir, null, new[] { "serve", "--host=127.0.0.1", $"--port={port}" }, true, Array.Empty<string>(), bps);
+        try
+        {
+            serve.Next(_ => serve.Output.Contains($"127.0.0.1:{port}"), 120000);
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
+            var page = http.GetAsync($"http://127.0.0.1:{port}/");
+            // stopped in the template (not in storage/framework/views' compiled file), at its line, the template's name as the frame's
+            var stop = serve.Next(e => Is(e, "stopped"), 90000);
+            var frames = stop["frames"]!.AsArray();
+            Assert.True(string.Equals(template, frames[0]!["file"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase), frames.ToJsonString());
+            Assert.Equal(at, frames[0]!["line"]!.GetValue<int>());
+            Assert.Equal("welcome.blade.php", frames[0]!["name"]!.GetValue<string>());
+            // the template's values: Laravel's view variables
+            serve.Session.Handle(new JsonObject { ["type"] = "evaluate", ["id"] = 1, ["frameId"] = 0, ["expression"] = "Route::has('login') ? 'yes' : 'no'" });
+            Assert.True(serve.Next(e => Is(e, "evaluated"))["result"]!.GetValue<string>() is "\"yes\"" or "\"no\"", "evaluated in the view");
+            // a step goes on in the template
+            serve.Session.Handle(new JsonObject { ["type"] = "next" });
+            var stepped = serve.Next(e => Is(e, "stopped"), 30000);
+            Assert.True(stepped["frames"]![0]!["file"]!.GetValue<string>().EndsWith("welcome.blade.php", StringComparison.OrdinalIgnoreCase), stepped.ToJsonString());
+            Assert.True(stepped["frames"]![0]!["line"]!.GetValue<int>() > at, stepped.ToJsonString());
+            serve.Session.Handle(new JsonObject { ["type"] = "continue" });
+            Assert.Equal(200, (int)page.GetAwaiter().GetResult().StatusCode);
+        }
+        finally
+        {
+            serve.Session.Handle(new JsonObject { ["type"] = "stop" });
+            serve.Next(e => Is(e, "exited"), 30000);
+        }
+    }
+
+    [Fact]
+    public void PhpactorOnThisComputerGivesCodeInsightInALaravelProject()
+    {
+        if (Php is not { } php || LaravelDir is not { } dir || PhpLanguageServer.Phar() == null) return;
+        // Phpactor's index and settings in a folder of the test's own
+        string home = Path.Combine(Path.GetTempPath(), "pm_phpactor_home_" + Guid.NewGuid().ToString("N")[..8]);
+        Environment.SetEnvironmentVariable("PYMAGIC_PHPACTOR_HOME", home);
+        try
+        {
+            // a document of the editor only (nothing is written into the project)
+            string file = Path.Combine(dir, "routes", "pm-insight.php");
+            string text = string.Join("\n", new[]
+            {
+                "<?php",                                          // 0
+                "use App\\Models\\User;",                         // 1
+                "use Illuminate\\Support\\Str;",                  // 2
+                "$user = new User();",                            // 3
+                "$slug = Str::slug('Hello World');",              // 4
+                "$user->",                                        // 5
+                "",
+            });
+            var toPage = new BlockingCollection<JsonNode>();
+            var log = new ConcurrentQueue<string>();
+            using var server = new PhpLanguageServer(php, dir, toPage.Add, log.Enqueue);
+            string uri = LanguageService.UriOfPath(file);
+            server.Notify("textDocument/didOpen", new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri, ["languageId"] = "php", ["version"] = 1, ["text"] = text } });
+            JsonObject At(int line, int character) => new() { ["textDocument"] = new JsonObject { ["uri"] = uri }, ["position"] = new JsonObject { ["line"] = line, ["character"] = character } };
+            string Log() => string.Join(" | ", log.TakeLast(8));
+
+            // completion after `$user->`: the model's methods, Laravel's included (Notifiable's notify)
+            var labels = new List<string>();
+            for (var until = DateTime.UtcNow.AddSeconds(90); !labels.Contains("notify") && DateTime.UtcNow < until; Thread.Sleep(labels.Count == 0 ? 2000 : 0))
+            {
+                var completion = server.Request("textDocument/completion", At(5, 7)).GetAwaiter().GetResult();
+                labels = (completion?["items"] as JsonArray ?? new JsonArray()).Select(i => i!["label"]!.GetValue<string>()).ToList();
+            }
+            Assert.True(labels.Contains("notify"), string.Join(",", labels.Take(20)) + " " + Log());
+
+            // hover on Str::slug: its signature
+            var hover = server.Request("textDocument/hover", At(4, 14)).GetAwaiter().GetResult();
+            string shown = hover?["contents"]?["value"]?.GetValue<string>() ?? "";
+            Assert.True(shown.Contains("slug"), shown + " " + Log());
+
+            // go to definition of User: the project's app/Models/User.php
+            var defs = server.Request("textDocument/definition", At(3, 13)).GetAwaiter().GetResult()!.AsArray();
+            Assert.True(defs.Count > 0, Log());
+            Assert.Equal(LanguageService.UriOfPath(Path.Combine(dir, "app", "Models", "User.php")), defs[0]!["uri"]!.GetValue<string>());
+
+            // signature help in Str::slug(
+            string calling = text.Replace("$user->\n", "Str::slug(\n");
+            server.Notify("textDocument/didChange", new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri, ["version"] = 2 }, ["contentChanges"] = new JsonArray(new JsonObject { ["text"] = calling }) });
+            var help = server.Request("textDocument/signatureHelp", At(5, 10)).GetAwaiter().GetResult();
+            Assert.True(help?["signatures"]?[0]?["label"]?.GetValue<string>().Contains("title") == true, help?.ToJsonString() + " " + Log());
+
+            // a problem: a class that is not there
+            string broken = text.Replace("$user->\n", "$x = new Missing();\n");
+            server.Notify("textDocument/didChange", new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri, ["version"] = 3 }, ["contentChanges"] = new JsonArray(new JsonObject { ["text"] = broken }) });
+            server.Notify("textDocument/didSave", new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri } });
+            JsonNode? found = null;
+            for (var until = DateTime.UtcNow.AddSeconds(60); found == null && DateTime.UtcNow < until && toPage.TryTake(out var msg, TimeSpan.FromSeconds(5));)
+                if (msg["params"]?["uri"]?.GetValue<string>() == uri && (msg["params"]!["diagnostics"] as JsonArray)!.Any(d => d!["message"]!.GetValue<string>().Contains("Missing"))) found = msg;
+            Assert.True(found != null, "no problem told for Missing; " + Log());
+            Assert.True(server.Failed == null, server.Failed ?? "");
+            Assert.True(!File.Exists(file), "nothing written into the project");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PYMAGIC_PHPACTOR_HOME", null);
+            try { Directory.Delete(home, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    [Fact]
+    public void ComposerCommandsAreListedAndRunInTheRunPanel()
+    {
+        if (Php is not { } php || Environment.GetEnvironmentVariable("PYMAGIC_COMPOSER") is not { Length: > 0 }) return;
+        string dir = Path.Combine(Path.GetTempPath(), "pm_composer_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(Path.Combine(dir, "src"));
+        File.WriteAllText(Path.Combine(dir, "composer.json"), "{\"name\":\"pm/shop\",\"autoload\":{\"psr-4\":{\"Shop\\\\\":\"src/\"}},\"scripts\":{\"hello\":\"@php -r \\\"echo 'hello from composer';\\\"\",\"post-autoload-dump\":\"@php -r \\\"echo 'dumped';\\\"\"}}");
+        File.WriteAllText(Path.Combine(dir, "src", "Item.php"), "<?php\nnamespace Shop;\nclass Item {}\n");
+        try
+        {
+            // the list: Composer's own, then composer.json's scripts (not its event hooks)
+            var names = PhpTools.ComposerCommands(dir)!.Select(c => c!["name"]!.GetValue<string>()).ToList();
+            Assert.True(names.Contains("require") && names.Contains("require --dev") && names.Contains("dump-autoload") && names.Contains("run-script hello"), string.Join(",", names));
+            Assert.True(!names.Contains("run-script post-autoload-dump"), "an event hook is Composer's own");
+            Assert.True(PhpTools.ComposerCommands(Path.GetTempPath()) == null, "no composer.json");
+
+            // dump-autoload writes vendor/autoload.php (its hook runs too)
+            using (var run = new Run())
+            {
+                run.Session.Php = php;
+                run.Session.StartComposer(dir, new[] { "dump-autoload" });
+                Assert.Equal(0, run.Next(e => Is(e, "exited"), 120000)["code"]!.GetValue<int>());
+                Assert.True(File.Exists(Path.Combine(dir, "vendor", "autoload.php")), run.Output);
+                Assert.Contains("dumped", run.Output);
+            }
+            // a script of composer.json
+            using (var run = new Run())
+            {
+                run.Session.Php = php;
+                run.Session.StartComposer(dir, new[] { "run-script", "hello" });
+                Assert.Equal(0, run.Next(e => Is(e, "exited"), 120000)["code"]!.GetValue<int>());
+                Assert.Contains("hello from composer", run.Output);
+            }
+            // a command that is not one
+            using (var run = new Run())
+            {
+                run.Session.StartComposer(dir, new[] { "; rm -rf" });
+                Assert.Contains("a Composer command", run.Next(e => Is(e, "error"))["message"]!.GetValue<string>());
+            }
+        }
+        finally { try { Directory.Delete(dir, true); } catch (IOException) { } }
     }
 
     [Fact]

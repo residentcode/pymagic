@@ -13,7 +13,11 @@ What it does, in short:
   Express, each by its own generator (Node.js needed), and Laravel by Composer (PHP needed).
 - **Laravel and PHP**: Blade templates coloured (Emmet and Tailwind in them), Run Artisan Command (Ctrl+Shift+X) with the project's own
   commands, run configurations for Laravel's server, an Artisan command and a PHP script, and PHP debugged with Xdebug in the same panes
-  (a request of `artisan serve` stops at a breakpoint of a route or a controller).
+  (a request of `artisan serve` stops at a breakpoint of a route or a controller). PHP may run on another machine reached by SSH
+  (`ssh:user@host|php` in Settings > PHP): run, debug and Artisan there. PHP's code insight comes from Phpactor (carried by PyMagic;
+  on an SSH machine, its own): completion, hover, signature help, go to definition, references, problems. Laravel's views, components,
+  route names, config keys, `.env` variables, translations and assets are links and completed; Run Composer Command runs Composer's
+  commands and composer.json's scripts; breakpoints in Blade templates stop in the template.
 - **Running**: run configurations, a debugger, tests with coverage, a profiler, a Python console, Jupyter notebooks, a terminal.
   JavaScript and TypeScript too: Node.js files and npm scripts (▶ Run and Debug above each script of a package.json), debugged with the
   same panes (the processes a dev server starts included, TypeScript and Next.js through their source maps), and JavaScript Debug of a page

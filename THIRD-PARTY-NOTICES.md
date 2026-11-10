@@ -17,6 +17,7 @@ which keeps its own license. Nothing in PyMagic's license limits what these lice
 | Part | License |
 |---|---|
 | Qwen2.5-Coder-0.5B (full line completion), fetched by `models/fetch.mjs` | Apache License 2.0, see [models/NOTICE.md](models/NOTICE.md) |
+| Phpactor 2026.10.07.0 (PHP's code insight), fetched by `phpactor/fetch.mjs` (its phar holds its own dependencies, each under its license) | MIT License, see [phpactor/LICENSE](phpactor/LICENSE) |
 | Monaco Editor | MIT License |
 | xterm.js and its fit add-on | MIT License |
 | Mermaid | MIT License |

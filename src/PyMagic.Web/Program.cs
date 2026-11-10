@@ -1147,6 +1147,13 @@ app.Map("/lsp", async (HttpContext ctx) =>
     _ = service.StartIndexing();
     var outbox = new BlockingCollection<string>();
     var server = new PyMagic.Server.Server(service, msg => outbox.Add(msg.ToJsonString()));
+    // PHP's code insight: Phpactor on the machine Settings > PHP names (ssh:user@host|php), for this page
+    server.PhpFactory = send =>
+    {
+        if (!Plugins.On("laravel")) return null;
+        if (PhpTools.Remote(PhpSetting("phpPath")) is { } remotePhp) return new PhpLanguageServer(remotePhp.Target, remotePhp.Php, root, send, text => Console.Error.WriteLine(text));
+        return PhpTools.FindPhp(PhpSetting("phpPath")) is { } localPhp ? new PhpLanguageServer(localPhp, root, send, text => Console.Error.WriteLine(text)) : null;
+    };
     var inbox = new BlockingCollection<JsonNode?>();
     lspInboxes[inbox] = 0;
     if (interpreters.Current is { } currentInterpreter) service.ConfigureInterpreter(currentInterpreter);
@@ -1192,6 +1199,7 @@ app.Map("/lsp", async (HttpContext ctx) =>
     inbox.Add(null);
     lspInboxes.TryRemove(inbox, out _);
     worker.Join(TimeSpan.FromSeconds(5));
+    server.ClosePhp();
     outbox.CompleteAdding();
     await sender;
 });
@@ -1302,6 +1310,26 @@ string? PhpSetting(string key)
 // Laravel: the PHP and Composer found, and whether the project is a Laravel one (its version, its routes files)
 app.MapGet("/api/php", () =>
 {
+    // PHP on another machine (ssh:user@host|php): its version, Xdebug and Composer as that machine says
+    if (PhpTools.Remote(PhpSetting("phpPath")) is { } remotePhp)
+    {
+        try
+        {
+            var f = PhpTools.RemoteFacts(remotePhp.Target, remotePhp.Php);
+            // Phpactor there, which PHP's code insight needs
+            string? phpactor = null;
+            try { var (pc, po, _) = remotePhp.Target.Remote("phpactor --version 2>/dev/null", 30_000); if (pc == 0) phpactor = po.Trim().Split(' ').LastOrDefault(); }
+            catch (ServiceException) { }
+            return Results.Json(new
+            {
+                php = f.Version != null ? $"{remotePhp.Php} on {remotePhp.Target.Destination}" : null, version = f.Version, remote = remotePhp.Target.Destination, composer = f.Composer,
+                xdebug = new { loaded = f.Xdebug, dll = (string?)null, version = f.XdebugVersion, error = f.Xdebug ? null : $"The PHP of {remotePhp.Target.Destination} has no Xdebug: install it there (sudo apt install php-xdebug)." },
+                phpactor = phpactor ?? "",
+                laravel = PhpTools.Laravel(root),
+            });
+        }
+        catch (ServiceException e) { return Results.Json(new { php = (string?)null, error = e.Message, remote = remotePhp.Target.Destination, laravel = PhpTools.Laravel(root) }); }
+    }
     string? php = PhpTools.FindPhp(PhpSetting("phpPath"));
     string? version = null;
     if (php != null)
@@ -1313,10 +1341,32 @@ app.MapGet("/api/php", () =>
     if (php != null)
         try { var x = PhpTools.FindXdebug(php, PhpSetting("xdebugPath")); xdebug = new { loaded = x.Loaded, dll = x.Dll, version = x.Version, error = x.Error }; }
         catch (Exception e) when (e is ServiceException or System.ComponentModel.Win32Exception) { }
-    return Results.Json(new { php, version, composer = composer == null ? null : string.Join(" ", new[] { composer.Value.Program }.Concat(composer.Value.Prefix)), xdebug, laravel = PhpTools.Laravel(root) });
+    return Results.Json(new { php, version, composer = composer == null ? null : string.Join(" ", new[] { composer.Value.Program }.Concat(composer.Value.Prefix)), xdebug,
+        phpactor = PhpLanguageServer.Phar() != null ? "2026.10.07.0" : "", laravel = PhpTools.Laravel(root) });
 });
 
 // Artisan's commands of the project (php artisan list), for Run Artisan Command and the configurations' list
+// Laravel's names in the editor (LaravelLinks.cs): where the view, route, config key, variable, translation or asset in the quotes at an offset
+// of a .php file or Blade template leads ({ file, line }, or null), and what can go in those quotes ({ items, start, end })
+app.MapPost("/api/laravel/link", async (HttpRequest req) =>
+{
+    var b = await JsonNode.ParseAsync(req.Body);
+    if (!Plugins.On("laravel") || PhpTools.Laravel(root) == null || b?["text"]?.GetValue<string>() is not { } text || b["offset"]?.GetValue<int>() is not int offset) return Results.Json((object?)null);
+    if (LaravelLinks.At(text, offset) is not { } place || LaravelLinks.Target(root, place) is not { } target) return Results.Json((object?)null);
+    return Results.Json(new { file = Path.GetRelativePath(root, target.File).Replace('\\', '/'), line = target.Line, kind = place.Kind, start = place.Start, end = place.End });
+});
+app.MapPost("/api/laravel/complete", async (HttpRequest req) =>
+{
+    var b = await JsonNode.ParseAsync(req.Body);
+    if (!Plugins.On("laravel") || PhpTools.Laravel(root) == null || b?["text"]?.GetValue<string>() is not { } text || b["offset"]?.GetValue<int>() is not int offset) return Results.Json((object?)null);
+    if (LaravelLinks.At(text, offset) is not { } place) return Results.Json((object?)null);
+    return Results.Json(new { kind = place.Kind, start = place.Start, end = place.End, items = LaravelLinks.Complete(root, place) });
+});
+
+// Composer's commands for Run Composer Command (the usual ones and composer.json's scripts)
+app.MapGet("/api/composer/commands", () => PhpTools.ComposerCommands(root) is { } commands ? Results.Json(commands)
+    : Results.BadRequest(new { error = "There is no composer.json in the project folder." }));
+
 app.MapGet("/api/artisan/commands", async () =>
 {
     if (PhpTools.Laravel(root) == null) return Results.BadRequest(new { error = "The project is not a Laravel project (no artisan file and laravel/framework)." });
@@ -2062,7 +2112,7 @@ app.Map("/run", async (HttpContext ctx) =>
                 string file0 = msg["file"]?.GetValue<string>() ?? "";
                 var debugTests = msg["tests"] as JsonObject;   // Debug of tests: the test runner under the debugger
                 var profileTests = msg["profileTests"] as JsonObject;   // Profile of tests: pytest or unittest under the profiler
-                bool npmRun = msg["npmScript"]?.GetValue<string>() is { Length: > 0 } || msg["browser"] is JsonObject || msg["artisan"] is JsonArray;   // an npm script, a page or an Artisan command names no file
+                bool npmRun = msg["npmScript"]?.GetValue<string>() is { Length: > 0 } || msg["browser"] is JsonObject || msg["artisan"] is JsonArray || msg["composer"] is JsonArray;   // an npm script, a page or an Artisan command names no file
                 if (module == null && debugTests == null && profileTests == null && !npmRun) ResolveInRoot(file0);   // refuses paths outside the workspace
                 if (Scratches.IsScratchPath(file0)) file0 = Scratches.PathOf(file0);                         // a scratch runs where it is kept, in the project's folder
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
@@ -2109,6 +2159,15 @@ app.Map("/run", async (HttpContext ctx) =>
                     session.StartBrowser(root, pageUrl, web, browser["browserPath"]?.GetValue<string>(), bps);
                     if (msg["exceptionBreak"]?.GetValue<string>() == "raised")
                         session.Handle(new JsonObject { ["type"] = "setExceptionBreak", ["mode"] = "raised", ["classes"] = msg["exceptionClasses"]?.DeepClone() });
+                    continue;
+                }
+                // Composer: a command of the project's composer.json (install, require …, a script)
+                if (msg["composer"] is JsonArray composerArgs)
+                {
+                    session.Php = PhpSetting("phpPath");
+                    session.Composer = PhpSetting("composerPath");
+                    session.Target = ExecutionTarget.Local;
+                    session.StartComposer(root, composerArgs.Select(a => a?.GetValue<string>() ?? "").ToList());
                     continue;
                 }
                 // PHP: an Artisan command of a Laravel project, or a .php file (not a Blade template), run by the PHP of Settings > PHP

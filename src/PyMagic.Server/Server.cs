@@ -83,6 +83,24 @@ public sealed class Server
     public Server(LanguageService service, Action<JsonNode> send) { _service = service; _send = send; }
 
     /// <summary>
+    /// PHP's code insight: makes the Phpactor of this page when PHP runs on another machine (Settings > PHP names one), null otherwise (then
+    /// .php files have none). Asked again on each PHP file opened until it gives one.
+    /// </summary>
+    public Func<Action<JsonNode>, PhpLanguageServer?>? PhpFactory { get; set; }
+    PhpLanguageServer? _php;
+
+    PhpLanguageServer? Php(string? method)
+    {
+        if (_php != null || PhpFactory == null) return _php;
+        if (method != "textDocument/didOpen") return null;
+        try { return _php = PhpFactory(_send); }
+        catch (ServiceException e) { Log("php: " + e.Message); return null; }
+    }
+
+    /// <summary>Ends the page's Phpactor.</summary>
+    public void ClosePhp() { _php?.Dispose(); _php = null; }
+
+    /// <summary>
     /// When true, edits only mark documents as changed and <see cref="FlushDiagnostics"/> publishes later (the message
     /// loop calls it once the input queue is empty, so a burst of keystrokes costs one analysis, not one per key).
     /// </summary>
@@ -170,6 +188,23 @@ public sealed class Server
 
         // the whole project's problems take seconds: they are worked out beside the loop, on a copy of the documents, so typing and hovering go on
         if (id != null && method == "pymagic/problems" && Deferred) { StartProblems(id, args); return; }
+
+        // a .php file: Phpactor's (on the machine PHP runs on), answered beside the loop, which goes on with Python's
+        if (PhpLanguageServer.Reads(args?["textDocument"]?["uri"]?.GetValue<string>()))
+        {
+            var php = Php(method);
+            if (id == null) { php?.Notify(method, args); return; }
+            if (php == null) { Respond(id, null); return; }
+            var asked = id.DeepClone();
+            var p = args?.DeepClone();
+            _ = Task.Run(async () =>
+            {
+                try { Respond(asked, await php.Request(method, p)); }
+                catch (TimeoutException) { Respond(asked, null); }
+                catch (Exception e) { Fail(asked, -32603, e.Message); }
+            });
+            return;
+        }
 
         bool was = LineMap.Utf8.Value;
         LineMap.Utf8.Value = _utf8;
@@ -600,7 +635,7 @@ public sealed class Server
     void Respond(JsonNode id, object? result)
     {
         var msg = new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id.DeepClone() };
-        msg["result"] = result == null ? null : JsonSerializer.SerializeToNode(result, Json);
+        msg["result"] = result switch { null => null, JsonNode node => node.DeepClone(), _ => JsonSerializer.SerializeToNode(result, Json) };
         _send(msg);
     }
 

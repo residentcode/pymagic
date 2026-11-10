@@ -79,7 +79,7 @@ const PAGES = [
         { key: 'autoSave', label: 'Save files automatically', type: 'choice', options: [['off', 'Never'], ['blur', 'When the window is left'], ['delay', 'A second after the last change']], hint: 'Saving also formats the file when "format on save" is on.' },
     ]],
     ['php', 'PHP and Laravel', [
-        { key: 'phpPath', label: 'PHP', type: 'text', placeholder: 'Found by itself (PATH, C:\\php, XAMPP, Laragon, WAMP, Herd, Scoop)', hint: 'php.exe, or the folder that has it. It runs .php files, Artisan and Laravel\'s server, and debugs them with Xdebug.' },
+        { key: 'phpPath', label: 'PHP', type: 'text', placeholder: 'Found by itself (PATH, C:\\php, XAMPP, Laragon, WAMP, Herd, Scoop)', hint: 'php.exe, or the folder that has it. It runs .php files, Artisan and Laravel\'s server, and debugs them with Xdebug. PHP on another machine, reached by SSH: ssh:user@host|php (with a key: ssh:user@host?i=C:\\keys\\id_ed25519|php); the project is copied there before each run, Laravel\'s server is reached on the same port here, and code insight runs there with Phpactor (on this computer with the Phpactor PyMagic carries).' },
         { key: 'composerPath', label: 'Composer', type: 'text', placeholder: 'Found by itself (PATH, Composer-Setup, composer.phar beside PHP)', hint: 'composer.bat, composer.exe or composer.phar. New Project uses it to make a Laravel project.' },
         { key: 'xdebugPath', label: 'Xdebug', type: 'text', placeholder: 'Found by itself (the one php.ini loads, or php_xdebug*.dll in the ext folder)', hint: 'php_xdebug.dll made for this PHP (xdebug.org/download). Debug runs PHP with it; php.ini need not load it.' },
         { key: 'phpFound', label: 'Found', type: 'phpFound' },
@@ -140,9 +140,10 @@ function field(f) {
         control.className = 'set-found';
         control.textContent = 'Looking…';
         const look = () => void fetch('/api/php').then((r) => r.json()).then((p) => {
-            control.textContent = (p.php ? `PHP ${p.version ?? ''} (${p.php})` : 'No PHP found')
+            control.textContent = (p.php ? `PHP ${p.version ?? ''} (${p.php})` : p.error ?? (p.remote ? `No PHP on ${p.remote}` : 'No PHP found'))
+                + (p.php && p.phpactor !== undefined ? ` · ${p.phpactor ? `code insight: Phpactor ${p.phpactor}` : p.remote ? 'no Phpactor there: code insight needs it' : 'no Phpactor: code insight is off'}` : '')
                 + ` · ${p.composer ? `Composer (${p.composer})` : 'no Composer found'}`
-                + (p.xdebug ? ` · ${p.xdebug.loaded ? `Xdebug ${p.xdebug.version ?? ''} (php.ini)` : p.xdebug.dll ? `Xdebug (${p.xdebug.dll})` : 'no Xdebug: Debug needs it'}` : '')
+                + (p.xdebug ? ` · ${p.xdebug.loaded ? `Xdebug ${p.xdebug.version ?? ''} (${p.remote ? 'there' : 'php.ini'})` : p.xdebug.dll ? `Xdebug (${p.xdebug.dll})` : 'no Xdebug: Debug needs it'}` : '')
                 + (p.laravel ? ` · this project: Laravel ${p.laravel.version ?? p.laravel.requires}${p.laravel.installed ? '' : ' (composer install not run yet)'}` : '');
         }).catch(() => { control.textContent = 'The engine did not answer.'; });
         look();

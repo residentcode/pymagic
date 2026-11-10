@@ -22,7 +22,7 @@ import { setLiveTemplateSource, openSettings } from './settings-ui';
 import { setupHierarchy } from './hierarchy';
 import { setupRoutes } from './routes';
 import { setupDjango } from './django';
-import { setupLaravel } from './laravel';
+import { setupLaravel, setupLaravelLinks } from './laravel';
 import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
@@ -216,6 +216,11 @@ async function loadModel(rel, key) {
                     contentChanges: [{ text: plain.getValue() }],
                 }), 120);
             });
+        }
+        else if (lang === 'php' && pluginOn(pluginsAtStart(), 'laravel')) {
+            // PHP: Phpactor's code insight, on the machine PHP runs on (Settings > PHP names one reached by SSH; PhpLanguageServer.cs)
+            served.add(plain);
+            lsp.notify('textDocument/didOpen', { textDocument: { uri, languageId: 'php', version: plain.getVersionId(), text } });
         }
         return plain;
     }
@@ -457,7 +462,7 @@ function registerProviders() {
             }
         },
     });
-    monaco.languages.registerHoverProvider(CODE_LANGUAGES, {
+    monaco.languages.registerHoverProvider([...CODE_LANGUAGES, 'php'], {
         async provideHover(model, position, token) {
             // stopped in the debugger on a value: its popup (run.js) shows it instead, as PyCharm's does
             if (runHooks?.debugValueAt?.(model, position))
@@ -473,7 +478,7 @@ function registerProviders() {
         },
     });
     // a .feature file's steps go to their step definitions (LanguageService.Bdd.cs)
-    monaco.languages.registerDefinitionProvider([...CODE_LANGUAGES, 'gherkin'], {
+    monaco.languages.registerDefinitionProvider([...CODE_LANGUAGES, 'gherkin', 'php'], {
         async provideDefinition(model, position) {
             const cell = notebook?.targetOf(model, position);
             const uri = cell ? cell.uri : serverUri.get(model);
@@ -541,7 +546,9 @@ function registerProviders() {
     monaco.languages.registerCompletionItemProvider('django-html', completionProvider(['.', '|', '"', "'", ' ', '%']));
     // in a .feature file the steps come after a keyword and its space
     monaco.languages.registerCompletionItemProvider('gherkin', completionProvider([' ']));
-    monaco.languages.registerReferenceProvider(CODE_LANGUAGES, {
+    // PHP (Phpactor's): after $ for variables, -> and :: for members, \ for namespaces
+    monaco.languages.registerCompletionItemProvider('php', completionProvider(['$', '>', ':', '\\']));
+    monaco.languages.registerReferenceProvider([...CODE_LANGUAGES, 'php'], {
         async provideReferences(model, position, context) {
             const cell = notebook?.targetOf(model, position);
             const uri = cell ? cell.uri : serverUri.get(model);
@@ -669,7 +676,7 @@ function registerProviders() {
             return { actions, dispose() { } };
         },
     });
-    monaco.languages.registerSignatureHelpProvider(CODE_LANGUAGES, {
+    monaco.languages.registerSignatureHelpProvider([...CODE_LANGUAGES, 'php'], {
         signatureHelpTriggerCharacters: ['(', ','],
         signatureHelpRetriggerCharacters: [')'],
         async provideSignatureHelp(model, position, token) {
@@ -1056,6 +1063,7 @@ async function main() {
         await desktop.closeProject();
     };
     window.pymagic.closeProject = closeProject;
+    window.pymagic.runCommand = (id) => runById(id, editor);
     runConfigs = setupRunConfigurations({ currentFile: () => currentRel });
     runHooks = setupRun({ ...common, root: info.root, scratches: info.scratches, runConfig: () => runConfigs.current(), runConfigByName: (name) => runConfigs.byName(name), showDiff: (...a) => git.showDiff(...a), askText: (...a) => explorer.askText(...a),
         // a notebook's cells are debugged as files of their own: their breakpoints and the stops in them
@@ -1190,7 +1198,11 @@ async function main() {
         });
     // Laravel: Run Artisan command (Ctrl+Shift+X) in a Laravel project
     if (plugin('laravel'))
+    {
         setupLaravel({ run: runHooks, askText: (...a) => explorer.askText(...a) });
+        // Laravel's names as links and completion: views, routes, config keys, .env, translations, assets, components
+        setupLaravelLinks({ modelFor: ensureModel, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+    }
     const problems = setupProblems({ editor, lsp, openFile, relOfUri });
     setupTodo({ editor, lsp, openFile, relOfUri });
     const terminal = setupTerminal();

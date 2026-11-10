@@ -14,3 +14,5 @@ models/*.part
 
 # per-agent and lead build folders (dotnet --artifacts-path); a build under the temp folder is removed by the antivirus
 .artifacts/
+phpactor/*.phar
+phpactor/*.part

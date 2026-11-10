@@ -42,6 +42,12 @@ await fetchModel(resolve(repo, 'models'));
 mkdirSync(resolve(stage, 'models'), { recursive: true });
 cpSync(resolve(repo, 'models', MODEL.file), resolve(stage, 'models', MODEL.file));
 cpSync(resolve(repo, 'models', 'NOTICE.md'), resolve(stage, 'models', 'NOTICE.md'));
+// Phpactor, PHP's code insight (5 MB, not in git): fetched once into phpactor/, checked against its SHA-256, carried by the app
+const { fetchPhpactor, PHPACTOR } = await import(pathToFileURL(resolve(repo, 'phpactor', 'fetch.mjs')).href);
+await fetchPhpactor(resolve(repo, 'phpactor'));
+mkdirSync(resolve(stage, 'phpactor'), { recursive: true });
+cpSync(resolve(repo, 'phpactor', PHPACTOR.file), resolve(stage, 'phpactor', PHPACTOR.file));
+cpSync(resolve(repo, 'phpactor', 'LICENSE'), resolve(stage, 'phpactor', 'LICENSE'));
 console.log('== licenses');
 // PyMagic's own license and the notices of what it carries (THIRD-PARTY-NOTICES.md), with the license text of every part: the schemas',
 // the NuGet packages' and .NET's (licenses/), and those of every npm package the page is built from (its dependencies too, which the

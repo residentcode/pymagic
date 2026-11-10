@@ -86,7 +86,10 @@ public sealed partial class RunSession
 
     static JsonNode Note(string text) => new JsonObject { ["type"] = "output", ["stream"] = "stdout", ["text"] = text };
 
-    string ToRemote(string local) => _map != null ? _map.ToRemote(local) : Target.ToTarget(local);
+    string ToRemote(string local) => _bridged ? local : _map != null ? _map.ToRemote(local) : Target.ToTarget(local);
+
+    /// <summary>The debugger helper of the run maps paths itself (XdebugBridge for PHP on another machine): it is given the project's own.</summary>
+    bool _bridged;
     string ToLocal(string remote) => _map != null ? _map.ToLocal(remote) : Target.ToHost(remote);
 
     /// <summary>The settings a debug server keeps for the programs that connect later (with <c>_gate</c> held).</summary>

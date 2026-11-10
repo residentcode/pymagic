@@ -1,7 +1,10 @@
 // Laravel in the built PyMagic.exe, on a copy of a Laravel app (PYMAGIC_TEST_LARAVEL_DIR, its vendor installed) with the PHP PYMAGIC_PHP names:
 // Blade coloured in a .blade.php, Settings > PHP saying what is found, Run Artisan Command (Ctrl+Shift+X) listing the project's commands and
 // running route:list, the Laravel server configuration answering, and Debug of it with Xdebug: a request stopping at a breakpoint of a route, its
-// frames, the Variables pane, the value popup of a PHP array, Resume. Run: PYMAGIC_PHP=… PYMAGIC_TEST_LARAVEL_DIR=… node desktop/e2e/laravel.check.mjs
+// frames, the Variables pane, the value popup of a PHP array, Resume. Then code insight with this computer's PHP (Phpactor's completion), a view's
+// name as a link and completed, Run Composer Command (dump-autoload), a Blade template's breakpoint stopping a request in the template, and
+// Pause stopping a slow request where it is.
+// Run: PYMAGIC_PHP=… PYMAGIC_COMPOSER=… PYMAGIC_TEST_LARAVEL_DIR=… PYMAGIC_PHPACTOR_HOME=(a folder in %TEMP%) node desktop/e2e/laravel.check.mjs
 import assert from 'node:assert/strict';
 import { appendFileSync, cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -25,12 +28,19 @@ appendFileSync(join(root, 'routes', 'web.php'), [
     "    $total = array_sum(array_column($items, 'price'));",
     "    return response()->json(['total' => $total]);",
     '});',
+    "Route::get('/slow', function () {",
+    '    for ($i = 0; $i < 3000; $i++) {',
+    '        usleep(5000);',
+    '    }',
+    "    return 'slow done';",
+    '});',
     '',
 ].join('\n'));
 const ORDER_LINE = 12;
+const SLOW_LINE = 16;   // the loop's lines: 15 (for), 16 (usleep)
 
 async function clickMargin(page, line) {
-    const at = await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.revealLine(${line}); const box = ed.getContainerDomNode().getBoundingClientRect();
+    const at = await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.revealLineInCenter(${line}, 1); const box = ed.getContainerDomNode().getBoundingClientRect();
         return { x: box.left + ed.getLayoutInfo().glyphMarginLeft + 5, y: box.top + ed.getTopForLineNumber(${line}) - ed.getScrollTop() + 8 }; })()`);
     await page.click(at.x, at.y);
     await sleep(300);
@@ -110,6 +120,73 @@ try {
     const body = await answered.json();
     console.log('the request went on:', answered.status, JSON.stringify(body));
     assert.equal(body.total, 15);
+    await page.evaluate(`${$('b-stop')}.click()`);
+    await page.waitFor(`/exit code/.test(${$('output')}.textContent.split('Running').pop())`, 30000, 'Stop');
+
+    // code insight with this computer's PHP: Phpactor's completion after `$user->` (asked again until it has indexed the project)
+    assert.ok(found.phpactor, 'the Phpactor PyMagic carries');
+    await page.evaluate(`window.pymagic.openFile('routes/web.php')`);
+    await page.waitFor(`window.pymagic.editor.getModel()?.uri.path.endsWith('web.php')`, 20000, 'routes/web.php');
+    await page.evaluate(`(() => { const ed = window.pymagic.editor; const m = ed.getModel(); const last = m.getLineCount();
+        ed.setPosition({ lineNumber: last, column: m.getLineMaxColumn(last) }); ed.focus(); ed.trigger('test', 'type', { text: '\\n$user = new \\\\App\\\\Models\\\\User();\\n$user->noti' }); })()`);
+    let labels = [];
+    for (let i = 0; i < 40 && !labels.includes('notify'); i++) {
+        await page.evaluate(`window.pymagic.editor.trigger('test', 'hideSuggestWidget', {})`);
+        await page.evaluate(`window.pymagic.editor.trigger('test', 'editor.action.triggerSuggest', {})`);
+        await sleep(2500);
+        labels = await page.evaluate(`[...document.querySelectorAll('.suggest-widget.visible .monaco-list-row')].map((x) => x.getAttribute('aria-label'))`);
+    }
+    console.log('completion after $user->noti:', labels.slice(0, 6));
+    assert.ok(labels.includes('notify'), labels.join(','));
+    await page.key(27, 'Escape');
+    await page.evaluate(`(() => { const ed = window.pymagic.editor; while (ed.getModel().getValue().includes('$user')) ed.trigger('test', 'undo', {}); })()`);
+
+    // a view's name is a link: Go to Definition on 'welcome' opens resources/views/welcome.blade.php
+    await page.evaluate(`(() => { const ed = window.pymagic.editor; const m = ed.getModel(); const at = m.getValue().indexOf("view('welcome')") + 7;
+        ed.setPosition(m.getPositionAt(at)); ed.focus(); return ed.trigger('test', 'editor.action.revealDefinition', {}); })()`);
+    await page.waitFor(`window.pymagic.editor.getModel()?.uri.path.endsWith('welcome.blade.php')`, 20000, 'the view opened from its name');
+    // completion in view('…'): the project's views
+    const views = await page.evaluate(`(async () => { const r = await fetch('/api/laravel/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: "view('", offset: 6 }) }); return (await r.json()).items.map((i) => i.label); })()`);
+    console.log('views in view(\'…\'):', views.slice(0, 4));
+    assert.ok(views.includes('welcome'), views.join(','));
+
+    // Run Composer command: its list (composer.json's scripts in it), and dump-autoload run in the Run panel
+    await page.evaluate(`window.pymagic.runCommand('pymagic.laravel.composer')`);
+    const composerRows = await page.waitFor(`document.querySelectorAll('.artisan-row').length > 8 && [...document.querySelectorAll('.artisan-row .artisan-name')].map((x) => x.textContent)`, 20000, 'the Composer commands');
+    console.log('Run Composer command:', composerRows.length, 'commands, scripts:', composerRows.filter((n) => n.startsWith('run-script')).join(', '));
+    assert.ok(composerRows.includes('require') && composerRows.some((n) => n.startsWith('run-script ')), composerRows.join(','));
+    await page.evaluate(`(() => { const f = document.querySelector('.artisan-box input'); f.value = 'dump-autoload'; f.dispatchEvent(new Event('input')); f.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+    const dumped = await page.waitFor(`(() => { const t = ${$('output')}.textContent.split('Running').pop(); return /exit code \\d/.test(t) ? t : null; })()`, 120000, 'composer dump-autoload');
+    console.log('composer dump-autoload:', JSON.stringify(dumped.trim().split('\n').filter(Boolean).slice(-2)));
+    assert.match(dumped, /exit code 0/);
+
+    // a breakpoint of a Blade template: the request of / stops in welcome.blade.php, at its line
+    await page.evaluate(`window.pymagic.openFile('resources/views/welcome.blade.php')`);
+    await page.waitFor(`window.pymagic.editor.getModel()?.uri.path.endsWith('welcome.blade.php')`, 20000, 'welcome.blade.php');
+    const bladeLine = await page.evaluate(`window.pymagic.editor.getModel().getLinesContent().findIndex((l) => l.includes("@if (Route::has('login'))")) + 1`);
+    assert.ok(bladeLine > 0, 'the @if line');
+    assert.equal(await clickMargin(page, bladeLine), true, 'the template breakpoint');
+    await page.evaluate(`${$('b-debug')}.click()`);
+    await page.waitFor(`${$('output')}.textContent.split('Running').pop().includes('127.0.0.1:${port}')`, 120000, 'the server under the debugger again');
+    const home = fetch(`http://127.0.0.1:${port}/`);
+    const bladeStop = await page.waitFor(`!${$('b-over')}.disabled && document.querySelector('#frames div.sel')?.textContent`, 90000, 'the stop in the template');
+    console.log('stopped in the template:', bladeStop);
+    assert.ok(bladeStop.includes(`welcome.blade.php:${bladeLine}`), bladeStop);
+    await page.evaluate(`${$('b-debug')}.click()`);
+    assert.equal((await home).status, 200);
+
+    // Pause: a slow request, stopped where it is (Xdebug's control socket), with no breakpoint there; Resume, and it is answered
+    const slow = fetch(`http://127.0.0.1:${port}/slow`);
+    await sleep(1500);
+    await page.waitFor(`!${$('b-pause')}.disabled`, 10000, 'Pause enabled');
+    await page.evaluate(`${$('b-pause')}.click()`);
+    const paused = await page.waitFor(`!${$('b-over')}.disabled && document.querySelector('#frames div.sel')?.textContent`, 30000, 'the pause');
+    console.log('paused:', paused);
+    assert.match(paused, new RegExp(`web\\.php:(${SLOW_LINE - 1}|${SLOW_LINE})\\b`), paused);
+    await page.evaluate(`${$('b-debug')}.click()`);
+    const slowBody = await (await slow).text();
+    console.log('the slow request went on:', slowBody);
+    assert.equal(slowBody, 'slow done');
     await page.evaluate(`${$('b-stop')}.click()`);
     await page.waitFor(`/exit code/.test(${$('output')}.textContent.split('Running').pop())`, 30000, 'Stop');
     console.log('OK');

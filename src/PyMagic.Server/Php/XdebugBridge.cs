@@ -15,8 +15,8 @@ namespace PyMagic.Server;
 /// own to the session's port, so the debugger's panes, the values in the editor and the value popup work for PHP as they do for Python.
 ///
 /// Each Xdebug connection is a PHP process or request; one is shown stopped at a time, and another that stops meanwhile is shown when the
-/// shown one goes on. Xdebug cannot be told anything while PHP runs, so breakpoints changed meanwhile reach a run when it next stops, and
-/// every new request has them all. Library code (the project's vendor folder) is stepped over as pm_debug.py steps over libraries, unless
+/// shown one goes on. DBGp tells Xdebug nothing while PHP runs, so breakpoints changed meanwhile reach a run when it next stops, and every
+/// new request has them all; Pause goes through Xdebug's control socket instead (Xdebug 3.5 on Windows, 3.3 on Linux). Library code (the project's vendor folder) is stepped over as pm_debug.py steps over libraries, unless
 /// the run is with all code.
 /// </summary>
 public sealed class XdebugBridge : IDisposable
@@ -45,10 +45,14 @@ public sealed class XdebugBridge : IDisposable
         public Dictionary<string, string> Children { get; } = new();
     }
 
-    public XdebugBridge(string root, bool allCode)
+    readonly ExecutionTarget? _target;
+
+    /// <summary><paramref name="target"/>: the machine PHP runs on when it is not this one (its paths are mapped to the project's).</summary>
+    public XdebugBridge(string root, bool allCode, ExecutionTarget? target = null)
     {
         _root = Path.GetFullPath(root);
         _allCode = allCode;
+        _target = target;
         _xdebug = new TcpListener(IPAddress.Loopback, 0);
         _xdebug.Start();
         Task.Run(AcceptXdebug);
@@ -70,6 +74,8 @@ public sealed class XdebugBridge : IDisposable
         $"xdebug.client_port={Port}\n" +
         "xdebug.connect_timeout_ms=2000\n" +
         "xdebug.idekey=PYMAGIC\n" +
+        // Pause's way in: polled by the clock (the default needs the processor's TSC clock, which a container or VM may not show)
+        "xdebug.control_socket=time\n" +
         "xdebug.log_level=0\n";
 
     /// <summary>Connects to the RunSession's port as its debugger helper does, and serves its messages until either end goes.</summary>
@@ -154,7 +160,7 @@ public sealed class XdebugBridge : IDisposable
                 return;
             }
             case "pause":
-                Say("Xdebug cannot pause PHP while it runs: set a breakpoint where it should stop.\n");
+                _ = Task.Run(Pause);
                 return;
             case "continue": _ = _shown?.Resume("run"); return;
             case "next": _ = _shown?.Resume("step_over"); return;
@@ -211,6 +217,83 @@ public sealed class XdebugBridge : IDisposable
     }
 
     DbgpSession Need() => _shown ?? throw new InvalidOperationException("The program is not stopped.");
+
+    /// <summary>
+    /// Sends Xdebug's control command (ps, pause) to a PHP process of the machine it runs on and returns Xdebug's XML answer, or null when the
+    /// process has no control socket. Set for PHP on another machine (its PHP connects to the socket there); this computer's is the default.
+    /// </summary>
+    public Func<string, string, string?>? Control { get; set; }
+
+    /// <summary>
+    /// Pause: every PHP run under the debugger that runs is told to stop where it is, through Xdebug's control socket (Xdebug 3.5 has it on
+    /// Windows, a named pipe \\.\pipe\xdebug-ctrl.PID, and Linux, an abstract socket @xdebug-ctrl.PID; Xdebug polls it every 25 ms). Xdebug then
+    /// answers the run command it was given with a break, at the line it is on.
+    /// </summary>
+    void Pause()
+    {
+        var running = Sessions().Where(s => !s.IsStopped && s.Pid != "").ToList();
+        // a server's requests running: those (artisan serve's own process only waits on PHP's server meanwhile)
+        if (running.Any(s => s.IsRequest)) running = running.Where(s => s.IsRequest).ToList();
+        if (running.Count == 0)
+        {
+            Say(Sessions().Count == 0
+                ? "No PHP is running under the debugger now: a server's request is paused while it runs (open the page, then Pause), or set a breakpoint.\n"
+                : "The program is stopped already.\n");
+            return;
+        }
+        bool any = false;
+        foreach (var s in running)
+        {
+            s.Pausing = true;
+            string? answer;
+            try { answer = (Control ?? LocalControl)(s.Pid, "pause"); }
+            catch (Exception e) when (e is IOException or TimeoutException or UnauthorizedAccessException or ServiceException or InvalidOperationException) { answer = null; }
+            if (answer != null && answer.Contains("success=\"1\"")) { any = true; continue; }
+            s.Pausing = false;
+            if (answer != null && Regex.Match(answer, @"<message>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</message>") is { Success: true } m) Say($"Xdebug did not pause {s.Label}: {m.Groups[1].Value}\n");
+        }
+        if (!any)
+            Say("Xdebug did not answer the pause: it needs Xdebug 3.5 or later (on Windows) or 3.3 or later (on Linux), with xdebug.control_socket not off. " +
+                "Set a breakpoint where it should stop instead.\n");
+    }
+
+    /// <summary>A PHP process of this computer: its control socket is the named pipe xdebug-ctrl.PID (Windows).</summary>
+    static string? LocalControl(string pid, string command)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        using var pipe = new System.IO.Pipes.NamedPipeClientStream(".", "xdebug-ctrl." + pid, System.IO.Pipes.PipeDirection.InOut);
+        try { pipe.Connect(1000); }
+        catch (TimeoutException) { return null; }
+        var bytes = Encoding.ASCII.GetBytes(command);
+        pipe.Write(bytes);
+        pipe.Flush();
+        // Xdebug looks at the pipe between statements, every 25 ms: its answer is one write, then it closes its end
+        var answer = new MemoryStream();
+        var buf = new byte[4096];
+        var read = pipe.ReadAsync(buf).AsTask();
+        if (!read.Wait(2000)) return null;
+        answer.Write(buf, 0, read.Result);
+        while (read.Result > 0 && answer.Length < 65536)
+        {
+            read = pipe.ReadAsync(buf).AsTask();
+            if (!read.Wait(500)) break;
+            answer.Write(buf, 0, read.Result);
+        }
+        return Encoding.UTF8.GetString(answer.ToArray());
+    }
+
+    /// <summary>
+    /// A PHP process of another machine: a PHP command line run there, which connects to the abstract socket Xdebug opened (@xdebug-ctrl.PID)
+    /// and prints the answer. <paramref name="remote"/> runs a shell command there and returns its exit code and output.
+    /// </summary>
+    public static Func<string, string, string?> RemoteControl(string php, Func<string, (int Code, string Out)> remote) => (pid, command) =>
+    {
+        if (!Regex.IsMatch(pid, @"^\d+$") || !Regex.IsMatch(command, @"^[a-z]+$")) return null;
+        string code = "$s=@stream_socket_client('unix://'.chr(0).'xdebug-ctrl." + pid + "',$n,$e,2);if(!$s)exit(3);fwrite($s,'" + command + "');" +
+                      "stream_set_timeout($s,2);echo stream_get_contents($s);";
+        var (exit, output) = remote($"{SshTarget.Quote(php)} -n -r {SshTarget.Quote(code)}");
+        return exit == 0 && output.Contains("<ctrl-response") ? output : null;
+    };
 
     List<DbgpSession> Sessions() { lock (_gate) return _sessions.ToList(); }
 
@@ -323,15 +406,30 @@ public sealed class XdebugBridge : IDisposable
 
     internal static string Canonical(string path) => Path.GetFullPath(path).TrimEnd('\\', '/');
 
-    /// <summary>A file of this computer from Xdebug's file:// address (file:///C:/proj/a.php), or null for code that is not a file (eval).</summary>
-    internal static string? FileOf(string? uri)
+    /// <summary>
+    /// A file of this computer from Xdebug's file:// address (file:///C:/proj/a.php), or null for code that is not a file (eval). PHP on another
+    /// machine names its own paths (file:///root/.pymagic/projects/…/a.php): they are the project's files here.
+    /// </summary>
+    internal string? FileOf(string? uri)
     {
         if (string.IsNullOrEmpty(uri) || !uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)) return null;
-        try { return new Uri(uri).LocalPath; } catch (UriFormatException) { return null; }
+        try
+        {
+            var u = new Uri(uri);
+            if (_target == null || _target.IsLocal) return u.LocalPath;
+            return _target.ToHost(Uri.UnescapeDataString(u.AbsolutePath));
+        }
+        catch (UriFormatException) { return null; }
     }
 
-    /// <summary>Xdebug's address of a file of this computer: file:///C:/proj/a%20b.php.</summary>
-    internal static string UriOf(string file) => new Uri(Path.GetFullPath(file)).AbsoluteUri;
+    /// <summary>Xdebug's address of a file of this computer: file:///C:/proj/a%20b.php (on another machine, the path the file has there).</summary>
+    internal string UriOf(string file)
+    {
+        string full = Path.GetFullPath(file);
+        if (_target == null || _target.IsLocal) return new Uri(full).AbsoluteUri;
+        string remote = _target.ToTarget(full);
+        return "file://" + string.Join("/", remote.Split('/').Select(Uri.EscapeDataString));
+    }
 
     bool IsLibrary(string? file) => !_allCode && file != null && Regex.IsMatch(file, @"[\\/]vendor[\\/]", RegexOptions.IgnoreCase);
 
@@ -423,6 +521,12 @@ public sealed class XdebugBridge : IDisposable
 
         public string Label { get; private set; } = "PHP";
         public bool IsStopped => _stopped;
+        /// <summary>The process id of the PHP process (Xdebug's appid), whose control socket Pause uses.</summary>
+        public string Pid { get; private set; } = "";
+        /// <summary>A request of PHP's server (artisan serve's server.php), not a program of its own.</summary>
+        public bool IsRequest { get; private set; }
+        /// <summary>Pause was asked for: the next break is the pause's, wherever it is.</summary>
+        public volatile bool Pausing;
 
         public DbgpSession(XdebugBridge bridge, TcpClient client)
         {
@@ -437,8 +541,10 @@ public sealed class XdebugBridge : IDisposable
             {
                 var init = ReadPacket();
                 if (init == null || init.Name.LocalName != "init") { Close(); return; }
-                string? file = FileOf((string?)init.Attribute("fileuri"));
+                string? file = _bridge.FileOf((string?)init.Attribute("fileuri"));
                 string pid = (string?)init.Attribute("appid") ?? "";
+                Pid = pid;
+                IsRequest = file != null && Path.GetFileName(file).Equals("server.php", StringComparison.OrdinalIgnoreCase);
                 Label = file == null ? $"PHP {pid}"
                     // a request of PHP's server (artisan serve's): its server.php is the same for all of them
                     : Path.GetFileName(file).Equals("server.php", StringComparison.OrdinalIgnoreCase) ? $"request {pid}"
@@ -580,12 +686,16 @@ public sealed class XdebugBridge : IDisposable
             List<JsonObject> specs;
             lock (_bridge._gate) specs = _bridge._breakpoints.TryGetValue(Canonical(file), out var b) ? b.Specs.ToList() : new();
             var ids = new List<string>();
+            // a Blade template runs as the files Laravel compiled it into: its breakpoints are set there (none until it is compiled)
+            var places = BladeViews.IsTemplate(file) ? BladeViews.CompiledOf(_bridge._root, file) : new List<string> { file };
             foreach (var spec in specs)
+            foreach (var place in places)
             {
                 int line = Num(spec["line"]);
                 if (line <= 0) continue;
+                if (!ReferenceEquals(place, file)) line = BladeViews.ToCompiled(place, line);
                 string? condition = spec["condition"]?.GetValue<string>()?.Trim();
-                string uri = Quote(UriOf(file));
+                string uri = Quote(_bridge.UriOf(place));
                 try
                 {
                     var r = !string.IsNullOrEmpty(condition)
@@ -641,8 +751,14 @@ public sealed class XdebugBridge : IDisposable
             if (!_stopped) return;
             string path = Path.GetFullPath(Path.Combine(_bridge._root, file));
             _runTo = (path, line);
-            try { await Ask("breakpoint_set", $"-t line -f {Quote(UriOf(path))} -n {line} -r 1"); }
-            catch (Exception e) when (e is DbgpException or IOException) { }
+            // in a Blade template: in each file Laravel compiled it into
+            var places = BladeViews.IsTemplate(path) ? BladeViews.CompiledOf(_bridge._root, path) : new List<string> { path };
+            foreach (var place in places)
+            {
+                int atLine = ReferenceEquals(place, path) ? line : BladeViews.ToCompiled(place, line);
+                try { await Ask("breakpoint_set", $"-t line -f {Quote(_bridge.UriOf(place))} -n {atLine} -r 1"); }
+                catch (Exception e) when (e is DbgpException or IOException) { }
+            }
             await Resume("run");
         }
 
@@ -662,13 +778,23 @@ public sealed class XdebugBridge : IDisposable
                     string? exception = (string?)message?.Attribute("exception");
                     var stack = await Ask("stack_get", "");
                     var levels = stack.Elements().Where(e => e.Name.LocalName == "stack").ToList();
-                    string? topFile = FileOf((string?)levels.FirstOrDefault()?.Attribute("filename"));
+                    string? topFile = _bridge.FileOf((string?)levels.FirstOrDefault()?.Attribute("filename"));
                     int topLine = int.TryParse((string?)levels.FirstOrDefault()?.Attribute("lineno"), out var tl) ? tl : 0;
+                    // a compiled Blade view: the place in its template, where its breakpoints are
+                    if (topFile != null) (topFile, topLine) = BladeViews.ToTemplate(topFile, topLine);
 
-                    if (exception != null)
+                    if (Pausing && exception == null)
+                    {
+                        // Pause's break: where PHP was, whatever the line
+                        Pausing = false;
+                        _runTo = null;
+                        _reason = "pause";
+                        _message = null;
+                    }
+                    else if (exception != null)
                     {
                         // as "only my code": an exception thrown and caught inside the libraries, with none of the project's code on the stack
-                        bool mine = levels.Any(l => FileOf((string?)l.Attribute("filename")) is { } f && !_bridge.IsLibrary(f));
+                        bool mine = levels.Any(l => _bridge.FileOf((string?)l.Attribute("filename")) is { } f && !_bridge.IsLibrary(f));
                         if (!mine) { last = "run"; continue; }
                         _reason = "exception";
                         _message = exception + (message!.Value is { Length: > 0 } m ? ": " + m.Trim() : "");
@@ -689,7 +815,7 @@ public sealed class XdebugBridge : IDisposable
                     {
                         // a step into the libraries: out of them again, to the project's code that called them; a step out to them: on to the
                         // next breakpoint (Laravel's own code runs the rest of the request)
-                        if (_bridge.IsLibrary(topFile) && levels.Any(l => !_bridge.IsLibrary(FileOf((string?)l.Attribute("filename")))))
+                        if (_bridge.IsLibrary(topFile) && levels.Any(l => !_bridge.IsLibrary(_bridge.FileOf((string?)l.Attribute("filename")))))
                         {
                             if (command == "step_into" && last != "run") { last = "step_out"; continue; }
                             last = "run";
@@ -760,12 +886,15 @@ public sealed class XdebugBridge : IDisposable
             foreach (var l in levels)
             {
                 int depth = int.TryParse((string?)l.Attribute("level"), out var d) ? d : frames.Count;
-                string? file = FileOf((string?)l.Attribute("filename"));
+                string? file = _bridge.FileOf((string?)l.Attribute("filename"));
                 if (file == null) continue;
                 if (_bridge.IsLibrary(file) && frames.Count > 0) continue;
                 int line = int.TryParse((string?)l.Attribute("lineno"), out var n) ? n : 0;
                 string where = (string?)l.Attribute("where") ?? "";
-                frames.Add((depth, new JsonObject { ["id"] = frames.Count, ["name"] = where == "{main}" ? "(main)" : where, ["file"] = file, ["line"] = line, ["first"] = line }));
+                // a compiled Blade view is shown as its template
+                var (shownFile, shownLine) = BladeViews.ToTemplate(file, line);
+                if (!ReferenceEquals(shownFile, file) && shownFile != file) where = Path.GetFileName(shownFile);
+                frames.Add((depth, new JsonObject { ["id"] = frames.Count, ["name"] = where == "{main}" ? "(main)" : where, ["file"] = shownFile, ["line"] = shownLine, ["first"] = shownLine }));
             }
             return frames;
         }

@@ -14,6 +14,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Run\pm_debug.py" LogicalName="pm_debug.py" />
+    <EmbeddedResource Include="Php\pm_phpactor.php" LogicalName="pm_phpactor.php" />
+    <EmbeddedResource Include="Php\pm_bladecompile.php" LogicalName="pm_bladecompile.php" />
     <EmbeddedResource Include="Run\pm_db.py" LogicalName="pm_db.py" />
     <EmbeddedResource Include="Run\pm_dbserver.py" LogicalName="pm_dbserver.py" />
     <EmbeddedResource Include="Run\pm_askpass.cmd" LogicalName="pm_askpass.cmd" />

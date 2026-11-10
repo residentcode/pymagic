@@ -176,6 +176,49 @@ public sealed class SshTarget : ExecutionTarget
         return psi;
     }
 
+    /// <summary>
+    /// A program other than Python (PHP) on the machine, in the project's folder there: <paramref name="marker"/> gives the arguments that put the
+    /// run's mark in its command line (PHP's <c>-d pymagic=ID</c>), and it runs in a process group of its own, so <see cref="StopGroup"/> ends what
+    /// it started too (artisan serve's server). <paramref name="reverse"/>: ports of this machine it connects to (Xdebug's), brought to the same
+    /// port there; <paramref name="forward"/>: ports it serves (artisan serve), brought to the same port here. <paramref name="unset"/>: variables
+    /// taken out of its environment.
+    /// </summary>
+    public ProcessStartInfo StartProgram(string program, string workDir, Func<string, IEnumerable<string>> marker, IEnumerable<string> args, IReadOnlyDictionary<string, string>? env = null,
+        IEnumerable<int>? reverse = null, IEnumerable<int>? forward = null, IEnumerable<string>? unset = null)
+    {
+        string runId = Guid.NewGuid().ToString("N")[..12];
+        string cwd = ToTarget(workDir);
+        if (!cwd.StartsWith(ProjectDir, StringComparison.Ordinal)) cwd = ProjectDir;
+        var cmd = new StringBuilder($"mkdir -p {Quote(cwd)} && cd {Quote(cwd)} && exec setsid -w env");
+        foreach (var u in unset ?? Array.Empty<string>()) cmd.Append(" -u ").Append(Quote(u));
+        foreach (var (k, v) in env ?? new Dictionary<string, string>()) cmd.Append(' ').Append(Quote($"{k}={(HostPath.IsMatch(v) ? ToTarget(v) : v)}"));
+        cmd.Append(' ').Append(Quote(program));
+        foreach (var a in marker(runId)) cmd.Append(' ').Append(Quote(a));
+        foreach (var a in args) cmd.Append(' ').Append(Quote(HostPath.IsMatch(a) ? ToTarget(a) : a));
+        var extra = new List<string>();
+        foreach (var p in (reverse ?? Array.Empty<int>()).Distinct()) extra.AddRange(new[] { "-R", $"{p}:127.0.0.1:{p}" });
+        foreach (var p in (forward ?? Array.Empty<int>()).Distinct()) extra.AddRange(new[] { "-L", $"127.0.0.1:{p}:127.0.0.1:{p}" });
+        if (extra.Count > 0) extra.InsertRange(0, new[] { "-o", "ExitOnForwardFailure=yes" });
+        var psi = Ssh(cmd.ToString(), extra);
+        psi.Environment["PYMAGIC_RUN_ID"] = runId;
+        lock (_groups) _groups.Add(runId);
+        return psi;
+    }
+
+    readonly HashSet<string> _groups = new();
+
+    /// <summary>Ends a program <see cref="StartProgram"/> began, with every process of its group.</summary>
+    public void StopGroup(string runId)
+    {
+        if (!Regex.IsMatch(runId, "^[0-9a-f]{12}$")) return;
+        try { Remote($"for p in $(pgrep -f 'pymagic[=]{runId}'); do kill -TERM -- -$(ps -o pgid= -p $p | tr -d ' ') 2>/dev/null; done; true", 20_000); }
+        catch (ServiceException) { /* the machine is gone, so is the program */ }
+    }
+
+    /// <summary>Runs a program on the machine in the project's folder there and waits for it (Artisan's list, PHP's version).</summary>
+    public (int Code, string Out, string Err) RunInProject(string program, IEnumerable<string> args, int timeoutMs = 120_000)
+        => Remote($"mkdir -p {Quote(ProjectDir)} && cd {Quote(ProjectDir)} && {Quote(program)} {string.Join(" ", args.Select(Quote))}", timeoutMs);
+
     /// <summary>A login shell on the machine in the project's folder there (a password may be typed: this one has a terminal).</summary>
     public override (string Program, IReadOnlyList<string> Args)? ShellCommand(string workDir)
     {
@@ -193,6 +236,9 @@ public sealed class SshTarget : ExecutionTarget
     public override void Stop(string runId)
     {
         if (!Regex.IsMatch(runId, "^[0-9a-f]{12}$")) return;
+        bool group;
+        lock (_groups) group = _groups.Remove(runId);
+        if (group) { StopGroup(runId); return; }
         try { Remote($"pkill -f 'pymagic[=]{runId}' || true", 20_000); } catch (ServiceException) { /* the machine is gone, so is the program */ }
     }
 

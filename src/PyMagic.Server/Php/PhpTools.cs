@@ -15,9 +15,39 @@ public static class PhpTools
     /// <summary>PHP: the path given (a php.exe, or a folder that has one), else the first PHP found; null when there is none.</summary>
     public static string? FindPhp(string? configured)
     {
+        if (Remote(configured) != null) return configured!.Trim();      // PHP on another machine: its spec, as Settings > PHP has it
         foreach (var c in Candidates(configured, "PYMAGIC_PHP", "php"))
             if (Works(c)) return c;
         return null;
+    }
+
+    /// <summary>
+    /// PHP on another machine reached by SSH, as Settings > PHP names it: <c>ssh:user@host:port?i=KEYFILE|php</c> (the spec of a remote Python
+    /// interpreter, PHP's program after the bar). Null for a PHP of this computer.
+    /// </summary>
+    public static (SshTarget Target, string Php)? Remote(string? setting)
+    {
+        if (string.IsNullOrWhiteSpace(setting) || !setting.TrimStart().StartsWith("ssh:", StringComparison.Ordinal)) return null;
+        return ExecutionTarget.Parse(setting.Trim()) is { Target: SshTarget ssh } t ? (ssh, t.Python) : null;
+    }
+
+    static readonly Dictionary<string, (DateTime At, string? Version, bool Xdebug, string? XdebugVersion, string? Composer)> RemoteInfo = new();
+
+    /// <summary>What PHP on another machine is: its version, its Xdebug (php-xdebug of the system's packages), its Composer. Asked once a minute at most.</summary>
+    public static (string? Version, bool Xdebug, string? XdebugVersion, string? Composer) RemoteFacts(SshTarget target, string php)
+    {
+        string key = target.Spec(php);
+        lock (RemoteInfo)
+            if (RemoteInfo.TryGetValue(key, out var known) && DateTime.UtcNow - known.At < TimeSpan.FromMinutes(1)) return (known.Version, known.Xdebug, known.XdebugVersion, known.Composer);
+        var (code, output, _) = target.Remote($"{SshTarget.Quote(php)} -r " + SshTarget.Quote("echo PHP_VERSION, \"\\n\", extension_loaded('xdebug') ? phpversion('xdebug') : '-', \"\\n\";")
+            + " ; command -v composer || true", 30_000);
+        var lines = output.Replace("\r", "").Split('\n');
+        string? version = code == 0 && lines.Length > 0 && Regex.IsMatch(lines[0], @"^\d+\.\d+") ? lines[0].Trim() : null;
+        bool xdebug = version != null && lines.Length > 1 && lines[1].Trim() != "-";
+        string? composer = lines.Skip(2).Select(l => l.Trim()).FirstOrDefault(l => l.StartsWith('/'));
+        var facts = (DateTime.UtcNow, version, xdebug, xdebug ? lines[1].Trim() : null, composer);
+        lock (RemoteInfo) RemoteInfo[key] = facts;
+        return (version, xdebug, facts.Item4, composer);
     }
 
     static IEnumerable<string> Candidates(string? configured, string variable, string program)
@@ -164,7 +194,8 @@ public static class PhpTools
             .Select(p => File.Exists(p) ? File.GetLastWriteTimeUtc(p).Ticks : Directory.Exists(p) ? Directory.GetLastWriteTimeUtc(p).Ticks : 0));
         lock (Cache)
             if (Cache.TryGetValue(root, out var cached) && cached.Stamp == stamp) return (JsonArray)cached.List.DeepClone();
-        var (code, output, error) = Run(php, new[] { "artisan", "list", "--format=json" }, root, 120);
+        var remote = Remote(php);
+        var (code, output, error) = remote is { } r ? InProject(r.Target, r.Php, root, new[] { "artisan", "list", "--format=json" }) : Run(php, new[] { "artisan", "list", "--format=json" }, root, 120);
         if (code != 0) throw new ServiceException("php artisan list: " + (error.Trim().Split('\n').LastOrDefault() ?? $"exit code {code}"));
         var list = new JsonArray();
         var node = JsonNode.Parse(output[output.IndexOf('{')..]);
@@ -186,6 +217,57 @@ public static class PhpTools
         return (JsonArray)list.DeepClone();
     }
 
+    /// <summary>A PHP command in the project's folder on another machine, the project copied there first (its changed files only).</summary>
+    public static (int Code, string Out, string Err) InProject(SshTarget target, string php, string root, IEnumerable<string> args, int timeoutMs = 120_000)
+    {
+        target.Project = root;
+        target.Prepare(root, null, null);
+        return target.RunInProject(php, args, timeoutMs);
+    }
+
+    /// <summary>
+    /// Composer's commands for Run Composer Command: the usual ones with what they ask for, then the scripts of the project's composer.json
+    /// (run-script NAME; Laravel's dev, test, setup). Null when the folder has no composer.json.
+    /// </summary>
+    public static JsonArray? ComposerCommands(string root)
+    {
+        string file = Path.Combine(root, "composer.json");
+        if (!File.Exists(file)) return null;
+        JsonObject C(string name, string about, params (string Name, bool Required)[] args) => new()
+        {
+            ["name"] = name, ["description"] = about,
+            ["arguments"] = new JsonArray(args.Select(a => (JsonNode)new JsonObject { ["name"] = a.Name, ["required"] = a.Required }).ToArray()),
+            ["options"] = new JsonArray(),
+        };
+        var list = new JsonArray
+        {
+            C("install", "Installs the packages of composer.lock (or of composer.json when there is no lock) into vendor"),
+            C("update", "Updates the packages to the newest versions composer.json allows, and composer.lock with them", ("packages", false)),
+            C("require", "Adds a package to composer.json and installs it: vendor/package, or vendor/package:^2.0", ("packages", true)),
+            C("require --dev", "Adds a package for development only (require-dev): tests, debugging, code style", ("packages", true)),
+            C("remove", "Removes a package from composer.json and vendor", ("packages", true)),
+            C("dump-autoload", "Writes the class autoloader again (after classes were added or moved by hand)"),
+            C("outdated", "Lists the installed packages that have newer versions"),
+            C("show", "Lists the installed packages, or tells one", ("package", false)),
+            C("why", "Tells which packages need a package", ("package", true)),
+            C("validate", "Checks composer.json"),
+            C("audit", "Checks the installed packages against the security advisories"),
+            C("create-project", "Makes a new project from a package in a folder", ("package", true), ("directory", false)),
+        };
+        try
+        {
+            if (JsonNode.Parse(File.ReadAllText(file))?["scripts"] is JsonObject scripts)
+                foreach (var (name, body) in scripts)
+                {
+                    if (name.StartsWith("pre-") || name.StartsWith("post-")) continue;      // Composer's own events, run by it
+                    string about = body is JsonArray steps ? string.Join(" && ", steps.Select(x => x?.ToString())) : body?.ToString() ?? "";
+                    list.Add(C("run-script " + name, "composer.json's script: " + (about.Length > 160 ? about[..160] + "…" : about)));
+                }
+        }
+        catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidOperationException) { }
+        return list;
+    }
+
     static readonly Dictionary<string, (string Stamp, JsonArray List)> Cache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -194,6 +276,7 @@ public static class PhpTools
     /// </summary>
     public static void CreateLaravel(string folder, string? phpSetting, string? composerSetting, Action<string>? say = null)
     {
+        if (Remote(phpSetting) != null) throw new ServiceException("New Project makes a Laravel app with PHP of this computer: Settings > PHP names PHP on another machine. Make it there with composer create-project laravel/laravel, or empty that setting for a while.");
         string php = FindPhp(phpSetting) ?? throw new ServiceException("PHP was not found: install PHP 8.2 or later, or name its php.exe in Settings > PHP.");
         var composer = FindComposer(composerSetting, php) ?? throw new ServiceException("Composer was not found: install Composer (getcomposer.org), or name it in Settings > PHP.");
         if (Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).Any()) throw new ServiceException($"{folder} is there already and not empty.");

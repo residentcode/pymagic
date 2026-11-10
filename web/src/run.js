@@ -1277,14 +1277,16 @@ export function setupRun(deps) {
         openBrowser = !!extra.openBrowser;
         followLogs((extra.logFiles ?? '').split(',').map((s) => s.trim()).filter(Boolean));
         testsRun = !!extra.tests;
-        lastLaunch = { rel, debug, profile, args, extra, started: Date.now(), label: extra.label ?? (extra.module ? `python -m ${extra.module}` : extra.npmScript ? `npm run ${extra.npmScript}` : extra.browser ? `JavaScript Debug ${extra.browser.url}` : extra.artisan ? `php artisan ${extra.artisan.join(' ')}` : extra.tests ? 'tests' : (rel ?? 'a program')) };
+        lastLaunch = { rel, debug, profile, args, extra, started: Date.now(), label: extra.label ?? (extra.module ? `python -m ${extra.module}` : extra.npmScript ? `npm run ${extra.npmScript}` : extra.browser ? `JavaScript Debug ${extra.browser.url}` : extra.artisan ? `php artisan ${extra.artisan.join(' ')}` : extra.composer ? `composer ${extra.composer.join(' ')}` : extra.tests ? 'tests' : (rel ?? 'a program')) };
         run = new RunClient({ type: 'start', file: rel ?? undefined, module: extra.module, tests: extra.tests, profileTests: extra.profileTests, allCode: extra.allCode, debug, profile, args, env: extra.env, cwd: extra.cwd, breakpoints, exceptionBreak: raisedBox.checked ? 'raised' : 'uncaught',
             exceptionClasses: exceptionClasses(), muted: muteBox.checked, loadPolicy: policyBox.value, functionBreaks: functionNames(),
             envFiles: extra.envFiles, interpreter: extra.interpreter, uv: extra.uv, uvPath: extra.uvPath, contentRoots: extra.contentRoots, sourceRoots: extra.sourceRoots,
             // JavaScript: an npm script of a package.json (its folder), and the Node program a configuration names
             npmScript: extra.npmScript, packageDir: extra.packageDir, node: extra.node, browser: extra.browser,
             // PHP: an Artisan command of a Laravel project (php artisan serve, migrate, …)
-            artisan: extra.artisan });
+            artisan: extra.artisan,
+            // Composer: a command of the project's composer.json (install, require …, a script)
+            composer: extra.composer });
         run.onMessage = handle;
         // only this run's connection counts: an earlier one closing late (Before launch) must not end the next run
         const mine = run;
@@ -1953,6 +1955,8 @@ export function setupRun(deps) {
         runModule: (module, args = [], debug = false) => launch(null, debug, false, args, { module }),
         /** `php artisan command args` of a Laravel project; false when a run is going. */
         runArtisan: (args, debug = false) => launch(null, debug, false, [], { artisan: args }),
+        /** `composer command args` of the project; false when a run is going. */
+        runComposer: (args) => launch(null, false, false, [], { composer: args }),
         /** The program that is running, as a service of the Services window: stopped, restarted (started again as it was) or shown. */
         services: () => [...(run === null || !lastLaunch || lastLaunch.extra?.member ? [] : [{
             id: 'run', group: 'Run', name: lastLaunch.label, started: lastLaunch.started,
