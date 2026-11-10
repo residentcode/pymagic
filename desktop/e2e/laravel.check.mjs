@@ -208,6 +208,19 @@ try {
     console.log('problems in the script and style of the template:', problems.length ? problems : 'none');
     assert.deepEqual(problems.filter((p) => p.startsWith('javascript') || p.startsWith('css')), []);
 
+    // /* */ typed around tags of the HTML: a warning that it is no comment there, and the quick fix that makes it {{-- --}}
+    await page.evaluate(`(() => { const ed = window.pymagic.editor; const m = ed.getModel(); const last = m.getLineCount();
+        ed.executeEdits('test', [{ range: new window.pymagic.monaco.Range(last, 1, last, 1), text: '/*<link rel="preconnect" href="https://fonts.bunny.net">\\n<link href="https://fonts.bunny.net/css" rel="stylesheet"/>*/\\n' }]); })()`);
+    const warning = await page.waitFor(`window.pymagic.monaco.editor.getModelMarkers({ owner: 'html-comment', resource: window.pymagic.editor.getModel().uri })[0]?.message`, 10000, 'the /* */ warning');
+    console.log('/* */ around HTML:', warning);
+    await page.evaluate(`(() => { const ed = window.pymagic.editor; const mk = window.pymagic.monaco.editor.getModelMarkers({ owner: 'html-comment', resource: ed.getModel().uri })[0];
+        ed.setPosition({ lineNumber: mk.startLineNumber, column: mk.startColumn + 3 }); ed.focus(); return ed.trigger('test', 'editor.action.quickFix', {}); })()`);
+    await page.waitFor(`[...document.querySelectorAll('.action-widget .monaco-list-row')].some((x) => (x.getAttribute('aria-label') ?? '').startsWith('Change to a Blade comment'))`, 10000, 'the quick fix in the menu');
+    await page.key(13, 'Enter');
+    const fixed = await page.waitFor(`(() => { const v = window.pymagic.editor.getModel().getValue(); return v.includes('{{-- <link') ? v.slice(v.indexOf('{{-- <link')) : null; })()`, 10000, 'the quick fix');
+    console.log('after the quick fix:', JSON.stringify(fixed));
+    assert.equal(fixed, '{{-- <link rel="preconnect" href="https://fonts.bunny.net">\n<link href="https://fonts.bunny.net/css" rel="stylesheet"/> --}}\n');
+
     // Run Composer command: its list (composer.json's scripts in it), and dump-autoload run in the Run panel
     await page.evaluate(`window.pymagic.runCommand('pymagic.laravel.composer')`);
     const composerRows = await page.waitFor(`document.querySelectorAll('.artisan-row').length > 8 && [...document.querySelectorAll('.artisan-row .artisan-name')].map((x) => x.textContent)`, 20000, 'the Composer commands');

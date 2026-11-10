@@ -16,6 +16,7 @@ import { setupPythonConsole } from './pyconsole';
 import { setupDiagrams } from './diagram';
 import { setupTemplateLinks } from './templatelinks';
 import { setupEmbedded } from './embedded';
+import { setupHtmlComments } from './html-comment.js';
 import { setupTemplatePreview } from './templatepreview';
 import { addModelAdmin, addModelSerializer } from './django-model';
 import { setLiveTemplateSource, openSettings } from './settings-ui';
@@ -1173,6 +1174,7 @@ async function main() {
         if (word) void diagrams.openModel(word);
     });
     setupEmbedded();
+    setupHtmlComments();
     // Ctrl+Shift+/ comments the selection as one block ({{-- --}} in Blade, /* */ in CSS and JavaScript, <!-- --> in HTML), as PhpStorm's key
     monaco.editor.addKeybindingRule({ keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Slash, command: 'editor.action.blockComment', when: 'editorTextFocus && !editorReadonly' });
     setupTemplatePreview({ editor, lsp, uriOf: (model) => serverUri.get(model) });
