@@ -120,6 +120,27 @@ public sealed class SshTarget : ExecutionTarget
         catch (System.ComponentModel.Win32Exception) { throw new ServiceException("the ssh program was not found (it comes with Windows 10 and later as an optional feature)"); }
     }
 
+    /// <summary>Runs a command on the machine with this text as its standard input (which no command line limits), and waits for it.</summary>
+    public (int Code, string Out, string Err) RemoteWithInput(string command, string input, int timeoutMs = 60_000)
+    {
+        var psi = Ssh(command);
+        psi.RedirectStandardOutput = true; psi.RedirectStandardError = true; psi.RedirectStandardInput = true;
+        psi.StandardOutputEncoding = new UTF8Encoding(false); psi.StandardErrorEncoding = new UTF8Encoding(false); psi.StandardInputEncoding = new UTF8Encoding(false);
+        try
+        {
+            using var p = Process.Start(psi) ?? throw new ServiceException("ssh did not start");
+            var stdout = p.StandardOutput.ReadToEndAsync();
+            var stderr = p.StandardError.ReadToEndAsync();
+            p.StandardInput.Write(input);
+            p.StandardInput.Close();
+            if (!p.WaitForExit(timeoutMs)) { try { p.Kill(true); } catch (InvalidOperationException) { } throw new ServiceException($"{Destination} did not answer in time"); }
+            p.WaitForExit();
+            if (p.ExitCode == 255) throw new ServiceException($"cannot connect to {Destination}: {FirstLine(stderr.Result) ?? "ssh failed"}");
+            return (p.ExitCode, stdout.Result, stderr.Result);
+        }
+        catch (System.ComponentModel.Win32Exception) { throw new ServiceException("the ssh program was not found (it comes with Windows 10 and later as an optional feature)"); }
+    }
+
     static string? FirstLine(string text) => text.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.Length > 0);
 
     static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> Homes = new();

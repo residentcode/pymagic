@@ -24,6 +24,10 @@ public sealed partial class RunSession
     {
         _root = root;
         IsDebug = debug;
+        SailTarget? sail;
+        try { sail = SailTarget.Of(root, Php); }
+        catch (ServiceException e) { Error(e.Message); return; }
+        if (sail != null) { StartSailPhp(root, sail, script, artisan, debug, args, breakpoints); return; }
         if (PhpTools.Remote(Php) is { } remote) { StartRemotePhp(root, remote.Target, remote.Php, script, artisan, debug, args, breakpoints); return; }
         if (!Target.IsLocal) { Error("PHP runs on this computer, or on a machine reached by SSH that Settings > PHP names."); return; }
         string? php = PhpTools.FindPhp(Php);
@@ -58,13 +62,15 @@ public sealed partial class RunSession
     /// folder there, Laravel's server brought to the same port here, under the debugger Xdebug's connection brought back here; files an Artisan
     /// command made there (make:model, make:migration, …) are fetched into the project when it ends.
     /// </summary>
-    void StartRemotePhp(string root, SshTarget ssh, string php, string? script, IReadOnlyList<string>? artisan, bool debug, IReadOnlyList<string> args, IReadOnlyDictionary<string, JsonArray>? breakpoints)
+    /// <param name="program">PHP's own arguments as they are (a test run's vendor/bin/phpunit …), instead of a script or an Artisan command.</param>
+    void StartRemotePhp(string root, SshTarget ssh, string php, string? script, IReadOnlyList<string>? artisan, bool debug, IReadOnlyList<string> args, IReadOnlyDictionary<string, JsonArray>? breakpoints, IReadOnlyList<string>? program = null)
     {
         ssh.Project = root;
         Target = ssh;
         _bridged = debug;
         var phpArgs = new List<string>();
-        if (artisan != null)
+        if (program != null) phpArgs.AddRange(program);
+        else if (artisan != null)
         {
             if (!File.Exists(Path.Combine(root, "artisan"))) { Error("There is no artisan file in the project folder: it is not a Laravel project."); return; }
             if (artisan.Count == 0 || !System.Text.RegularExpressions.Regex.IsMatch(artisan[0], @"^[\w:.-]+$")) { Error("an Artisan command: serve, migrate, make:model, …"); return; }
@@ -166,6 +172,20 @@ public sealed partial class RunSession
         if (args.Count == 0 || !System.Text.RegularExpressions.Regex.IsMatch(args[0], @"^[\w:.-]+$")) { Error("a Composer command: install, require, update, …"); return; }
         if (!File.Exists(Path.Combine(root, "composer.json"))) { Error("There is no composer.json in the project folder."); return; }
         var all = new List<string>(args) { "--no-interaction" };
+        // Sail: the container's Composer, in the project it shares
+        SailTarget? sail;
+        try { sail = SailTarget.Of(root, Php); }
+        catch (ServiceException e) { Error(e.Message); return; }
+        if (sail != null)
+        {
+            Target = sail;
+            try { if (!sail.Running()) { Say("Starting Sail's container (docker compose up -d)…\n"); sail.Up(); } }
+            catch (ServiceException e) { Error(e.Message); return; }
+            var spsi = sail.Start("php", root, new[] { "/usr/bin/composer" }.Concat(all));
+            _runId = spsi.Environment["PYMAGIC_RUN_ID"];
+            StartProcess(spsi, root, null, null);
+            return;
+        }
         if (PhpTools.Remote(Php) is { } remote)
         {
             var ssh = remote.Target;

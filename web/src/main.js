@@ -24,6 +24,7 @@ import { setupHierarchy } from './hierarchy';
 import { setupRoutes } from './routes';
 import { setupDjango } from './django';
 import { setupLaravel, setupLaravelLinks } from './laravel';
+import { setupPhpAnalysis } from './php-analysis.js';
 import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
@@ -338,9 +339,34 @@ async function refreshFormatters() {
     }
     catch { /* the server is not ready */ }
 }
+/** A .php file's text as the project's Pint or PHP CS Fixer lays it out (the whole file: neither formats a part), or null with the reason shown. */
+async function phpFormatted(model, quiet) {
+    const res = await fetch('/api/php/format', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: model.getValue() }) }).catch(() => null);
+    const body = await res?.json().catch(() => null);
+    if (!res?.ok || typeof body?.text !== 'string') {
+        if (!quiet) toast(body?.error ?? 'The file cannot be formatted.', true);
+        return null;
+    }
+    return body.text;
+}
+async function formatPhp(model, quiet) {
+    const before = model.getValue();
+    const text = await phpFormatted(model, quiet);
+    if (text === null) return false;
+    if (model.getValue() !== before) return false;   // typed in meanwhile: that text wins
+    if (text !== before) {
+        editor.pushUndoStop();
+        model.pushEditOperations(editor.getSelections(), [{ range: model.getFullModelRange(), text }], () => null);
+        editor.pushUndoStop();
+    }
+    if (!quiet) toast(text !== before ? 'Formatted' : 'Already formatted');
+    return true;
+}
 async function formatCurrent(quiet = false) {
     const model = editor.getModel();
     const uri = model && serverUri.get(model);
+    const rel = uri && relPathOf.get(normalise(uri));
+    if (model && rel && /\.php$/i.test(rel) && !/\.blade\.php$/i.test(rel)) return formatPhp(model, quiet);
     if (!model || !uri || !relPathOf.get(normalise(uri))?.endsWith('.py'))
         return false;
     lsp.notify('textDocument/didChange', { textDocument: { uri, version: model.getVersionId() }, contentChanges: [{ text: model.getValue() }] });
@@ -407,6 +433,13 @@ async function organizeImports() {
 /** Python and Django templates share hover, go to definition, completion, usages and rename. */
 const CODE_LANGUAGES = ['python', 'django-html'];
 function registerProviders() {
+    // PHP: the project's Pint or PHP CS Fixer, for Monaco's own Format Document as for the toolbar's Format
+    monaco.languages.registerDocumentFormattingEditProvider('php', {
+        async provideDocumentFormattingEdits(model) {
+            const text = await phpFormatted(model, false);
+            return text === null || text === model.getValue() ? [] : [{ range: model.getFullModelRange(), text }];
+        },
+    });
     monaco.languages.registerDocumentFormattingEditProvider('python', {
         async provideDocumentFormattingEdits(model) {
             if (notebook?.isCell(model)) {
@@ -1206,6 +1239,8 @@ async function main() {
         setupLaravel({ run: runHooks, askText: (...a) => explorer.askText(...a) });
         // Laravel's names as links and completion: views, routes, config keys, .env, translations, assets, components
         setupLaravelLinks({ modelFor: ensureModel, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
+        // PHPStan's problems (Larastan's too) of a .php file when it is opened and saved
+        setupPhpAnalysis({ editor, relOf: (model) => relPathOf.get(normalise(serverUri.get(model) ?? '')) });
     }
     const problems = setupProblems({ editor, lsp, openFile, relOfUri });
     setupTodo({ editor, lsp, openFile, relOfUri });

@@ -2,7 +2,8 @@
 // Blade coloured in a .blade.php, Settings > PHP saying what is found, Run Artisan Command (Ctrl+Shift+X) listing the project's commands and
 // running route:list, the Laravel server configuration answering, and Debug of it with Xdebug: a request stopping at a breakpoint of a route, its
 // frames, the Variables pane, the value popup of a PHP array, Resume. Then code insight with this computer's PHP (Phpactor's completion), a view's
-// name as a link and completed, a route of two nested groups opened from its name on a line of its own in a Blade @php block, Run Composer Command (dump-autoload), a Blade template's breakpoint stopping a request in the template, and
+// name as a link and completed, a route of two nested groups opened from its name on a line of its own in a Blade @php block, the Tests panel
+// with PHPUnit (All, the failure and its line, At cursor, Debug of a test to its breakpoint), Run Composer Command (dump-autoload), a Blade template's breakpoint stopping a request in the template, and
 // Pause stopping a slow request where it is.
 // Run: PYMAGIC_PHP=… PYMAGIC_COMPOSER=… PYMAGIC_TEST_LARAVEL_DIR=… PYMAGIC_PHPACTOR_HOME=(a folder in %TEMP%) node desktop/e2e/laravel.check.mjs
 import assert from 'node:assert/strict';
@@ -46,6 +47,9 @@ appendFileSync(join(root, 'routes', 'web.php'), [
 ].join('\n'));
 // a template whose @php block names that route on a line of its own
 mkdirSync(join(root, 'resources', 'views', 'admin'), { recursive: true });
+// a PHPUnit test class of the copy: one test passes, one fails (at line 16), for the Tests panel
+writeFileSync(join(root, 'tests', 'Unit', 'CartTest.php'), ['<?php', '', 'namespace Tests\\Unit;', '', 'use PHPUnit\\Framework\\TestCase;', '', 'class CartTest extends TestCase', '{',
+    '    public function test_adds_items(): void', '    {', '        $this->assertSame(2, count([1, 2]));', '    }', '', '    public function test_totals(): void', '    {', "        $this->assertSame(15, 7 + 7, 'the total');", '    }', '}', ''].join('\n'));
 // a template with Blade inside its <script> and <style>, where JavaScript and CSS are completed
 writeFileSync(join(root, 'resources', 'views', 'admin', 'page.blade.php'), ['<script>', '    const users = @json($users);', '    @if ($admin)', "        const name = '{{ $name }}';", '    @endif', '    // JS', '</script>',
     '<style>', '    .dark {', '        /* CSS */', '    }', '</style>', ''].join('\n'));
@@ -230,6 +234,46 @@ try {
     const dumped = await page.waitFor(`(() => { const t = ${$('output')}.textContent.split('Running').pop(); return /exit code \\d/.test(t) ? t : null; })()`, 120000, 'composer dump-autoload');
     console.log('composer dump-autoload:', JSON.stringify(dumped.trim().split('\n').filter(Boolean).slice(-2)));
     assert.match(dumped, /exit code 0/);
+
+    // the Tests panel: PHPUnit's tests of the project in its tree, all of them run (Laravel's examples and CartTest), then one at the cursor
+    await page.evaluate(`(() => { const s = ${$('tests-fw')}; s.value = 'auto'; s.dispatchEvent(new Event('change')); ${$('t-tests')}.click(); })()`);
+    await page.waitFor(`[...document.querySelectorAll('#tests-tree .trow .tname')].some((x) => x.textContent === 'CartTest.php')`, 20000, 'the PHP tests in the tree');
+    await page.evaluate(`${$('tests-all')}.click()`);
+    await page.waitFor(`!${$('tests-all')}.disabled && ${$('tests-console')}.textContent.includes('finished')`, 120000, 'the PHPUnit run')
+        .catch(async (e) => { throw new Error(e.message + '; ' + await page.evaluate(`${$('tests-console')}.textContent.slice(-600)`)); });
+    for (let i = 0; i < 6; i++)
+        await page.evaluate(`[...document.querySelectorAll('#tests-tree .trow .caret')].filter((c) => c.textContent === '▸').forEach((c) => c.click())`);
+    const testRows = await page.evaluate(`Object.fromEntries([...document.querySelectorAll('#tests-tree .trow')].map((r) => [r.querySelector('.tname').textContent, r.querySelector('.ticon').textContent]))`);
+    console.log('the Tests panel after PHPUnit:', JSON.stringify(testRows));
+    assert.equal(testRows.test_adds_items, '✔');
+    assert.equal(testRows.test_totals, '✖');
+    assert.equal(testRows.test_that_true_is_true, '✔');
+    assert.equal(testRows.test_the_application_returns_a_successful_response, '✔');
+    const summary = await page.evaluate(`${$('tests-summary')}.textContent`);
+    console.log('summary:', summary);
+    // the failed test's detail: its message and a link to its line
+    await page.evaluate(`[...document.querySelectorAll('#tests-tree .trow')].find((r) => r.querySelector('.tname').textContent === 'test_totals').click()`);
+    const detail = await page.waitFor(`document.querySelector('#tests-tab')?.textContent.includes('Go to tests/Unit/CartTest.php:16') && document.querySelector('#tests-tab').textContent.includes('the total')`, 10000, 'the failure and its line');
+    assert.ok(detail);
+    // At cursor: the cursor in test_adds_items runs that test alone
+    await page.evaluate(`window.pymagic.openFile('tests/Unit/CartTest.php')`);
+    await page.waitFor(`window.pymagic.editor.getModel()?.uri.path.endsWith('CartTest.php')`, 20000, 'CartTest.php');
+    await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 11, column: 9 }); ed.focus(); ${$('tests-console')}.textContent = ''; ${$('tests-here')}.click(); })()`);
+    await page.waitFor(`!${$('tests-all')}.disabled && ${$('tests-console')}.textContent.includes('finished')`, 120000, 'the test at the cursor');
+    const atCursor = await page.evaluate(`${$('tests-console')}.textContent`);
+    console.log('At cursor:', JSON.stringify(atCursor.split('\\n').filter((l) => /Tests:|OK|FAIL|finished/.test(l)).slice(-3)));
+    assert.match(atCursor, /OK \(1 test/);
+    // Debug from the Tests panel: a breakpoint in test_adds_items stops there (Xdebug), Resume, and the panel has its result
+    assert.equal(await clickMargin(page, 11), true, 'the breakpoint in CartTest.php');
+    // (Debug takes the selected row first: test_adds_items)
+    await page.evaluate(`(() => { [...document.querySelectorAll('#tests-tree .trow')].find((r) => r.querySelector('.tname').textContent === 'test_adds_items').click(); ${$('tests-debug')}.click(); })()`);
+    const testStop = await page.waitFor(`!${$('b-over')}.disabled && document.querySelector('#frames div.sel')?.textContent`, 90000, 'the stop in the test')
+        .catch(async (e) => { throw new Error(e.message + '; output: ' + await page.evaluate(`${$('output')}.textContent.slice(-800)`)); });
+    console.log('Debug of a test stopped:', testStop);
+    assert.match(testStop, /CartTest\.php:11\b/);
+    await page.evaluate(`${$('b-debug')}.click()`);
+    await page.waitFor(`[...document.querySelectorAll('#tests-tree .trow')].find((r) => r.querySelector('.tname').textContent === 'test_adds_items')?.querySelector('.ticon').textContent === '✔' && /exit code/.test(${$('output')}.textContent.split('Running').pop())`, 60000, 'the debugged test passed');
+    assert.equal(await clickMargin(page, 11), false, 'the breakpoint off again');
 
     // a breakpoint of a Blade template: the request of / stops in welcome.blade.php, at its line
     await page.evaluate(`window.pymagic.openFile('resources/views/welcome.blade.php')`);

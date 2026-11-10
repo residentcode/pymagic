@@ -173,6 +173,13 @@ public sealed class PhpLanguageServer : IDisposable
     public void Notify(string method, JsonNode? p)
     {
         if (_disposed) return;
+        // the open files' text (full sync), for what is added to Phpactor's answers (Eloquent's columns)
+        if (p?["textDocument"]?["uri"]?.GetValue<string>() is { } docUri)
+        {
+            if (method == "textDocument/didOpen" && p["textDocument"]?["text"]?.GetValue<string>() is { } opened) _texts[docUri] = opened;
+            else if (method == "textDocument/didChange" && (p["contentChanges"] as JsonArray)?.LastOrDefault()?["text"]?.GetValue<string>() is { } changed) _texts[docUri] = changed;
+            else if (method == "textDocument/didClose") _texts.TryRemove(docUri, out _);
+        }
         _outgoing.Add(new JsonObject { ["jsonrpc"] = "2.0", ["method"] = method, ["params"] = Map(p?.DeepClone(), RemoteUri) });
         // a file saved here is copied there a moment later: Phpactor's index reads the files there
         if (_ssh != null && method is "textDocument/didSave" or "textDocument/didClose" or "textDocument/didChange")
@@ -187,7 +194,52 @@ public sealed class PhpLanguageServer : IDisposable
     {
         if (_disposed) return null;
         var answer = await Ask(method, Map(p?.DeepClone(), RemoteUri)).WaitAsync(TimeSpan.FromSeconds(method == "textDocument/references" ? 120 : 30), cancel).ConfigureAwait(false);
-        return Shape(method, Map(answer, HostUri), p);
+        var shaped = Shape(method, Map(answer, HostUri), p);
+        if (method == "textDocument/completion" && shaped?["items"] is JsonArray items)
+            try { await AddModelMembers(p, items, cancel).ConfigureAwait(false); }
+            catch (Exception e) when (e is TimeoutException or OperationCanceledException or IOException) { }
+        return shaped;
+    }
+
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _texts = new();
+
+    /// <summary>
+    /// After <c>$model-></c>: the columns and relations of the project's Eloquent model the receiver is (Phpactor's hover of the receiver names
+    /// its class), added to Phpactor's items.
+    /// </summary>
+    async Task AddModelMembers(JsonNode? p, JsonArray items, CancellationToken cancel)
+    {
+        if (p?["textDocument"]?["uri"]?.GetValue<string>() is not { } uri || !_texts.TryGetValue(uri, out var text)) return;
+        int lineNo = p["position"]?["line"]?.GetValue<int>() ?? -1, character = p["position"]?["character"]?.GetValue<int>() ?? -1;
+        var lines = text.Split('\n');
+        if (lineNo < 0 || lineNo >= lines.Length) return;
+        string before = lines[lineNo].TrimEnd('\r');
+        before = before[..Math.Min(character, before.Length)];
+        var arrow = System.Text.RegularExpressions.Regex.Match(before, @"(\S)\s*->\s*\w*$");
+        if (!arrow.Success) return;
+        // the receiver's last character: a call's (…) is the method's name before it
+        int at = arrow.Groups[1].Index;
+        if (before[at] == ')')
+        {
+            int depth = 0;
+            for (int i = at; i >= 0; i--)
+            {
+                if (before[i] == ')') depth++;
+                else if (before[i] == '(' && --depth == 0) { at = i - 1; break; }
+            }
+        }
+        if (at < 0 || !(char.IsLetterOrDigit(before[at]) || before[at] == '_')) return;
+        var hoverAsk = new JsonObject { ["textDocument"] = new JsonObject { ["uri"] = uri }, ["position"] = new JsonObject { ["line"] = lineNo, ["character"] = at } };
+        var hover = await Ask("textDocument/hover", Map(hoverAsk, RemoteUri)).WaitAsync(TimeSpan.FromSeconds(10), cancel).ConfigureAwait(false);
+        foreach (var cls in EloquentModels.ClassesIn(Text(hover?["contents"]), text))
+        {
+            if (EloquentModels.Items(_root, cls) is not { } added) continue;
+            // a relation is Phpactor's method posts() and also the property posts: a name and kind Phpactor has already is left out
+            string Key(JsonNode? i) => (i?["label"]?.GetValue<string>() ?? "") + "\0" + (i?["kind"]?.ToJsonString() ?? "");
+            var have = new HashSet<string>(items.Select(Key), StringComparer.Ordinal);
+            foreach (var item in added) if (!have.Contains(Key(item))) items.Add(item!.DeepClone());
+            return;
+        }
     }
 
     Task<JsonNode?> Ask(string method, JsonNode? p, bool raw = false)

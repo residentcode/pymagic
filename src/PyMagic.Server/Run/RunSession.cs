@@ -441,17 +441,25 @@ public sealed partial class RunSession : IDisposable
         });
     }
 
+    /// <summary>A run of PHP's tests: its output's TeamCity messages, read as the Tests panel's (PhpTests.cs).</summary>
+    TeamCityReader? _teamCity;
+
     Task Pump(StreamReader reader, string stream) => Task.Run(() =>
     {
         var buf = new char[4096];
         int n;
+        var tests = stream == "stdout" ? _teamCity : null;
         try
         {
             while ((n = reader.Read(buf, 0, buf.Length)) > 0)
-                _emit(new JsonObject { ["type"] = "output", ["stream"] = stream, ["text"] = new string(buf, 0, n) });
+            {
+                if (tests != null) foreach (var e in tests.Feed(new string(buf, 0, n))) _emit(e);
+                else _emit(new JsonObject { ["type"] = "output", ["stream"] = stream, ["text"] = new string(buf, 0, n) });
+            }
         }
         catch (IOException) { }
         catch (ObjectDisposedException) { }
+        if (tests != null) foreach (var e in tests.Flush()) _emit(e);
     });
 
     /// <summary>Tells the page a run could not be started (the run it asked for), as any error of a start.</summary>
@@ -623,6 +631,7 @@ public sealed partial class RunSession : IDisposable
     void Cleanup()
     {
         EndConsoleRelay();
+        _teamCity = null;
         lock (_gate)
         {
             try { _listener?.Stop(); } catch (SocketException) { }

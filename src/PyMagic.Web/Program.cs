@@ -1151,6 +1151,8 @@ app.Map("/lsp", async (HttpContext ctx) =>
     server.PhpFactory = send =>
     {
         if (!Plugins.On("laravel")) return null;
+        // Sail: Phpactor with a PHP of this computer when there is one (it reads the project Sail shares), else none
+        if (SailTarget.IsSetting(PhpSetting("phpPath"))) return PhpTools.FindPhp(null) is { } hostPhp ? new PhpLanguageServer(hostPhp, root, send, text => Console.Error.WriteLine(text)) : null;
         if (PhpTools.Remote(PhpSetting("phpPath")) is { } remotePhp) return new PhpLanguageServer(remotePhp.Target, remotePhp.Php, root, send, text => Console.Error.WriteLine(text));
         return PhpTools.FindPhp(PhpSetting("phpPath")) is { } localPhp ? new PhpLanguageServer(localPhp, root, send, text => Console.Error.WriteLine(text)) : null;
     };
@@ -1310,6 +1312,30 @@ string? PhpSetting(string key)
 // Laravel: the PHP and Composer found, and whether the project is a Laravel one (its version, its routes files)
 app.MapGet("/api/php", () =>
 {
+    // Laravel Sail: the container's PHP, Xdebug and Composer (asked only when it runs: looking does not start it)
+    if (SailTarget.IsSetting(PhpSetting("phpPath")))
+    {
+        try
+        {
+            var sail = SailTarget.Of(root, PhpSetting("phpPath"))!;
+            bool running = sail.Running();
+            string? sailPhp = null, xdebugVersion = null;
+            if (running)
+            {
+                var (code, output, _) = sail.Exec("php -r 'echo PHP_VERSION, \"|\", phpversion(\"xdebug\") ?: \"-\";'", 60_000);
+                if (code == 0 && output.Trim().Split('|') is [var v, var x]) { sailPhp = v; xdebugVersion = x == "-" ? null : x; }
+            }
+            return Results.Json(new
+            {
+                php = "Laravel Sail (laravel.test)", version = sailPhp, remote = "Sail", composer = running ? "/usr/bin/composer in the container" : null,
+                xdebug = new { loaded = xdebugVersion != null, dll = (string?)null, version = xdebugVersion, error = running && xdebugVersion == null ? "Sail's container has no Xdebug." : null },
+                sail = new { compose = sail.ComposeFile, running, url = sail.AppUrl() },
+                phpactor = PhpLanguageServer.Phar() != null && PhpTools.FindPhp(null) != null ? "2026.10.07.0" : "",
+                laravel = PhpTools.Laravel(root),
+            });
+        }
+        catch (ServiceException e) { return Results.Json(new { php = (string?)null, error = e.Message, remote = "Sail", laravel = PhpTools.Laravel(root) }); }
+    }
     // PHP on another machine (ssh:user@host|php): its version, Xdebug and Composer as that machine says
     if (PhpTools.Remote(PhpSetting("phpPath")) is { } remotePhp)
     {
@@ -1354,6 +1380,23 @@ app.MapPost("/api/laravel/link", async (HttpRequest req) =>
     if (!Plugins.On("laravel") || PhpTools.Laravel(root) == null || b?["text"]?.GetValue<string>() is not { } text || b["offset"]?.GetValue<int>() is not int offset) return Results.Json((object?)null);
     if (LaravelLinks.At(text, offset) is not { } place || LaravelLinks.Target(root, place) is not { } target) return Results.Json((object?)null);
     return Results.Json(new { file = Path.GetRelativePath(root, target.File).Replace('\\', '/'), line = target.Line, kind = place.Kind, start = place.Start, end = place.End });
+});
+// Format of a .php file with the project's Pint or PHP CS Fixer ({ text } in, { text } or { error } out)
+app.MapPost("/api/php/format", async (HttpRequest req) =>
+{
+    var b = await JsonNode.ParseAsync(req.Body);
+    if (b?["text"]?.GetValue<string>() is not { } text) return Results.BadRequest(new { error = "no text" });
+    try { return Results.Json(new { text = await Task.Run(() => PhpFormat.Format(root, PhpSetting("phpPath"), text)) }); }
+    catch (ServiceException e) { return Results.Json(new { error = e.Message }, statusCode: 400); }
+});
+// PHPStan's problems of a saved .php file of the project ({ file } in; { problems }, { none: true } without PHPStan, or { error } out)
+app.MapPost("/api/php/analyse", async (HttpRequest req) =>
+{
+    var b = await JsonNode.ParseAsync(req.Body);
+    if (b?["file"]?.GetValue<string>() is not { Length: > 0 } file) return Results.BadRequest(new { error = "no file" });
+    if (!Plugins.On("laravel") || !PhpAnalysis.Available(root)) return Results.Json(new { none = true });
+    try { return Results.Json(new { problems = await Task.Run(() => PhpAnalysis.Analyse(root, PhpSetting("phpPath"), file)) }); }
+    catch (ServiceException e) { return Results.Json(new { error = e.Message }, statusCode: 400); }
 });
 app.MapPost("/api/laravel/complete", async (HttpRequest req) =>
 {
@@ -1622,7 +1665,8 @@ app.MapPost("/api/toml", async (HttpRequest req) =>
     string? json = Schemas.TomlToJson(DatabasePython(), await reader.ReadToEndAsync());
     return json == null ? Results.Json(new { error = "not TOML, or a Python older than 3.11" }) : Results.Text(json, "application/json");
 });
-app.MapGet("/api/tests", () => TestDiscovery.Discover(root));
+// the project's tests: Python's, and PHP's (PHPUnit, Pest) when the Laravel/PHP plugin is on
+app.MapGet("/api/tests", () => Plugins.On("laravel") ? TestDiscovery.Discover(root).Concat(PhpTests.Discover(root)).ToList() : TestDiscovery.Discover(root));
 DjangoConfig.Load(root);
 ProjectFolders.Load(root);
 ProjectFolders.AutoTemplates = DjangoProject.Scan(root).TemplateDirs?.ToList() ?? new();
@@ -2199,7 +2243,15 @@ app.Map("/run", async (HttpContext ctx) =>
                         session.Handle(new JsonObject { ["type"] = "mute", ["on"] = true });
                     continue;
                 }
-                if (debugTests != null)
+                var debugIds = (debugTests?["ids"] as JsonArray)?.Select(i => i!.GetValue<string>()).ToList() ?? new List<string>();
+                if (debugTests != null && Plugins.On("laravel") && RunSession.IsPhpTestRun(root, debugIds, debugTests["framework"]?.GetValue<string>() ?? "auto"))
+                {
+                    // PHP's tests under Xdebug: PHPUnit or Pest with the PHP of Settings > PHP
+                    session.Php = PhpSetting("phpPath");
+                    session.Xdebug = PhpSetting("xdebugPath");
+                    session.StartPhpTests(root, debugIds, debugTests["framework"]?.GetValue<string>() ?? "auto", debug: true, bps);
+                }
+                else if (debugTests != null)
                     session.StartDebugTests(root, (debugTests["ids"] as JsonArray)?.Select(i => i!.GetValue<string>()).ToList() ?? new List<string>(),
                         debugTests["framework"]?.GetValue<string>() ?? "auto", bps);   // pm_tests checks the name
                 else if (profileTests != null)
@@ -2258,6 +2310,13 @@ app.Map("/run", async (HttpContext ctx) =>
             else if (msg["type"]?.GetValue<string>() == "startTests")
             {
                 var ids = (msg["ids"] as JsonArray)?.Select(a => a!.GetValue<string>()).ToList() ?? new List<string>();
+                // PHP's tests: PHPUnit or Pest, with the PHP of Settings > PHP
+                if (Plugins.On("laravel") && RunSession.IsPhpTestRun(root, ids, msg["framework"]?.GetValue<string>() ?? "auto"))
+                {
+                    session.Php = PhpSetting("phpPath");
+                    session.StartPhpTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto");
+                    continue;
+                }
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;
                 session.StartTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto", msg["coverage"]?.GetValue<bool>() == true,
                     msg["settings"]?.GetValue<string>() is { Length: > 0 } djangoSettings ? djangoSettings : DjangoConfig.Current.Settings, msg["failfast"]?.GetValue<bool>() == true,

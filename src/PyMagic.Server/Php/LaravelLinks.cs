@@ -186,27 +186,62 @@ public static class LaravelLinks
         var result = new List<(string, string, int)>();
         string dir = Path.Combine(root, "routes");
         if (!Directory.Exists(dir)) return result;
+        var texts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in Directory.GetFiles(dir, "*.php", SearchOption.AllDirectories))
+            try { texts[Path.GetFullPath(file)] = File.ReadAllText(file); } catch (IOException) { }
+
+        // a routes file a group includes (->name('admin.')->group(base_path('routes/admin.php'))) has the group's prefix: groups of routes files,
+        // of bootstrap/app.php (withRouting's then:) and of the service providers, a file included by an included one adding up
+        var includers = new Dictionary<string, string>(texts, StringComparer.OrdinalIgnoreCase);
+        foreach (var extra in new[] { Path.Combine(root, "bootstrap", "app.php") }.Concat(Directory.Exists(Path.Combine(root, "app", "Providers")) ? Directory.GetFiles(Path.Combine(root, "app", "Providers"), "*.php") : Array.Empty<string>()))
+            if (File.Exists(extra)) try { includers[Path.GetFullPath(extra)] = File.ReadAllText(extra); } catch (IOException) { }
+        var included = new List<(string From, string Target, string Prefix)>();
+        foreach (var (file, text) in includers)
+            foreach (var (target, prefix) in IncludesOf(text, Path.GetDirectoryName(file)!, root)) included.Add((file, target, prefix));
+        var prefixOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (int pass = 0; pass < 4; pass++)
+            foreach (var (from, target, prefix) in included)
+                if (prefix.Length > 0 || prefixOf.ContainsKey(from))
+                    prefixOf[target] = (prefixOf.TryGetValue(from, out var outer) ? outer : "") + prefix;
+
+        foreach (var (file, text) in texts)
         {
-            string text;
-            try { text = File.ReadAllText(file); } catch (IOException) { continue; }
-            foreach (var (name, line) in RoutesOf(text)) result.Add((name, file, line));
+            string outerPrefix = prefixOf.TryGetValue(file, out var p) ? p : "";
+            foreach (var (name, line) in RoutesOf(text)) result.Add((outerPrefix + name, file, line));
         }
         return result;
     }
 
-    static readonly string[] ResourceActions = { "index", "create", "store", "show", "edit", "update", "destroy" };
-
-    /// <summary>The named routes of a routes file's text: (name, 0-based line).</summary>
-    public static List<(string Name, int Line)> RoutesOf(string text)
+    /// <summary>The routes files a file's groups include (by base_path('…'), __DIR__.'…', or a require inside a group), with the prefix they give.</summary>
+    public static List<(string Target, string Prefix)> IncludesOf(string text, string fileDir, string root)
     {
-        var result = new List<(string, int)>();
+        var result = new List<(string, string)>();
         string code = CodeOnly(text);
-        int LineAt(int at) { int n = 0; for (int i = 0; i < at && i < text.Length; i++) if (text[i] == '\n') n++; return n; }
+        var (groups, _, fileGroups) = GroupsOf(text, code);
+        string PrefixAt(int at) => string.Concat(groups.Where(g => g.Open < at && at < g.Close).OrderBy(g => g.Open).Select(g => g.Prefix));
+        string? Target(string expression)
+        {
+            string? path = Regex.Match(expression, @"base_path\(\s*['""]([^'""]+)['""]\s*\)") is { Success: true } b ? Path.Combine(root, b.Groups[1].Value)
+                : Regex.Match(expression, @"__DIR__\s*\.\s*['""]([^'""]+)['""]") is { Success: true } d ? fileDir + d.Groups[1].Value
+                : null;
+            return path == null ? null : Path.GetFullPath(path);
+        }
+        foreach (var (at, args, prefix) in fileGroups)
+            if (Target(args) is { } target) result.Add((target, PrefixAt(at) + prefix));
+        foreach (Match r in Regex.Matches(text, @"(?<![\w$>:])(?:require|include)(?:_once)?\b\s*\(?([^;]+);"))
+            if (code[r.Index] is 'r' or 'i' && Target(r.Groups[1].Value) is { } target) result.Add((target, PrefixAt(r.Index)));
+        return result;
+    }
 
-        // the groups that give a name prefix: the braces of their closure, and the ->name( of their head (which names no route)
+    /// <summary>
+    /// The groups of a routes file that give a name prefix: the braces of their closure; the offsets of the ->name( of their heads (which name no
+    /// route); and the groups of a file (group(base_path(…))): where they are, their arguments' text and their own prefix.
+    /// </summary>
+    static (List<(int Open, int Close, string Prefix)> Groups, HashSet<int> Heads, List<(int At, string Args, string Prefix)> FileGroups) GroupsOf(string text, string code)
+    {
         var groups = new List<(int Open, int Close, string Prefix)>();
         var heads = new HashSet<int>();
+        var fileGroups = new List<(int, string, string)>();
         foreach (Match g in Regex.Matches(code, @"(?:->|::)group\s*\("))
         {
             int start = StatementStart(code, g.Index);
@@ -218,12 +253,28 @@ public static class LaravelLinks
             }
             // the closure: the first brace after group( (a group of a file, group(base_path(…)), has none before its ;)
             int brace = code.IndexOf('{', g.Index), semi = code.IndexOf(';', g.Index);
-            if (brace < 0 || (semi >= 0 && semi < brace)) continue;
+            if (brace < 0 || (semi >= 0 && semi < brace))
+            {
+                if (semi > g.Index) fileGroups.Add((g.Index, text[(g.Index + g.Length)..semi], prefix ?? ""));
+                continue;
+            }
             // Route::group(['as' => 'admin.', 'prefix' => …], function () {
             if (Regex.Match(text[g.Index..brace], @"['""]as['""]\s*=>\s*(['""])([^'""]*)\1") is { Success: true } a) prefix = (prefix ?? "") + a.Groups[2].Value;
             if (string.IsNullOrEmpty(prefix)) continue;
             groups.Add((brace, ClosingBrace(code, brace), prefix));
         }
+        return (groups, heads, fileGroups);
+    }
+
+    static readonly string[] ResourceActions = { "index", "create", "store", "show", "edit", "update", "destroy" };
+
+    /// <summary>The named routes of a routes file's text: (name, 0-based line).</summary>
+    public static List<(string Name, int Line)> RoutesOf(string text)
+    {
+        var result = new List<(string, int)>();
+        string code = CodeOnly(text);
+        int LineAt(int at) { int n = 0; for (int i = 0; i < at && i < text.Length; i++) if (text[i] == '\n') n++; return n; }
+        var (groups, heads, _) = GroupsOf(text, code);
         string PrefixAt(int at) => string.Concat(groups.Where(g => g.Open < at && at < g.Close).OrderBy(g => g.Open).Select(g => g.Prefix));
 
         foreach (Match m in Regex.Matches(text, @"->name\(\s*(['""])([^'""]+)\1\s*\)"))
@@ -251,7 +302,7 @@ public static class LaravelLinks
     }
 
     /// <summary>PHP's text with its comments and the insides of its strings blanked (same length, same lines): brackets there are not code.</summary>
-    static string CodeOnly(string text)
+    internal static string CodeOnly(string text)
     {
         var c = text.ToCharArray();
         for (int i = 0; i < c.Length; i++)
@@ -295,7 +346,7 @@ public static class LaravelLinks
         return 0;
     }
 
-    static int ClosingBrace(string code, int open)
+    internal static int ClosingBrace(string code, int open)
     {
         int depth = 0;
         for (int i = open; i < code.Length; i++)

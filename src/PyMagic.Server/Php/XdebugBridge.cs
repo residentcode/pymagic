@@ -64,7 +64,10 @@ public sealed class XdebugBridge : IDisposable
         _target = target;
         // PHP on another machine compiles its Blade views there: copies of them here
         if (target is SshTarget ssh) _views = new RemoteBladeViews(ssh);
-        _xdebug = new TcpListener(IPAddress.Loopback, 0);
+        // Sail's container shares the project: its compiled views are here, naming their templates by the container's paths
+        if (target is SailTarget sail) BladeViews.MapSources(Path.Combine(_root, "storage", "framework", "views"), path => path.StartsWith('/') ? sail.ToHost(path) : null);
+        // a container reaches PyMagic at host.docker.internal: every address listens
+        _xdebug = new TcpListener(target is SailTarget ? IPAddress.Any : IPAddress.Loopback, 0);
         _xdebug.Start();
         Task.Run(AcceptXdebug);
     }
@@ -1061,6 +1064,7 @@ public sealed class XdebugBridge : IDisposable
         _disposed = true;
         try { _xdebug.Stop(); } catch (SocketException) { }
         _views?.Dispose();
+        if (_target is SailTarget) BladeViews.MapSources(Path.Combine(_root, "storage", "framework", "views"), null);
         List<TcpClient> early;
         lock (_gate) { early = _early.ToList(); _early.Clear(); }
         foreach (var c in early) c.Dispose();

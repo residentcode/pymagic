@@ -16,6 +16,7 @@ public static class PhpTools
     public static string? FindPhp(string? configured)
     {
         if (Remote(configured) != null) return configured!.Trim();      // PHP on another machine: its spec, as Settings > PHP has it
+        if (SailTarget.IsSetting(configured)) return "sail";            // Laravel Sail's container (SailTarget)
         foreach (var c in Candidates(configured, "PYMAGIC_PHP", "php"))
             if (Works(c)) return c;
         return null;
@@ -195,7 +196,10 @@ public static class PhpTools
         lock (Cache)
             if (Cache.TryGetValue(root, out var cached) && cached.Stamp == stamp) return (JsonArray)cached.List.DeepClone();
         var remote = Remote(php);
-        var (code, output, error) = remote is { } r ? InProject(r.Target, r.Php, root, new[] { "artisan", "list", "--format=json" }) : Run(php, new[] { "artisan", "list", "--format=json" }, root, 120);
+        var sail = SailTarget.Of(root, php);
+        if (sail != null && !sail.Running()) sail.Up();
+        var (code, output, error) = sail != null ? sail.Exec("php artisan list --format=json", 120_000)
+            : remote is { } r ? InProject(r.Target, r.Php, root, new[] { "artisan", "list", "--format=json" }) : Run(php, new[] { "artisan", "list", "--format=json" }, root, 120);
         if (code != 0) throw new ServiceException("php artisan list: " + (error.Trim().Split('\n').LastOrDefault() ?? $"exit code {code}"));
         var list = new JsonArray();
         var node = JsonNode.Parse(output[output.IndexOf('{')..]);

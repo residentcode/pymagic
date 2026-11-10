@@ -284,6 +284,51 @@ public class PhpSshLiveTests
     }
 
     [Fact]
+    public void PhpUnitRunsThereAndItsResultsAreTheProjectsTestsHere()
+    {
+        if (Spec is not { } spec || LaravelDir is not { } source) return;
+        string dir = CopyOfLaravel(source);
+        File.WriteAllText(Path.Combine(dir, "tests", "Unit", "ThereTest.php"),
+            "<?php\n\nnamespace Tests\\Unit;\n\nuse PHPUnit\\Framework\\TestCase;\n\nclass ThereTest extends TestCase\n{\n    public function test_on_linux(): void\n    {\n        $this->assertSame('Linux', PHP_OS_FAMILY);\n    }\n\n    public function test_fails_there(): void\n    {\n        $this->assertSame(1, 2);\n    }\n}\n");
+        using var run = new Run();
+        run.Session.Php = spec;
+        run.Session.StartPhpTests(dir, new[] { "tests/Unit/ThereTest.php" }, "auto");
+        run.Next(e => Is(e, "exited"), 240000);
+        var results = run.Seen.Where(e => Is(e, "testResult")).ToDictionary(e => e["id"]!.GetValue<string>(), e => e);
+        Assert.Equal("passed", results["tests/Unit/ThereTest.php::ThereTest::test_on_linux"]["outcome"]!.GetValue<string>());
+        var failed = results["tests/Unit/ThereTest.php::ThereTest::test_fails_there"];
+        Assert.Equal("failed", failed["outcome"]!.GetValue<string>());
+        // the place there (/root/.pymagic/projects/…/tests/Unit/ThereTest.php:16) is the project's file here
+        Assert.Equal("tests/Unit/ThereTest.php", failed["file"]!.GetValue<string>());
+        Assert.Equal(16, failed["line"]!.GetValue<int>());
+        try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+
+    [Fact]
+    public void PintThereFormatsTheEditorsText()
+    {
+        if (Spec is not { } spec || LaravelDir is not { } source || !File.Exists(Path.Combine(source, "vendor", "bin", "pint"))) return;
+        string dir = CopyOfLaravel(source);
+        File.WriteAllText(Path.Combine(dir, "pint.json"), "{\"preset\": \"laravel\", \"rules\": {\"array_syntax\": {\"syntax\": \"long\"}}}");
+        string formatted = PhpFormat.Format(dir, spec, "<?php\nnamespace App;\nclass  Demo{\npublic function  run( $a,$b ){\nreturn  array($a,$b);\n}\n}\n");
+        Assert.Equal("<?php\n\nnamespace App;\n\nclass Demo\n{\n    public function run($a, $b)\n    {\n        return array($a, $b);\n    }\n}\n", formatted);
+        try { PhpFormat.Format(dir, spec, "<?php\nfunction (\n"); Assert.True(false, "a file with a syntax error was formatted"); }
+        catch (ServiceException e) { Assert.Contains("not valid PHP", e.Message); }
+        try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+
+    [Fact]
+    public void PhpStanThereFindsTheProblemsOfAFileHere()
+    {
+        if (Spec is not { } spec || V("PYMAGIC_TEST_STAN_DIR") is not { } source || !PhpAnalysis.Available(source)) return;
+        string dir = CopyOfLaravel(source);
+        File.WriteAllText(Path.Combine(dir, "app", "Models", "PmBad.php"), "<?php\n\nnamespace App\\Models;\n\nclass PmBad\n{\n    public function first(): ?User\n    {\n        return User::query()->where('email', 'a@b.c')->nope();\n    }\n}\n");
+        var problems = PhpAnalysis.Analyse(dir, spec, "app/Models/PmBad.php");
+        Assert.True(problems.Any(p => p!["line"]!.GetValue<int>() == 9 && p["message"]!.GetValue<string>().Contains("Builder<App\\Models\\User>::nope()")), problems.ToJsonString());
+        try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+
+    [Fact]
     public void NewProjectMakesLaravelThereAndCopiesItHere()
     {
         if (Spec is not { } spec || V("PYMAGIC_TEST_NEW_LARAVEL") != "1") return;

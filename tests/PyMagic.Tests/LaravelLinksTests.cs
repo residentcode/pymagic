@@ -168,4 +168,47 @@ public class LaravelLinksTests
         }
         finally { Directory.Delete(root, true); }
     }
+
+    [Fact]
+    public void ARoutesFileAGroupIncludesHasTheGroupsPrefix()
+    {
+        string root = Project();
+        void W(string rel, string text) { string f = Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar)); Directory.CreateDirectory(Path.GetDirectoryName(f)!); File.WriteAllText(f, text); }
+        try
+        {
+            // Laravel 11's bootstrap/app.php: withRouting's then: groups a file of its own
+            W("bootstrap/app.php", string.Join("\n", new[]
+            {
+                "<?php",
+                "return Application::configure(basePath: dirname(__DIR__))",
+                "    ->withRouting(",
+                "        web: __DIR__.'/../routes/web.php',",
+                "        then: function () {",
+                "            Route::middleware('web')",
+                "                ->name('admin.')",
+                "                ->group(base_path('routes/admin.php'));",
+                "        },",
+                "    )->create();",
+            }));
+            W("routes/admin.php", string.Join("\n", new[]
+            {
+                "<?php",                                                                      // 0
+                "Route::get('/admin', fn () => 'x')->name('dashboard');",                     // 1
+                "Route::name('reports.')->group(function () {",                               // 2
+                "    require __DIR__.'/reports.php';",                                         // 3
+                "});",
+            }));
+            W("routes/reports.php", "<?php\nRoute::get('/daily', fn () => 'd')->name('daily');\n");
+            // a file required at the top of web.php: no prefix
+            W("routes/auth.php", "<?php\nRoute::get('/login', fn () => 'l')->name('login');\n");
+            File.AppendAllText(Path.Combine(root, "routes", "web.php"), "\nrequire __DIR__.'/auth.php';\n");
+            var routes = LaravelLinks.Routes(root).Select(r => r.Name + "@" + Path.GetFileName(r.File) + ":" + r.Line).ToList();
+            string all = string.Join(", ", routes);
+            foreach (var want in new[] { "admin.dashboard@admin.php:1", "admin.reports.daily@reports.php:1", "login@auth.php:1", "home@web.php:2", "admin.users@web.php:4" })
+                Assert.True(routes.Contains(want), want + " in " + all);
+            Assert.True(!routes.Any(r => r.StartsWith("dashboard@") || r.StartsWith("daily@") || r.StartsWith("reports.daily@")), all);
+            Assert.Equal("routes/reports.php:1", Rel(root, Go(root, "route('admin.reports.daily')", "admin.reports")));
+        }
+        finally { Directory.Delete(root, true); }
+    }
 }
