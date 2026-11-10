@@ -282,4 +282,83 @@ public class PhpSshLiveTests
         Assert.True(left.Trim().Length == 0, left);
         try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
+
+    [Fact]
+    public void NewProjectMakesLaravelThereAndCopiesItHere()
+    {
+        if (Spec is not { } spec || V("PYMAGIC_TEST_NEW_LARAVEL") != "1") return;
+        string dir = Path.Combine(Path.GetTempPath(), "pm_phpssh_new_" + Guid.NewGuid().ToString("N")[..8], "shop");
+        var said = new List<string>();
+        try
+        {
+            PhpTools.CreateLaravel(dir, spec, null, said.Add);
+            Assert.True(File.Exists(Path.Combine(dir, "artisan")) && File.Exists(Path.Combine(dir, "vendor", "autoload.php")) && File.Exists(Path.Combine(dir, ".env")), string.Join("\n", said.TakeLast(5)));
+            Assert.Contains("APP_KEY=base64:", File.ReadAllText(Path.Combine(dir, ".env")));
+            Assert.True(PhpTools.Laravel(dir) != null, "a Laravel project");
+            // run there: nothing of it is sent again (it is there already)
+            using var run = new Run();
+            run.Session.Php = spec;
+            run.Session.StartPhp(dir, null, new[] { "--version" }, false, Array.Empty<string>(), null);
+            Assert.Equal(0, run.Next(e => Is(e, "exited"), 120000)["code"]!.GetValue<int>());
+            Assert.Contains("Laravel Framework", run.Output);
+            Assert.True(!run.Output.Contains("Copying"), run.Output);
+        }
+        finally
+        {
+            var ssh = PhpTools.Remote(spec)!.Value.Target;
+            ssh.Project = dir;
+            if (ssh.ProjectDir.Contains("/.pymagic/projects/")) try { ssh.Remote($"rm -rf {SshTarget.Quote(ssh.ProjectDir)}", 60_000); } catch (ServiceException) { }
+            try { Directory.Delete(Path.GetDirectoryName(dir)!, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    [Fact]
+    public void ABladeTemplatesBreakpointStopsThereInTheTemplateHere()
+    {
+        if (Spec is not { } spec || LaravelDir is not { } source) return;
+        string dir = CopyOfLaravel(source);
+        string template = Path.Combine(dir, "resources", "views", "welcome.blade.php");
+        var lines = File.ReadAllLines(template);
+        int at = Array.FindIndex(lines, l => l.Contains("@if (Route::has('login'))")) + 1;
+        Assert.True(at > 0, "welcome.blade.php has its @if (Route::has('login'))");
+        int port;
+        using (var l = new TcpListener(System.Net.IPAddress.Loopback, 0)) { l.Start(); port = ((System.Net.IPEndPoint)l.LocalEndpoint).Port; l.Stop(); }
+        using var serve = new Run();
+        serve.Session.Php = spec;
+        var bps = new Dictionary<string, JsonArray> { [Path.Combine("resources", "views", "welcome.blade.php")] = new JsonArray(new JsonObject { ["line"] = at }) };
+        serve.Session.StartPhp(dir, null, new[] { "serve", "--host=127.0.0.1", $"--port={port}" }, true, Array.Empty<string>(), bps);
+        try
+        {
+            serve.Next(_ => serve.Output.Contains($"127.0.0.1:{port}"), 180000);
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
+            // the first request already: the templates were compiled there before the server started
+            var page = http.GetAsync($"http://127.0.0.1:{port}/");
+            JsonNode stop;
+            try { stop = serve.Next(e => Is(e, "stopped"), 90000); }
+            catch (AssertionException) { throw new AssertionException("no stop; the run said: " + serve.Output); }
+            var frames = stop["frames"]!.AsArray();
+            Assert.True(string.Equals(template, frames[0]!["file"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase), frames.ToJsonString());
+            Assert.Equal(at, frames[0]!["line"]!.GetValue<int>());
+            Assert.Equal("welcome.blade.php", frames[0]!["name"]!.GetValue<string>());
+            serve.Session.Handle(new JsonObject { ["type"] = "evaluate", ["id"] = 1, ["frameId"] = 0, ["expression"] = "PHP_OS_FAMILY" });
+            Assert.Equal("\"Linux\"", serve.Next(e => Is(e, "evaluated"))["result"]!.GetValue<string>());
+            serve.Session.Handle(new JsonObject { ["type"] = "next" });
+            var stepped = serve.Next(e => Is(e, "stopped"), 30000);
+            Assert.True(stepped["frames"]![0]!["file"]!.GetValue<string>().EndsWith("welcome.blade.php", StringComparison.OrdinalIgnoreCase), stepped.ToJsonString());
+            Assert.True(stepped["frames"]![0]!["line"]!.GetValue<int>() > at, stepped.ToJsonString());
+            serve.Session.Handle(new JsonObject { ["type"] = "continue" });
+            Assert.Equal(200, (int)page.GetAwaiter().GetResult().StatusCode);
+            // a second request stops there again
+            page = http.GetAsync($"http://127.0.0.1:{port}/");
+            Assert.Equal(at, serve.Next(e => Is(e, "stopped"), 90000)["frames"]![0]!["line"]!.GetValue<int>());
+            serve.Session.Handle(new JsonObject { ["type"] = "continue" });
+            Assert.Equal(200, (int)page.GetAwaiter().GetResult().StatusCode);
+        }
+        finally
+        {
+            serve.Session.Handle(new JsonObject { ["type"] = "stop" });
+            serve.Next(e => Is(e, "exited"), 30000);
+        }
+        try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
 }

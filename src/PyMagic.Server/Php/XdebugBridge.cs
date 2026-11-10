@@ -46,6 +46,15 @@ public sealed class XdebugBridge : IDisposable
     }
 
     readonly ExecutionTarget? _target;
+    readonly RemoteBladeViews? _views;
+
+    /// <summary>The compiled files of a Blade template that PHP runs: in the project, or the copies of another machine's.</summary>
+    internal List<string> CompiledOf(string template)
+    {
+        if (_views == null) return BladeViews.CompiledOf(_root, template);
+        _views.Refresh();
+        return BladeViews.CompiledIn(_views.LocalDir, template);
+    }
 
     /// <summary><paramref name="target"/>: the machine PHP runs on when it is not this one (its paths are mapped to the project's).</summary>
     public XdebugBridge(string root, bool allCode, ExecutionTarget? target = null)
@@ -53,6 +62,8 @@ public sealed class XdebugBridge : IDisposable
         _root = Path.GetFullPath(root);
         _allCode = allCode;
         _target = target;
+        // PHP on another machine compiles its Blade views there: copies of them here
+        if (target is SshTarget ssh) _views = new RemoteBladeViews(ssh);
         _xdebug = new TcpListener(IPAddress.Loopback, 0);
         _xdebug.Start();
         Task.Run(AcceptXdebug);
@@ -417,7 +428,8 @@ public sealed class XdebugBridge : IDisposable
         {
             var u = new Uri(uri);
             if (_target == null || _target.IsLocal) return u.LocalPath;
-            return _target.ToHost(Uri.UnescapeDataString(u.AbsolutePath));
+            string there = Uri.UnescapeDataString(u.AbsolutePath);
+            return _views?.LocalOf(there) ?? _target.ToHost(there);
         }
         catch (UriFormatException) { return null; }
     }
@@ -427,7 +439,7 @@ public sealed class XdebugBridge : IDisposable
     {
         string full = Path.GetFullPath(file);
         if (_target == null || _target.IsLocal) return new Uri(full).AbsoluteUri;
-        string remote = _target.ToTarget(full);
+        string remote = _views?.RemoteOf(full) ?? _target.ToTarget(full);
         return "file://" + string.Join("/", remote.Split('/').Select(Uri.EscapeDataString));
     }
 
@@ -687,7 +699,7 @@ public sealed class XdebugBridge : IDisposable
             lock (_bridge._gate) specs = _bridge._breakpoints.TryGetValue(Canonical(file), out var b) ? b.Specs.ToList() : new();
             var ids = new List<string>();
             // a Blade template runs as the files Laravel compiled it into: its breakpoints are set there (none until it is compiled)
-            var places = BladeViews.IsTemplate(file) ? BladeViews.CompiledOf(_bridge._root, file) : new List<string> { file };
+            var places = BladeViews.IsTemplate(file) ? _bridge.CompiledOf(file) : new List<string> { file };
             foreach (var spec in specs)
             foreach (var place in places)
             {
@@ -752,7 +764,7 @@ public sealed class XdebugBridge : IDisposable
             string path = Path.GetFullPath(Path.Combine(_bridge._root, file));
             _runTo = (path, line);
             // in a Blade template: in each file Laravel compiled it into
-            var places = BladeViews.IsTemplate(path) ? BladeViews.CompiledOf(_bridge._root, path) : new List<string> { path };
+            var places = BladeViews.IsTemplate(path) ? _bridge.CompiledOf(path) : new List<string> { path };
             foreach (var place in places)
             {
                 int atLine = ReferenceEquals(place, path) ? line : BladeViews.ToCompiled(place, line);
@@ -1048,6 +1060,7 @@ public sealed class XdebugBridge : IDisposable
         if (_disposed) return;
         _disposed = true;
         try { _xdebug.Stop(); } catch (SocketException) { }
+        _views?.Dispose();
         List<TcpClient> early;
         lock (_gate) { early = _early.ToList(); _early.Clear(); }
         foreach (var c in early) c.Dispose();

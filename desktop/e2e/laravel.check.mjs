@@ -2,7 +2,7 @@
 // Blade coloured in a .blade.php, Settings > PHP saying what is found, Run Artisan Command (Ctrl+Shift+X) listing the project's commands and
 // running route:list, the Laravel server configuration answering, and Debug of it with Xdebug: a request stopping at a breakpoint of a route, its
 // frames, the Variables pane, the value popup of a PHP array, Resume. Then code insight with this computer's PHP (Phpactor's completion), a view's
-// name as a link and completed, Run Composer Command (dump-autoload), a Blade template's breakpoint stopping a request in the template, and
+// name as a link and completed, a route of two nested groups opened from its name on a line of its own in a Blade @php block, Run Composer Command (dump-autoload), a Blade template's breakpoint stopping a request in the template, and
 // Pause stopping a slow request where it is.
 // Run: PYMAGIC_PHP=… PYMAGIC_COMPOSER=… PYMAGIC_TEST_LARAVEL_DIR=… PYMAGIC_PHPACTOR_HOME=(a folder in %TEMP%) node desktop/e2e/laravel.check.mjs
 import assert from 'node:assert/strict';
@@ -34,8 +34,19 @@ appendFileSync(join(root, 'routes', 'web.php'), [
     '    }',
     "    return 'slow done';",
     '});',
+    // groups in groups, written over several lines: the route's name is admin.reports.index
+    "Route::middleware('web')",
+    "    ->name('admin.')",
+    "    ->group(function () {",
+    "        Route::name('reports.')->group(function () {",
+    "            Route::get('/admin/reports', fn () => 'reports')->name('index');",
+    '        });',
+    '    });',
     '',
 ].join('\n'));
+// a template whose @php block names that route on a line of its own
+mkdirSync(join(root, 'resources', 'views', 'admin'), { recursive: true });
+writeFileSync(join(root, 'resources', 'views', 'admin', 'links.blade.php'), ['@php', '    $reports = route(', "        'admin.reports.index'", '    );', '@endphp', '<a href="{{ $reports }}">Reports</a>', ''].join('\n'));
 const ORDER_LINE = 12;
 const SLOW_LINE = 16;   // the loop's lines: 15 (for), 16 (usleep)
 
@@ -149,6 +160,16 @@ try {
     const views = await page.evaluate(`(async () => { const r = await fetch('/api/laravel/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: "view('", offset: 6 }) }); return (await r.json()).items.map((i) => i.label); })()`);
     console.log('views in view(\'…\'):', views.slice(0, 4));
     assert.ok(views.includes('welcome'), views.join(','));
+
+    // a route's name in a Blade @php block, under the prefixes of two groups: Go to Definition opens routes/web.php at its ->name
+    await page.evaluate(`window.pymagic.openFile('resources/views/admin/links.blade.php')`);
+    await page.waitFor(`window.pymagic.editor.getModel()?.uri.path.endsWith('links.blade.php')`, 20000, 'links.blade.php');
+    await page.evaluate(`(() => { const ed = window.pymagic.editor; const m = ed.getModel(); const at = m.getValue().indexOf('admin.reports.index') + 3;
+        ed.setPosition(m.getPositionAt(at)); ed.focus(); return ed.trigger('test', 'editor.action.revealDefinition', {}); })()`);
+    const routeAt = await page.waitFor(`window.pymagic.editor.getModel()?.uri.path.endsWith('routes/web.php') && window.pymagic.editor.getPosition().lineNumber`, 20000, 'the route opened from its name');
+    const routeLine = await page.evaluate(`window.pymagic.editor.getModel().getLineContent(${routeAt})`);
+    console.log(`admin.reports.index in a @php block leads to routes/web.php:${routeAt}:`, routeLine.trim());
+    assert.ok(routeLine.includes("->name('index')"), routeLine);
 
     // Run Composer command: its list (composer.json's scripts in it), and dump-autoload run in the Run panel
     await page.evaluate(`window.pymagic.runCommand('pymagic.laravel.composer')`);

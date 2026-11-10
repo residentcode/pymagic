@@ -99,6 +99,17 @@ public sealed partial class RunSession
         string? token = null;
         if (debug)
         {
+            // a Laravel server: its Blade templates compiled there first, as on this computer (pm_bladecompile.php), for the first request's breakpoints
+            if (artisan is { Count: > 0 } && artisan[0] == "serve" && PhpTools.Laravel(root) != null)
+                try
+                {
+                    string code = File.ReadAllText(ExtractHelper("pm_bladecompile.php"));
+                    code = code.StartsWith("<?php") ? code[5..] : code;
+                    // as base64: ssh's command line on Windows changes the backslashes before quotes that the code has
+                    string b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(code));
+                    ssh.Remote($"cd {SshTarget.Quote(ssh.ProjectDir)} && {SshTarget.Quote(php)} -r {SshTarget.Quote($"eval(base64_decode('{b64}'));")}", 120_000);
+                }
+                catch (Exception e) when (e is ServiceException or IOException) { }
             bridge = new XdebugBridge(root, AllCode, ssh);
             // Pause: the PHP there connects to Xdebug's control socket there
             bridge.Control = XdebugBridge.RemoteControl(php, command => { var (code, output, _) = ssh.Remote(command, 15_000); return (code, output); });

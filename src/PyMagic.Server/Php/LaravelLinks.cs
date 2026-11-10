@@ -43,7 +43,8 @@ public static class LaravelLinks
         {
             int nameStart = m.Groups[2].Index, nameEnd = nameStart + m.Groups[2].Length;
             if (at < m.Index || at > (m.Groups[3].Length > 0 ? m.Index + m.Length - 1 : line.Length)) continue;
-            string before = line[..m.Index];
+            // what is before the quote, the lines before too: a call's argument on a line of its own (route(\n 'home'), as in a Blade @php block)
+            string before = text[Math.Max(0, lineStart - 400)..(lineStart + m.Index)];
             foreach (var (kind, call) in Calls)
                 if (call.IsMatch(before)) return new Place(kind, m.Groups[2].Value, lineStart + nameStart, lineStart + nameEnd);
             return null;
@@ -175,7 +176,11 @@ public static class LaravelLinks
         }
     }
 
-    /// <summary>The project's named routes: the name given by ->name('…') in routes/*.php, with a group's name prefix (Route::name('admin.')->group).</summary>
+    /// <summary>
+    /// The project's named routes: the name ->name('…') gives in routes/*.php, under the name prefixes of the groups around it however a group is
+    /// written (Route::name('admin.')->group(…), a chain over several lines, ->as('admin.'), Route::group(['as' => 'admin.'], …), groups in
+    /// groups); Route::resource and Route::apiResource name their actions (with ->only, ->except and ->names).
+    /// </summary>
     public static List<(string Name, string File, int Line)> Routes(string root)
     {
         var result = new List<(string, string, int)>();
@@ -183,28 +188,122 @@ public static class LaravelLinks
         if (!Directory.Exists(dir)) return result;
         foreach (var file in Directory.GetFiles(dir, "*.php", SearchOption.AllDirectories))
         {
-            string[] lines;
-            try { lines = File.ReadAllLines(file); } catch (IOException) { continue; }
-            // name prefixes of the groups open at each line: Route::name('admin.')->group(function () { … }) / ->name('admin.')->group(
-            var prefixes = new Stack<(string Prefix, int Depth)>();
-            int depth = 0;
-            for (int i = 0; i < lines.Length; i++)
-            {
-                string l = lines[i];
-                var group = Regex.Match(l, @"(?:Route::|->)(?:name|as)\(\s*['""]([^'""]+)['""]\s*\)(?:->\w+\([^)]*\))*->group\(");
-                string prefix = string.Concat(prefixes.Reverse().Select(p => p.Prefix));
-                foreach (Match m in Regex.Matches(l, @"->name\(\s*['""]([^'""]+)['""]\s*\)"))
-                    if (!(group.Success && group.Groups[1].Index == m.Groups[1].Index)) result.Add((prefix + m.Groups[1].Value, file, i));
-                foreach (Match m in Regex.Matches(l, @"Route::resource\(\s*['""]([^'""]+)['""]"))
-                    foreach (var action in new[] { "index", "create", "store", "show", "edit", "update", "destroy" }) result.Add((prefix + m.Groups[1].Value.Replace('/', '.') + "." + action, file, i));
-                int opened = l.Count(c => c == '{'), closed = l.Count(c => c == '}');
-                if (group.Success) prefixes.Push((group.Groups[1].Value, depth));
-                depth += opened - closed;
-                while (prefixes.Count > 0 && depth <= prefixes.Peek().Depth && !group.Success) prefixes.Pop();
-                if (group.Success && opened == closed) { /* a group on one line */ prefixes.Pop(); }
-            }
+            string text;
+            try { text = File.ReadAllText(file); } catch (IOException) { continue; }
+            foreach (var (name, line) in RoutesOf(text)) result.Add((name, file, line));
         }
         return result;
+    }
+
+    static readonly string[] ResourceActions = { "index", "create", "store", "show", "edit", "update", "destroy" };
+
+    /// <summary>The named routes of a routes file's text: (name, 0-based line).</summary>
+    public static List<(string Name, int Line)> RoutesOf(string text)
+    {
+        var result = new List<(string, int)>();
+        string code = CodeOnly(text);
+        int LineAt(int at) { int n = 0; for (int i = 0; i < at && i < text.Length; i++) if (text[i] == '\n') n++; return n; }
+
+        // the groups that give a name prefix: the braces of their closure, and the ->name( of their head (which names no route)
+        var groups = new List<(int Open, int Close, string Prefix)>();
+        var heads = new HashSet<int>();
+        foreach (Match g in Regex.Matches(code, @"(?:->|::)group\s*\("))
+        {
+            int start = StatementStart(code, g.Index);
+            string? prefix = null;
+            foreach (Match n in Regex.Matches(text[start..g.Index], @"(?:Route::|->)(?:name|as)\(\s*(['""])([^'""]*)\1\s*\)"))
+            {
+                prefix = (prefix ?? "") + n.Groups[2].Value;
+                heads.Add(start + n.Index);
+            }
+            // the closure: the first brace after group( (a group of a file, group(base_path(…)), has none before its ;)
+            int brace = code.IndexOf('{', g.Index), semi = code.IndexOf(';', g.Index);
+            if (brace < 0 || (semi >= 0 && semi < brace)) continue;
+            // Route::group(['as' => 'admin.', 'prefix' => …], function () {
+            if (Regex.Match(text[g.Index..brace], @"['""]as['""]\s*=>\s*(['""])([^'""]*)\1") is { Success: true } a) prefix = (prefix ?? "") + a.Groups[2].Value;
+            if (string.IsNullOrEmpty(prefix)) continue;
+            groups.Add((brace, ClosingBrace(code, brace), prefix));
+        }
+        string PrefixAt(int at) => string.Concat(groups.Where(g => g.Open < at && at < g.Close).OrderBy(g => g.Open).Select(g => g.Prefix));
+
+        foreach (Match m in Regex.Matches(text, @"->name\(\s*(['""])([^'""]+)\1\s*\)"))
+            if (code[m.Index] == '-' && !heads.Contains(m.Index)) result.Add((PrefixAt(m.Index) + m.Groups[2].Value, LineAt(m.Index)));
+
+        foreach (Match m in Regex.Matches(text, @"Route::(resource|apiResource)\(\s*(['""])([^'""]+)\2"))
+        {
+            if (code[m.Index] != 'R') continue;
+            int end = code.IndexOf(';', m.Index);
+            string chain = text[m.Index..(end < 0 ? text.Length : end)];
+            var actions = ResourceActions.Where(a => m.Groups[1].Value == "resource" || (a != "create" && a != "edit")).ToList();
+            List<string> Quoted(string s) => Regex.Matches(s, @"['""]([^'""]+)['""]").Select(q => q.Groups[1].Value).ToList();
+            if (Regex.Match(chain, @"->only\(([^)]*)\)") is { Success: true } only) { var keep = Quoted(only.Groups[1].Value); actions = actions.Where(keep.Contains).ToList(); }
+            if (Regex.Match(chain, @"->except\(([^)]*)\)") is { Success: true } except) { var drop = Quoted(except.Groups[1].Value); actions = actions.Where(a => !drop.Contains(a)).ToList(); }
+            string name = m.Groups[3].Value.Replace('/', '.');
+            var renamed = new Dictionary<string, string>();
+            if (Regex.Match(chain, @"->names\(\s*(['""])([^'""]+)\1\s*\)") is { Success: true } names) name = names.Groups[2].Value;
+            else if (Regex.Match(chain, @"->names\(\s*\[([^\]]*)\]") is { Success: true } map)
+                foreach (Match kv in Regex.Matches(map.Groups[1].Value, @"['""](\w+)['""]\s*=>\s*['""]([^'""]+)['""]")) renamed[kv.Groups[1].Value] = kv.Groups[2].Value;
+            string prefix = PrefixAt(m.Index);
+            int line = LineAt(m.Index);
+            foreach (var action in actions) result.Add((prefix + (renamed.TryGetValue(action, out var r) ? r : name + "." + action), line));
+        }
+        return result.OrderBy(r => r.Item2).ToList();
+    }
+
+    /// <summary>PHP's text with its comments and the insides of its strings blanked (same length, same lines): brackets there are not code.</summary>
+    static string CodeOnly(string text)
+    {
+        var c = text.ToCharArray();
+        for (int i = 0; i < c.Length; i++)
+        {
+            char ch = c[i];
+            if (ch == '/' && i + 1 < c.Length && c[i + 1] == '/' || ch == '#' && (i + 1 >= c.Length || c[i + 1] != '['))
+            {
+                while (i < c.Length && c[i] != '\n') c[i++] = ' ';
+                i--;
+            }
+            else if (ch == '/' && i + 1 < c.Length && c[i + 1] == '*')
+            {
+                int end = text.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                end = end < 0 ? c.Length : end + 2;
+                for (; i < end; i++) if (c[i] != '\n') c[i] = ' ';
+                i--;
+            }
+            else if (ch == '\'' || ch == '"')
+            {
+                for (i++; i < c.Length && text[i] != ch; i++)
+                {
+                    if (text[i] == '\\' && i + 1 < c.Length) { c[i] = ' '; i++; }
+                    if (c[i] != '\n') c[i] = ' ';
+                }
+            }
+        }
+        return new string(c);
+    }
+
+    /// <summary>Where the statement that has an offset starts: after the ; or brace before it that is outside brackets.</summary>
+    static int StatementStart(string code, int at)
+    {
+        int depth = 0;
+        for (int i = at - 1; i >= 0; i--)
+        {
+            char ch = code[i];
+            if (ch == ')' || ch == ']') depth++;
+            else if (ch == '(' || ch == '[') { if (depth == 0) return i + 1; depth--; }
+            else if (depth == 0 && (ch == ';' || ch == '{' || ch == '}')) return i + 1;
+        }
+        return 0;
+    }
+
+    static int ClosingBrace(string code, int open)
+    {
+        int depth = 0;
+        for (int i = open; i < code.Length; i++)
+        {
+            if (code[i] == '{') depth++;
+            else if (code[i] == '}' && --depth == 0) return i;
+        }
+        return code.Length;
     }
 
     // ------------------------------------------------------------ completion

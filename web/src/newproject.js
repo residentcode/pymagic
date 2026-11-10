@@ -22,7 +22,7 @@ const KINDS = [
     ['nodejs', 'Node.js', 'package.json and index.js; nothing is downloaded.', 'other'],
     ['express', 'Express', 'An Express app made by express-generator with the view engine chosen, its packages installed with npm.', 'other'],
     // PHP's, made by Composer
-    ['laravel', 'Laravel', 'A Laravel app made by Composer (composer create-project laravel/laravel), with its .env, app key and SQLite database. It needs PHP 8.2 or later and Composer: found by themselves, or named in Settings > PHP.', 'php'],
+    ['laravel', 'Laravel', 'A Laravel app made by Composer (composer create-project laravel/laravel), with its .env, app key and SQLite database. It needs PHP 8.2 or later and Composer: found by themselves, or named in Settings > PHP. With PHP on a machine reached by SSH, the Composer there makes it and it is copied here.', 'php'],
 ];
 /** Whether a kind is PHP's (made by Composer, no Python environment, no Node options). */
 export const isPhpKind = (kind) => KINDS.some(([id, , , group]) => id === kind && group === 'php');

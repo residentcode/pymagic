@@ -103,4 +103,69 @@ public class LaravelLinksTests
         }
         finally { Directory.Delete(root, true); }
     }
+
+    [Fact]
+    public void RouteNamesTakeThePrefixesOfEveryGroupAroundThem()
+    {
+        string text = string.Join("\n", new[]
+        {
+            "<?php",                                                                            // 0
+            "Route::middleware('auth')",                                                        // 1
+            "    ->prefix('admin')",                                                            // 2
+            "    ->name('admin.')",                                                             // 3
+            "    ->group(function () {",                                                        // 4
+            "        // a brace in a comment: { and a name: ->name('nope')",                     // 5
+            "        Route::get('/', fn () => '{')->name('home');",                             // 6
+            "        Route::name('users.')->group(function () {",                               // 7
+            "            Route::get('/users', [UserController::class, 'index'])->name('index');", // 8
+            "            Route::controller(X::class)->as('x.')->group(function () {",           // 9
+            "                Route::get('/x', 'show')->name('show');",                          // 10
+            "            });",                                                                  // 11
+            "        });",                                                                      // 12
+            "        Route::resource('photos', PhotoController::class)->only(['index', 'show']);", // 13
+            "    });",                                                                          // 14
+            "Route::group(['prefix' => 'api', 'as' => 'api.'], function () {",                 // 15
+            "    Route::apiResource('posts', PostController::class)->except('destroy');",       // 16
+            "    Route::resource('tags', TagController::class)->names(['index' => 'tags.all']);", // 17
+            "});",                                                                              // 18
+            "Route::prefix('v2')->group(base_path('routes/v2.php'));",                          // 19
+            "Route::get('/about', fn () => 'about')->name('about');",                           // 20
+        });
+        var routes = LaravelLinks.RoutesOf(text).Select(r => r.Name + ":" + r.Line).ToList();
+        string all = string.Join(",", routes);
+        foreach (var want in new[] { "admin.home:6", "admin.users.index:8", "admin.users.x.show:10", "admin.photos.index:13", "admin.photos.show:13",
+                                     "api.posts.index:16", "api.posts.update:16", "api.tags.all:17", "api.tags.edit:17", "about:20" })
+            Assert.True(routes.Contains(want), want + " in " + all);
+        foreach (var not in new[] { "nope", "admin.photos.create", "api.posts.destroy", "api.posts.create", "api.tags.index", "admin.users.", "admin." })
+            Assert.True(!routes.Any(r => r.StartsWith(not + ":")), not + " in " + all);
+        // home, users.index, x.show; photos' 2; posts' 4 (an API resource has no create and edit); tags' 7; about
+        Assert.Equal(17, routes.Count);
+    }
+
+    [Fact]
+    public void NamesInABladePhpBlockLeadToTheirFilesToo()
+    {
+        string root = Project();
+        try
+        {
+            string blade = string.Join("\n", new[]
+            {
+                "@php",
+                "    $home = route(",
+                "        'home'",
+                "    );",
+                "    $name = config('app.name');",
+                "@endphp",
+                "@php($users = route('admin.users'))",
+                "<a href=\"{{ $home }}\">{{ __('auth.failed') }}</a>",
+            });
+            Assert.Equal("routes/web.php:2", Rel(root, Go(root, blade, "'home'")));
+            Assert.Equal("config/app.php:2", Rel(root, Go(root, blade, "app.name")));
+            Assert.Equal("routes/web.php:4", Rel(root, Go(root, blade, "admin.users")));
+            Assert.Equal("lang/en/auth.php:2", Rel(root, Go(root, blade, "auth.failed")));
+            // a quote that is a second argument on its line of its own is not the call's name
+            Assert.Equal("none", Rel(root, Go(root, "route(\n  'home',\n  'about')", "'about'")));
+        }
+        finally { Directory.Delete(root, true); }
+    }
 }

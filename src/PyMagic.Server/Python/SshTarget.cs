@@ -295,6 +295,51 @@ public sealed class SshTarget : ExecutionTarget
         return true;
     }
 
+    /// <summary>Files of a folder there (plain names) copied into a folder here, in one connection (tar); false when the copy failed.</summary>
+    public bool FetchFiles(string targetDir, IReadOnlyCollection<string> names, string hostDir)
+    {
+        var plain = names.Where(n => n.Length > 0 && !n.Contains('/') && !n.Contains('\'') && n != "." && n != "..").ToList();
+        return plain.Count == 0 || Untar($"cd {Quote(targetDir)} && tar -cf - -- {string.Join(" ", plain.Select(Quote))}", hostDir);
+    }
+
+    /// <summary>A whole folder there copied into a folder here (its modification times kept); false when the copy failed.</summary>
+    public bool FetchFolder(string targetDir, string hostDir) => Untar($"cd {Quote(targetDir)} && tar -cf - .", hostDir);
+
+    bool Untar(string remoteTar, string hostDir)
+    {
+        Directory.CreateDirectory(hostDir);
+        var ssh = Ssh(remoteTar);
+        ssh.RedirectStandardOutput = true; ssh.RedirectStandardError = true; ssh.RedirectStandardInput = true;
+        var untar = LocalTar("-x", "-f", "-", "-C", hostDir);
+        untar.RedirectStandardInput = true; untar.RedirectStandardError = true;
+        using var s = Process.Start(ssh);
+        using var u = Process.Start(untar);
+        if (s == null || u == null) return false;
+        s.StandardInput.Close();
+        var sErr = s.StandardError.ReadToEndAsync();
+        var uErr = u.StandardError.ReadToEndAsync();
+        try { s.StandardOutput.BaseStream.CopyTo(u.StandardInput.BaseStream); u.StandardInput.Close(); } catch (IOException) { }
+        bool done = s.WaitForExit(30 * 60_000) & u.WaitForExit(30 * 60_000);
+        return done && s.ExitCode == 0 && u.ExitCode == 0;
+    }
+
+    /// <summary>
+    /// The project here and its folder there hold the same files (it was made there and copied here): recorded as sent, so the next copy sends
+    /// only what changes after.
+    /// </summary>
+    public void Adopt(string projectRoot)
+    {
+        Project = projectRoot;
+        if (Remote($"touch {Quote(ProjectDir + "/" + Marker)}", 30_000).Code != 0) return;
+        string recordFile = RecordFile(ProjectDir);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(recordFile)!);
+            File.WriteAllText(recordFile, new JsonObject(Files(Local, SkippedFolders).Select(f => KeyValuePair.Create(f.Rel, (JsonNode?)JsonValue.Create($"{f.Size}|{f.Ticks}")))).ToJsonString());
+        }
+        catch (IOException) { /* the first copy sends everything */ }
+    }
+
     // ------------------------------------------------------------ copying the project
 
     static readonly HashSet<string> SkippedFolders = new(StringComparer.OrdinalIgnoreCase)

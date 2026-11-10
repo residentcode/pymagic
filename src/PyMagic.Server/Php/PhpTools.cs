@@ -276,7 +276,7 @@ public static class PhpTools
     /// </summary>
     public static void CreateLaravel(string folder, string? phpSetting, string? composerSetting, Action<string>? say = null)
     {
-        if (Remote(phpSetting) != null) throw new ServiceException("New Project makes a Laravel app with PHP of this computer: Settings > PHP names PHP on another machine. Make it there with composer create-project laravel/laravel, or empty that setting for a while.");
+        if (Remote(phpSetting) is { } remote) { CreateLaravelThere(folder, remote.Target, remote.Php, say); return; }
         string php = FindPhp(phpSetting) ?? throw new ServiceException("PHP was not found: install PHP 8.2 or later, or name its php.exe in Settings > PHP.");
         var composer = FindComposer(composerSetting, php) ?? throw new ServiceException("Composer was not found: install Composer (getcomposer.org), or name it in Settings > PHP.");
         if (Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).Any()) throw new ServiceException($"{folder} is there already and not empty.");
@@ -296,5 +296,38 @@ public static class PhpTools
         Task.WaitAll(a1, a2);
         if (p.ExitCode != 0)
             throw new ServiceException("composer create-project laravel/laravel failed: " + string.Join(" ", tail.Where(l => l.Trim().Length > 0).TakeLast(3)));
+    }
+
+    /// <summary>
+    /// A new Laravel project made by the Composer of the machine Settings > PHP names (its PHP runs the project): made in the project's folder
+    /// there, then copied here; the copy is recorded as sent, so the first run sends nothing again (vendor included).
+    /// </summary>
+    static void CreateLaravelThere(string folder, SshTarget ssh, string php, Action<string>? say)
+    {
+        folder = Path.GetFullPath(folder);
+        if (Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).Any()) throw new ServiceException($"{folder} is there already and not empty.");
+        var facts = RemoteFacts(ssh, php);
+        if (facts.Version == null) throw new ServiceException($"{php} does not run PHP on {ssh.Destination}: install PHP there (sudo apt install php-cli) or name its path in Settings > PHP.");
+        if (facts.Composer == null) throw new ServiceException($"Composer is not on {ssh.Destination}: install it there (sudo apt install composer, or as getcomposer.org says) and make the project again.");
+        ssh.Project = folder;
+        string there = ssh.ProjectDir;
+        int slash = there.LastIndexOf('/');
+        if (slash <= 0) throw new ServiceException($"{there} is not a folder Laravel can be made in.");
+        string parent = there[..slash], leaf = there[(slash + 1)..];
+        // the project's own folder there (PyMagic's, under ~/.pymagic) is made again; a folder Settings names there must be empty
+        string clear = ssh.RemoteDir == null
+            ? $"rm -rf {SshTarget.Quote(there)}"
+            : $"if [ -n \"$(ls -A {SshTarget.Quote(there)} 2>/dev/null)\" ]; then echo 'not empty' >&2; exit 3; fi; rmdir {SshTarget.Quote(there)} 2>/dev/null; true";
+        // Composer runs Laravel's scripts with the PHP found first on the PATH: the one Settings names
+        string path = php.Contains('/') ? $"PATH={SshTarget.Quote(php[..php.LastIndexOf('/')])}:\"$PATH\" " : "";
+        say?.Invoke($"Making the Laravel app on {ssh.Destination} with its Composer (composer create-project laravel/laravel)…");
+        var (code, output, err) = ssh.Remote($"{clear} && mkdir -p {SshTarget.Quote(parent)} && cd {SshTarget.Quote(parent)} && {path}COMPOSER_ALLOW_SUPERUSER=1 composer create-project laravel/laravel {SshTarget.Quote(leaf)} --prefer-dist --no-interaction --no-ansi 2>&1", 20 * 60 * 1000);
+        if (code == 3) throw new ServiceException($"{there} on {ssh.Destination} is not empty: the new project needs an empty folder there.");
+        var lines = (output + err).Replace("\r", "").Split('\n').Where(l => l.Trim().Length > 0).ToList();
+        foreach (var l in lines) say?.Invoke(l);
+        if (code != 0) throw new ServiceException($"composer create-project laravel/laravel failed on {ssh.Destination}: " + string.Join(" ", lines.TakeLast(3)));
+        say?.Invoke($"Copying it here into {folder}…");
+        if (!ssh.FetchFolder(there, folder)) throw new ServiceException($"The project made on {ssh.Destination} ({there}) could not be copied here.");
+        ssh.Adopt(folder);
     }
 }
