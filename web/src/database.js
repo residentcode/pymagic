@@ -5,6 +5,7 @@ import { showTab } from './panel';
 import { toast } from './toast';
 import { cellText, typedValue, statementAt, statementsOf, sqlCompletions, changesOf, toCsv, toJson, toInserts } from './db-model';
 import { openMenu } from './menu';
+import { setupRedis } from './redis';
 
 const $ = (id) => document.getElementById(id);
 const PAGE = 200;
@@ -24,12 +25,14 @@ export function setupDatabase(deps) {
     let sources = [];
     const schemas = new Map();   // path -> [objects]
     const open = new Set();      // the tree's open nodes: "path", "path/table"
+    // a Redis server's keys and values (redis.js): a server of its own kind, without tables
+    const redis = setupRedis({ grid, status, node, paintTree });
 
     // ------------------------------------------------------------ data sources and their schema
     async function loadSources() {
         sources = await fetch('/api/db/sources').then((r) => (r.ok ? r.json() : [])).catch(() => []);
         const chosen = sourceBox.value;
-        sourceBox.replaceChildren(...sources.filter((s) => s.exists).map((s) => new Option(s.server ? `${s.name} (${s.server === 'postgres' ? 'PostgreSQL' : 'MySQL'})` : s.path, s.path)));
+        sourceBox.replaceChildren(...sources.filter((s) => s.exists).map((s) => new Option(s.server ? `${s.name} (${kindName(s.server)})` : s.path, s.path)));
         for (const [path, list] of databaseLists)
             for (const name of list.databases)
                 if (name !== list.current && sources.some((s) => s.path === path))
@@ -39,7 +42,7 @@ export function setupDatabase(deps) {
         if (sources.length === 1)
             open.add(sources[0].path);
         for (const s of sources)
-            if (open.has(s.path) && s.exists) {
+            if (open.has(s.path) && s.exists && s.server !== 'redis') {
                 if (s.server) await loadDatabases(s.path);
                 await loadSchema(s.path);
             }
@@ -127,6 +130,12 @@ export function setupDatabase(deps) {
                 : (s.added ? 'Added by hand; right-click to take it out of the list' : 'Found in the project') + (s.django ? ` · the database of ${s.django}` : '');
             row.onclick = async () => {
                 toggleNode(s.path);
+                if (s.server === 'redis') {
+                    // its keys are read as it opens (redis.js)
+                    redis.forget(s.path);
+                    paintTree();
+                    return;
+                }
                 if (open.has(s.path)) {
                     if (s.server) await loadDatabases(s.path);
                     await loadSchema(s.path);
@@ -151,6 +160,10 @@ export function setupDatabase(deps) {
             };
             if (!isOpen)
                 continue;
+            if (s.server === 'redis') {
+                redis.paintKeys(s.path, 1);
+                continue;
+            }
             // a server with more than one database: each is a node of its own (the one it was connected with first), opened by a click
             const list = s.server ? databaseLists.get(s.path) : null;
             if (list && list.databases.length > 1) {
@@ -197,7 +210,7 @@ export function setupDatabase(deps) {
             row.title = 'Double-click to see its definition in the console';
         }
     }
-    const kindName = (kind) => (kind === 'postgres' ? 'PostgreSQL' : 'MySQL');
+    const kindName = (kind) => ({ postgres: 'PostgreSQL', mysql: 'MySQL', redis: 'Redis' })[kind] ?? kind;
     // a server's databases: { databases, current }, asked for once when it is first opened
     const databaseLists = new Map();
     async function loadDatabases(path) {
@@ -235,7 +248,7 @@ export function setupDatabase(deps) {
     $('db-add').onclick = () => void addSqlite();
 
     // ------------------------------------------------------------ a PostgreSQL or MySQL server
-    const DEFAULT_PORTS = { postgres: '5432', mysql: '3306' };
+    const DEFAULT_PORTS = { postgres: '5432', mysql: '3306', redis: '6379' };
     const DRIVERS = { postgres: 'psycopg[binary]', mysql: 'PyMySQL' };
     // TLS as libpq names it; MySQL has no "allow" or "prefer" here (PyMySQL either encrypts or does not)
     const TLS_MODES = [['', "The driver's default"], ['disable', 'Off'], ['allow', 'Allow'], ['prefer', 'Prefer'], ['require', 'Require (not checked)'],
@@ -277,7 +290,7 @@ export function setupDatabase(deps) {
             return row;
         };
         const kind = document.createElement('select');
-        kind.append(new Option('PostgreSQL', 'postgres'), new Option('MySQL', 'mysql'));
+        kind.append(new Option('PostgreSQL', 'postgres'), new Option('MySQL', 'mysql'), new Option('Redis', 'redis'));
         kind.value = start.kind ?? 'postgres';
         const input = (type = 'text', value = '', placeholder = '') => { const i = document.createElement('input'); i.type = type; i.value = value; i.placeholder = placeholder; i.spellcheck = false; i.autocomplete = 'off'; return i; };
         const passwordHint = start.replaces ? 'Empty keeps the password that is kept' : '';
@@ -285,9 +298,11 @@ export function setupDatabase(deps) {
         addField('kind', 'Server', kind);
         addField('host', 'Host', input('text', start.host ?? 'localhost'));
         addField('port', 'Port', input('text', String(start.port ?? DEFAULT_PORTS[kind.value])));
-        addField('user', 'User', input('text', start.user ?? (kind.value === 'postgres' ? 'postgres' : 'root')));
+        const defaultUser = (k) => ({ postgres: 'postgres', mysql: 'root', redis: '' })[k];
+        const defaultDatabase = (k) => ({ postgres: 'postgres', mysql: '', redis: '0' })[k];
+        addField('user', 'User', input('text', start.user ?? defaultUser(kind.value)), 'Redis: an ACL user, or empty for the password alone');
         addField('password', 'Password', input('password', start.password ?? '', passwordHint), 'Kept in .pymagic/db-servers.private.json of the project: keep that file out of version control');
-        addField('database', 'Database', input('text', start.database ?? (kind.value === 'postgres' ? 'postgres' : '')), 'The one connected to first; the server\'s other databases are listed under it in the tree');
+        addField('database', 'Database', input('text', start.database ?? defaultDatabase(kind.value)), 'The one connected to first; the server\'s other databases are listed under it in the tree');
         addField('name', 'Name', input('text', start.name ?? ''), 'Optional: how the server is listed');
 
         // TLS: the drivers' own settings
@@ -301,7 +316,7 @@ export function setupDatabase(deps) {
         addField('sslKey', 'Client key', input('text', start.sslKey ?? '', 'optional'), 'The key of the client certificate', tls);
         const fillModes = () => {
             const was = mode.value || start.sslMode || '';
-            mode.replaceChildren(...TLS_MODES.filter(([m]) => kind.value === 'postgres' || !['allow', 'prefer'].includes(m)).map(([m, label]) => new Option(label, m)));
+            mode.replaceChildren(...TLS_MODES.filter(([m]) => kind.value === 'postgres' || (kind.value === 'redis' ? ['', 'disable', 'require'].includes(m) : !['allow', 'prefer'].includes(m))).map(([m, label]) => new Option(label, m)));
             mode.value = [...mode.options].some((o) => o.value === was) ? was : '';
         };
         fillModes();
@@ -324,13 +339,16 @@ export function setupDatabase(deps) {
 
         kind.onchange = () => {
             fields.port.value = DEFAULT_PORTS[kind.value];
-            fields.user.value = kind.value === 'postgres' ? 'postgres' : 'root';
-            fields.database.value = kind.value === 'postgres' ? 'postgres' : '';
+            fields.user.value = defaultUser(kind.value);
+            fields.database.value = defaultDatabase(kind.value);
+            note.textContent = noteOf();
             fillModes();
         };
         const note = document.createElement('div');
         note.className = 'ask-hint db-form-note';
-        note.textContent = "The passwords are kept in .pymagic/db-servers.private.json of the project: keep that file out of version control. PyMagic connects with the project's Python and its psycopg / PyMySQL package.";
+        const noteOf = () => "The passwords are kept in .pymagic/db-servers.private.json of the project: keep that file out of version control. "
+            + (kind.value === 'redis' ? 'PyMagic speaks to Redis itself (nothing to install).' : "PyMagic connects with the project's Python and its psycopg / PyMySQL package.");
+        note.textContent = noteOf();
         const error = document.createElement('div');
         error.className = 'db-form-error';
         const row = document.createElement('div');
@@ -616,6 +634,14 @@ export function setupDatabase(deps) {
         }
         if (dirty() && !confirm('Leave the changes that were not submitted?'))
             return;
+        // Redis: commands, one per line (the selection's, the cursor's line, or all)
+        if (sources.find((s) => s.path === path)?.server === 'redis') {
+            showTab('database');
+            setMode('console');
+            const text = whole ? model.getValue() : sel && !sel.isEmpty() ? model.getValueInRange(sel) : model.getLineContent(ed.getPosition().lineNumber);
+            await redis.run(path, text);
+            return;
+        }
         const statements = whole ? statementsOf(model.getValue())
             : sel && !sel.isEmpty() ? [{ text: model.getValueInRange(sel).trim().replace(/;\s*$/, '') }]
                 : [statementAt(model.getValue(), model.getOffsetAt(ed.getPosition()))];

@@ -79,7 +79,7 @@ public static class Databases
         var all = found.Values.OrderBy(s => s.Path, StringComparer.OrdinalIgnoreCase).ToList();
         var servers = DbServers.Load(root);
         // the PostgreSQL and MySQL databases of the Django settings that are not connected yet, offered with their settings
-        foreach (var (settings, alias, kind, fields) in DjangoServers(root))
+        foreach (var (settings, alias, kind, fields) in DjangoServers(root).Concat(LaravelServers(root)))
         {
             if (servers.Any(v => v.Kind == kind && string.Equals(v.Host, fields["host"], StringComparison.OrdinalIgnoreCase) && v.Port.ToString() == fields["port"] && v.Database == fields["database"]))
                 continue;
@@ -151,6 +151,56 @@ public static class Databases
     /// django-environ's <c>env.db()</c> / <c>env.db_url("VAR", default=...)</c> and dj-database-url's <c>config(env=..., default=...)</c> /
     /// <c>parse(...)</c>, the URL from the environment (DATABASE_URL unless another variable is named), else the project's .env, else the default.
     /// </summary>
+    /// <summary>
+    /// The database and Redis of a Laravel project's .env (DB_CONNECTION mysql, mariadb or pgsql; REDIS_HOST), offered as Django's are. With
+    /// Sail, a host that is a service of its compose file is this computer, at the port Sail forwards it to (FORWARD_DB_PORT, FORWARD_REDIS_PORT).
+    /// </summary>
+    public static List<(string Settings, string Alias, string Kind, Dictionary<string, string> Fields)> LaravelServers(string root)
+    {
+        var found = new List<(string, string, string, Dictionary<string, string>)>();
+        string envFile = System.IO.Path.Combine(root, ".env");
+        if (!File.Exists(System.IO.Path.Combine(root, "artisan")) || !File.Exists(envFile)) return found;
+        var env = new Dictionary<string, string>(StringComparer.Ordinal);
+        try
+        {
+            foreach (var line in File.ReadAllLines(envFile))
+                if (System.Text.RegularExpressions.Regex.Match(line, @"^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$") is { Success: true } m)
+                    env[m.Groups[1].Value] = m.Groups[2].Value.Trim('"', '\'');
+        }
+        catch (IOException) { return found; }
+        string E(string key, string fallback = "") => env.TryGetValue(key, out var v) && v.Length > 0 && v != "null" ? v : fallback;
+        // Sail's services: the names in its compose file
+        string compose = new[] { "compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml" }.Select(n => System.IO.Path.Combine(root, n)).FirstOrDefault(File.Exists) ?? "";
+        var services = new HashSet<string>(StringComparer.Ordinal);
+        try { if (compose.Length > 0) foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(compose), @"^    ([\w.-]+):\s*$", System.Text.RegularExpressions.RegexOptions.Multiline)) services.Add(m.Groups[1].Value); }
+        catch (IOException) { }
+        (string Host, string Port) Where(string host, string port, string forward)
+            => services.Contains(host) ? ("127.0.0.1", E(forward, port)) : (host, port);
+
+        string? kind = E("DB_CONNECTION") switch { "mysql" or "mariadb" => "mysql", "pgsql" => "postgres", _ => null };
+        if (kind != null)
+        {
+            var (host, port) = Where(E("DB_HOST", "127.0.0.1"), E("DB_PORT", kind == "postgres" ? "5432" : "3306"), "FORWARD_DB_PORT");
+            found.Add((".env", E("DB_CONNECTION"), kind, new Dictionary<string, string>
+            {
+                ["host"] = host, ["port"] = port, ["user"] = E("DB_USERNAME", kind == "postgres" ? "postgres" : "root"), ["password"] = E("DB_PASSWORD"),
+                ["database"] = E("DB_DATABASE"), ["name"] = $"{E("DB_CONNECTION")} ({E("DB_DATABASE")})" + (services.Contains(E("DB_HOST")) ? " · Sail" : ""),
+            }));
+        }
+        // Redis when the app uses it (Sail runs it, or the cache, sessions or queue are in it): Laravel's .env names a host either way
+        bool usesRedis = services.Contains(E("REDIS_HOST")) || new[] { "CACHE_STORE", "CACHE_DRIVER", "SESSION_DRIVER", "QUEUE_CONNECTION", "BROADCAST_CONNECTION" }.Any(k => E(k) == "redis");
+        if (E("REDIS_HOST").Length > 0 && usesRedis)
+        {
+            var (host, port) = Where(E("REDIS_HOST"), E("REDIS_PORT", "6379"), "FORWARD_REDIS_PORT");
+            found.Add((".env", "redis", "redis", new Dictionary<string, string>
+            {
+                ["host"] = host, ["port"] = port, ["user"] = E("REDIS_USERNAME"), ["password"] = E("REDIS_PASSWORD"), ["database"] = E("REDIS_DB", "0"),
+                ["name"] = "redis" + (services.Contains(E("REDIS_HOST")) ? " · Sail" : ""),
+            }));
+        }
+        return found;
+    }
+
     public static List<(string Settings, string Alias, string Kind, Dictionary<string, string> Fields)> DjangoServers(string root)
     {
         var result = new List<(string, string, string, Dictionary<string, string>)>();

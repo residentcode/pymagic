@@ -11,6 +11,8 @@ namespace PyMagic.Server;
 /// what the service's messages are is asked of the server itself through gRPC reflection (grpc.reflection.v1, else v1alpha), so no .proto file
 /// is needed; the JSON is written as protobuf, sent over HTTP/2 (plain text, or TLS for grpcs://), and the answer read back to JSON with the
 /// call's status, headers and trailers. Unary and server-streaming calls; a client-streaming one takes a JSON array, one message each.
+/// Answers compressed with gzip or deflate are read (PyMagic says it takes them); a request is sent compressed when its grpc-encoding
+/// header asks for gzip or deflate. A server without reflection is described by the project's own .proto files (ProtoFiles).
 /// </summary>
 public static class GrpcRequests
 {
@@ -25,11 +27,12 @@ public static class GrpcRequests
 
     /// <summary>One call. <paramref name="address"/>: http://host:port or https://host:port.</summary>
     /// <exception cref="ServiceException">The server cannot be reached, offers no reflection, has no such method, or the JSON does not fit.</exception>
-    public static async Task<Result> Call(string address, string service, string method, string jsonBody, IEnumerable<KeyValuePair<string, string>> metadata)
+    /// <param name="root">The project, whose .proto files describe the service when the server offers no reflection; null for none.</param>
+    public static async Task<Result> Call(string address, string service, string method, string jsonBody, IEnumerable<KeyValuePair<string, string>> metadata, string? root = null)
     {
         using var client = NewClient();
         var watch = Stopwatch.StartNew();
-        var pool = await Describe(client, address, service);
+        var pool = await Describe(client, address, service, root);
         if (!pool.Services.TryGetValue(service, out var svc))
             throw new ServiceException($"the server has no service {service}" + (pool.Services.Count > 0 ? $" (it has {string.Join(", ", pool.Services.Keys)})" : ""));
         var m = svc.Methods.FirstOrDefault(x => x.Name == method)
@@ -41,28 +44,32 @@ public static class GrpcRequests
         catch (JsonException e) { throw new ServiceException("the body is not JSON: " + e.Message); }
         var messages = m.ClientStreaming && json is JsonArray many ? many.ToList() : new List<JsonNode?> { json };
         byte[] frames;
-        try { frames = Frames(messages.Select(x => Protobuf.Encode(pool, m.Input, x))); }
+        // the request compressed as its grpc-encoding header says (gzip, deflate)
+        string? encoding = metadata.FirstOrDefault(h => h.Key.Equals("grpc-encoding", StringComparison.OrdinalIgnoreCase)).Value?.Trim().ToLowerInvariant();
+        if (encoding is not (null or "identity" or "gzip" or "deflate")) throw new ServiceException($"grpc-encoding {encoding}: PyMagic compresses with gzip or deflate");
+        try { frames = Frames(messages.Select(x => Protobuf.Encode(pool, m.Input, x)), encoding is "gzip" or "deflate" ? encoding : null); }
         catch (FormatException e) { throw new ServiceException(e.Message); }
 
         var (status, message, replies, headers) = await Send(client, address, $"/{service}/{method}", frames, metadata);
         var bodies = new JsonArray();
         foreach (var r in replies)
         {
-            try { bodies.Add(Protobuf.Decode(pool, m.Output, r)); }
+            try { bodies.Add(Protobuf.DecodeMessage(pool, m.Output, r)); }
             catch (FormatException e) { throw new ServiceException($"the answer could not be read as {m.Output}: {e.Message}"); }
         }
         var options = new JsonSerializerOptions { WriteIndented = true };
-        string body = bodies.Count == 0 ? "" : m.ServerStreaming ? bodies.ToJsonString(options) : bodies[0]!.ToJsonString(options);
+        string body = bodies.Count == 0 ? "" : m.ServerStreaming ? bodies.ToJsonString(options) : bodies[0]?.ToJsonString(options) ?? "null";
         return new Result(status, CodeName(status), message, body, headers, watch.ElapsedMilliseconds);
     }
 
-    /// <summary>The frames of gRPC's HTTP/2 body: each message after a byte (not compressed) and its length.</summary>
-    static byte[] Frames(IEnumerable<byte[]> messages)
+    /// <summary>The frames of gRPC's HTTP/2 body: each message after a byte (1 when it is compressed with <paramref name="encoding"/>) and its length.</summary>
+    static byte[] Frames(IEnumerable<byte[]> messages, string? encoding = null)
     {
         using var ms = new MemoryStream();
-        foreach (var m in messages)
+        foreach (var plain in messages)
         {
-            ms.WriteByte(0);
+            var m = encoding == null ? plain : Compress(plain, encoding);
+            ms.WriteByte(encoding == null ? (byte)0 : (byte)1);
             Span<byte> len = stackalloc byte[4];
             BinaryPrimitives.WriteUInt32BigEndian(len, (uint)m.Length);
             ms.Write(len);
@@ -71,16 +78,41 @@ public static class GrpcRequests
         return ms.ToArray();
     }
 
-    static List<byte[]> Unframe(byte[] body)
+    static byte[] Compress(byte[] data, string encoding)
+    {
+        using var output = new MemoryStream();
+        using (Stream z = encoding == "gzip" ? new System.IO.Compression.GZipStream(output, System.IO.Compression.CompressionLevel.Fastest, true)
+            : new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionLevel.Fastest, true))
+            z.Write(data);
+        return output.ToArray();
+    }
+
+    static byte[] Decompress(byte[] data, string? encoding)
+    {
+        using var input = new MemoryStream(data);
+        using Stream z = encoding switch
+        {
+            "gzip" => new System.IO.Compression.GZipStream(input, System.IO.Compression.CompressionMode.Decompress),
+            "deflate" => new System.IO.Compression.ZLibStream(input, System.IO.Compression.CompressionMode.Decompress),
+            _ => throw new ServiceException($"the answer is compressed with {encoding ?? "nothing it names"}, which PyMagic does not read (gzip and deflate it does)"),
+        };
+        using var output = new MemoryStream();
+        z.CopyTo(output);
+        return output.ToArray();
+    }
+
+    /// <summary>The messages of a body; a compressed one (its flag 1) read by the answer's grpc-encoding.</summary>
+    static List<byte[]> Unframe(byte[] body, string? encoding = null)
     {
         var list = new List<byte[]>();
         int at = 0;
         while (at + 5 <= body.Length)
         {
-            if (body[at] != 0) throw new ServiceException("the answer is compressed, which PyMagic does not read");
+            bool compressed = body[at] == 1;
             int len = (int)BinaryPrimitives.ReadUInt32BigEndian(body.AsSpan(at + 1, 4));
             if (at + 5 + len > body.Length) break;
-            list.Add(body.AsSpan(at + 5, len).ToArray());
+            var data = body.AsSpan(at + 5, len).ToArray();
+            list.Add(compressed ? Decompress(data, encoding) : data);
             at += 5 + len;
         }
         return list;
@@ -97,6 +129,7 @@ public static class GrpcRequests
         };
         request.Content.Headers.TryAddWithoutValidation("Content-Type", "application/grpc");
         request.Headers.TryAddWithoutValidation("TE", "trailers");
+        request.Headers.TryAddWithoutValidation("grpc-accept-encoding", "gzip, deflate, identity");
         foreach (var (k, v) in metadata) request.Headers.TryAddWithoutValidation(k, v);
         HttpResponseMessage response;
         try { response = await client.SendAsync(request, HttpCompletionOption.ResponseContentRead); }
@@ -116,12 +149,13 @@ public static class GrpcRequests
                 if (!response.IsSuccessStatusCode) throw new ServiceException($"{address} answered HTTP {(int)response.StatusCode} {response.ReasonPhrase}: not a gRPC server here?");
                 statusText = "2";   // no status: UNKNOWN, as gRPC's clients take it
             }
-            return (int.TryParse(statusText, out var code) ? code : 2, message == null ? null : Uri.UnescapeDataString(message), Unframe(body), headers);
+            string? encoding = response.Headers.TryGetValues("grpc-encoding", out var enc) ? enc.First().Trim().ToLowerInvariant() : null;
+            return (int.TryParse(statusText, out var code) ? code : 2, message == null ? null : Uri.UnescapeDataString(message), Unframe(body, encoding), headers);
         }
     }
 
     /// <summary>What the server says of a service and of everything its messages use, through reflection.</summary>
-    public static async Task<Protobuf.Pool> Describe(HttpClient client, string address, string service)
+    public static async Task<Protobuf.Pool> Describe(HttpClient client, string address, string service, string? root = null)
     {
         var pool = new Protobuf.Pool();
         string? api = null;
@@ -133,6 +167,16 @@ public static class GrpcRequests
             foreach (var f in files) pool.AddFile(f);
             api = candidate;
             break;
+        }
+        if (api == null && root != null)
+        {
+            // no reflection: the project's .proto files, when one of them has the service
+            var errors = new List<string>();
+            var fromFiles = ProtoFiles.Pool(root, errors);
+            if (fromFiles.Services.ContainsKey(service)) return fromFiles;
+            throw new ServiceException($"the server offers no gRPC reflection, and no .proto file of the project has the service {service}"
+                + (fromFiles.Services.Count > 0 ? $" (they have {string.Join(", ", fromFiles.Services.Keys)})" : "") + (errors.Count > 0 ? "; " + string.Join("; ", errors) : "")
+                + ": add its .proto file to the project, or switch reflection on in the server (grpcio-reflection, AddGrpcReflection, ...)");
         }
         if (api == null)
             throw new ServiceException("the server offers no gRPC reflection (grpc.reflection), which PyMagic asks what the service's messages are: switch it on in the server (grpcio-reflection, AddGrpcReflection, ...)");

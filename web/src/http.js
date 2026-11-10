@@ -223,8 +223,73 @@ export function setupHttpClient(deps) {
             toast('No request here: write one as `GET https://example.com`.');
             return;
         }
-        await sendRequest(rel, text, request);
+        await sendRequest(rel, text, request, undefined, true);
     }
+    // ------------------------------------------------------------ a WebSocket kept open (LiveSockets.cs)
+    const liveBar = $('http-live'), liveText = $('http-live-text');
+    let liveWs = null;
+    /** Opens a live connection and shows its talk as it goes; resolves when it has closed, with the answer as the one-shot request's. */
+    function liveSocket(start, label, subscription) {
+        liveWs?.close();
+        return new Promise((done) => {
+            const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+            const ws = new WebSocket(`${scheme}://${location.host}/api/ws/live`);
+            liveWs = ws;
+            const transcript = [];
+            let headers = {}, opened = false, closed = null, ended = false, ms = 0;
+            const paint = () => { bodyView.textContent = websocketTranscript(transcript, closed); bodyView.scrollTop = bodyView.scrollHeight; };
+            const finish = (answer) => {
+                if (ended)
+                    return;
+                ended = true;
+                if (liveWs === ws)
+                    liveWs = null;
+                liveBar.hidden = true;
+                done(answer);
+            };
+            ws.onopen = () => ws.send(JSON.stringify(start));
+            ws.onmessage = (e) => {
+                const m = JSON.parse(e.data);
+                ms = m.ms ?? ms;
+                if (m.type === 'error') {
+                    finish({ error: m.error });
+                    return;
+                }
+                if (m.type === 'open') {
+                    opened = true;
+                    headers = m.headers ?? {};
+                    head.className = 'ok';
+                    head.textContent = `101 Switching Protocols · open${m.protocol ? ` (${m.protocol})` : ''} · ${label}`;
+                    liveBar.hidden = false;
+                    liveText.hidden = subscription;
+                    $('http-live-send').hidden = subscription;
+                    $('http-live-close').textContent = subscription ? 'Stop' : 'Close';
+                    if (!subscription)
+                        liveText.focus();
+                }
+                else if (m.type === 'sent' || m.type === 'received') {
+                    transcript.push({ dir: m.type, text: m.text, ms: m.ms });
+                    paint();
+                }
+                else if (m.type === 'closed') {
+                    closed = m.byServer ? { status: m.status, description: m.description } : null;
+                    paint();
+                }
+            };
+            ws.onclose = () => finish(opened
+                ? { status: 101, reason: 'Switching Protocols', headers, ms, body: websocketTranscript(transcript, closed), transcript, size: transcript.reduce((n, t) => n + t.text.length, 0) }
+                : { error: 'the connection to PyMagic closed' });
+        });
+    }
+    function sendLive() {
+        if (!liveWs || !liveText.value)
+            return;
+        liveWs.send(JSON.stringify({ type: 'send', text: liveText.value }));
+        liveText.value = '';
+    }
+    $('http-live-send').onclick = sendLive;
+    liveText.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendLive(); } };
+    $('http-live-close').onclick = () => liveWs?.readyState === WebSocket.OPEN && liveWs.send(JSON.stringify({ type: 'close' }));
     /** The requests of a file kept as a run configuration: the one named (or on that line), or all of them in turn; `env` the environment to use. */
     async function runFile(rel, which, env) {
         const text = await readText(rel);
@@ -243,7 +308,7 @@ export function setupHttpClient(deps) {
                 break;
     }
     /** Sends one request of a file; false when it could not be sent (a variable without a value, a file that is not there). */
-    async function sendRequest(rel, text, request, env) {
+    async function sendRequest(rel, text, request, env, live = false) {
         const { pub, priv } = await refreshEnvironments(rel);
         if (env !== undefined && [...envBox.options].some((o) => o.value === env))
             envBox.value = env;
@@ -293,7 +358,14 @@ export function setupHttpClient(deps) {
             .then(async (res) => (res.ok ? res.json() : { error: (await res.json().catch(() => null))?.error ?? `HTTP ${res.status}` })).catch((e) => ({ error: String(e) }));
         const kind = KINDS[r.method] ?? 'http';
         let answer;
-        if (kind === 'graphql') {
+        // a GraphQL subscription (a ws:// address, or a subscription operation) goes over a WebSocket kept open, its events shown as they come
+        const subscription = kind === 'graphql' && (/^wss?:\/\//i.test(r.url) || /^\s*subscription\b/.test(graphqlPayload(r.body).query));
+        if (subscription)
+            answer = await liveSocket({ url: r.url, headers: Object.fromEntries(r.headers), graphql: graphqlPayload(r.body), fromFile: true }, `${r.method} ${r.url}`, true);
+        // a WebSocket request sent from the editor stays open: what is typed below the status goes to the server until Close
+        else if (kind === 'websocket' && live)
+            answer = await liveSocket({ url: r.url, headers: Object.fromEntries(r.headers), messages: websocketMessages(r.body), fromFile: true }, `${r.method} ${r.url}`, false);
+        else if (kind === 'graphql') {
             // POSTed as JSON, {query, variables}, as PyCharm sends it; the request's own Content-Type stays when it has one
             const headers = Object.fromEntries(r.headers);
             if (!Object.keys(headers).some((k) => k.toLowerCase() === 'content-type'))

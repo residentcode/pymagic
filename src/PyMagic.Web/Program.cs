@@ -986,6 +986,34 @@ app.MapPost("/api/ws", async (HttpRequest req) =>
     }
 });
 
+// a WEBSOCKET request (or a GRAPHQL subscription) kept open: the page's first message says what to open, then what it types goes to the
+// server and what the server sends comes back as it comes (LiveSockets)
+app.Map("/api/ws/live", async (HttpContext ctx) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    using var page = await ctx.WebSockets.AcceptWebSocketAsync();
+    var buffer = new byte[256 * 1024];
+    JsonNode? first = null;
+    try
+    {
+        using var whole = new MemoryStream();
+        System.Net.WebSockets.WebSocketReceiveResult r;
+        do { r = await page.ReceiveAsync(buffer, ctx.RequestAborted); whole.Write(buffer, 0, r.Count); } while (!r.EndOfMessage && r.MessageType != System.Net.WebSockets.WebSocketMessageType.Close);
+        if (r.MessageType != System.Net.WebSockets.WebSocketMessageType.Close) first = JsonNode.Parse(System.Text.Encoding.UTF8.GetString(whole.ToArray()));
+    }
+    catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or OperationCanceledException or System.Text.Json.JsonException) { return; }
+    async Task Refuse(string error)
+    {
+        try { await page.SendAsync(System.Text.Encoding.UTF8.GetBytes(new JsonObject { ["type"] = "error", ["error"] = error }.ToJsonString()), System.Net.WebSockets.WebSocketMessageType.Text, true, ctx.RequestAborted); }
+        catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or OperationCanceledException) { }
+    }
+    if (LiveSockets.StartOf(first) is not { } start) { await Refuse("a ws:// or wss:// address"); return; }
+    if (!start.Url.IsLoopback && first?["fromFile"]?.GetValue<bool>() != true) { await Refuse("only servers on this computer (localhost, 127.0.0.1)"); return; }
+    await LiveSockets.Relay(page, start, ctx.RequestAborted);
+    try { if (page.State == System.Net.WebSockets.WebSocketState.Open) await page.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); }
+    catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or OperationCanceledException) { }
+});
+
 // a GRPC request of an .http file: the service described by the server's reflection, the JSON sent as protobuf (GrpcRequests)
 app.MapPost("/api/grpc", async (HttpRequest req) =>
 {
@@ -997,7 +1025,7 @@ app.MapPost("/api/grpc", async (HttpRequest req) =>
     var metadata = (b?["metadata"] as JsonObject ?? new JsonObject()).Select(kv => new KeyValuePair<string, string>(kv.Key, kv.Value?.GetValue<string>() ?? "")).ToList();
     try
     {
-        var r = await GrpcRequests.Call(address.GetLeftPart(UriPartial.Authority), service, method, b?["body"]?.GetValue<string>() ?? "", metadata);
+        var r = await GrpcRequests.Call(address.GetLeftPart(UriPartial.Authority), service, method, b?["body"]?.GetValue<string>() ?? "", metadata, root);
         return Results.Json(new { status = r.Status, reason = r.StatusName, message = r.Message, body = r.Message != null && r.Body.Length == 0 ? r.Message : r.Body, headers = r.Headers, ms = r.Ms });
     }
     catch (ServiceException e) { return Results.BadRequest(new { error = e.Message }); }
@@ -1151,8 +1179,15 @@ app.Map("/lsp", async (HttpContext ctx) =>
     server.PhpFactory = send =>
     {
         if (!Plugins.On("laravel")) return null;
-        // Sail: Phpactor with a PHP of this computer when there is one (it reads the project Sail shares), else none
-        if (SailTarget.IsSetting(PhpSetting("phpPath"))) return PhpTools.FindPhp(null) is { } hostPhp ? new PhpLanguageServer(hostPhp, root, send, text => Console.Error.WriteLine(text)) : null;
+        // Sail: Phpactor in its container while it runs (its PHP, its extensions), else with a PHP of this computer when there is one
+        if (SailTarget.IsSetting(PhpSetting("phpPath")))
+        {
+            SailTarget? sail = null;
+            try { sail = SailTarget.Of(root, PhpSetting("phpPath")); if (sail != null && !sail.Running()) sail = null; }
+            catch (ServiceException) { sail = null; }
+            if (sail != null) return new PhpLanguageServer(sail, root, send, text => Console.Error.WriteLine(text));
+            return PhpTools.FindPhp(null) is { } hostPhp ? new PhpLanguageServer(hostPhp, root, send, text => Console.Error.WriteLine(text)) : null;
+        }
         if (PhpTools.Remote(PhpSetting("phpPath")) is { } remotePhp) return new PhpLanguageServer(remotePhp.Target, remotePhp.Php, root, send, text => Console.Error.WriteLine(text));
         return PhpTools.FindPhp(PhpSetting("phpPath")) is { } localPhp ? new PhpLanguageServer(localPhp, root, send, text => Console.Error.WriteLine(text)) : null;
     };
@@ -1308,6 +1343,30 @@ string? PhpSetting(string key)
     try { return JsonNode.Parse(userSettings.Read())?[key]?.GetValue<string>() is { Length: > 0 } v ? v : null; }
     catch (Exception e) when (e is System.Text.Json.JsonException or InvalidOperationException) { return null; }
 }
+
+// Eloquent's attributes from the database (artisan model:show): the project's artisan run by the PHP of Settings > PHP, wherever it is
+// (Sail's container only while it runs: completion does not start it)
+EloquentModels.Artisan = (projectRoot, args, seconds) =>
+{
+    string? setting = PhpSetting("phpPath");
+    string quoted = string.Join(" ", args.Select(SshTarget.Quote));
+    if (SailTarget.IsSetting(setting))
+    {
+        if (SailTarget.Of(projectRoot, setting) is not { } sail || !sail.Running()) return null;
+        var (code, output, _) = sail.Exec("php artisan " + quoted, seconds * 1000);
+        return (code, output);
+    }
+    if (PhpTools.Remote(setting) is { } remote)
+    {
+        var ssh = remote.Target;
+        ssh.Project = projectRoot;
+        var (code, output, _) = ssh.Remote($"cd {SshTarget.Quote(ssh.ProjectDir)} && {SshTarget.Quote(remote.Php)} artisan {quoted}", seconds * 1000);
+        return (code, output);
+    }
+    if (PhpTools.FindPhp(setting) is not { } php) return null;
+    var (localCode, localOut, _) = PhpTools.Run(php, new[] { "artisan" }.Concat(args), projectRoot, seconds);
+    return (localCode, localOut);
+};
 
 // Laravel: the PHP and Composer found, and whether the project is a Laravel one (its version, its routes files)
 app.MapGet("/api/php", () =>
@@ -1773,6 +1832,15 @@ app.MapPost("/api/db/servers", async (HttpRequest req) =>
         string? replaces = body["replaces"]?.GetValue<string>();
         if (replaces != null && password.Length == 0) password = DbServers.StoredPassword(root, replaces);
         if (replaces != null && sshPassword.Length == 0) sshPassword = DbServers.StoredPassword(root, replaces, ssh: true);
+        // Redis: spoken here (RedisClient), no driver of Python's
+        if (server.Kind == "redis")
+        {
+            string version;
+            using (var redis = OpenRedis(DbServers.Reach(root, server, password, sshPassword))) version = redis.Version();
+            if (replaces != null && replaces != server.Id) DbServers.Remove(root, replaces);
+            DbServers.Save(root, server, password, sshPassword);
+            return Results.Json(new { path = DbServers.PathOf(server.Id), version });
+        }
         var answer = Databases.Ask(DatabasePython(), new JsonObject { ["op"] = "test", ["server"] = DbServers.Reach(root, server, password, sshPassword) }, 30000, "pm_dbserver.py");
         if (answer["error"] is { } error)
             return Results.Json(new { error = error.GetValue<string>(), missingDriver = answer["missingDriver"]?.GetValue<bool>() ?? false });
@@ -1782,6 +1850,50 @@ app.MapPost("/api/db/servers", async (HttpRequest req) =>
     }
     catch (ServiceException e) { return Results.Json(new { error = e.Message }); }
 });
+// a Redis server of the project, connected to (DbServers.Reach's answer: where, who, TLS, through its SSH tunnel)
+RedisClient OpenRedis(JsonObject reach)
+{
+    string host = reach["via"]?["host"]?.GetValue<string>() ?? reach["host"]?.GetValue<string>() ?? "localhost";
+    int port = reach["via"]?["port"]?.GetValue<int>() ?? reach["port"]?.GetValue<int>() ?? 6379;
+    int database = int.TryParse(reach["database"]?.GetValue<string>(), out var d) ? d : 0;
+    bool tls = reach["ssl"]?["mode"]?.GetValue<string>() == "require";
+    return RedisClient.Connect(host, port, reach["user"]?.GetValue<string>() ?? "", reach["password"]?.GetValue<string>() ?? "", database, tls);
+}
+
+// Redis in the Database panel: {path (server:id), op: keys {pattern, cursor} | get {key} | change {change: {key, op, ...}} | command {line}}
+app.MapPost("/api/redis", async (HttpRequest req) =>
+{
+    if (await JsonNode.ParseAsync(req.Body) is not JsonObject body || body["path"]?.GetValue<string>() is not { } path || !DbServers.IsServerPath(path))
+        return Results.BadRequest("unknown request");
+    try
+    {
+        if (DbServers.Connection(root, path) is not { } reach || reach["kind"]?.GetValue<string>() != "redis") return Results.BadRequest("No such Redis server in the project.");
+        using var redis = OpenRedis(reach);
+        switch (body["op"]?.GetValue<string>())
+        {
+            case "keys":
+                var (keys, cursor) = redis.Keys(body["pattern"]?.GetValue<string>() ?? "*", body["cursor"]?.GetValue<string>() ?? "0");
+                return Results.Json(new { keys = keys.Select(k => new { key = k.Key, type = k.Type }), cursor, total = redis.Command("DBSIZE")?.GetValue<long>() });
+            case "get":
+                return Results.Json(redis.Get(body["key"]?.GetValue<string>() ?? ""));
+            case "change":
+                // the change in a field of its own: {op: "change", change: {op: "set", key, value}}
+                if (body["change"] is not JsonObject change) return Results.BadRequest("a change");
+                return Results.Json(new { error = redis.Change(change) });
+            case "command":
+                var words = RedisClient.Words(body["line"]?.GetValue<string>() ?? "");
+                if (words.Count == 0) return Results.Json(new { error = "a command: GET key, HGETALL key, KEYS user:*, …" });
+                // the connection is the panel's: commands that would take it over are not run from the console
+                if (words[0].ToUpperInvariant() is "SUBSCRIBE" or "PSUBSCRIBE" or "SSUBSCRIBE" or "MONITOR" or "SYNC" or "PSYNC")
+                    return Results.Json(new { error = $"{words[0].ToUpperInvariant()} holds the connection, which the console does not keep open." });
+                var reply = redis.Command(words.ToArray());
+                return Results.Json(reply is JsonObject o && o["error"] != null ? new JsonObject { ["error"] = o["error"]!.DeepClone() } : new JsonObject { ["reply"] = reply?.DeepClone() });
+        }
+        return Results.BadRequest("unknown request");
+    }
+    catch (ServiceException e) { return Results.Json(new { error = e.Message }); }
+});
+
 app.MapDelete("/api/db/servers", (string id) => { DbServers.Remove(root, id); return Results.Json(Databases.Find(root)); });
 // the servers' settings, for the form that changes one (never their passwords)
 app.MapGet("/api/db/servers", () => Results.Json(DbServers.Load(root)));
@@ -2328,7 +2440,7 @@ app.Map("/run", async (HttpContext ctx) =>
                 if (Plugins.On("laravel") && RunSession.IsPhpTestRun(root, ids, msg["framework"]?.GetValue<string>() ?? "auto"))
                 {
                     session.Php = PhpSetting("phpPath");
-                    session.StartPhpTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto");
+                    session.StartPhpTests(root, ids, msg["framework"]?.GetValue<string>() ?? "auto", coverage: msg["coverage"]?.GetValue<bool>() == true);
                     continue;
                 }
                 session.Python = interpreters.Current?.Python ?? python; session.Target = interpreters.Current?.Target ?? ExecutionTarget.Local;

@@ -137,7 +137,7 @@ export function setupLaravelLinks({ modelFor, relOf }) {
             if (!found?.items?.length) return { suggestions: [] };
             const s = model.getPositionAt(found.start), e = model.getPositionAt(found.end);
             const range = new monaco.Range(s.lineNumber, s.column, e.lineNumber, e.column);
-            const kind = { view: K.File, component: K.Class, route: K.Reference, config: K.Property, env: K.Variable, lang: K.Text, asset: K.File }[found.kind] ?? K.Text;
+            const kind = { view: K.File, component: K.Class, route: K.Reference, config: K.Property, env: K.Variable, lang: K.Text, asset: K.File, column: K.Field }[found.kind] ?? K.Text;
             return { suggestions: found.items.map((i, n) => ({ label: i.label, kind, detail: i.detail, insertText: i.label, range, sortText: String(n).padStart(4, '0') })) };
         },
     });

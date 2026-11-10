@@ -114,7 +114,7 @@ public class EloquentModelsTests
             Assert.Equal("author:belongsTo:User | comments:hasMany:Comment", string.Join(" | ", relations));
 
             var items = EloquentModels.Items(root, "App\\Models\\Post")!;
-            Assert.True(items.Any(i => i!["label"]!.GetValue<string>() == "headline" && i["detail"]!.GetValue<string>() == "string column of posts"), items.ToJsonString());
+            Assert.True(items.Any(i => i!["label"]!.GetValue<string>() == "headline" && i["detail"]!.GetValue<string>() == "string · string column of posts"), items.ToJsonString());
             Assert.True(items.Any(i => i!["label"]!.GetValue<string>() == "author" && i["detail"]!.GetValue<string>() == "belongsTo User relation"), items.ToJsonString());
             Assert.True(EloquentModels.Items(root, "App\\Services\\Mailer") == null, "no items for a class that is no model");
             Assert.Equal("App\\Models\\User | Illuminate\\Support\\Collection", string.Join(" | ", EloquentModels.ClassesIn("```php\n$user: \\App\\Models\\User|null\n```\nor Illuminate\\Support\\Collection")));
@@ -175,7 +175,7 @@ public class EloquentModelsTests
             // at `$user->` itself: Phpactor's methods (Notifiable's notify) and the columns together
             var both = Items(4, 7, "notify").Select(i => i["label"]!.GetValue<string>()).ToList();
             Assert.True(both.Contains("notify") && both.Contains("email"), string.Join(",", both.Take(40)));
-            Assert.Equal("string column of users", items.First(i => i["label"]!.GetValue<string>() == "email")["detail"]!.GetValue<string>());
+            Assert.Equal("string · string column of users", items.First(i => i["label"]!.GetValue<string>() == "email")["detail"]!.GetValue<string>());
             // a parameter typed User
             // `$u->` of the parameter (completion at the start of `name`)
             var param = Items(2, 37, "password").Select(i => i["label"]!.GetValue<string>()).ToList();
@@ -186,5 +186,127 @@ public class EloquentModelsTests
             Environment.SetEnvironmentVariable("PYMAGIC_PHPACTOR_HOME", null);
             try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
+    }
+
+    const string CastModel = """
+        <?php
+
+        namespace App\Models;
+
+        use App\Enums\Status;
+        use Illuminate\Database\Eloquent\Casts\Attribute;
+        use Illuminate\Database\Eloquent\Model;
+
+        class Order extends Model
+        {
+            protected function casts(): array
+            {
+                return [
+                    'paid' => 'boolean',
+                    'total' => 'decimal:2',
+                    'meta' => 'array',
+                    'shipped_at' => 'datetime',
+                    'status' => Status::class,
+                ];
+            }
+
+            protected function label(): Attribute
+            {
+                return Attribute::make(get: fn (mixed $value, array $attributes): string => '#' . $attributes['id']);
+            }
+
+            public function getIsLateAttribute(): bool
+            {
+                return false;
+            }
+        }
+        """;
+
+    const string OrderMigration = """
+        <?php
+
+        return new class extends Migration
+        {
+            public function up(): void
+            {
+                Schema::create('orders', function (Blueprint $table) {
+                    $table->id();
+                    $table->boolean('paid');
+                    $table->decimal('total', 8, 2);
+                    $table->json('meta');
+                    $table->timestamp('shipped_at')->nullable();
+                    $table->string('status');
+                    $table->timestamps();
+                });
+            }
+        };
+        """;
+
+    [Fact]
+    public void CastsAndAccessorsGiveTheAttributesTheirTypesAndQueriesTheirColumns()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "pm_eloquent_casts_" + Guid.NewGuid().ToString("N")[..8]);
+        W(root, "composer.json", """{"autoload":{"psr-4":{"App\\":"app/"}}}""");
+        W(root, "app/Models/Order.php", CastModel);
+        W(root, "database/migrations/2024_01_01_000000_create_orders_table.php", OrderMigration);
+        var saved = EloquentModels.Artisan;
+        EloquentModels.Artisan = null;
+        try
+        {
+            // the code's answer: the migration's columns with the model's casts, and its accessors
+            Assert.Equal("paid=boolean total=decimal:2 meta=array shipped_at=datetime status=App\\Enums\\Status".Replace("App\\Enums\\", ""),
+                string.Join(" ", EloquentModels.Casts(CastModel).Select(c => $"{c.Key}={c.Value}")).Replace("App\\Enums\\", ""));
+            Assert.Equal("label:string is_late:bool", string.Join(" ", EloquentModels.Accessors(CastModel).Select(a => $"{a.Name}:{a.Type}")));
+            var model = EloquentModels.Model(root, "App\\Models\\Order")!;
+            string Type(string name) => model.Attributes.First(a => a.Name == name).PhpType;
+            Assert.Equal("bool string array Carbon Status int Carbon", string.Join(" ", new[] { "paid", "total", "meta", "shipped_at", "status", "id", "created_at" }.Select(Type)));
+            Assert.Equal("bool · boolean column of orders (cast boolean)", EloquentModels.DetailOf(model.Attributes.First(a => a.Name == "paid"), model));
+            Assert.Equal("string · accessor of Order", EloquentModels.DetailOf(model.Attributes.First(a => a.Name == "label"), model));
+            var items = EloquentModels.Items(root, "App\\Models\\Order")!;
+            Assert.True(items.Any(i => i!["label"]!.GetValue<string>() == "is_late"), items.ToJsonString());
+
+            // a column in a query's quotes: User::where('…'), a chain's orderBy, select([…]); a closure's query is not known
+            string code = "<?php\nuse App\\Models\\Order;\n$a = Order::where('pa')->orderBy('to')->get();\n$b = Order::query()->select(['id', 'sh'])->get();\nOrder::where(function ($q) { $q->where('x'); });\n";
+            LaravelLinks.Place? At(string near) => LaravelLinks.At(code, code.IndexOf(near) + 1);
+            Assert.Equal("column pa App\\Models\\Order", At("pa')") is { } p1 ? $"{p1.Kind} {p1.Name} {p1.Receiver}" : "none");
+            Assert.Equal("column to", At("to')") is { } p2 ? $"{p2.Kind} {p2.Name}" : "none");
+            Assert.Equal("column sh", At("sh']") is { } p3 ? $"{p3.Kind} {p3.Name}" : "none");
+            Assert.True(At("x')") == null, "a closure's query");
+            var columns = LaravelLinks.Complete(root, At("pa')")!).Select(i => i!["label"]!.GetValue<string>()).ToList();
+            Assert.True(columns.Contains("paid") && columns.Contains("shipped_at") && !columns.Contains("label"), string.Join(",", columns));
+            // Ctrl+click on the column: the migration's line
+            var target = LaravelLinks.Target(root, At("pa')")! with { Name = "paid" });
+            Assert.Equal("create_orders_table.php:8", target is { } t ? $"{Path.GetFileName(t.File)[18..]}:{t.Line}" : "none");
+
+            // model:show's answer (the database's): its column types, nullability, casts and accessors
+            var shown = JsonNode.Parse("""{"table":"orders","attributes":[{"name":"id","type":"integer","nullable":false,"cast":"int"},{"name":"shipped_at","type":"datetime","nullable":true,"cast":"datetime"},{"name":"notes","type":"text","nullable":true,"cast":null},{"name":"label","type":null,"cast":"attribute"}]}""")!.AsObject();
+            var fromDb = EloquentModels.FromModelShow(shown, CastModel)!;
+            Assert.Equal("id:int shipped_at:Carbon? notes:string? label:string(accessor)", string.Join(" ", fromDb.Select(a => $"{a.Name}:{a.PhpType}{(a.Nullable ? "?" : "")}{(a.Accessor ? "(accessor)" : "")}")));
+
+            // a database without the table yet (migrations not run): model:show has its accessors only, and the migrations' columns are used
+            W(root, "artisan", "<?php");
+            EloquentModels.Artisan = (_, _, _) => (0, """{"table":"orders","attributes":[{"name":"label","type":null,"cast":"attribute"}]}""");
+            var notMigrated = EloquentModels.Model(root, "App\\Models\\Order", 10000)!;
+            Assert.True(!notMigrated.FromDatabase && notMigrated.Attributes.Any(a => a.Name == "paid"), string.Join(",", notMigrated.Attributes.Select(a => a.Name)));
+        }
+        finally { EloquentModels.Artisan = saved; Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void ModelShowReadsTheColumnsOfTheDatabaseItself()
+    {
+        if (V("PYMAGIC_PHP") is not { } php || V("PYMAGIC_TEST_LARAVEL_DIR") is not { } source || !File.Exists(Path.Combine(source, "database", "database.sqlite"))) return;
+        var saved = EloquentModels.Artisan;
+        EloquentModels.Artisan = (r, args, seconds) => { var (c, o, _) = PhpTools.Run(php, new[] { "artisan" }.Concat(args), r, seconds); return (c, o); };
+        try
+        {
+            // the users table as the database has it: email_verified_at nullable and cast to a date, password hashed
+            var model = EloquentModels.Model(source, "App\\Models\\User", 60000)!;
+            Assert.True(model.FromDatabase, "read from the database");
+            var verified = model.Attributes.First(a => a.Name == "email_verified_at");
+            Assert.Equal("Carbon|null · datetime column of users (cast datetime)", EloquentModels.DetailOf(verified, model));
+            Assert.Equal("string", model.Attributes.First(a => a.Name == "password").PhpType);
+        }
+        finally { EloquentModels.Artisan = saved; }
     }
 }

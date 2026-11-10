@@ -16,6 +16,10 @@ namespace PyMagic.Server;
 public sealed class PhpLanguageServer : IDisposable
 {
     readonly SshTarget? _ssh;
+    // Sail: Phpactor in its container, which shares the project (nothing to copy)
+    readonly SailTarget? _sail;
+    // where the paths of Phpactor's messages are another machine's (SSH's, the container's), or null for this computer's
+    ExecutionTarget? Mapped => (ExecutionTarget?)_ssh ?? _sail;
     readonly string _php, _root;
     readonly Action<JsonNode> _toPage;
     readonly Action<string> _log;
@@ -41,9 +45,12 @@ public sealed class PhpLanguageServer : IDisposable
     /// <summary>Phpactor on this computer, run by the php.exe <paramref name="php"/>.</summary>
     public PhpLanguageServer(string php, string root, Action<JsonNode> toPage, Action<string>? log = null) : this(null, php, root, toPage, log, 0) { }
 
-    PhpLanguageServer(SshTarget? ssh, string php, string root, Action<JsonNode> toPage, Action<string>? log, int _)
+    /// <summary>Phpactor in Sail's container, run by its PHP with the project's extensions: PyMagic's phpactor.phar put in the project's .pymagic folder, which the container shares.</summary>
+    public PhpLanguageServer(SailTarget sail, string root, Action<JsonNode> toPage, Action<string>? log = null) : this(null, "php", root, toPage, log, 0, sail) { }
+
+    PhpLanguageServer(SshTarget? ssh, string php, string root, Action<JsonNode> toPage, Action<string>? log, int _, SailTarget? sail = null)
     {
-        _ssh = ssh; _php = php; _root = Path.GetFullPath(root); _toPage = toPage; _log = log ?? (_ => { });
+        _ssh = ssh; _sail = sail; _php = php; _root = Path.GetFullPath(root); _toPage = toPage; _log = log ?? (_ => { });
         if (_ssh != null) _ssh.Project = _root;
         _started = Task.Run(Start);
         new Thread(Write) { IsBackground = true, Name = "phpactor out" }.Start();
@@ -72,12 +79,12 @@ public sealed class PhpLanguageServer : IDisposable
     {
         try
         {
-            if (_ssh != null) StartThere(_ssh); else StartHere();
+            if (_sail != null) StartInSail(_sail); else if (_ssh != null) StartThere(_ssh); else StartHere();
             new Thread(Read) { IsBackground = true, Name = "phpactor in" }.Start();
 
             string rootUri = RemoteUri(_root);
             var options = new JsonObject { ["language_server_phpstan.enabled"] = false, ["language_server_psalm.enabled"] = false, ["indexer.poll_time"] = 2000 };
-            if (_ssh == null)
+            if (Mapped == null)
             {
                 // on Windows: no inotify or find for the index to watch with (PHP's own polling instead), and no process of the phar for problems
                 options["indexer.enabled_watchers"] = new JsonArray("php");
@@ -111,6 +118,29 @@ public sealed class PhpLanguageServer : IDisposable
             _log("phpactor: " + _failed);
             foreach (var w in _waiting.Values) w.TrySetResult(null);
         }
+    }
+
+    void StartInSail(SailTarget sail)
+    {
+        string phar = Phar() ?? throw new ServiceException("PyMagic's Phpactor (phpactor/phpactor.phar) is not there: PHP's code insight needs it.");
+        if (!sail.Running()) throw new ServiceException("Sail's container is not running: Phpactor runs in it once it is (sail up).");
+        // the phar where the container sees it: the project's .pymagic folder (copied again when PyMagic's is another)
+        string inProject = Path.Combine(_root, ".pymagic", "phpactor.phar");
+        var from = new FileInfo(phar);
+        if (!File.Exists(inProject) || new FileInfo(inProject).Length != from.Length || File.GetLastWriteTimeUtc(inProject) < from.LastWriteTimeUtc)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(inProject)!);
+            File.Copy(phar, inProject, true);
+        }
+        // its index, cache and settings in the container's /tmp, not in the project
+        var env = new Dictionary<string, string> { ["XDG_CACHE_HOME"] = "/tmp/pymagic-phpactor/cache", ["XDG_CONFIG_HOME"] = "/tmp/pymagic-phpactor/config", ["XDG_DATA_HOME"] = "/tmp/pymagic-phpactor/data" };
+        var psi = sail.Start("php", _root, new[] { "-d", "memory_limit=1G", sail.ToTarget(inProject), "language-server" }, env);
+        psi.RedirectStandardInput = true; psi.RedirectStandardOutput = true; psi.RedirectStandardError = true;
+        _runId = psi.Environment["PYMAGIC_RUN_ID"];
+        _process = Process.Start(psi) ?? throw new ServiceException("docker did not start");
+        _channel = new MessageChannel(_process.StandardOutput.BaseStream, _process.StandardInput.BaseStream);
+        var err = _process.StandardError;
+        Task.Run(() => { string? line; while ((line = err.ReadLine()) != null) _log("phpactor: " + line); });
     }
 
     void StartThere(SshTarget ssh)
@@ -310,20 +340,20 @@ public sealed class PhpLanguageServer : IDisposable
 
     string RemoteUri(string uriOrPath)
     {
-        if (_ssh == null) return uriOrPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ? uriOrPath : LanguageService.UriOfPath(Path.GetFullPath(uriOrPath));
+        if (Mapped == null) return uriOrPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ? uriOrPath : LanguageService.UriOfPath(Path.GetFullPath(uriOrPath));
         string local = uriOrPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ? new Uri(uriOrPath).LocalPath : uriOrPath;
-        string remote = _ssh!.ToTarget(Path.GetFullPath(local));
+        string remote = Mapped!.ToTarget(Path.GetFullPath(local));
         return remote.StartsWith('/') ? "file://" + string.Join("/", remote.Split('/').Select(Uri.EscapeDataString)) : uriOrPath;
     }
 
     string HostUri(string uri)
     {
-        if (_ssh == null) return uri;
+        if (Mapped == null) return uri;
         try
         {
             var u = new Uri(uri);
             if (!u.IsFile) return uri;
-            string host = _ssh!.ToHost(Uri.UnescapeDataString(u.AbsolutePath));
+            string host = Mapped!.ToHost(Uri.UnescapeDataString(u.AbsolutePath));
             return host.StartsWith('/') ? uri : LanguageService.UriOfPath(host);
         }
         catch (UriFormatException) { return uri; }
@@ -431,5 +461,6 @@ public sealed class PhpLanguageServer : IDisposable
         _job?.Kill();
         _job?.Dispose();
         if (_runId is { } id && _ssh is { } ssh) Task.Run(() => ssh.StopGroup(id));
+        if (_runId is { } sid && _sail is { } sail) Task.Run(() => sail.Stop(sid));
     }
 }

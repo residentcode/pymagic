@@ -169,6 +169,56 @@ public static class PhpTests
         args.Add("/(?:" + string.Join("|", parts) + ")$/");
         return args;
     }
+
+    /// <summary>Where a coverage run of PHP's tests leaves PHPUnit's Clover report (relative to the project, as its command line names it).</summary>
+    public const string CloverFile = ".pymagic/php-clover.xml";
+
+    /// <summary>
+    /// The arguments a coverage run adds: the Clover report, and when phpunit.xml says nothing of the code to measure (no &lt;source&gt;, no
+    /// &lt;coverage&gt;), the project's app/ or src/ folder as the filter (PHPUnit measures nothing without one).
+    /// </summary>
+    public static List<string> CoverageArguments(string root)
+    {
+        var args = new List<string> { "--coverage-clover", CloverFile };
+        string? config = new[] { "phpunit.xml", "phpunit.xml.dist", "phpunit.dist.xml" }.Select(n => Path.Combine(root, n)).FirstOrDefault(File.Exists);
+        string text = "";
+        try { if (config != null) text = File.ReadAllText(config); } catch (IOException) { }
+        if (!Regex.IsMatch(text, @"<(source|coverage)\b[^>]*>[\s\S]*?<include\b"))
+            foreach (var folder in new[] { "app", "src" }.Where(f => Directory.Exists(Path.Combine(root, f))))
+            { args.Add("--coverage-filter"); args.Add(folder); }
+        return args;
+    }
+
+    /// <summary>
+    /// PHPUnit's Clover report as the coverage of Python's runs (.pymagic/coverage.json): { files: { "app/Models/User.php": { executable: [lines],
+    /// executed: [lines] } } }, a statement line ("stmt", and a method's own line) executed when its count is above 0. Files are named as the run
+    /// names them (this computer's, Sail's container's, the SSH machine's); <paramref name="relOf"/> gives the project's relative path or null.
+    /// </summary>
+    public static JsonObject CloverToCoverage(string xml, Func<string, string?> relOf)
+    {
+        var files = new JsonObject();
+        var doc = System.Xml.Linq.XDocument.Parse(xml);
+        foreach (var file in doc.Descendants("file"))
+        {
+            string? rel = file.Attribute("name")?.Value is { } name ? relOf(name) : null;
+            if (rel == null || files.ContainsKey(rel)) continue;
+            var executable = new SortedSet<int>();
+            var executed = new SortedSet<int>();
+            foreach (var line in file.Elements("line"))
+            {
+                if (line.Attribute("type")?.Value is not ("stmt" or "method")) continue;
+                if (!int.TryParse(line.Attribute("num")?.Value, out int num) || num <= 0) continue;
+                executable.Add(num);
+                if (long.TryParse(line.Attribute("count")?.Value, out long count) && count > 0) executed.Add(num);
+            }
+            files[rel] = new JsonObject
+            {
+                ["executable"] = new JsonArray(executable.Select(n => (JsonNode)n).ToArray()),
+                ["executed"] = new JsonArray(executed.Select(n => (JsonNode)n).ToArray()),
+            };
+        }
+        return new JsonObject { ["files"] = files };
+    }
 }
 
 /// <summary>

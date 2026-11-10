@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 
 namespace PyMagic.Server;
 
-/// <summary>A PostgreSQL or MySQL server the Database panel is connected to. The passwords are not part of it: they are kept apart.</summary>
+/// <summary>A PostgreSQL, MySQL or Redis server the Database panel is connected to (Redis: Database is its number, User an ACL user or empty). The passwords are not part of it: they are kept apart.</summary>
 /// <param name="SslMode">TLS: "" (the driver's own default), "disable", "allow", "prefer", "require", "verify-ca" or "verify-full" (libpq's names; MySQL takes disable, require and the two verify ones).</param>
 /// <param name="SslCa">The certificate of the authority the server's certificate is checked against (a file); SslCert and SslKey the client's own.</param>
 /// <param name="SshHost">The machine the server is reached through, by an SSH tunnel; empty for none. Host and Port are then as that machine sees them.</param>
@@ -112,10 +112,10 @@ public static class DbServers
     {
         string Text(string key) => (body[key]?.ToString() ?? "").Trim();
         string kind = Text("kind").ToLowerInvariant();
-        if (kind is not ("postgres" or "mysql")) throw new ServiceException("The kind of server is PostgreSQL or MySQL.");
+        if (kind is not ("postgres" or "mysql" or "redis")) throw new ServiceException("The kind of server is PostgreSQL, MySQL or Redis.");
         string host = Text("host");
         if (host.Length == 0) host = "localhost";
-        int port = body["port"] is { } p && int.TryParse(p.ToString(), out var n) ? n : (kind == "postgres" ? 5432 : 3306);
+        int port = body["port"] is { } p && int.TryParse(p.ToString(), out var n) ? n : (kind == "postgres" ? 5432 : kind == "redis" ? 6379 : 3306);
         if (port is < 1 or > 65535) throw new ServiceException("The port is a number from 1 to 65535.");
         string user = Text("user");
         string database = Text("database");
@@ -132,10 +132,17 @@ public static class DbServers
         // ssh would read a host or user starting with - as an option of its own
         if (sshHost.StartsWith('-') || sshUser.StartsWith('-') || (sshHost.Length > 0 && host.StartsWith('-'))) throw new ServiceException("A host or user cannot start with -.");
         if (sshHost.Any(char.IsWhiteSpace) || sshUser.Any(char.IsWhiteSpace)) throw new ServiceException("The SSH host and user have no spaces.");
-        if (user.Length == 0) user = kind == "postgres" ? "postgres" : "root";
+        if (kind == "redis")
+        {
+            // a database of Redis is a number (0 to 15 by default)
+            if (database.Length == 0) database = "0";
+            if (!int.TryParse(database, out var number) || number < 0) throw new ServiceException("A Redis database is a number: 0, 1, …");
+            if (sslMode is not ("" or "disable" or "require")) throw new ServiceException("Redis's TLS is disable or require here.");
+        }
+        else if (user.Length == 0) user = kind == "postgres" ? "postgres" : "root";
         if (database.Length == 0 && kind == "postgres") database = "postgres";
         string name = Text("name");
-        if (name.Length == 0) name = $"{user}@{host}" + (database.Length > 0 ? "/" + database : "") + (sshHost.Length > 0 ? " via " + sshHost : "");
+        if (name.Length == 0) name = (kind == "redis" ? $"{host}:{port}/{database}" : $"{user}@{host}" + (database.Length > 0 ? "/" + database : "")) + (sshHost.Length > 0 ? " via " + sshHost : "");
         string id = new string((kind + "-" + host + "-" + port + "-" + user + "-" + database + (sshHost.Length > 0 ? "-via-" + sshHost : "")).Select(c => char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : '-').ToArray()).Trim('-');
         return new DbServer(id, name, kind, host, port, user, database, sslMode, sslCa, sslCert, sslKey, sshHost, sshPort, sshUser, sshKey);
     }

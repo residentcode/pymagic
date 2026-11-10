@@ -346,4 +346,103 @@ public class PhpTestsTests
         }
         finally { try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
     }
+
+    [Fact]
+    public void CloverReportsAreTheTestsPanelsCoverage()
+    {
+        const string clover = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <coverage generated="1"><project timestamp="1">
+              <package name="App"><file name="/var/www/html/app/Support/Calc.php">
+                <class name="App\Support\Calc" namespace="App\Support"><metrics/></class>
+                <line num="7" type="method" name="sign" visibility="public" complexity="2" crap="2" count="1"/>
+                <line num="9" type="stmt" count="1"/>
+                <line num="10" type="stmt" count="0"/>
+                <line num="12" type="stmt" count="3"/>
+                <metrics loc="14"/>
+              </file></package>
+              <file name="/somewhere/else/vendor/x.php"><line num="1" type="stmt" count="1"/></file>
+            </project></coverage>
+            """;
+        var data = PhpTests.CloverToCoverage(clover, path => path.StartsWith("/var/www/html/") ? path["/var/www/html/".Length..] : null);
+        var files = data["files"]!.AsObject();
+        Assert.Equal(1, files.Count);
+        Assert.Equal("[7,9,10,12]", files["app/Support/Calc.php"]!["executable"]!.ToJsonString());
+        Assert.Equal("[7,9,12]", files["app/Support/Calc.php"]!["executed"]!.ToJsonString());
+
+        // the code measured: phpunit.xml's <source>, else the app/ (or src/) folder named on the command line
+        string dir = Path.Combine(Path.GetTempPath(), "pm_phpcov_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(Path.Combine(dir, "app"));
+        Directory.CreateDirectory(Path.Combine(dir, "tests", "Unit"));
+        File.WriteAllText(Path.Combine(dir, "tests", "Unit", "ATest.php"), "<?php class ATest extends PHPUnit\\Framework\\TestCase { public function test_a(): void {} }");
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "phpunit.xml"), "<phpunit><testsuites/></phpunit>");
+            Assert.Equal("--coverage-clover .pymagic/php-clover.xml --coverage-filter app", string.Join(" ", PhpTests.CoverageArguments(dir)));
+            File.WriteAllText(Path.Combine(dir, "phpunit.xml"), "<phpunit><source>\n<include><directory>app</directory></include></source></phpunit>");
+            Assert.Equal("--coverage-clover .pymagic/php-clover.xml", string.Join(" ", PhpTests.CoverageArguments(dir)));
+            // a PHP tests configuration's folder is a PHP run; a folder without PHP tests is not
+            Assert.True(RunSession.IsPhpTestRun(dir, new[] { "tests/Unit" }, "auto"));
+            Assert.True(!RunSession.IsPhpTestRun(dir, new[] { "app" }, "auto"));
+        }
+        finally { try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    [Fact]
+    public void ACoverageRunKeepsTheLinesItsTestsRan()
+    {
+        if (V("PYMAGIC_PHP") is not { } php || V("PYMAGIC_TEST_LARAVEL_DIR") is not { } source || !File.Exists(Path.Combine(source, "vendor", "bin", "phpunit"))) return;
+        if (PhpTools.FindXdebug(php, null).Error != null) return;   // a PHP without Xdebug measures nothing
+        string dir = CopyOf(source, "coverage");
+        Directory.CreateDirectory(Path.Combine(dir, "app", "Support"));
+        File.WriteAllText(Path.Combine(dir, "app", "Support", "Calc.php"), """
+            <?php
+
+            namespace App\Support;
+
+            class Calc
+            {
+                public static function sign(int $n): string
+                {
+                    if ($n < 0) {
+                        return 'negative';
+                    }
+                    return 'positive';
+                }
+            }
+            """.Replace("\r\n", "\n"));
+        File.WriteAllText(Path.Combine(dir, "tests", "Unit", "CalcTest.php"), """
+            <?php
+
+            namespace Tests\Unit;
+
+            use App\Support\Calc;
+            use PHPUnit\Framework\TestCase;
+
+            class CalcTest extends TestCase
+            {
+                public function test_positive(): void
+                {
+                    $this->assertSame('positive', Calc::sign(3));
+                }
+            }
+            """);
+        try
+        {
+            using var run = new Run();
+            run.Session.Php = php;
+            run.Session.StartPhpTests(dir, new[] { "tests/Unit/CalcTest.php" }, "auto", coverage: true);
+            var seen = run.UntilExit();
+            Assert.Equal("passed", Outcomes(seen)["tests/Unit/CalcTest.php::CalcTest::test_positive"]);
+            var data = JsonNode.Parse(File.ReadAllText(RunSession.CoveragePath(dir)))!;
+            var calc = data["files"]!["app/Support/Calc.php"];
+            Assert.True(calc != null, data.ToJsonString()[..Math.Min(400, data.ToJsonString().Length)]);
+            var executed = calc!["executed"]!.AsArray().Select(n => n!.GetValue<int>()).ToList();
+            var executable = calc["executable"]!.AsArray().Select(n => n!.GetValue<int>()).ToList();
+            // the if and the positive return ran; the negative one did not
+            Assert.True(executed.Contains(9) && executed.Contains(12) && !executed.Contains(10) && executable.Contains(10), $"{string.Join(",", executable)} / {string.Join(",", executed)}");
+            Assert.True(CoverageSuites.List(dir).Count >= 1, "kept as a suite");
+        }
+        finally { try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+    }
 }

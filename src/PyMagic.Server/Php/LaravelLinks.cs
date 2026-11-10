@@ -14,7 +14,11 @@ namespace PyMagic.Server;
 public static class LaravelLinks
 {
     /// <summary>What a quoted name is: the kind of name and the text of the quotes (start, end: offsets of the name in the text).</summary>
-    public sealed record Place(string Kind, string Name, int Start, int End);
+    /// <param name="Receiver">For a column of a query (User::where('…')): the model class the query starts from, as the file names it.</param>
+    public sealed record Place(string Kind, string Name, int Start, int End, string? Receiver = null);
+
+    // a column of a query: the first argument of where(), orderBy(), pluck() and their kin, a name of select([…]) or whereIn's
+    static readonly Regex ColumnCall = new(@"(?:->|::)(?:where|orWhere|whereNot|orWhereNot|whereIn|whereNotIn|orWhereIn|orWhereNotIn|whereNull|whereNotNull|orWhereNull|orWhereNotNull|whereBetween|whereNotBetween|whereDate|whereMonth|whereDay|whereYear|whereTime|whereColumn|whereLike|whereNotLike|firstWhere|orderBy|orderByDesc|latest|oldest|groupBy|having|pluck|value|increment|decrement|sum|avg|average|max|min|count|distinct|select|addSelect|get|only|except|latestOfMany|oldestOfMany)\s*\(\s*(?:\[(?:[^\[\]]*,)?\s*)?$", RegexOptions.Compiled);
 
     // the call or directive before the quote that names a kind of thing; the name is its first argument (a view: Route::view's second)
     static readonly (string Kind, Regex Before)[] Calls =
@@ -47,12 +51,31 @@ public static class LaravelLinks
             string before = text[Math.Max(0, lineStart - 400)..(lineStart + m.Index)];
             foreach (var (kind, call) in Calls)
                 if (call.IsMatch(before)) return new Place(kind, m.Groups[2].Value, lineStart + nameStart, lineStart + nameEnd);
+            if (ColumnCall.IsMatch(before) && QueryModel(before) is { } model && EloquentModels.ClassesIn(model, text).FirstOrDefault() is { } fqcn) return new Place("column", m.Groups[2].Value, lineStart + nameStart, lineStart + nameEnd, fqcn);
             return null;
         }
         // a Blade component's tag: <x-alert …> or <x-forms.input>
         foreach (Match m in Regex.Matches(line, @"</?x-([\w.\-:]*)"))
             if (at >= m.Index && at <= m.Index + m.Length) return new Place("component", m.Groups[1].Value, lineStart + m.Groups[1].Index, lineStart + m.Groups[1].Index + m.Groups[1].Length);
         return null;
+    }
+
+    /// <summary>
+    /// The class a query starts from, for the text before a call's quote: its statement (back to a ; { or } outside the brackets) begins with
+    /// Class:: (User::where(…)->orderBy(, User::query()->…); a variable's query is not known here.
+    /// </summary>
+    static string? QueryModel(string before)
+    {
+        int depth = 0, start = 0;
+        for (int i = before.Length - 1; i >= 0; i--)
+        {
+            char c = before[i];
+            if (c is ')' or ']') depth++;
+            else if (c is '(' or '[') { if (depth == 0) continue; depth--; }
+            else if (depth == 0 && c is ';' or '{' or '}') { start = i + 1; break; }
+        }
+        var m = Regex.Match(before[start..], @"^\s*(?:return\s+|\$\w+\s*=\s*|=>\s*)?\\?([A-Z][\w]*(?:\\[A-Z]\w*)*)::");
+        return m.Success && m.Groups[1].Value is not ("DB" or "Schema" or "Route" or "Config" or "Cache" or "Str" or "Arr") ? m.Groups[1].Value : null;
     }
 
     // ------------------------------------------------------------ links
@@ -62,6 +85,12 @@ public static class LaravelLinks
     {
         switch (place.Kind)
         {
+            case "column":
+            {
+                // a column of a query leads to the migration that makes it (the last one naming it)
+                if (place.Receiver == null || EloquentModels.Model(root, place.Receiver, 0) is not { } model) return null;
+                return EloquentModels.MigrationOf(root, model.Table, place.Name);
+            }
             case "view":
                 return ViewFile(root, place.Name) is { } view ? (view, 0) : null;
             case "component":
@@ -366,6 +395,13 @@ public static class LaravelLinks
         void Add(string label, string detail) { if (items.Count < 500) items.Add(new JsonObject { ["label"] = label, ["detail"] = detail }); }
         switch (place.Kind)
         {
+            case "column":
+            {
+                // the model's attributes that are columns (an accessor is no column of a query)
+                if (place.Receiver == null || EloquentModels.Model(root, place.Receiver) is not { } model) break;
+                foreach (var a in model.Attributes.Where(a => !a.Accessor)) Add(a.Name, EloquentModels.DetailOf(a, model));
+                break;
+            }
             case "view":
             {
                 string views = Path.Combine(root, "resources", "views");

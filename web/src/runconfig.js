@@ -296,6 +296,18 @@ export function setupRunConfigurations({ currentFile }) {
                     check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'), check('Open the Run panel when started', 'openPanel'));
                 return;
             }
+            if (c.kind === 'phpTests') {
+                // PHP's tests: a folder, a file or one test of the Tests panel, by PHPUnit or Pest; they run in the Tests panel
+                const runner = document.createElement('select');
+                for (const [v, label] of [['', "The project's (Pest when it has it, else PHPUnit)"], ['phpunit', 'PHPUnit'], ['pest', 'Pest']]) runner.add(new Option(label, v));
+                runner.value = c.phpRunner ?? '';
+                runner.onchange = () => { c.phpRunner = runner.value; };
+                form.append(field('Name', name), field('Kind', kind),
+                    field('Target', text('target', 'tests/Unit, tests/Unit/MathTest.php or tests/Unit/MathTest.php::MathTest::test_adds'), 'A folder, a file or one test; empty for all.'),
+                    field('Runner', runner),
+                    check('Store as project file', 'shared', 'Kept in .run/pymagic.json beside the code, for Git; the others stay in .pymagic.'));
+                return;
+            }
             if (PHP_KINDS.has(c.kind)) {
                 // PHP: Laravel's server (php artisan serve), an Artisan command, or a .php file, with the PHP of Settings > PHP
                 const phpFields = [];

@@ -145,6 +145,152 @@ public class HttpKindsTests
         Assert.Equal("chat", result.Headers.FirstOrDefault(h => h.Key.Equals("Sec-WebSocket-Protocol", StringComparison.OrdinalIgnoreCase)).Value);
     }
 
+    // ------------------------------------------------------------ WebSocket kept open, and GraphQL subscriptions (LiveSockets)
+
+    /// <summary>A server of one WebSocket connection on a free port, with the subprotocol it accepts; <paramref name="talk"/> is its side.</summary>
+    static (int Port, Task Serving, HttpListener Listener) WsServer(Func<string?, string?> protocol, Func<WebSocket, Task> talk)
+    {
+        int port = FreePort();
+        var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var serving = Task.Run(async () =>
+        {
+            var ctx = await listener.GetContextAsync();
+            var wsc = await ctx.AcceptWebSocketAsync(protocol(ctx.Request.Headers["Sec-WebSocket-Protocol"]));
+            // the other side may close without the handshake once it has what it wanted
+            try { await talk(wsc.WebSocket); } catch (WebSocketException) { }
+        });
+        return (port, serving, listener);
+    }
+
+    static async Task<string> Read(WebSocket ws)
+    {
+        var buffer = new byte[64 * 1024];
+        using var whole = new MemoryStream();
+        WebSocketReceiveResult r;
+        do { r = await ws.ReceiveAsync(buffer, CancellationToken.None); whole.Write(buffer, 0, r.Count); } while (!r.EndOfMessage && r.MessageType != WebSocketMessageType.Close);
+        return r.MessageType == WebSocketMessageType.Close ? "<close>" : Encoding.UTF8.GetString(whole.ToArray());
+    }
+    static Task Say(WebSocket ws, string text) => ws.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, CancellationToken.None);
+
+    /// <summary>PyMagic's side (the page's socket to LiveSockets.Relay) on another port; the test drives the page's side.</summary>
+    static async Task<List<JsonNode>> Live(JsonObject start, Func<ClientWebSocket, List<JsonNode>, Task> drive)
+    {
+        int port = FreePort();
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var relaying = Task.Run(async () =>
+        {
+            var ctx = await listener.GetContextAsync();
+            var wsc = await ctx.AcceptWebSocketAsync(null);
+            await LiveSockets.Relay(wsc.WebSocket, LiveSockets.StartOf(start)!, CancellationToken.None);
+            try { await wsc.WebSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); } catch (WebSocketException) { }
+        });
+        using var page = new ClientWebSocket();
+        await page.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/"), CancellationToken.None);
+        var seen = new List<JsonNode>();
+        await drive(page, seen);
+        // the page answers the close, as a browser does
+        try { await page.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); } catch (Exception e) when (e is WebSocketException or TimeoutException) { }
+        await relaying.WaitAsync(TimeSpan.FromSeconds(15));
+        return seen;
+    }
+
+    /// <summary>The page's messages until one of this type (it is kept with the rest).</summary>
+    static async Task<JsonNode> Until(ClientWebSocket page, List<JsonNode> seen, string type, Func<JsonNode, bool>? also = null)
+    {
+        while (true)
+        {
+            string text;
+            try { text = await Read(page).WaitAsync(TimeSpan.FromSeconds(15)); }
+            catch (TimeoutException) { throw new AssertionException($"no {type} in 15 s; saw {string.Join(" ", seen.Select(s => s.ToJsonString()))}"); }
+            if (text == "<close>") throw new AssertionException($"closed before {type}; saw {string.Join(" ", seen.Select(s => s.ToJsonString()))}");
+            var m = JsonNode.Parse(text)!;
+            seen.Add(m);
+            if (m["type"]!.GetValue<string>() == type && (also == null || also(m))) return m;
+        }
+    }
+
+    [Fact]
+    public void AWebSocketKeptOpenSendsWhatIsTypedUntilItIsClosed()
+    {
+        var (port, serving, listener) = WsServer(_ => null, async ws =>
+        {
+            await Say(ws, "welcome");
+            while (ws.State == WebSocketState.Open)
+            {
+                string text = await Read(ws);
+                if (text == "<close>") { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); break; }
+                await Say(ws, "echo: " + text);
+            }
+        });
+        using (listener)
+        {
+            var start = new JsonObject { ["url"] = $"ws://127.0.0.1:{port}/", ["messages"] = new JsonArray(new JsonObject { ["text"] = "first", ["wait"] = true }) };
+            var seen = Live(start, async (page, seen) =>
+            {
+                await Until(page, seen, "open");
+                await Until(page, seen, "received", m => m["text"]!.GetValue<string>() == "echo: first");
+                // typed while it is open
+                await Say(page, """{"type":"send","text":"typed later"}""");
+                await Until(page, seen, "received", m => m["text"]!.GetValue<string>() == "echo: typed later");
+                await Say(page, """{"type":"close"}""");
+                await Until(page, seen, "closed");
+            }).GetAwaiter().GetResult();
+            serving.Wait(5000);
+            Assert.Equal("received welcome | sent first | received echo: first | sent typed later | received echo: typed later",
+                string.Join(" | ", seen.Where(m => m["type"]!.GetValue<string>() is "sent" or "received").Select(m => $"{m["type"]} {m["text"]}")));
+        }
+    }
+
+    [Fact]
+    public void AGraphQlSubscriptionShowsItsEventsInEitherProtocol()
+    {
+        foreach (string protocol in new[] { "graphql-transport-ws", "graphql-ws" })
+        {
+            bool legacy = protocol == "graphql-ws";
+            string? asked = null, query = null, stopped = null;
+            var (port, serving, listener) = WsServer(p => { asked = p; return protocol; }, async ws =>
+            {
+                Assert.Equal("connection_init", JsonNode.Parse(await Read(ws))!["type"]!.GetValue<string>());
+                await Say(ws, """{"type":"connection_ack"}""");
+                var sub = JsonNode.Parse(await Read(ws))!;
+                Assert.Equal(legacy ? "start" : "subscribe", sub["type"]!.GetValue<string>());
+                query = sub["payload"]!["query"]!.GetValue<string>() + " " + sub["payload"]!["variables"]!.ToJsonString();
+                if (!legacy) await Say(ws, """{"type":"ping"}""");
+                for (int i = 1; i <= 2; i++)
+                    await Say(ws, new JsonObject { ["id"] = "1", ["type"] = legacy ? "data" : "next", ["payload"] = new JsonObject { ["data"] = new JsonObject { ["tick"] = i } } }.ToJsonString());
+                if (legacy) { await Say(ws, """{"id":"1","type":"complete"}"""); await Read(ws); return; }
+                // the pong, then Stop's complete
+                string pong = await Read(ws);
+                Assert.Equal("pong", JsonNode.Parse(pong)!["type"]!.GetValue<string>());
+                stopped = JsonNode.Parse(await Read(ws))!["type"]!.GetValue<string>();
+                await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
+            });
+            using (listener)
+            {
+                // an http:// address is the subscription's ws:// one
+                var start = new JsonObject { ["url"] = $"http://127.0.0.1:{port}/graphql", ["graphql"] = new JsonObject { ["query"] = "subscription { tick }", ["variables"] = new JsonObject { ["every"] = 1 } } };
+                var seen = Live(start, async (page, seen) =>
+                {
+                    var open = await Until(page, seen, "open");
+                    Assert.Equal(protocol, open["protocol"]!.GetValue<string>());
+                    await Until(page, seen, "received", m => m["text"]!.GetValue<string>().Contains("\"tick\": 2"));
+                    if (!legacy) await Say(page, """{"type":"close"}""");
+                    await Until(page, seen, "closed");
+                }).ContinueWith(t => t.IsFaulted ? throw new AssertionException(protocol + ": " + t.Exception!.InnerException) : t.Result).GetAwaiter().GetResult();
+                serving.Wait(5000);
+                Assert.Equal("subscription { tick } {\"every\":1}", query);
+                Assert.Contains("graphql-transport-ws", asked ?? "");
+                var events = seen.Where(m => m["type"]!.GetValue<string>() == "received").Select(m => m["text"]!.GetValue<string>().Replace("\r", "").Replace("\n", "").Replace(" ", "")).ToList();
+                Assert.Equal("{\"data\":{\"tick\":1}}|{\"data\":{\"tick\":2}}" + (legacy ? "|(thesubscriptioniscomplete)" : ""), string.Join("|", events));
+                if (!legacy) Assert.Equal("complete", stopped);
+            }
+        }
+    }
+
     // ------------------------------------------------------------ gRPC against Python's grpcio
 
     const string Proto = """
@@ -253,4 +399,156 @@ public class HttpKindsTests
             try { Directory.Delete(dir, true); } catch (IOException) { /* in use a moment longer */ }
         }
     }
+    const string WellKnownProto = """
+        syntax = "proto3";
+        package wk;
+
+        import "google/protobuf/timestamp.proto";
+        import "google/protobuf/duration.proto";
+        import "google/protobuf/wrappers.proto";
+        import "google/protobuf/struct.proto";
+        import "google/protobuf/field_mask.proto";
+        import "google/protobuf/empty.proto";
+
+        // a clock that answers what it is sent, its duration doubled and its label in capitals
+        service Clock {
+          rpc Echo (Stamp) returns (Stamp);
+          rpc Nothing (google.protobuf.Empty) returns (google.protobuf.Empty) {}
+        }
+
+        message Stamp {
+          google.protobuf.Timestamp at = 1;
+          google.protobuf.Duration took = 2;
+          google.protobuf.Int32Value maybe = 3;
+          google.protobuf.StringValue label = 4;
+          google.protobuf.Struct extra = 5;
+          google.protobuf.FieldMask mask = 6;
+          google.protobuf.Value anything = 7;
+          map<string, Inner> inners = 8;
+          repeated Level levels = 9 [json_name = "lv"];
+          message Inner {
+            oneof pick { string text = 1; int32 n = 2; }
+          }
+          enum Level { LOW = 0; HIGH = 1; }
+        }
+        """;
+
+    const string WellKnownJson = """{"at":"2024-05-01T10:00:00.250Z","took":"1.500s","maybe":0,"label":"tick","extra":{"a":1,"b":[true,null,"x"],"c":{"d":2.5}},"mask":"name,address.cityName","anything":"text","inners":{"one":{"text":"t"},"two":{"n":2}},"lv":["HIGH","LOW"]}""";
+
+    [Fact]
+    public void ProtoFilesAndWellKnownTypesAreReadAndWrittenInTheirJsonForms()
+    {
+        var pool = ProtoFiles.PoolOf(WellKnownProto);
+        Assert.Equal("Echo:wk.Stamp>wk.Stamp Nothing:google.protobuf.Empty>google.protobuf.Empty", string.Join(" ", pool.Services["wk.Clock"].Methods.Select(m => $"{m.Name}:{m.Input}>{m.Output}")));
+        Assert.True(pool.Messages["wk.Stamp.InnersEntry"].MapEntry, "the map's entry");
+        Assert.True(pool.Enums.ContainsKey("wk.Stamp.Level"), "the nested enum");
+        Assert.Equal("wk.Stamp.Level lv", pool.Messages["wk.Stamp"].Fields.First(f => f.Number == 9) is var lv ? $"{lv.TypeName} {lv.JsonName}" : "");
+        // each type there and back: the same JSON
+        var bytes = Protobuf.Encode(pool, "wk.Stamp", JsonNode.Parse(WellKnownJson));
+        Assert.Equal(JsonNode.Parse(WellKnownJson)!.ToJsonString(), Protobuf.DecodeMessage(pool, "wk.Stamp", bytes)!.ToJsonString());
+        // a Duration below a second and negative, a Timestamp with an offset, nanoseconds of 6 digits
+        Assert.Equal("{\"at\":\"2024-05-01T08:00:00.000001Z\",\"took\":\"-0.500s\"}",
+            Protobuf.DecodeMessage(pool, "wk.Stamp", Protobuf.Encode(pool, "wk.Stamp", JsonNode.Parse("{\"at\":\"2024-05-01T10:00:00.000001+02:00\",\"took\":\"-0.500s\"}")))!.ToJsonString());
+        string Why(string json)
+        {
+            try { Protobuf.Encode(pool, "wk.Stamp", JsonNode.Parse(json)); return "(no error)"; }
+            catch (FormatException e) { return e.Message; }
+        }
+        Assert.Contains("RFC 3339", Why("{\"at\":\"yesterday\"}"));
+        Assert.Contains("\"1.5s\"", Why("{\"took\":\"90 minutes\"}"));
+        // a .proto file that is not one
+        var errors = new List<string>();
+        string dir = Path.Combine(Path.GetTempPath(), "pm_protos_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(Path.Combine(dir, "protos"));
+        Directory.CreateDirectory(Path.Combine(dir, "node_modules", "x"));
+        File.WriteAllText(Path.Combine(dir, "protos", "wk.proto"), WellKnownProto);
+        File.WriteAllText(Path.Combine(dir, "protos", "broken.proto"), "message { oops");
+        File.WriteAllText(Path.Combine(dir, "node_modules", "x", "other.proto"), "service Other {}");
+        try
+        {
+            var found = ProtoFiles.Pool(dir, errors);
+            Assert.True(found.Services.ContainsKey("wk.Clock") && !found.Services.ContainsKey("Other"), string.Join(",", found.Services.Keys));
+            Assert.True(errors.Count == 1 && errors[0].StartsWith("protos" + Path.DirectorySeparatorChar + "broken.proto"), string.Join(" | ", errors));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    const string WellKnownServer = """
+        import sys, os
+        from concurrent import futures
+        here = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(0, here)
+        from grpc_tools import protoc
+        import grpc_tools
+        include = os.path.join(os.path.dirname(grpc_tools.__file__), "_proto")
+        assert protoc.main(["protoc", "-I" + here, "-I" + include, "--python_out=" + here, "--grpc_python_out=" + here, os.path.join(here, "protos", "wk.proto")]) == 0
+        import grpc
+        from protos import wk_pb2, wk_pb2_grpc
+
+        class Clock(wk_pb2_grpc.ClockServicer):
+            def Echo(self, request, context):
+                reply = wk_pb2.Stamp()
+                reply.CopyFrom(request)
+                reply.took.FromTimedelta(request.took.ToTimedelta() * 2)
+                reply.label.value = request.label.value.upper()
+                return reply
+            def Nothing(self, request, context):
+                return request
+
+        # no reflection; every answer compressed with gzip
+        server = grpc.server(futures.ThreadPoolExecutor(max_workers=4), compression=grpc.Compression.Gzip)
+        wk_pb2_grpc.add_ClockServicer_to_server(Clock(), server)
+        port = server.add_insecure_port("127.0.0.1:0")
+        server.start()
+        print("ready", port, flush=True)
+        server.wait_for_termination()
+        """;
+
+    [Fact]
+    public void AServerWithoutReflectionIsDescribedByTheProjectsProtoFilesAndItsAnswersAreDecompressed()
+    {
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_GRPC_PYTHON") is not { Length: > 0 } python) return;
+        string dir = Path.Combine(Path.GetTempPath(), "pm_grpcwk_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "protos"));
+        File.WriteAllText(Path.Combine(dir, "protos", "wk.proto"), WellKnownProto);
+        File.WriteAllText(Path.Combine(dir, "protos", "__init__.py"), "");
+        File.WriteAllText(Path.Combine(dir, "server.py"), WellKnownServer);
+        var psi = new ProcessStartInfo(python, $"-u \"{Path.Combine(dir, "server.py")}\"") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        using var server = Process.Start(psi)!;
+        try
+        {
+            var ready = server.StandardOutput.ReadLineAsync();
+            if (!ready.Wait(60000) || ready.Result is not { } line || !line.StartsWith("ready "))
+                throw new AssertionException("the gRPC server did not start: " + server.StandardError.ReadToEnd());
+            string address = "http://127.0.0.1:" + line.Split(' ')[1];
+
+            // without the project's files there is nothing to describe it by
+            try { GrpcRequests.Call(address, "wk.Clock", "Echo", "{}", Array.Empty<KeyValuePair<string, string>>()).GetAwaiter().GetResult(); throw new AssertionException("no error"); }
+            catch (ServiceException e) { Assert.Contains("no gRPC reflection", e.Message); }
+
+            // the project's .proto; the request sent with gzip; the answer gzipped by the server
+            var r = GrpcRequests.Call(address, "wk.Clock", "Echo", WellKnownJson, new[] { new KeyValuePair<string, string>("grpc-encoding", "gzip") }, dir).GetAwaiter().GetResult();
+            Assert.True(r.Status == 0, r.Message ?? "");
+            Assert.Equal("gzip", r.Headers["grpc-encoding"]);
+            // (the request went compressed: a compressed message without its grpc-encoding is refused)
+            var body = JsonNode.Parse(r.Body)!;
+            Assert.Equal("3s", body["took"]!.GetValue<string>());
+            Assert.Equal("TICK", body["label"]!.GetValue<string>());
+            Assert.Equal("2024-05-01T10:00:00.250Z", body["at"]!.GetValue<string>());
+            // (a Struct is a map: its keys in any order)
+            Assert.True(JsonNode.DeepEquals(JsonNode.Parse("{\"a\":1,\"b\":[true,null,\"x\"],\"c\":{\"d\":2.5}}"), body["extra"]), body["extra"]!.ToJsonString());
+            Assert.Equal("name,address.cityName", body["mask"]!.GetValue<string>());
+            Assert.Equal("[\"HIGH\",\"LOW\"]", body["lv"]!.ToJsonString());
+            // Empty in and out
+            var empty = GrpcRequests.Call(address, "wk.Clock", "Nothing", "{}", Array.Empty<KeyValuePair<string, string>>(), dir).GetAwaiter().GetResult();
+            Assert.Equal(0, empty.Status);
+            Assert.Equal("{}", JsonNode.Parse(empty.Body)!.ToJsonString());
+        }
+        finally
+        {
+            try { server.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+    }
+
 }

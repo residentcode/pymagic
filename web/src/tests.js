@@ -554,8 +554,13 @@ export function setupTests(deps) {
     $('tests-here').onclick = runAtCursor;
     // a run configuration of tests (Django tests): its framework and settings, its results in the tree
     window.addEventListener('pymagic:runTests', (e) => {
-        const { ids, framework, settings, failfast } = e.detail;
+        const { ids, framework, settings, failfast, debug } = e.detail;
         $('tests-fw').value = framework;
+        // Debug of a tests configuration: the tests under the debugger, as the tree's Debug
+        if (debug && framework !== 'django') {
+            debugTests(ids);
+            return;
+        }
         void run(ids, false, { settings, failfast });
     });
     /** Debugging tests: the test runner itself started under the debugger (Run panel), so the tests' breakpoints stop;
@@ -617,7 +622,8 @@ export function setupTests(deps) {
     function paintRunMarks() {
         const model = editor.getModel();
         const rel = model && deps.relOf(model);
-        if (!rel || model.getLanguageId() !== 'python') {
+        // Python's tests and PHP's (PHPUnit's classes and methods, Pest's tests)
+        if (!rel || !['python', 'php'].includes(model.getLanguageId())) {
             runMarks.clear();
             return;
         }
@@ -646,10 +652,12 @@ export function setupTests(deps) {
         if (!n)
             return;
         const where = { x: e.event.browserEvent.clientX, y: e.event.browserEvent.clientY };
+        // (PHP's tests have no profiler of PyMagic's)
+        const php = /\.php$/i.test(n.file ?? '');
         openMenu(where, [
             { label: `Run '${n.name}'`, run: () => void run([n.id]) },
             { label: `Debug '${n.name}'`, run: () => debugTests([n.id]) },
-            { label: `Profile '${n.name}'`, run: () => profileTests([n.id]) },
+            ...(php ? [] : [{ label: `Profile '${n.name}'`, run: () => profileTests([n.id]) }]),
             { label: `Run '${n.name}' with coverage`, run: () => void run([n.id], true) },
         ]);
     });

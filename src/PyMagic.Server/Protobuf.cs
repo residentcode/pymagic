@@ -9,9 +9,9 @@ namespace PyMagic.Server;
 /// Just enough of Protocol Buffers for the HTTP client's GRPC requests, with no .proto file and no package: the descriptors a server gives
 /// through gRPC reflection (FileDescriptorProto, read here field by field) and a message written from JSON and read back to JSON, by the
 /// proto3 JSON mapping (int64 as text, bytes as base64, enums by name, maps as objects). Well-known types (Timestamp, wrappers, Struct) are
-/// written as the plain messages they are, not in their special JSON forms.
+/// written in their own JSON forms (Protobuf.WellKnown.cs).
 /// </summary>
-public static class Protobuf
+public static partial class Protobuf
 {
     public sealed class Field
     {
@@ -254,6 +254,7 @@ public static class Protobuf
     /// <exception cref="FormatException">The JSON does not fit the message.</exception>
     public static byte[] Encode(Pool pool, string messageName, JsonNode? json)
     {
+        if (IsWellKnown(messageName)) return EncodeWellKnown(pool, messageName, json);
         if (!pool.Messages.TryGetValue(messageName, out var message)) throw new FormatException($"the server did not describe the message {messageName}");
         using var ms = new MemoryStream();
         if (json is null) return Array.Empty<byte>();
@@ -262,7 +263,8 @@ public static class Protobuf
         {
             var field = message.Fields.FirstOrDefault(f => f.JsonName == key) ?? message.Fields.FirstOrDefault(f => f.Name == key)
                 ?? throw new FormatException($"{Short(messageName)} has no field {key}" + (message.Fields.Count > 0 ? $" (it has {string.Join(", ", message.Fields.Select(f => f.JsonName))})" : ""));
-            if (value is null) continue;
+            // null is a field not set; a Value's null is its null_value
+            if (value is null) { if (field.TypeName == WellKnownPrefix + "Value" && !field.Repeated) WriteBytes(ms, field.Number, EncodeWellKnown(pool, field.TypeName, null)); continue; }
             WriteField(ms, pool, field, value, messageName);
         }
         return ms.ToArray();
@@ -376,6 +378,10 @@ public static class Protobuf
 
     // ------------------------------------------------------------ a message to JSON
 
+    /// <summary>A message read to JSON as its type is written: a well-known type in its own form (text, a number, null), any other as an object.</summary>
+    public static JsonNode? DecodeMessage(Pool pool, string messageName, byte[] bytes) =>
+        IsWellKnown(messageName) ? DecodeWellKnown(pool, messageName, bytes) : Decode(pool, messageName, bytes);
+
     /// <summary>A message read to JSON; fields it does not know are left out, fields not set are not written (proto3's defaults).</summary>
     public static JsonObject Decode(Pool pool, string messageName, byte[] bytes)
     {
@@ -438,7 +444,7 @@ public static class Protobuf
     {
         switch (f.Type)
         {
-            case TMessage: return Decode(pool, f.TypeName ?? "", data ?? Array.Empty<byte>());
+            case TMessage: return DecodeMessage(pool, f.TypeName ?? "", data ?? Array.Empty<byte>());
             case TString: return JsonValue.Create(Text(data));
             case TBytes: return JsonValue.Create(Convert.ToBase64String(data ?? Array.Empty<byte>()));
             case TBool: return JsonValue.Create(value != 0);
