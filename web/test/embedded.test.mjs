@@ -30,3 +30,37 @@ test('the documents keep the template\'s length and lines; template expressions 
     assert.ok(css.includes('*{margin: 0}'), css);
     assert.ok(inRegion(page, page.indexOf('color'), 'css') && !inRegion(page, page.indexOf('title'), 'css'));
 });
+
+test('Blade inside a script: echoes and @json are values, directives and comments go, @{{ stays', () => {
+    const blade = [
+        '<script defer>',
+        '    const users = @json($users);',
+        '    const raw = {!! $config !!};',
+        "    const name = '{{ $user->name }}';",
+        '    {{-- a note --}}',
+        '    @if ($admin)',
+        '        admin(name, @js($flags));',
+        '    @endif',
+        "    const mail = 'me@example.com';",
+        '    const vue = "@{{ message }}";',
+        '</script>',
+        '<style>',
+        '    .dark { color: {{ $color }}; }',
+        '</style>',
+        '',
+    ].join('\n');
+    const js = embeddedDocument(blade, 'javascript', 'blade');
+    assert.equal(js.length, blade.length);
+    const lines = js.split('\n');
+    assert.equal(lines[1], '    const users = 0            ;');
+    assert.equal(lines[2], '    const raw = 0              ;');
+    assert.equal(lines[3], "    const name = '0                ';");
+    assert.equal(lines[4].trim(), '');
+    assert.equal(lines[5].trim(), '');
+    assert.equal(lines[6], '        admin(name, 0          );');
+    assert.equal(lines[7].trim(), '');
+    assert.equal(lines[8], "    const mail = 'me@example.com';");
+    assert.equal(lines[9], '    const vue = "@{{ message }}";');
+    const css = embeddedDocument(blade, 'css', 'blade').split('\n');
+    assert.equal(css[12], '    .dark { color: 0           ; }');
+});

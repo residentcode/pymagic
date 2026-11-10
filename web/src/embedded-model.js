@@ -5,9 +5,21 @@
 
 const blankOut = (text) => text.replace(/[^\n]/g, ' ');
 
+/** A value as long as a template expression: `0` and spaces. */
+const value = (m) => '0' + blankOut(m.slice(1));
+
 /** A template expression inside code: a value as long as it (`0` and spaces), or spaces when it stands alone on its line. */
-function neutral(code) {
-    return code.replace(/\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}|\{#[\s\S]*?#\}/g, (m) => (m.startsWith('{{') ? '0' + blankOut(m.slice(1)) : blankOut(m)));
+function neutral(code, template) {
+    if (template === 'blade') {
+        // Blade: {{-- comments --}} go; {{ }}, {!! !!}, @json(…) and @js(…) are values; other directives (@if(…), @endif, @csrf) go; @{{ is JavaScript's
+        return code.replace(/\{\{--[\s\S]*?--\}\}|@\{\{|\{\{[\s\S]*?\}\}|\{!![\s\S]*?!!\}|(?<![\w.@])@(\w+)(\s*\((?:[^()'"]|'[^']*'|"[^"]*"|\((?:[^()'"]|'[^']*'|"[^"]*")*\))*\))?/g, (m, directive) => {
+            if (m === '@{{') return m;
+            if (m.startsWith('{{--')) return blankOut(m);
+            if (m.startsWith('{{') || m.startsWith('{!!')) return value(m);
+            return directive === 'json' || directive === 'js' ? value(m) : blankOut(m);
+        });
+    }
+    return code.replace(/\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}|\{#[\s\S]*?#\}/g, (m) => (m.startsWith('{{') ? value(m) : blankOut(m)));
 }
 
 /** The regions of a language in a template: [start, end) of each block's content (and of each style="" value for CSS). */
@@ -36,13 +48,13 @@ export function regionsOf(text, language) {
 }
 
 /** The document of one language: the template's text blank outside its regions. A style="" value is wrapped as a rule so CSS reads it (`*{…}`). */
-export function embeddedDocument(text, language) {
+export function embeddedDocument(text, language, template = 'django') {
     const regions = regionsOf(text, language);
     let out = '';
     let at = 0;
     for (const [start, end] of regions) {
         out += blankOut(text.slice(at, start));
-        const code = neutral(text.slice(start, end));
+        const code = neutral(text.slice(start, end), template);
         // an attribute's declarations become a rule: two of the blanked characters before it carry "*{" and the closing quote "}"
         const isAttribute = language === 'css' && /=\s*["']$/.test(text.slice(Math.max(0, start - 3), start));
         if (isAttribute && out.length >= 2 && out.endsWith('  ')) out = out.slice(0, -2) + '*{';

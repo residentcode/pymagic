@@ -46,6 +46,9 @@ appendFileSync(join(root, 'routes', 'web.php'), [
 ].join('\n'));
 // a template whose @php block names that route on a line of its own
 mkdirSync(join(root, 'resources', 'views', 'admin'), { recursive: true });
+// a template with Blade inside its <script> and <style>, where JavaScript and CSS are completed
+writeFileSync(join(root, 'resources', 'views', 'admin', 'page.blade.php'), ['<script>', '    const users = @json($users);', '    @if ($admin)', "        const name = '{{ $name }}';", '    @endif', '    // JS', '</script>',
+    '<style>', '    .dark {', '        /* CSS */', '    }', '</style>', ''].join('\n'));
 writeFileSync(join(root, 'resources', 'views', 'admin', 'links.blade.php'), ['@php', '    $reports = route(', "        'admin.reports.index'", '    );', '@endphp', '<a href="{{ $reports }}">Reports</a>', ''].join('\n'));
 const ORDER_LINE = 12;
 const SLOW_LINE = 16;   // the loop's lines: 15 (for), 16 (usleep)
@@ -175,6 +178,35 @@ try {
     const routeLine = await page.evaluate(`window.pymagic.editor.getModel().getLineContent(${routeAt})`);
     console.log(`admin.reports.index in a @php block leads to routes/web.php:${routeAt}:`, routeLine.trim());
     assert.ok(routeLine.includes("->name('index')"), routeLine);
+
+    // completion in a template's <script> (JavaScript's, of the TypeScript service) and <style> (CSS properties); Blade's @json, @if and {{ }}
+    // in the script are no JavaScript errors
+    await page.evaluate(`window.pymagic.openFile('resources/views/admin/page.blade.php')`);
+    await page.waitFor(`window.pymagic.editor.getModel()?.uri.path.endsWith('page.blade.php')`, 20000, 'page.blade.php');
+    async function suggestAfter(marker, text, wanted) {
+        await page.evaluate(`(() => { const ed = window.pymagic.editor; const m = ed.getModel(); const p = m.getPositionAt(m.getValue().indexOf(${JSON.stringify(marker)}) + ${marker.length});
+            ed.setPosition(p); ed.focus(); ed.trigger('test', 'type', { text: ${JSON.stringify(text)} }); })()`);
+        let rows = [];
+        for (let i = 0; i < 15 && !rows.some((l) => l?.startsWith(wanted)); i++) {
+            await page.evaluate(`window.pymagic.editor.trigger('test', 'hideSuggestWidget', {})`);
+            await page.evaluate(`window.pymagic.editor.trigger('test', 'editor.action.triggerSuggest', {})`);
+            await sleep(1500);
+            rows = await page.evaluate(`[...document.querySelectorAll('.suggest-widget.visible .monaco-list-row')].map((x) => x.getAttribute('aria-label'))`);
+        }
+        await page.key(27, 'Escape');
+        return rows;
+    }
+    const jsRows = await suggestAfter('// JS', '\n    document.querySel', 'querySelector');
+    console.log('completion in <script> after document.querySel:', jsRows.slice(0, 4));
+    assert.ok(jsRows.some((l) => l?.startsWith('querySelector')), jsRows.join(','));
+    const cssRows = await suggestAfter('/* CSS */', '\n        backgr', 'background');
+    console.log('completion in <style> after backgr:', cssRows.slice(0, 4));
+    assert.ok(cssRows.some((l) => l?.startsWith('background')), cssRows.join(','));
+    await page.evaluate(`(() => { const ed = window.pymagic.editor; const m = ed.getModel(); ed.executeEdits('test', [{ range: m.getFullModelRange(), text: m.getValue().replace('document.querySel', 'document.title;').replace('backgr', 'color: red;') }]); })()`);
+    await sleep(3000);
+    const problems = await page.evaluate(`window.pymagic.monaco.editor.getModelMarkers({ resource: window.pymagic.editor.getModel().uri }).map((x) => x.source + ': ' + x.message)`);
+    console.log('problems in the script and style of the template:', problems.length ? problems : 'none');
+    assert.deepEqual(problems.filter((p) => p.startsWith('javascript') || p.startsWith('css')), []);
 
     // Run Composer command: its list (composer.json's scripts in it), and dump-autoload run in the Run panel
     await page.evaluate(`window.pymagic.runCommand('pymagic.laravel.composer')`);

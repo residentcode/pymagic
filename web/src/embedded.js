@@ -4,11 +4,15 @@
 import * as monaco from 'monaco-editor';
 import { embeddedDocument, inRegion, CSS_PROPERTIES } from './embedded-model.js';
 
+// the templates that get this, and how their expressions are read inside code (Blade's own: {!! !!}, @json, directives)
+const TEMPLATES = { 'django-html': 'django', twig: 'django', blade: 'blade' };
+
 export function setupEmbedded() {
-    monaco.languages.html.registerHTMLLanguageService('django-html', {}, {
-        completionItems: true, hovers: true, documentHighlights: true, links: true, selectionRanges: true, colors: true,
-        documentSymbols: false, foldingRanges: false, diagnostics: false, rename: false, documentFormattingEdits: false, documentRangeFormattingEdits: false,
-    });
+    for (const language of Object.keys(TEMPLATES))
+        monaco.languages.html.registerHTMLLanguageService(language, {}, {
+            completionItems: true, hovers: true, documentHighlights: true, links: true, selectionRanges: true, colors: true,
+            documentSymbols: false, foldingRanges: false, diagnostics: false, rename: false, documentFormattingEdits: false, documentRangeFormattingEdits: false,
+        });
     // a block's own names are not checked against the page's other scripts (they share a window, not a file)
     monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: false });
 
@@ -16,26 +20,28 @@ export function setupEmbedded() {
     const owners = new Map();   // hidden model uri -> template model
     let n = 0;
 
+    const doc = (model, text, language) => embeddedDocument(text, language, TEMPLATES[model.getLanguageId()]);
+
     function sync(model) {
         let h = hidden.get(model);
         const text = model.getValue();
         if (!h) {
             n++;
             h = {
-                css: monaco.editor.createModel(embeddedDocument(text, 'css'), 'css', monaco.Uri.parse(`inmemory://embedded/${n}.css`)),
-                js: monaco.editor.createModel(embeddedDocument(text, 'javascript'), 'javascript', monaco.Uri.parse(`inmemory://embedded/${n}.js`)),
+                css: monaco.editor.createModel(doc(model, text, 'css'), 'css', monaco.Uri.parse(`inmemory://embedded/${n}.css`)),
+                js: monaco.editor.createModel(doc(model, text, 'javascript'), 'javascript', monaco.Uri.parse(`inmemory://embedded/${n}.js`)),
             };
             hidden.set(model, h);
             owners.set(h.css.uri.toString(), model);
             owners.set(h.js.uri.toString(), model);
             return;
         }
-        h.css.setValue(embeddedDocument(text, 'css'));
-        h.js.setValue(embeddedDocument(text, 'javascript'));
+        h.css.setValue(doc(model, text, 'css'));
+        h.js.setValue(doc(model, text, 'javascript'));
     }
 
     function watch(model) {
-        if (model.getLanguageId() !== 'django-html' || hidden.has(model)) return;
+        if (!(model.getLanguageId() in TEMPLATES) || hidden.has(model)) return;
         sync(model);
         let timer = 0;
         model.onDidChangeContent(() => { clearTimeout(timer); timer = window.setTimeout(() => sync(model), 300); });
@@ -70,7 +76,7 @@ export function setupEmbedded() {
 
     const KIND = monaco.languages.CompletionItemKind;
     const tsKind = (k) => ({ function: KIND.Function, method: KIND.Method, property: KIND.Property, var: KIND.Variable, let: KIND.Variable, const: KIND.Constant, class: KIND.Class, keyword: KIND.Keyword, module: KIND.Module, interface: KIND.Interface }[k] ?? KIND.Text);
-    monaco.languages.registerCompletionItemProvider('django-html', {
+    monaco.languages.registerCompletionItemProvider(Object.keys(TEMPLATES), {
         triggerCharacters: ['.'],
         async provideCompletionItems(model, position) {
             const h = hidden.get(model);
@@ -80,7 +86,7 @@ export function setupEmbedded() {
             const word = model.getWordUntilPosition(position);
             const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
             if (inRegion(text, offset, 'javascript')) {
-                if (h.js.getValue() !== embeddedDocument(text, 'javascript')) sync(model);
+                if (h.js.getValue() !== doc(model, text, 'javascript')) sync(model);
                 const worker = await (await monaco.languages.typescript.getJavaScriptWorker())(h.js.uri);
                 const info = await worker.getCompletionsAtPosition(h.js.uri.toString(), offset);
                 return { suggestions: (info?.entries ?? []).slice(0, 300).map((e) => ({ label: e.name, kind: tsKind(e.kind), insertText: e.name, sortText: e.sortText, range })) };
