@@ -445,6 +445,7 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
 /* Settings > Keymap: one row a command, its keys and what can be done */
 .keymap-bar { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
 .keymap-bar input[type=search] { flex: 1; height: 28px; }
+.keymap-preset { display: flex; align-items: center; gap: 6px; white-space: nowrap; } .keymap-preset select { height: 28px; }
 .keymap-changed { display: flex; align-items: center; gap: 6px; color: var(--dim); white-space: nowrap; }
 #keymap-list h3 { margin: 14px 0 4px; font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
 .keymap-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 3px 6px; border-radius: 6px; }

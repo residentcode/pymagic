@@ -87,6 +87,7 @@ import { themeName, defineTheme, defineLightTheme } from './theme';
 import { loadSettings, editorOptions, applySettings, followSettings, themeNow, settings, withoutCallParens, onSettings, change as changeSetting, pluginsAtStart } from './settings';
 import { requote } from './quotes-model';
 import { defineCommand, setupCommands, applyKeybindings, currentKeyLabel, runById } from './commands.js';
+import { keymapChanges } from './keymap-model.js';
 import { setKeyLabels } from './menu';
 // each language service runs in its worker; the rest share the editor's
 self.MonacoEnvironment = {
@@ -1530,7 +1531,8 @@ async function main() {
     window.pymagic.tabs = tabs;
     // the person's keys (Settings > Keymap), now that every command and action is defined, and again whenever they change
     let keysNow = '';
-    const keysFollow = (s) => { const k = JSON.stringify(s.keybindings ?? {}); if (k !== keysNow) { keysNow = k; applyKeybindings(s.keybindings); } };
+    // (the keymap's keys first: PyCharm's or VS Code's, then the person's own over them)
+    const keysFollow = (s) => { const k = (s.keymap ?? '') + JSON.stringify(s.keybindings ?? {}); if (k !== keysNow) { keysNow = k; applyKeybindings(keymapChanges(s.keymap, s.keybindings)); } };
     keysFollow(settings());
     onSettings(keysFollow);
 }

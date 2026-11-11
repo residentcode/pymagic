@@ -40,9 +40,9 @@ try {
     await page.waitFor(`!!window.pymagic?.closeProject`, 20000, 'the page');
     page.ws.send(JSON.stringify({ id: 99001, method: 'Runtime.evaluate', params: { expression: 'window.pymagic.closeProject()' } }));
     let w = await target(welcomeAt, 'the welcome screen');
-    assert.deepEqual(await w.until(`(() => { const b = [...document.querySelectorAll('nav button')].map((x) => x.textContent); return b.length ? b : null; })()`, 'the pages'), ['Projects', 'Plugins', 'Learn']);
+    assert.deepEqual(await w.until(`(() => { const b = [...document.querySelectorAll('nav button')].map((x) => x.textContent); return b.length ? b : null; })()`, 'the pages'), ['Projects', 'Customize', 'Plugins', 'Learn']);
     assert.deepEqual(await w.run(`[...document.querySelectorAll('.actions button')].map((x) => x.textContent)`), ['New project…', 'Open folder…', 'Get from VCS…']);
-    console.log('the welcome screen: Projects, Plugins, Learn; New project, Open folder, Get from VCS');
+    console.log('the welcome screen: Projects, Customize, Plugins, Learn; New project, Open folder, Get from VCS');
 
     // Learn
     await w.run(`document.querySelector('nav button[data-page="learn"]').click()`);

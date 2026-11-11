@@ -107,3 +107,50 @@ export function withKey(changes, commands, id, key) {
     else next[id] = want;
     return next;
 }
+
+// ------------------------------------------------------------ keymaps: the keys a command starts with, as PyCharm or VS Code give them
+
+/** The keymaps to choose from (Settings > Keymap, the welcome screen's Customize): [id, name]. */
+export const KEYMAPS = [['pymagic', "PyMagic's own"], ['pycharm', 'PyCharm (Windows)'], ['vscode', 'VS Code']];
+
+/**
+ * Each keymap's keys where it differs from PyMagic's own: command id -> key ("" for none). PyMagic's commands and Monaco's own actions alike;
+ * a key it takes from another command gives that one its own key in the keymap too (PyCharm's F2 is the next problem, so rename is Shift+F6).
+ */
+export const KEYMAP_KEYS = {
+    pymagic: {},
+    pycharm: {
+        'pymagic.run.run': 'Shift+F10', 'pymagic.run.debug': 'Shift+F9', 'pymagic.run.stop': 'Ctrl+F2',
+        'pymagic.run.stepOver': 'F8', 'pymagic.run.stepInto': 'F7', 'pymagic.run.stepOut': 'Shift+F8',
+        'pymagic.run.toggleBreakpoint': 'Ctrl+F8', 'pymagic.run.editBreakpoint': 'Ctrl+Shift+F8',
+        'pymagic.bookmarks.toggle': 'F11', 'pymagic.bookmarks.next': '', 'pymagic.bookmarks.previous': '',
+        'pymagic.search.symbol': 'Ctrl+Alt+Shift+N', 'pymagic.edit.organizeImports': 'Ctrl+Alt+O',
+        'pymagic.window.searchEverywhere': 'Ctrl+Shift+N', 'pymagic.window.settings': 'Ctrl+Alt+S', 'pymagic.window.terminal': 'Alt+F12',
+        'pymagic.tabs.close': 'Ctrl+F4', 'pymagic.tabs.next': 'Alt+Right', 'pymagic.tabs.previous': 'Alt+Left',
+        'editor.action.copyLinesDownAction': 'Ctrl+D', 'editor.action.addSelectionToNextFindMatch': 'Alt+J', 'editor.action.selectHighlights': 'Ctrl+Alt+Shift+J',
+        'editor.action.deleteLines': 'Ctrl+Y', 'redo': 'Ctrl+Shift+Z',
+        'editor.action.smartSelect.expand': 'Ctrl+W', 'editor.action.smartSelect.shrink': 'Ctrl+Shift+W',
+        'editor.action.revealDefinition': 'Ctrl+B', 'editor.action.goToImplementation': 'Ctrl+Alt+B', 'editor.action.goToReferences': 'Alt+F7',
+        'editor.action.rename': 'Shift+F6', 'editor.action.marker.nextInFiles': 'F2', 'editor.action.marker.prevInFiles': 'Shift+F2',
+        'editor.action.moveLinesUpAction': 'Ctrl+Shift+Up', 'editor.action.moveLinesDownAction': 'Ctrl+Shift+Down',
+        'editor.action.startFindReplaceAction': 'Ctrl+R', 'editor.action.showHover': 'Ctrl+Q', 'editor.action.joinLines': 'Ctrl+Shift+J',
+        'editor.action.triggerParameterHints': 'Ctrl+P', 'editor.action.quickFix': 'Alt+Enter',
+    },
+    vscode: {
+        'pymagic.edit.format': 'Shift+Alt+F', 'editor.action.formatDocument': '',
+        'pymagic.window.findAction': 'Ctrl+Shift+P', 'pymagic.search.symbol': 'Ctrl+T',
+        'pymagic.tabs.next': 'Ctrl+PageDown', 'pymagic.tabs.previous': 'Ctrl+PageUp',
+        'pymagic.nav.back': 'Alt+Left', 'pymagic.nav.forward': 'Alt+Right',
+    },
+};
+
+/** The commands with the keys a keymap starts them with (Settings > Keymap's list, its Reset); the others keep their own. */
+export function withKeymap(commands, keymap) {
+    const keys = KEYMAP_KEYS[keymap] ?? {};
+    return commands.map((c) => (Object.hasOwn(keys, c.id) ? { ...c, keys: keys[c.id] ? [normaliseKey(keys[c.id])] : [] } : c));
+}
+
+/** The changes in force: the keymap's keys, then the person's own over them. */
+export function keymapChanges(keymap, changes = {}) {
+    return { ...(KEYMAP_KEYS[keymap] ?? {}), ...changes };
+}

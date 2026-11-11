@@ -1,5 +1,5 @@
 // PyMagic for Windows: starts the C# host in the background and shows the editor in its own window.
-const { app, BrowserWindow, Menu, dialog, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell, ipcMain, safeStorage } = require('electron');
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -10,6 +10,8 @@ const { hostEnvironment } = require('./host-env');
 const { remember, existing, forget } = require('./recent-projects');
 const { missingWebPackages } = require('./web-packages');
 const { cloneAddressOk, repositoryName } = require('./clone-model');
+const { engineSettingsFile, customizeOf, withCustomize } = require('./customize-model');
+const { ghCommand, ghAccountOf, deviceCodeOf, ghWantsEnter, tokenOk, reposOf } = require('./github-model');
 
 const repo = path.resolve(__dirname, '..');
 const packaged = app.isPackaged;
@@ -229,6 +231,45 @@ function cancelClone(w) {
   if (c) spawnSync('taskkill', ['/PID', String(c.child.pid), '/T', '/F'], { windowsHide: true });
 }
 
+// ---- GitHub for Get from VCS: the GitHub CLI's own sign-in when it is installed, else a token the person pastes (kept encrypted by Windows)
+const githubTokenFile = () => path.join(app.getPath('userData'), 'github-token.bin');
+const githubApiBase = () => process.env.PYMAGIC_GITHUB_API || 'https://api.github.com';
+function storedGithubToken() {
+  try { return safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(fs.readFileSync(githubTokenFile())) : null; } catch { return null; }
+}
+/** Runs the GitHub CLI: { code, out, err }, code -1 and missing when it is not installed. */
+function runGh(args, timeoutMs = 60000) {
+  return new Promise((resolve) => {
+    let out = '', err = '';
+    let child;
+    try { const c = ghCommand(args); child = spawn(c.program, c.args, { windowsHide: true, env: { ...process.env, GH_PROMPT_DISABLED: '1', NO_COLOR: '1' } }); }
+    catch { resolve({ code: -1, out, err, missing: true }); return; }
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, timeoutMs);
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('error', (e) => { clearTimeout(timer); resolve({ code: -1, out, err: String(e.message), missing: e.code === 'ENOENT' }); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ code: code ?? -1, out, err }); });
+  });
+}
+async function githubApi(token, apiPath) {
+  const res = await fetch(githubApiBase() + apiPath, { headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'User-Agent': 'PyMagic', 'X-GitHub-Api-Version': '2022-11-28' } });
+  if (!res.ok) throw new Error(res.status === 401 ? 'GitHub did not take the token (401): it may have expired or been revoked.' : 'GitHub answered ' + res.status + ' ' + res.statusText);
+  return res.json();
+}
+/** Who is signed in: { via: 'token' | 'gh' | null, user, gh (installed) }. */
+async function githubStatus() {
+  const token = storedGithubToken();
+  if (token) {
+    try { return { via: 'token', user: (await githubApi(token, '/user')).login }; }
+    catch (e) { return { via: null, error: String(e.message), tokenKept: true }; }
+  }
+  const r = await runGh(['auth', 'status', '--hostname', 'github.com'], 30000);
+  const user = ghAccountOf(r.out + '\n' + r.err);
+  return r.code === 0 && user ? { via: 'gh', user } : { via: null, gh: !r.missing };
+}
+const ghLogins = new Map();   // window -> the gh auth login running for it
+const REPOS_PATH = '/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member';
+
 /**
  * Close Project, as PyCharm's: with another project window open, this one closes; the last one shows the welcome screen, and so does the
  * next start (until a project is opened).
@@ -315,6 +356,83 @@ app.whenReady().then(async () => {
   // the welcome screen: its New project, and the way back from that dialog when it is cancelled (a window without a project only)
   ipcMain.handle('pymagic:new-project', (e) => { const w = windowOf(e.sender); if (!w.project) return welcomeTool(w, 'newproject'); });
   ipcMain.handle('pymagic:plugins', (e) => { const w = windowOf(e.sender); if (!w.project) return welcomeTool(w, 'plugins'); });
+  // Customize: the theme, code colours, font and keymap of the person's settings (the engine's file), read and changed before a project is open;
+  // All settings… is Settings itself on an engine of its own, as Plugins is
+  ipcMain.handle('pymagic:customize', () => {
+    try { return customizeOf(JSON.parse(fs.readFileSync(engineSettingsFile(), 'utf8'))); } catch { return customizeOf({}); }
+  });
+  ipcMain.handle('pymagic:customize-set', (_e, patch) => {
+    const file = engineSettingsFile();
+    let stored = {};
+    try { stored = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* none yet */ }
+    try {
+      const next = withCustomize(stored, patch);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(next, null, 2));
+      return customizeOf(next);
+    } catch (err) { return { error: String(err.message ?? err) }; }
+  });
+  // Get from VCS's GitHub: who is signed in, signing in (the CLI's browser sign-in, its code told to the page; or a token), the repositories
+  ipcMain.handle('pymagic:github-status', () => githubStatus());
+  ipcMain.handle('pymagic:github-login', (e) => new Promise((resolve) => {
+    const w = windowOf(e.sender);
+    if (ghLogins.has(w)) { resolve({ error: 'A sign-in is already waiting.' }); return; }
+    let child;
+    try { const c = ghCommand(['auth', 'login', '--hostname', 'github.com', '--git-protocol', 'https', '--web']); child = spawn(c.program, c.args, { windowsHide: true }); }
+    catch { resolve({ error: 'The GitHub CLI (gh) is not installed.' }); return; }
+    ghLogins.set(w, child);
+    let text = '', told = false, entered = false, cancelled = false;
+    child.cancel = () => { cancelled = true; try { child.kill(); } catch { /* gone */ } };
+    const read = (d) => {
+      text += d;
+      const code = deviceCodeOf(text);
+      if (code && !told && !e.sender.isDestroyed()) { told = true; e.sender.send('pymagic:github-code', code); }
+      // gh waits for Enter, then opens the browser itself
+      if (ghWantsEnter(text) && !entered) { entered = true; try { child.stdin.write('\n'); } catch { /* gone */ } }
+    };
+    child.stdout.on('data', read);
+    child.stderr.on('data', read);
+    child.on('error', (err) => { ghLogins.delete(w); resolve({ error: err.code === 'ENOENT' ? 'The GitHub CLI (gh) is not installed.' : String(err.message) }); });
+    child.on('close', async (code) => {
+      ghLogins.delete(w);
+      if (cancelled) { resolve({ error: 'The sign-in was cancelled.' }); return; }
+      if (code !== 0) { resolve({ error: text.trim().split('\n').pop() || 'gh ended with code ' + code }); return; }
+      resolve(await githubStatus());
+    });
+  }));
+  ipcMain.handle('pymagic:github-login-cancel', (e) => { ghLogins.get(windowOf(e.sender))?.cancel(); });
+  ipcMain.handle('pymagic:github-token', async (_e, token) => {
+    const t = String(token ?? '').trim();
+    if (!tokenOk(t)) return { error: 'That is not a GitHub token: it starts with ghp_ or github_pat_.' };
+    if (!safeStorage.isEncryptionAvailable()) return { error: 'Windows cannot keep the token encrypted here.' };
+    let user;
+    try { user = (await githubApi(t, '/user')).login; } catch (err) { return { error: String(err.message) }; }
+    fs.mkdirSync(path.dirname(githubTokenFile()), { recursive: true });
+    fs.writeFileSync(githubTokenFile(), safeStorage.encryptString(t));
+    return { via: 'token', user };
+  });
+  // forgetting PyMagic's token; the GitHub CLI's own sign-in is the person's, left as it is
+  ipcMain.handle('pymagic:github-forget', () => { try { fs.unlinkSync(githubTokenFile()); } catch { /* none */ } return githubStatus(); });
+  ipcMain.handle('pymagic:github-repos', async () => {
+    try {
+      const token = storedGithubToken();
+      if (token) {
+        const pages = [];
+        for (let page = 1; page <= 5; page++) {
+          const list = await githubApi(token, REPOS_PATH + '&page=' + page);
+          pages.push(list);
+          if (!Array.isArray(list) || list.length < 100) break;
+        }
+        return { repos: reposOf(pages) };
+      }
+      const r = await runGh(['api', '--paginate', REPOS_PATH.slice(1)], 120000);
+      if (r.code !== 0) return { error: (r.err || r.out).trim().split('\n').pop() || 'gh api failed' };
+      // --paginate writes one array per page, one after the other
+      const pages = JSON.parse('[' + r.out.trim().replace(/\]\s*\[/g, '],[') + ']');
+      return { repos: reposOf(pages) };
+    } catch (err) { return { error: String(err.message ?? err) }; }
+  });
+  ipcMain.handle('pymagic:all-settings', (e) => { const w = windowOf(e.sender); if (!w.project) return welcomeTool(w, 'settings'); });
   // Get from VCS: where the clone is suggested, the clone itself (its progress as pymagic:clone-progress), and Cancel
   ipcMain.handle('pymagic:clone-near', (_e, url) => path.join(path.dirname(nearFolder()), repositoryName(url) || 'repository'));
   ipcMain.handle('pymagic:clone', async (e, url, folder) => {

@@ -4,11 +4,14 @@
 <meta charset="utf-8">
 <title>PyMagic</title>
 <!-- The welcome screen of a window without a project (after Close Project), as PyCharm's: Projects (New project, Open folder, Get from VCS, the
-     recent projects), Plugins (Settings at its Plugins page) and Learn (the demo project and PyMagic's guides). -->
+     recent projects), Customize (the theme, code colours, the editor's font and the keymap, before a project is open), Plugins (Settings at its
+     Plugins page) and Learn (the demo project and PyMagic's guides). -->
 <style>
   :root { --bg: #0f111a; --panel: #161925; --line: #262b3d; --text: #bcc1d6; --dim: #7c839c; --accent: #82aaff; --hover: #1f2335; --red: #f07178; --green: #c3e88d; }
+  /* the theme of Customize: light, or the system's when it says so */
+  :root[data-theme=light] { --bg: #f5f6f8; --panel: #ffffff; --line: #dde0e6; --text: #23262f; --dim: #6b7080; --accent: #2f6fdb; --hover: #eceef3; --red: #c62828; --green: #2e7d32; }
   @media (prefers-color-scheme: light) {
-    :root { --bg: #f5f6f8; --panel: #ffffff; --line: #dde0e6; --text: #23262f; --dim: #6b7080; --accent: #2f6fdb; --hover: #eceef3; --red: #c62828; --green: #2e7d32; }
+    :root:not([data-theme=dark]) { --bg: #f5f6f8; --panel: #ffffff; --line: #dde0e6; --text: #23262f; --dim: #6b7080; --accent: #2f6fdb; --hover: #eceef3; --red: #c62828; --green: #2e7d32; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; height: 100vh; background: var(--bg); color: var(--text); font: 14px "Segoe UI", system-ui, sans-serif; display: flex; }
@@ -45,6 +48,21 @@
   .learn li { align-items: flex-start; }
   .learn .text div:last-child { color: var(--dim); font-size: 13px; }
   p.note { color: var(--dim); margin: 0 0 16px; max-width: 640px; line-height: 1.5; }
+  .gh { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 12px; }
+  .gh-status { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; color: var(--dim); }
+  .gh-status b { color: var(--text); }
+  .gh-code { font: 600 20px Consolas, monospace; letter-spacing: .08em; color: var(--accent); }
+  .gh-repos { max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 12px; }
+  .gh-repos li { padding: 6px 10px; }
+  .gh-repos li.sel { background: var(--hover); color: var(--accent); }
+  .gh-repos .path { white-space: normal; }
+  .tag { font-size: 11px; color: var(--dim); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 6px; }
+  .field { display: grid; grid-template-columns: 160px minmax(0, 360px); align-items: center; gap: 12px; margin-bottom: 14px; }
+  .field label { color: var(--dim); }
+  select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
+  .field input { margin: 0; }
+  .saved { color: var(--green); font-size: 12px; min-height: 16px; margin: 4px 0 14px; }
+  .sample { font-variant-ligatures: none; font-size: 14px; border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; background: var(--panel); margin: 0 0 18px; max-width: 520px; white-space: pre; }
 </style>
 </head>
 <body>
@@ -53,6 +71,7 @@
   <div class="version" id="status">No project is open in this window.</div>
   <nav>
     <button data-page="projects" class="active">Projects</button>
+    <button data-page="customize">Customize</button>
     <button data-page="plugins">Plugins</button>
     <button data-page="learn">Learn</button>
   </nav>
@@ -73,10 +92,41 @@
       <div class="error" id="vcs-error" hidden></div>
       <pre class="progress" id="vcs-progress" hidden></pre>
       <div class="row"><button class="primary" id="vcs-clone">Clone</button><button id="vcs-cancel">Cancel</button></div>
+      <div class="gh" id="gh">
+        <div class="gh-status" id="gh-status">GitHub: …</div>
+        <div id="gh-signin" hidden>
+          <p class="note" id="gh-why">Sign in to GitHub to choose one of your repositories here (your own, your collaborations, your organizations').</p>
+          <div class="row"><button id="gh-cli">Sign in with the GitHub CLI…</button><button id="gh-token-show">Use a personal access token…</button></div>
+          <div id="gh-device" hidden><p class="note">Type this code on the page GitHub opened in your browser (<span id="gh-device-url"></span>):</p><div class="gh-code" id="gh-code"></div><div class="row"><button id="gh-cli-cancel">Cancel</button></div></div>
+          <div id="gh-token-form" hidden>
+            <label for="gh-token">A token of GitHub (Settings › Developer settings › Personal access tokens), with read access to your repositories. Windows keeps it encrypted for PyMagic.</label>
+            <div class="row"><input id="gh-token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_… or ghp_…"><button id="gh-token-save">Sign in</button></div>
+          </div>
+        </div>
+        <div id="gh-list" hidden>
+          <input id="gh-filter" placeholder="Filter your repositories" spellcheck="false">
+          <ul class="gh-repos" id="gh-repos"></ul>
+        </div>
+        <div class="error" id="gh-error" hidden></div>
+      </div>
     </div>
     <h2>Recent projects</h2>
     <input id="filter" placeholder="Search the recent projects" aria-label="Search the recent projects">
     <ul id="recent"></ul>
+  </section>
+  <section id="customize" hidden>
+    <h2>Customize</h2>
+    <p class="note">How PyMagic looks and which keys it answers to. They are your settings, not a project's: the next project opened has them,
+      and Settings changes them later.</p>
+    <div class="field"><label for="c-theme">Theme</label><select id="c-theme"><option value="dark">Dark</option><option value="light">Light</option><option value="system">Follow the system</option></select></div>
+    <div class="field"><label for="c-colors">Code colours</label><select id="c-colors"><option value="vscode">VS Code (Dark Modern / Light Modern)</option><option value="pymagic">PyMagic's own</option></select></div>
+    <div class="field"><label for="c-font">Editor font</label><select id="c-font"></select></div>
+    <div class="field"><label for="c-size">Font size</label><input id="c-size" type="number" min="8" max="40" step="1"></div>
+    <pre class="sample" id="c-sample">def greet(name: str) -> str:
+    return f"Hello, {name}!"   # 0O1lI != ==</pre>
+    <div class="field"><label for="c-keymap">Keymap</label><select id="c-keymap"><option value="pymagic">PyMagic's own</option><option value="pycharm">PyCharm (Windows)</option><option value="vscode">VS Code</option></select></div>
+    <div class="saved" id="c-saved"></div>
+    <button id="c-all">All settings…</button>
   </section>
   <section id="plugins" hidden>
     <h2>Plugins</h2>
@@ -151,6 +201,101 @@
   $('open').addEventListener('click', async () => open(await desktop.chooseFolder()));
   $('filter').addEventListener('input', show);
 
+  // ---- GitHub: signed in (the GitHub CLI's own, or a token kept for PyMagic), the person's repositories to choose from
+  let repos = [];
+  const ghError = (text) => { $('gh-error').textContent = text ?? ''; $('gh-error').hidden = !text; };
+  function paintRepos() {
+    const q = $('gh-filter').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const shown = repos.filter((r) => q.every((w) => r.name.toLowerCase().includes(w) || r.description.toLowerCase().includes(w)));
+    const list = $('gh-repos');
+    list.replaceChildren();
+    for (const r of shown.slice(0, 300)) {
+      const li = document.createElement('li');
+      li.tabIndex = 0;
+      li.dataset.url = r.url;
+      li.classList.toggle('sel', $('vcs-url').value.trim() === r.url);
+      const text = document.createElement('div');
+      text.className = 'text';
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = r.name;
+      for (const [on, tag] of [[r.private, 'private'], [r.fork, 'fork'], [r.archived, 'archived']])
+        if (on) name.append(Object.assign(document.createElement('span'), { className: 'tag', textContent: tag }));
+      const about = document.createElement('div');
+      about.className = 'path';
+      about.textContent = r.description;
+      text.append(name, about);
+      li.append(text);
+      const choose = () => { $('vcs-url').value = r.url; void suggest(); paintRepos(); };
+      li.addEventListener('click', choose);
+      li.addEventListener('keydown', (e) => { if (e.key === 'Enter') choose(); });
+      list.append(li);
+    }
+    if (!shown.length) list.append(Object.assign(document.createElement('li'), { className: 'empty', textContent: repos.length ? 'No repository matches.' : 'No repositories.' }));
+  }
+  function signedIn(st) {
+    const status = $('gh-status');
+    status.replaceChildren();
+    ghError(st?.error);
+    $('gh-device').hidden = true;
+    if (st?.via) {
+      status.append('GitHub: ', Object.assign(document.createElement('b'), { textContent: st.user }), st.via === 'gh' ? ' (the GitHub CLI’s sign-in)' : ' (a token)');
+      if (st.via === 'token') {
+        const out = document.createElement('button');
+        out.textContent = 'Sign out';
+        out.title = 'Forget the token PyMagic keeps (it stays valid on GitHub until you revoke it there)';
+        out.addEventListener('click', async () => signedIn(await desktop.githubForget()));
+        status.append(out);
+      }
+      $('gh-signin').hidden = true;
+      $('gh-list').hidden = false;
+      // another account's list: the filter of the last one goes
+      $('gh-filter').value = '';
+      $('gh-repos').replaceChildren(Object.assign(document.createElement('li'), { className: 'empty', textContent: 'Reading your repositories…' }));
+      void desktop.githubRepos().then((r) => { if (r?.error) ghError(r.error); repos = r?.repos ?? []; paintRepos(); });
+      return;
+    }
+    status.textContent = 'GitHub: not signed in';
+    $('gh-signin').hidden = false;
+    $('gh-list').hidden = true;
+    $('gh-cli').hidden = st?.gh === false;
+    $('gh-why').textContent = 'Sign in to GitHub to choose one of your repositories here (your own, your collaborations, your organizations’).'
+      + (st?.gh === false ? ' The GitHub CLI (gh) would sign in through the browser; without it, a personal access token does.' : '');
+  }
+  desktop.onGithubCode?.((c) => {
+    $('gh-device').hidden = false;
+    $('gh-code').textContent = c.code;
+    // the page as a link too: gh opens it itself, but not always when it has no terminal of its own
+    const link = Object.assign(document.createElement('a'), { href: '#', textContent: c.url });
+    link.style.color = 'var(--accent)';
+    link.addEventListener('click', (e) => { e.preventDefault(); window.open(c.url, '_blank'); });
+    $('gh-device-url').replaceChildren(link);
+  });
+  $('gh-cli').addEventListener('click', async () => {
+    ghError('');
+    $('gh-cli').disabled = true;
+    $('gh-status').textContent = 'GitHub: signing in with the GitHub CLI…';
+    const st = await desktop.githubLogin();
+    $('gh-cli').disabled = false;
+    signedIn(st);
+  });
+  $('gh-cli-cancel').addEventListener('click', () => void desktop.githubLoginCancel());
+  $('gh-token-show').addEventListener('click', () => { $('gh-token-form').hidden = false; $('gh-token').focus(); });
+  const saveToken = async () => {
+    const token = $('gh-token').value;
+    $('gh-token-save').disabled = true;
+    const st = await desktop.githubToken(token);
+    $('gh-token-save').disabled = false;
+    if (st?.error) { ghError(st.error); return; }
+    $('gh-token').value = '';
+    $('gh-token-form').hidden = true;
+    signedIn(st);
+  };
+  $('gh-token-save').addEventListener('click', () => void saveToken());
+  $('gh-token').addEventListener('keydown', (e) => { if (e.key === 'Enter') void saveToken(); });
+  $('gh-filter').addEventListener('input', paintRepos);
+  let ghAsked = false;
+
   // ---- Get from VCS: git clone into a new folder, then the project opens here
   let dirTouched = false;
   const suggest = async () => { if (!dirTouched) $('vcs-dir').value = await desktop.cloneNear($('vcs-url').value); };
@@ -159,8 +304,10 @@
     $('vcs-error').hidden = true;
     await suggest();
     $('vcs-url').focus();
+    // who is signed in to GitHub, asked once a window
+    if (!ghAsked) { ghAsked = true; void desktop.githubStatus?.().then(signedIn); }
   });
-  $('vcs-url').addEventListener('input', () => void suggest());
+  $('vcs-url').addEventListener('input', () => { void suggest(); if (repos.length) paintRepos(); });
   $('vcs-dir').addEventListener('input', () => { dirTouched = true; });
   $('vcs-browse').addEventListener('click', async () => {
     const chosen = await desktop.pickFolder($('vcs-dir').value);
@@ -200,6 +347,48 @@
     }
     // done: the project opens in this window
   });
+
+  // ---- Customize: the person's settings (the engine's file), each change written as it is made
+  const FONTS = [
+    ['"Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace', 'Cascadia Code'],
+    ['"Cascadia Mono", Consolas, "Courier New", monospace', 'Cascadia Mono'],
+    ['Consolas, "Courier New", monospace', 'Consolas'],
+    ['"JetBrains Mono", "Cascadia Code", Consolas, monospace', 'JetBrains Mono (when installed)'],
+    ['"Fira Code", "Cascadia Code", Consolas, monospace', 'Fira Code (when installed)'],
+    ['"Courier New", monospace', 'Courier New'],
+  ];
+  const look = (c) => {
+    // the welcome screen takes the theme too ("system" follows Windows')
+    if (c.theme === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = c.theme;
+    $('c-sample').style.fontFamily = c.fontFamily;
+    $('c-sample').style.fontSize = c.fontSize + 'px';
+  };
+  function fill(c) {
+    const font = $('c-font');
+    if (!font.options.length || ![...font.options].some((o) => o.value === c.fontFamily)) {
+      font.replaceChildren(...FONTS.map(([v, label]) => new Option(label, v)));
+      if (!FONTS.some(([v]) => v === c.fontFamily)) font.add(new Option(c.fontFamily.split(',')[0].replace(/"/g, '') + ' (your own)', c.fontFamily));
+    }
+    $('c-theme').value = c.theme; $('c-colors').value = c.codeColors; font.value = c.fontFamily; $('c-size').value = String(c.fontSize); $('c-keymap').value = c.keymap;
+    look(c);
+  }
+  let savedTimer;
+  async function save(patch) {
+    const r = await desktop.setCustomize?.(patch);
+    if (!r || r.error) { $('c-saved').textContent = r?.error ?? 'Not saved.'; $('c-saved').style.color = 'var(--red)'; return; }
+    fill(r);
+    $('c-saved').style.color = '';
+    $('c-saved').textContent = 'Saved: the next project opened has it.';
+    clearTimeout(savedTimer);
+    savedTimer = setTimeout(() => { $('c-saved').textContent = ''; }, 2500);
+  }
+  $('c-theme').addEventListener('change', () => void save({ theme: $('c-theme').value }));
+  $('c-colors').addEventListener('change', () => void save({ codeColors: $('c-colors').value }));
+  $('c-font').addEventListener('change', () => void save({ fontFamily: $('c-font').value }));
+  $('c-size').addEventListener('change', () => { const n = Math.round(Number($('c-size').value)); if (n >= 8 && n <= 40) void save({ fontSize: n }); });
+  $('c-keymap').addEventListener('change', () => void save({ keymap: $('c-keymap').value }));
+  $('c-all').addEventListener('click', () => { $('c-all').disabled = true; busy('Starting Settings…'); void desktop.allSettings(); });
+  void desktop.customize?.().then((c) => { if (c) fill(c); });
 
   // ---- Plugins and Learn
   $('plugins-open').addEventListener('click', () => { $('plugins-open').disabled = true; busy('Starting Settings…'); void desktop.plugins(); });

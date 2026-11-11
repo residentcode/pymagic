@@ -6,7 +6,7 @@ import { PLUGINS, pluginOn, switchPlugin, findPlugins, requiredName } from './pl
 import { OPEN_PROJECT_IN } from './openproject-model.js';
 import { buildLabel, shortTime } from './build-info.js';
 import { keymapCommands, defineCommand } from './commands.js';
-import { keyFromEvent, effectiveKeys, clashes, withKey } from './keymap-model.js';
+import { keyFromEvent, effectiveKeys, clashes, withKey, KEYMAPS, withKeymap } from './keymap-model.js';
 import { readSnippets, writeSnippets, readFileTemplates } from './codegen-model.js';
 import { schemaMappingsPage } from './schema-picker.js';
 
@@ -450,9 +450,20 @@ const SPECIAL = {
         bar.append(search, changedLabel);
         const list = document.createElement('div');
         list.id = 'keymap-list';
+        // the keymap: the keys every command starts with (PyMagic's own, PyCharm's, VS Code's); the changes below are made over it
+        const keymapBox = document.createElement('select');
+        keymapBox.id = 'keymap-choice';
+        for (const [id, name] of KEYMAPS) keymapBox.add(new Option(name, id));
+        keymapBox.value = settings().keymap ?? 'pymagic';
+        const keymapRow = document.createElement('label');
+        keymapRow.className = 'keymap-preset';
+        keymapRow.append('Keymap ', keymapBox);
+        keymapRow.title = 'The keys the commands start with; Reset gives a command back the key this keymap gives it';
+        bar.prepend(keymapRow);
         page.append(bar, list);
 
-        const commands = keymapCommands();
+        let commands = withKeymap(keymapCommands(), keymapBox.value);
+        keymapBox.onchange = () => { change({ keymap: keymapBox.value }); commands = withKeymap(keymapCommands(), keymapBox.value); paint(); };
         const ORDER = ['Run', 'Edit', 'Navigate', 'Refactor', 'Tools', 'Window', 'PyMagic', 'Editor'];
         let recording = null;      // the id whose new key is being pressed
         let offer = null;          // { id, key, others }: a key another command has, offered to this one
@@ -514,7 +525,9 @@ const SPECIAL = {
                     }
                 }
             }
-            if (!shown) list.append(Object.assign(document.createElement('p'), { className: 'set-note', textContent: 'No command matches.' }));
+            // (Settings from the welcome screen has no editor, so no commands: the keymap chosen above holds for the projects opened)
+            if (!shown) list.append(Object.assign(document.createElement('p'), { className: 'set-note', textContent: commands.length ? 'No command matches.'
+                : 'The commands and their keys are listed here when a project is open. The keymap chosen above is used by every project opened.' }));
         }
 
         // the keys pressed while a command waits for its new one

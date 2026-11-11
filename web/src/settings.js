@@ -36,6 +36,7 @@ export const DEFAULTS = {
     previewTab: false,        // a file opened with one click replaces the last one opened so, until it is edited
     plugins: {},              // Settings > Plugins: plugin id -> false for one switched off; every plugin is on unless it is here
     keybindings: {},          // Settings > Keymap: command id -> key ("Ctrl+Shift+D"), "" for none; what is not here keeps its own key
+    keymap: 'pymagic',        // pymagic | pycharm | vscode: the keys commands start with (keymap-model.js), the person's keybindings over them
     codeVision: true,         // usages and inheritors above functions and classes
     codeVisionAuthor: true,   // and who wrote most of each (Git blame)
     hintParams: true,         // the names of parameters before arguments
