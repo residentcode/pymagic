@@ -57,7 +57,7 @@ public static class GrpcRequests
             try { bodies.Add(Protobuf.DecodeMessage(pool, m.Output, r)); }
             catch (FormatException e) { throw new ServiceException($"the answer could not be read as {m.Output}: {e.Message}"); }
         }
-        var options = new JsonSerializerOptions { WriteIndented = true };
+        var options = new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
         string body = bodies.Count == 0 ? "" : m.ServerStreaming ? bodies.ToJsonString(options) : bodies[0]?.ToJsonString(options) ?? "null";
         return new Result(status, CodeName(status), message, body, headers, watch.ElapsedMilliseconds);
     }
@@ -87,7 +87,7 @@ public static class GrpcRequests
         return output.ToArray();
     }
 
-    static byte[] Decompress(byte[] data, string? encoding)
+    internal static byte[] Decompress(byte[] data, string? encoding)
     {
         using var input = new MemoryStream(data);
         using Stream z = encoding switch

@@ -210,6 +210,44 @@ public sealed class RedisClient : IDisposable
         return r is JsonObject o && o["error"] != null ? o["error"]!.ToString() : null;
     }
 
+    // ------------------------------------------------------------ a connection kept: SUBSCRIBE and its kin, MONITOR
+
+    /// <summary>Whether a command holds the connection, the server sending to it from then on (the console keeps a connection of its own open for it).</summary>
+    public static bool Holds(string command) => command.ToUpperInvariant() is "SUBSCRIBE" or "PSUBSCRIBE" or "SSUBSCRIBE" or "MONITOR";
+
+    /// <summary>Sends a command whose answers come as the server sends them (<see cref="Next"/>), without a time limit for them.</summary>
+    public void Hold(params string[] args)
+    {
+        var sb = new StringBuilder();
+        sb.Append('*').Append(args.Length).Append("\r\n");
+        foreach (var a in args) sb.Append('$').Append(Encoding.UTF8.GetByteCount(a)).Append("\r\n").Append(a).Append("\r\n");
+        _tcp.ReceiveTimeout = 0;
+        try { _stream.Write(Encoding.UTF8.GetBytes(sb.ToString())); _stream.Flush(); }
+        catch (IOException e) { throw new ServiceException("Redis: " + e.Message); }
+    }
+
+    /// <summary>What the server sends next on a held connection; an IOException when it (or <see cref="Dispose"/>) closes it.</summary>
+    public JsonNode? Next() => Read();
+
+    /// <summary>
+    /// A held connection's message as the console shows it: a channel's message as "channel: text" (a pattern's as "channel (pattern): text"),
+    /// a subscription as "(subscribed to channel, 2 in all)", MONITOR's lines as Redis writes them.
+    /// </summary>
+    public static string PushText(JsonNode? m)
+    {
+        string S(JsonNode? n) => n is JsonValue v && v.TryGetValue<string>(out var s) ? s : n?.ToJsonString() ?? "(nil)";
+        if (m is JsonArray a && a.Count >= 3 && S(a[0]) is { } kind)
+            switch (kind)
+            {
+                case "message": case "smessage": return $"{S(a[1])}: {S(a[2])}";
+                case "pmessage" when a.Count >= 4: return $"{S(a[2])} ({S(a[1])}): {S(a[3])}";
+                case "subscribe": case "psubscribe": case "ssubscribe": return $"(subscribed to {S(a[1])}, {S(a[2])} in all)";
+                case "unsubscribe": case "punsubscribe": case "sunsubscribe": return $"(unsubscribed from {S(a[1])}, {S(a[2])} left)";
+            }
+        if (m is JsonObject o && o["error"] != null) return "(error) " + S(o["error"]);
+        return S(m);
+    }
+
     /// <summary>A command as typed in the console (words, "quoted words" with \" inside), split as redis-cli splits it.</summary>
     public static List<string> Words(string line)
     {

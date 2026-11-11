@@ -2,7 +2,10 @@
 // (PYMAGIC_TEST_SAIL_DB_DIR: sail:add mysql,redis, its containers up): Phpactor in the app's container (completion after $user->, the model's
 // methods and its columns), the .env's MySQL and Redis offered in the Database panel, Redis connected from the filled form, its keys in the
 // tree, a key's value shown and changed, a hash's fields, and Redis commands in the console.
-// Run: PYMAGIC_TEST_SAIL_DB_DIR=… node desktop/e2e/saildb.check.mjs
+// Then a Redis command that holds the connection (SUBSCRIBE, MONITOR) in the console, and MySQL connected from its offer (with
+// PYMAGIC_TEST_DB_PYTHON, a Python with PyMySQL). PYMAGIC_TEST_SAIL_SERVICES_ONLY=1: only the MySQL and Redis containers run (no app
+// container, no Phpactor in it).
+// Run: PYMAGIC_TEST_SAIL_DB_DIR=… [PYMAGIC_TEST_DB_PYTHON=…] [PYMAGIC_TEST_SAIL_SERVICES_ONLY=1] node desktop/e2e/saildb.check.mjs
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -17,7 +20,8 @@ assert.ok(source, 'PYMAGIC_TEST_SAIL_DB_DIR');
 const root = join(mkdtempSync(join(tmpdir(), 'pymagic-e2e-saildb-')), basename(source));
 cpSync(source, root, { recursive: true, filter: (f) => !/[\\/](node_modules|\.git|\.pymagic)$/.test(f) });
 const composeEnv = { ...process.env, WWWUSER: '1000', WWWGROUP: '1000' };
-execFileSync('docker', ['compose', 'up', '-d', '--force-recreate', 'laravel.test'], { cwd: root, env: composeEnv, stdio: 'ignore' });
+const servicesOnly = process.env.PYMAGIC_TEST_SAIL_SERVICES_ONLY === '1';
+if (!servicesOnly) execFileSync('docker', ['compose', 'up', '-d', '--force-recreate', 'laravel.test'], { cwd: root, env: composeEnv, stdio: 'ignore' });
 const redisCli = (...args) => execFileSync('docker', ['compose', 'exec', '-T', 'redis', 'redis-cli', ...args], { cwd: root, env: composeEnv }).toString().trim();
 redisCli('SET', 'pm:greeting', 'hello');
 redisCli('HSET', 'pm:user', 'name', 'Ada', 'age', '36');
@@ -25,9 +29,10 @@ writeFileSync(join(root, 'app', 'PmTyping.php'), '<?php\n\nuse App\\Models\\User
 const $ = (id) => `document.getElementById(${JSON.stringify(id)})`;
 const rowsOf = `[...document.querySelectorAll('#db-tree > *')].map((r) => r.textContent.replace(/\\s+/g, ' ').trim())`;
 
-const app = await launch(root, { phpPath: 'sail' });
+const app = await launch(root, servicesOnly ? null : { phpPath: 'sail' });
 const { page } = app;
 try {
+    if (!servicesOnly) {
     // Phpactor in the container: after $user-> the model's methods (Notifiable's notify) and the users table's columns
     await page.evaluate(`window.pymagic.openFile('app/PmTyping.php')`);
     await page.waitFor(`window.pymagic.editor.getModel()?.uri.path.endsWith('PmTyping.php')`, 20000, 'PmTyping.php');
@@ -51,6 +56,7 @@ try {
     console.log('in the container:', inContainer.split('\n')[0]);
     assert.match(inContainer, /phpactor\.phar language-server/);
     await page.key(27, 'Escape');
+    }
 
     // the Database panel: the .env's MySQL and Redis offered, not connected yet
     await page.evaluate(`${$('t-database')}.click()`);
@@ -95,10 +101,65 @@ try {
     const replies = await page.waitFor(`document.querySelector('.db-redis-replies')?.textContent ?? null`, 20000, 'the replies');
     console.log('the console:\n' + replies);
     assert.match(replies, /> HGETALL pm:user\n1\) "name"\n2\) "Ada"\n3\) "age"\n4\) "36"\n> INCR pm:count\n\(integer\) 1\n> NOSUCH x\n\(error\) ERR unknown command/);
+
+    // a command that holds the connection: SUBSCRIBE in the console, a message published from outside shown as it comes, Stop; MONITOR
+    const consoleRun = async (text) => {
+        await page.evaluate(`(() => { const ed = window.pymagic.monaco.editor.getEditors().find((e) => e.getContainerDomNode().closest('#db-sql')); ed.setValue(${JSON.stringify(text)}); ed.setSelection(ed.getModel().getFullModelRange()); })()`);
+        await page.evaluate(`${$('db-run')}.click()`);
+    };
+    const stopButton = `[...document.querySelectorAll('#db-status button')].find((b) => b.textContent === 'Stop')`;
+    await consoleRun('GET pm:greeting\nSUBSCRIBE pm:news pm:other\nGET never');
+    await page.waitFor(`/listening/.test(${$('db-status')}.textContent) && /subscribed to pm:other/.test(document.querySelector('.db-redis-replies')?.textContent ?? '')`, 20000, 'subscribed');
+    redisCli('PUBLISH', 'pm:news', 'hello listeners');
+    redisCli('PUBLISH', 'pm:other', 'second');
+    const heard = await page.waitFor(`(() => { const t = document.querySelector('.db-redis-replies')?.textContent ?? ''; return /pm:other: second/.test(t) ? t : null; })()`, 20000, 'the messages');
+    console.log('SUBSCRIBE in the console:\n' + heard, '|', await page.evaluate(`${$('db-status')}.textContent`));
+    assert.match(heard, /> GET pm:greeting\n"hello from PyMagic"\n> SUBSCRIBE pm:news pm:other\n\(the 1 line after it not run: SUBSCRIBE holds its connection\)\n\(subscribed to pm:news, 1 in all\)\n\(subscribed to pm:other, 2 in all\)\npm:news: hello listeners\npm:other: second/);
+    await page.evaluate(`${stopButton}.click()`);
+    const ended = await page.waitFor(`(() => { const t = ${$('db-status')}.textContent; return /ended/.test(t) ? t : null; })()`, 20000, 'stopped');
+    console.log('after Stop:', ended);
+    assert.match(ended, /^SUBSCRIBE ended \(Stop\): 4 messages$/);
+    assert.equal(redisCli('PUBSUB', 'NUMSUB', 'pm:news').split('\n').pop(), '0', 'the subscription is gone');
+    await consoleRun('MONITOR');
+    await page.waitFor(`/listening/.test(${$('db-status')}.textContent)`, 20000, 'monitoring');
+    redisCli('SET', 'pm:watched', '1');
+    const monitored = await page.waitFor(`(() => { const t = document.querySelector('.db-redis-replies')?.textContent ?? ''; return /"SET" "pm:watched" "1"/.test(t) ? t : null; })()`, 20000, "MONITOR's line");
+    console.log('MONITOR:', monitored.split('\n').filter((l) => /pm:watched/.test(l)));
+    await page.evaluate(`${stopButton}.click()`);
+    await page.waitFor(`/ended/.test(${$('db-status')}.textContent)`, 20000, 'MONITOR stopped');
+
+    // MySQL from its offer, with a Python that has PyMySQL (the panel's MySQL is spoken by it): the form filled from the .env, Connect, its tables
+    const dbPython = process.env.PYMAGIC_TEST_DB_PYTHON;
+    if (dbPython) {
+        // a table of the check's own (the database may not be migrated: Sail's PHP is not needed here), made with the .env's user
+        execFileSync('docker', ['compose', 'exec', '-T', 'mysql', 'mysql', '-usail', '-ppassword', 'laravel', '-e', 'CREATE TABLE IF NOT EXISTS pm_check (id INT PRIMARY KEY, name VARCHAR(20)); REPLACE INTO pm_check VALUES (1, "Ada");'], { cwd: root, env: composeEnv, stdio: 'ignore' });
+        assert.ok(await page.evaluate(`fetch('/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: ${JSON.stringify(dbPython)} }) }).then((r) => r.ok)`), 'the Python taken');
+        await page.evaluate(`${$('db-mode-data')}.click()`);
+        await page.evaluate(`[...document.querySelectorAll('#db-tree > *')].find((r) => /MySQL · 127\\.0\\.0\\.1:3306\\/laravel/.test(r.textContent)).click()`);
+        await page.waitFor(`${$('db-form-kind')}?.value === 'mysql'`, 10000, 'the MySQL form');
+        const mysqlForm = await page.evaluate(`['host', 'port', 'user', 'database'].map((k) => k + '=' + document.getElementById('db-form-' + k).value).join(' ') + ' password=' + (document.getElementById('db-form-password').value ? 'filled' : 'empty')`);
+        console.log('the MySQL form:', mysqlForm);
+        assert.equal(mysqlForm, 'host=127.0.0.1 port=3306 user=sail database=laravel password=filled');
+        await page.evaluate(`document.querySelector('.db-server-form .ask-buttons button.primary').click()`);
+        await page.waitFor(`!document.querySelector('.db-server-form')`, 60000, 'MySQL connected')
+            .catch(async (e) => { throw new Error(e.message + ' | ' + await page.evaluate(`document.querySelector('.db-server-form')?.textContent ?? ''`)); });
+        // its databases (laravel, the one connected with, and testing): laravel opened
+        await page.waitFor(`${rowsOf}.some((t) => /^▸laravel\\s*database/.test(t))`, 60000, 'the databases');
+        await page.evaluate(`[...document.querySelectorAll('#db-tree > *')].find((r) => /^▸laravel\\s*database/.test(r.textContent.replace(/\\s+/g, ' ').trim())).click()`);
+        const tables = await page.waitFor(`(() => { const r = ${rowsOf}; return r.some((t) => /pm_check/.test(t)) ? r : null; })()`, 60000, 'the tables')
+            .catch(async (e) => { throw new Error(e.message + ' | ' + (await page.evaluate(rowsOf)).join(' | ')); });
+        console.log('MySQL connected from its offer:', tables.filter((t) => /mysql|MySQL|pm_check|users|migrations/.test(t)));
+        // its rows in the grid
+        await page.evaluate(`[...document.querySelectorAll('#db-tree > *')].find((r) => /pm_check/.test(r.textContent)).dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+        const grid = await page.waitFor(`(() => { const t = ${$('db-grid')}.textContent; return /Ada/.test(t) ? t : null; })()`, 30000, 'the rows');
+        console.log('pm_check:', grid.replace(/\s+/g, ' ').slice(0, 120));
+        execFileSync('docker', ['compose', 'exec', '-T', 'mysql', 'mysql', '-usail', '-ppassword', 'laravel', '-e', 'DROP TABLE pm_check;'], { cwd: root, env: composeEnv, stdio: 'ignore' });
+    }
+    else console.log('(MySQL from its offer not checked: PYMAGIC_TEST_DB_PYTHON names no Python with PyMySQL)');
     console.log('OK');
 } finally {
     try { redisCli('DEL', 'pm:greeting', 'pm:user', 'pm:count'); } catch { /* gone */ }
     await app.close();
     // the app's container made again with its own folder
-    execFileSync('docker', ['compose', 'up', '-d', '--force-recreate', 'laravel.test'], { cwd: source, env: composeEnv, stdio: 'ignore' });
+    if (!servicesOnly) execFileSync('docker', ['compose', 'up', '-d', '--force-recreate', 'laravel.test'], { cwd: source, env: composeEnv, stdio: 'ignore' });
 }

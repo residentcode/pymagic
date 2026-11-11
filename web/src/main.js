@@ -16,6 +16,7 @@ import { setupPythonConsole } from './pyconsole';
 import { setupDiagrams } from './diagram';
 import { setupTemplateLinks } from './templatelinks';
 import { setupEmbedded } from './embedded';
+import { setupTsProject } from './tsproject';
 import { setupHtmlComments } from './html-comment.js';
 import { setupTemplatePreview } from './templatepreview';
 import { addModelAdmin, addModelSerializer } from './django-model';
@@ -185,7 +186,15 @@ async function loadModel(rel, key) {
     // search results can lead to files that are not Python: they are shown; only templates are known to the language server
     if (!rel.endsWith('.py')) {
         const lang = languageFor(rel, text);
-        const plain = monaco.editor.createModel(text, lang, monaco.Uri.parse('pymagic:///' + rel));
+        // (Go to Definition into a file the TypeScript service was given as a library has made its model already: it is taken over)
+        const existing = monaco.editor.getModel(monaco.Uri.parse('pymagic:///' + rel));
+        if (existing) {
+            if (existing.getValue() !== text)
+                existing.setValue(text);
+            if (existing.getLanguageId() !== lang)
+                monaco.editor.setModelLanguage(existing, lang);
+        }
+        const plain = existing ?? monaco.editor.createModel(text, lang, monaco.Uri.parse('pymagic:///' + rel));
         models.set(key, plain);
         serverUri.set(plain, uri);
         relPathOf.set(key, rel);
@@ -1210,6 +1219,7 @@ async function main() {
         if (word) void diagrams.openModel(word);
     });
     setupEmbedded();
+    window.pymagic.tsProject = setupTsProject();
     setupHtmlComments();
     // Ctrl+Shift+/ comments the selection as one block ({{-- --}} in Blade, /* */ in CSS and JavaScript, <!-- --> in HTML), as PhpStorm's key
     monaco.editor.addKeybindingRule({ keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Slash, command: 'editor.action.blockComment', when: 'editorTextFocus && !editorReadonly' });

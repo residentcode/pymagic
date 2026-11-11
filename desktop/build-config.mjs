@@ -34,8 +34,8 @@ export function installerConfig() {
     win: { icon: ICON },
     nsis: {
       oneClick: false,
-      perMachine: false,                // a page offers "only for me" (the default, no admin) or "for all users"
-      allowElevation: true,             // only needed for "for all users"
+      perMachine: true,                 // for all users, in C:\Program Files\PyMagic (Windows asks for an administrator's approval); no "only for me" page
+      allowElevation: true,
       // a folder page that only takes a folder PyMagic can own (not there yet, empty, or an earlier PyMagic): electron-builder keeps a chosen folder
       // as it is when its path already says "PyMagic", and uninstalling or updating deletes it whole; the rule is in installer/installer.nsh
       allowToChangeInstallationDirectory: true,

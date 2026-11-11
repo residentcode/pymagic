@@ -31,6 +31,11 @@ export function replyText(reply, indent = '') {
     return JSON.stringify(reply);
 }
 
+/** Whether a console line holds the connection (the server sends to it from then on): it is run on a connection of its own. */
+export const holdsConnection = (line) => /^\s*(p|s)?subscribe\s|^\s*monitor\s*$/i.test(line);
+/** How many lines a held command's view keeps (the latest). */
+const LIVE_LINES = 2000;
+
 /** The lines of the console to run: the selection's, the cursor's, or all of them; empty lines and # comments left out. */
 export function commandLines(text) {
     return text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
@@ -233,26 +238,83 @@ export function setupRedis({ grid, status, node, paintTree }) {
             status.textContent = `The first ${rows.length} of ${r.size}.`;
     }
 
-    /** Commands typed in the console, one per line, each reply shown as redis-cli shows it. */
+    // a command that holds the connection (SUBSCRIBE, MONITOR): its own connection (/api/redis/live), each message as it comes, until Stop
+    let live = null;
+    const stopLive = () => { if (live?.readyState === WebSocket.OPEN) live.send(JSON.stringify({ type: 'stop' })); };
+    function listen(path, line, pre, out) {
+        stopLive();
+        const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+        const ws = new WebSocket(`${scheme}://${location.host}/api/redis/live`);
+        live = ws;
+        const word = line.split(/\s+/)[0].toUpperCase();
+        const paint = () => {
+            pre.textContent = out.join('\n');
+            pre.scrollTop = pre.scrollHeight;
+        };
+        const stop = Object.assign(document.createElement('button'), { textContent: 'Stop', title: `End ${word} (its connection is closed)` });
+        stop.onclick = stopLive;
+        status.className = '';
+        status.replaceChildren(`${word}: connecting… `, stop);
+        let messages = 0;
+        ws.onopen = () => ws.send(JSON.stringify({ path, line }));
+        ws.onmessage = (e) => {
+            const m = JSON.parse(e.data);
+            if (m.type === 'open')
+                status.replaceChildren(`${word}: listening (messages show as they come) `, stop);
+            else if (m.type === 'message') {
+                messages++;
+                out.push(m.text);
+                // the latest lines kept: a busy MONITOR would grow without end
+                if (out.length > LIVE_LINES)
+                    out.splice(1, out.length - LIVE_LINES);
+                paint();
+                status.replaceChildren(`${word}: listening, ${messages} message${messages === 1 ? '' : 's'} `, stop);
+            }
+            else if (m.type === 'closed') {
+                if (m.error)
+                    out.push(`(error) ${m.error}`);
+                paint();
+                status.className = m.error ? 'err' : '';
+                status.textContent = `${word} ended${m.error ? '' : ' (Stop)'}: ${messages} message${messages === 1 ? '' : 's'}`;
+            }
+        };
+        ws.onclose = () => {
+            if (live === ws)
+                live = null;
+        };
+    }
+
+    /** Commands typed in the console, one per line, each reply shown as redis-cli shows it; one that holds the connection is listened to. */
     async function run(path, text) {
         const lines = commandLines(text);
         if (!lines.length) {
-            toast('No command: GET key, HGETALL key, SCAN 0 MATCH user:*, …');
+            toast('No command: GET key, HGETALL key, SCAN 0 MATCH user:*, SUBSCRIBE channel, MONITOR, …');
             return;
         }
+        stopLive();
         const out = [];
         let failed = false;
         status.className = '';
         status.textContent = 'Running…';
-        for (const line of lines) {
+        const pre = document.createElement('pre');
+        pre.className = 'db-redis-replies';
+        for (const [i, line] of lines.entries()) {
+            if (holdsConnection(line)) {
+                out.push(`> ${line}`);
+                if (i < lines.length - 1)
+                    out.push(`(the ${lines.length - 1 - i} line${lines.length - 1 - i === 1 ? '' : 's'} after it not run: ${line.split(/\s+/)[0].toUpperCase()} holds its connection)`);
+                grid.textContent = '';
+                pre.textContent = out.join('\n');
+                grid.append(pre);
+                listen(path, line, pre, out);
+                return;
+            }
             const r = await ask({ op: 'command', path, line });
             out.push(`> ${line}`, r.error ? `(error) ${r.error}` : replyText(r.reply));
             if (r.error)
                 failed = true;
         }
         grid.textContent = '';
-        const pre = document.createElement('pre');
-        pre.className = 'db-redis-replies';
         pre.textContent = out.join('\n');
         grid.append(pre);
         status.className = failed ? 'err' : '';
@@ -261,5 +323,5 @@ export function setupRedis({ grid, status, node, paintTree }) {
         paintTree();
     }
 
-    return { paintKeys, showKey, run, forget: (path) => keys.delete(path) };
+    return { paintKeys, showKey, run, stop: stopLive, forget: (path) => keys.delete(path) };
 }

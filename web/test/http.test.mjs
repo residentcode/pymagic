@@ -263,4 +263,7 @@ test('a gRPC address: plain text by default, TLS with grpcs:// or https://', () 
 test('the talk of a WebSocket request as text', () => {
     assert.equal(websocketTranscript([{ dir: 'sent', text: 'hi', ms: 3 }, { dir: 'received', text: 'a\nb', ms: 12 }], { status: 1000, description: 'bye' }),
         '→     3 ms  hi\n←    12 ms  a\n            b\n× closed (1000 bye)');
+    // a gRPC call kept open: a typed message not sent, and the call's status
+    assert.equal(websocketTranscript([{ dir: 'sent', text: '{"value":1}', ms: 5 }, { dir: 'note', text: 'not sent: Number has no field valu', ms: 9 }], { status: '0 OK', description: '' }),
+        '→     5 ms  {"value":1}\n!     9 ms  not sent: Number has no field valu\n× closed (0 OK)');
 });

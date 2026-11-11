@@ -1,7 +1,9 @@
 // The HTTP client's requests that stay open, and gRPC without reflection, in the built PyMagic.exe, each sent from the editor's ▶ Run as a
 // person sends it: a WEBSOCKET request kept open (its messages, then one typed in the HTTP tab, then Close), a GRAPHQL subscription over
 // graphql-transport-ws (its events as they come, then Stop), and a GRPC call to a server without reflection, described by the project's own
-// .proto file, with well-known types (Timestamp, Duration, Struct, ...) and its answer compressed with gzip.
+// .proto file, with well-known types (Timestamp, Duration, Struct, ...) and its answer compressed with gzip; then gRPC calls kept open: a
+// bidirectional one (each answer before the next message is typed) and a client-streaming one (its array, a typed message, a wrong field
+// not sent, Close and the one answer).
 // Run: PYMAGIC_TEST_GRPC_PYTHON=<python with grpcio, grpcio-tools, websockets> node desktop/e2e/httplive.check.mjs
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -20,6 +22,8 @@ import "google/protobuf/duration.proto";
 import "google/protobuf/struct.proto";
 service Clock {
   rpc Echo (Stamp) returns (Stamp);
+  rpc Talk (stream Stamp) returns (stream Stamp);
+  rpc Total (stream Stamp) returns (Stamp);
 }
 message Stamp {
   google.protobuf.Timestamp at = 1;
@@ -48,6 +52,11 @@ class Clock(wk_pb2_grpc.ClockServicer):
         reply.took.FromTimedelta(request.took.ToTimedelta() * 2)
         reply.label = request.label.upper()
         return reply
+    def Talk(self, requests, context):
+        for r in requests:
+            yield wk_pb2.Stamp(label="heard " + r.label)
+    def Total(self, requests, context):
+        return wk_pb2.Stamp(label="+".join(r.label for r in requests))
 
 async def echo(ws):
     await ws.send("welcome")
@@ -101,6 +110,8 @@ const root = project({
         '### socket', 'WEBSOCKET ws://127.0.0.1:' + wsPort + '/', '', '=== wait-for-server', 'one', '',
         '### ticks', 'GRAPHQL ws://127.0.0.1:' + gqlPort + '/graphql', '', 'subscription {', '  tick', '}', '',
         '### clock', 'GRPC 127.0.0.1:' + grpcPort + '/wk.Clock/Echo', '', '{"at": "2024-05-01T10:00:00.250Z", "took": "1.5s", "extra": {"a": [1, true]}, "label": "tick"}', '',
+        '### talk', 'GRPC 127.0.0.1:' + grpcPort + '/wk.Clock/Talk', '', '{"label": "first"}', '',
+        '### total', 'GRPC 127.0.0.1:' + grpcPort + '/wk.Clock/Total', '', '[{"label": "a"}, {"label": "b"}]', '',
     ].join('\n'),
     'protos/wk.proto': PROTO,
 });
@@ -158,6 +169,39 @@ try {
     assert.deepEqual(answer, { at: '2024-05-01T10:00:00.250Z', took: '3s', extra: { a: [1, true] }, label: 'TICK' });
     await page.evaluate(`document.querySelector('#http-parts button[data-part="headers"]').click()`);
     assert.match(await body(), /grpc-encoding: gzip/);
+    await page.evaluate(`document.querySelector('#http-parts button[data-part="body"]').click()`);
+
+    const type = (text) => page.evaluate(`(() => { const box = ${$('http-live-text')}; box.value = ${JSON.stringify(text)}; box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()`);
+    const lines = async () => (await body()).split('\n').map((l) => l.replace(/\s+\d+ ms\s+/, ' ').trim()).filter(Boolean);
+    // GRPC bidirectional, kept open: the file's message answered, then a typed one answered, Close
+    await runAt(3);
+    await page.waitFor(`!${$('http-live')}.hidden && /open \\(bidirectional\\)/.test(${$('http-status')}.textContent)`, 40000, 'the bidirectional call open');
+    await page.waitFor(`${$('http-body')}.textContent.includes('heard first')`, 20000, "the answer to the file's message");
+    assert.match(await page.evaluate(`${$('http-live-text')}.placeholder`), /wk\.Stamp as JSON/);
+    await type('{"label": "second"}');
+    await page.waitFor(`${$('http-body')}.textContent.includes('heard second')`, 20000, 'the answer to the typed message');
+    await page.evaluate(`${$('http-live-close')}.click()`);
+    const talked = await page.waitFor(`(() => { const t = ${$('http-status')}.textContent; return ${$('http-live')}.hidden && /^gRPC 0 OK/.test(t) ? t : null; })()`, 20000, 'the call ended');
+    const chat = await lines();
+    console.log('GRPC bidirectional kept open:', talked, chat);
+    assert.deepEqual(chat.map((l) => l.replace(/\s+/g, ' ')), ['→ {"label":"first"}', '← {', '"label": "heard first"', '}', '→ {"label":"second"}', '← {', '"label": "heard second"', '}', '× closed (0 OK)']);
+
+    // GRPC client streaming: the file's array, a typed message, one with a wrong field (not sent), Close, the one answer
+    await runAt(4);
+    await page.waitFor(`!${$('http-live')}.hidden && /open \\(client streaming\\)/.test(${$('http-status')}.textContent)`, 40000, 'the client-streaming call open');
+    await type('{"label": "c"}');
+    await page.waitFor(`${$('http-body')}.textContent.includes('{"label":"c"}')`, 20000, 'the typed message sent');
+    await type('{"labl": "d"}');
+    await page.waitFor(`${$('http-body')}.textContent.includes('not sent')`, 20000, 'the wrong one not sent');
+    await page.evaluate(`${$('http-live-close')}.click()`);
+    await page.waitFor(`${$('http-live')}.hidden && /^gRPC 0 OK/.test(${$('http-status')}.textContent)`, 20000, 'the call ended');
+    const total = await lines();
+    console.log('GRPC client streaming kept open:', total);
+    assert.equal(total.filter((l) => l.startsWith('→')).length, 3);
+    assert.ok(total.some((l) => /^! not sent: .*labl/.test(l)), total.join(' | '));
+    assert.ok(total.some((l) => l.includes('"label": "a+b+c"')), total.join(' | '));
+    // the history keeps it, with gRPC's status
+    assert.match(await page.evaluate(`document.querySelector('#http-history .http-item')?.textContent ?? ''`), /Total|total|0/);
     console.log('OK');
 } catch (e) {
     console.log('HTTP tab:', await page.evaluate(`${$('http-status')}.textContent + ' | live bar hidden: ' + ${$('http-live')}.hidden + ' | ' + ${$('http-body')}.textContent.slice(0, 500)`).catch(() => '?'));

@@ -1014,6 +1014,47 @@ app.Map("/api/ws/live", async (HttpContext ctx) =>
     catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or OperationCanceledException) { }
 });
 
+// the TypeScript service's project (TsProject): the project's own JS/TS files and its tsconfig; the packages' types, asked for apart (they
+// change only with node_modules)
+app.MapGet("/api/ts/project", () =>
+{
+    if (!TsProject.IsJsProject(root)) return Results.Json(new { js = false });
+    var code = TsProject.Code(root);
+    return Results.Json(new { js = true, config = TsProject.Config(root), files = code.List.Select(f => new { path = f.Path, text = f.Text }), truncated = code.Truncated });
+});
+app.MapGet("/api/ts/packages", () =>
+{
+    var p = TsProject.Packages(root);
+    return Results.Json(new { files = p.List.Select(f => new { path = f.Path, text = f.Text }), truncated = p.Truncated });
+});
+
+// a GRPC request sent from the editor: a streaming call kept open, what is typed sent as it is typed, each answer as it comes (GrpcLive)
+app.Map("/api/grpc/live", async (HttpContext ctx) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    using var page = await ctx.WebSockets.AcceptWebSocketAsync();
+    var buffer = new byte[256 * 1024];
+    JsonNode? first = null;
+    try
+    {
+        using var whole = new MemoryStream();
+        System.Net.WebSockets.WebSocketReceiveResult r;
+        do { r = await page.ReceiveAsync(buffer, ctx.RequestAborted); whole.Write(buffer, 0, r.Count); } while (!r.EndOfMessage && r.MessageType != System.Net.WebSockets.WebSocketMessageType.Close);
+        if (r.MessageType != System.Net.WebSockets.WebSocketMessageType.Close) first = JsonNode.Parse(System.Text.Encoding.UTF8.GetString(whole.ToArray()));
+    }
+    catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or OperationCanceledException or System.Text.Json.JsonException) { return; }
+    async Task Refuse(string error)
+    {
+        try { await page.SendAsync(System.Text.Encoding.UTF8.GetBytes(new JsonObject { ["type"] = "error", ["error"] = error }.ToJsonString()), System.Net.WebSockets.WebSocketMessageType.Text, true, ctx.RequestAborted); }
+        catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or OperationCanceledException) { }
+    }
+    if (GrpcLive.StartOf(first) is not { } start) { await Refuse("a gRPC address: host:port/package.Service/Method"); return; }
+    if (!new Uri(start.Address).IsLoopback && first?["fromFile"]?.GetValue<bool>() != true) { await Refuse("only servers on this computer (localhost, 127.0.0.1)"); return; }
+    await GrpcLive.Relay(page, start, root, ctx.RequestAborted);
+    try { if (page.State == System.Net.WebSockets.WebSocketState.Open) await page.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); }
+    catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or OperationCanceledException) { }
+});
+
 // a GRPC request of an .http file: the service described by the server's reflection, the JSON sent as protobuf (GrpcRequests)
 app.MapPost("/api/grpc", async (HttpRequest req) =>
 {
@@ -1883,15 +1924,78 @@ app.MapPost("/api/redis", async (HttpRequest req) =>
             case "command":
                 var words = RedisClient.Words(body["line"]?.GetValue<string>() ?? "");
                 if (words.Count == 0) return Results.Json(new { error = "a command: GET key, HGETALL key, KEYS user:*, …" });
-                // the connection is the panel's: commands that would take it over are not run from the console
-                if (words[0].ToUpperInvariant() is "SUBSCRIBE" or "PSUBSCRIBE" or "SSUBSCRIBE" or "MONITOR" or "SYNC" or "PSYNC")
-                    return Results.Json(new { error = $"{words[0].ToUpperInvariant()} holds the connection, which the console does not keep open." });
+                // the connection is the panel's: commands that would take it over go to a connection of their own (/api/redis/live)
+                if (RedisClient.Holds(words[0]))
+                    return Results.Json(new { error = $"{words[0].ToUpperInvariant()} holds the connection: the console runs it on a connection of its own (/api/redis/live)." });
+                if (words[0].ToUpperInvariant() is "SYNC" or "PSYNC")
+                    return Results.Json(new { error = $"{words[0].ToUpperInvariant()} is a replica's command: PyMagic does not take a server's copy." });
                 var reply = redis.Command(words.ToArray());
                 return Results.Json(reply is JsonObject o && o["error"] != null ? new JsonObject { ["error"] = o["error"]!.DeepClone() } : new JsonObject { ["reply"] = reply?.DeepClone() });
         }
         return Results.BadRequest("unknown request");
     }
     catch (ServiceException e) { return Results.Json(new { error = e.Message }); }
+});
+
+// a Redis command of the console that holds the connection (SUBSCRIBE, PSUBSCRIBE, SSUBSCRIBE, MONITOR): a connection of its own, each message
+// the server sends told to the page as it comes ({type: "open"}, {type: "message", text, ms}, {type: "closed", error?}), until the page says
+// {type: "stop"} or goes
+app.Map("/api/redis/live", async (HttpContext ctx) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    using var page = await ctx.WebSockets.AcceptWebSocketAsync();
+    var buffer = new byte[64 * 1024];
+    var watch = System.Diagnostics.Stopwatch.StartNew();
+    var sendLock = new SemaphoreSlim(1, 1);
+    async Task Tell(JsonObject o)
+    {
+        o["ms"] ??= watch.ElapsedMilliseconds;
+        await sendLock.WaitAsync();
+        try { if (page.State == System.Net.WebSockets.WebSocketState.Open) await page.SendAsync(System.Text.Encoding.UTF8.GetBytes(o.ToJsonString()), System.Net.WebSockets.WebSocketMessageType.Text, true, CancellationToken.None); }
+        catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or ObjectDisposedException) { }
+        finally { sendLock.Release(); }
+    }
+    async Task<JsonNode?> FromPage()
+    {
+        using var whole = new MemoryStream();
+        System.Net.WebSockets.WebSocketReceiveResult r;
+        do { r = await page.ReceiveAsync(buffer, ctx.RequestAborted); whole.Write(buffer, 0, r.Count); } while (!r.EndOfMessage && r.MessageType != System.Net.WebSockets.WebSocketMessageType.Close);
+        return r.MessageType == System.Net.WebSockets.WebSocketMessageType.Close ? null : JsonNode.Parse(System.Text.Encoding.UTF8.GetString(whole.ToArray()));
+    }
+    JsonNode? first;
+    try { first = await FromPage(); }
+    catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or OperationCanceledException or System.Text.Json.JsonException) { return; }
+    var words = RedisClient.Words(first?["line"]?.GetValue<string>() ?? "");
+    string? path = first?["path"]?.GetValue<string>();
+    RedisClient? redis = null;
+    try
+    {
+        if (words.Count == 0 || !RedisClient.Holds(words[0])) throw new ServiceException("SUBSCRIBE channel…, PSUBSCRIBE pattern…, SSUBSCRIBE channel… or MONITOR");
+        if (path == null || !DbServers.IsServerPath(path) || DbServers.Connection(root, path) is not { } reach || reach["kind"]?.GetValue<string>() != "redis")
+            throw new ServiceException("No such Redis server in the project.");
+        redis = OpenRedis(reach);
+        redis.Hold(words.ToArray());
+    }
+    catch (ServiceException e) { redis?.Dispose(); await Tell(new JsonObject { ["type"] = "closed", ["error"] = e.Message }); return; }
+    await Tell(new JsonObject { ["type"] = "open" });
+    string? lost = null;
+    var reading = Task.Run(async () =>
+    {
+        try { while (true) await Tell(new JsonObject { ["type"] = "message", ["text"] = RedisClient.PushText(redis.Next()) }); }
+        catch (Exception e) when (e is IOException or ObjectDisposedException or System.Net.Sockets.SocketException or FormatException) { lost = e.Message; }
+    });
+    // Stop (or the page gone): the connection closed, which ends the reading
+    var stopping = Task.Run(async () =>
+    {
+        try { while (page.State == System.Net.WebSockets.WebSocketState.Open && await FromPage() is { } m && m["type"]?.GetValue<string>() != "stop") { } }
+        catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or OperationCanceledException or System.Text.Json.JsonException) { }
+    });
+    bool stopped = await Task.WhenAny(reading, stopping) == stopping;
+    redis.Dispose();
+    await Task.WhenAny(reading, Task.Delay(2000));
+    await Tell(new JsonObject { ["type"] = "closed", ["error"] = stopped ? null : "the server closed the connection" + (lost != null ? $" ({lost})" : "") });
+    try { if (page.State == System.Net.WebSockets.WebSocketState.Open) await page.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); }
+    catch (Exception e) when (e is System.Net.WebSockets.WebSocketException or OperationCanceledException) { }
 });
 
 app.MapDelete("/api/db/servers", (string id) => { DbServers.Remove(root, id); return Results.Json(Databases.Find(root)); });

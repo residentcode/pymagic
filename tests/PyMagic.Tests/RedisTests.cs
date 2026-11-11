@@ -104,4 +104,43 @@ public class RedisTests
             foreach (var k in redis.Keys(p + "*").Keys) redis.Command("DEL", k.Key);
         }
     }
+    [Fact]
+    public void AHeldConnectionsMessagesAreShownAsRedisCliShowsThem()
+    {
+        Assert.True(RedisClient.Holds("subscribe") && RedisClient.Holds("PSUBSCRIBE") && RedisClient.Holds("ssubscribe") && RedisClient.Holds("Monitor"));
+        Assert.True(!RedisClient.Holds("PUBLISH") && !RedisClient.Holds("SYNC"));
+        Assert.Equal("news: hello", RedisClient.PushText(new JsonArray("message", "news", "hello")));
+        Assert.Equal("news.uk (news.*): hi", RedisClient.PushText(new JsonArray("pmessage", "news.*", "news.uk", "hi")));
+        Assert.Equal("(subscribed to news, 1 in all)", RedisClient.PushText(new JsonArray("subscribe", "news", 1)));
+        Assert.Equal("(unsubscribed from news, 0 left)", RedisClient.PushText(new JsonArray("unsubscribe", "news", 0)));
+        Assert.Equal("OK", RedisClient.PushText(JsonValue.Create("OK")));
+        Assert.Equal("(error) ERR no", RedisClient.PushText(new JsonObject { ["error"] = "ERR no" }));
+    }
+
+    [Fact]
+    public void SubscribeAndMonitorHoldAConnectionOfTheirOwn()
+    {
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_REDIS") is not { Length: > 0 } where) return;
+        string host = where.Split(':')[0];
+        int port = int.Parse(where.Split(':')[1]);
+        string channel = "pmtest-" + Guid.NewGuid().ToString("N")[..6];
+        using var sub = RedisClient.Connect(host, port, "", "", 0);
+        using var mon = RedisClient.Connect(host, port, "", "", 0);
+        using var other = RedisClient.Connect(host, port, "", "", 0);
+        sub.Hold("PSUBSCRIBE", channel + ".*");
+        Assert.Equal($"(subscribed to {channel}.*, 1 in all)", RedisClient.PushText(sub.Next()));
+        mon.Hold("MONITOR");
+        Assert.Equal("OK", RedisClient.PushText(mon.Next()));
+        // what another connection does: the message, and MONITOR's line of it (after a while: nothing times out on a held connection)
+        System.Threading.Thread.Sleep(300);
+        Assert.Equal(1L, other.Command("PUBLISH", channel + ".a", "hello there")!.GetValue<long>());
+        Assert.Equal($"{channel}.a ({channel}.*): hello there", RedisClient.PushText(sub.Next()));
+        string line = RedisClient.PushText(mon.Next());
+        Assert.True(line.Contains("\"PUBLISH\"") && line.Contains("\"hello there\""), line);
+        // closing it ends what it waits for
+        var waiting = Task.Run(() => { try { sub.Next(); return "a message"; } catch (Exception e) when (e is IOException or ObjectDisposedException) { return "closed"; } });
+        System.Threading.Thread.Sleep(200);
+        sub.Dispose();
+        Assert.Equal("closed", waiting.Wait(5000) ? waiting.Result : "still waiting");
+    }
 }

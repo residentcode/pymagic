@@ -48,7 +48,7 @@ PyMagic runs on Windows 10 and 11 (x64). There are two ways to get it.
 `PyMagic-web.cmd` (or `start.ps1`) runs the same editor in a browser tab instead of the app window.
 
 **Make a copy that needs nothing installed**: build it as in [Build the app](#build-the-app). Then run the installer
-`desktop\out\PyMagic-Setup-0.1.0.exe`, which installs PyMagic for the current user with a Start menu entry and a desktop shortcut. Or copy the
+`desktop\out\PyMagic-Setup-0.1.0.exe`, which installs PyMagic for all users in `C:\Program Files\PyMagic` (Windows asks for an administrator's approval), with a Start menu entry and, if you leave its box ticked, a desktop shortcut. Or copy the
 folder `desktop\out\PyMagic-win32-x64` to any Windows PC and start `PyMagic.exe` in it.
 
 A Python interpreter is not part of PyMagic. Use one installed on the PC, or make one in the app (*Create a .venv…*, or New Project with uv).

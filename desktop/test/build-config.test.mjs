@@ -10,10 +10,11 @@ const desktop = resolve(import.meta.dirname, '..');
 const opts = packagerOptions(desktop, resolve(desktop, 'stage'));
 const kept = p => !opts.ignore.some(re => re.test(p));
 
-test('the installer is a wizard that installs for the current user unless told otherwise', () => {
+test('the installer is a wizard that installs for all users, in Program Files', () => {
   const { nsis } = installerConfig();
   assert.equal(nsis.oneClick, false);
-  assert.equal(nsis.perMachine, false);
+  assert.equal(nsis.perMachine, true);
+  assert.equal(nsis.allowElevation, true);
 });
 
 test('the installer has a folder page, and a script that only lets it take a folder PyMagic can own', () => {

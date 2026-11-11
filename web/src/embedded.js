@@ -2,10 +2,14 @@
 // CSS and JavaScript blocks a hidden document each (embedded-model.js) that Monaco's CSS and TypeScript services check; their findings
 // are copied onto the template. Inside a <script> block the TypeScript service completes; inside <style> or style="" the CSS properties.
 import * as monaco from 'monaco-editor';
-import { embeddedDocument, inRegion, CSS_PROPERTIES } from './embedded-model.js';
+import { embeddedDocument, inRegion, CSS_PROPERTIES, scriptIsTs, componentPrelude, keepFinding } from './embedded-model.js';
 
 // the templates that get this, and how their expressions are read inside code (Blade's own: {!! !!}, @json, directives)
 const TEMPLATES = { 'django-html': 'django', twig: 'django', blade: 'blade' };
+// components open as HTML: their <script> (TypeScript with lang="ts") and <style> get hidden documents too
+const COMPONENT = /\.(vue|svelte)$/i;
+const componentOf = (model) => (model.getLanguageId() === 'html' && COMPONENT.exec(model.uri.path)?.[1].toLowerCase()) || null;
+const isTemplate = (model) => model.getLanguageId() in TEMPLATES || !!componentOf(model);
 
 export function setupEmbedded() {
     for (const language of Object.keys(TEMPLATES))
@@ -13,23 +17,47 @@ export function setupEmbedded() {
             completionItems: true, hovers: true, documentHighlights: true, links: true, selectionRanges: true, colors: true,
             documentSymbols: false, foldingRanges: false, diagnostics: false, rename: false, documentFormattingEdits: false, documentRangeFormattingEdits: false,
         });
-    // a block's own names are not checked against the page's other scripts (they share a window, not a file)
-    monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: false });
+    // .js files are type-checked as their checkJs or // @ts-check says, as VS Code does (Monaco's JavaScript has it off by default);
+    // a template's block is checked for its syntax only (keepFinding)
+    monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({ noSemanticValidation: false, noSyntaxValidation: false });
 
     const hidden = new Map();   // template model -> { css, js }
     const owners = new Map();   // hidden model uri -> template model
     let n = 0;
 
-    const doc = (model, text, language) => embeddedDocument(text, language, TEMPLATES[model.getLanguageId()]);
+    const doc = (model, text, language) => {
+        const kind = componentOf(model);
+        const out = embeddedDocument(text, language, kind ? 'component' : TEMPLATES[model.getLanguageId()]);
+        return kind && language === 'javascript' ? out + componentPrelude(kind, out) : out;
+    };
+    /**
+     * Where a block's document is: a component's beside it (pymagic:/src/App.svelte.3.ts), so its imports of the project's files resolve as
+     * the component's; a template's in memory.
+     */
+    const scriptUri = (model, script) => {
+        const ext = script === 'typescript' ? 'ts' : 'js';
+        return componentOf(model) ? monaco.Uri.parse(`${model.uri.toString()}.${n}.${ext}`) : monaco.Uri.parse(`inmemory://embedded/${n}.${ext}`);
+    };
+    /** The script's language: TypeScript for a component's <script lang="ts">. */
+    const scriptOf = (model, text) => (componentOf(model) && scriptIsTs(text) ? 'typescript' : 'javascript');
 
     function sync(model) {
         let h = hidden.get(model);
         const text = model.getValue();
+        const script = scriptOf(model, text);
+        // lang="ts" added or taken away: the script's document is made again in its language
+        if (h && h.js.getLanguageId() !== script) {
+            owners.delete(h.js.uri.toString());
+            h.js.dispose();
+            n++;
+            h.js = monaco.editor.createModel(doc(model, text, 'javascript'), script, scriptUri(model, script));
+            owners.set(h.js.uri.toString(), model);
+        }
         if (!h) {
             n++;
             h = {
                 css: monaco.editor.createModel(doc(model, text, 'css'), 'css', monaco.Uri.parse(`inmemory://embedded/${n}.css`)),
-                js: monaco.editor.createModel(doc(model, text, 'javascript'), 'javascript', monaco.Uri.parse(`inmemory://embedded/${n}.js`)),
+                js: monaco.editor.createModel(doc(model, text, 'javascript'), script, scriptUri(model, script)),
             };
             hidden.set(model, h);
             owners.set(h.css.uri.toString(), model);
@@ -41,7 +69,7 @@ export function setupEmbedded() {
     }
 
     function watch(model) {
-        if (!(model.getLanguageId() in TEMPLATES) || hidden.has(model)) return;
+        if (!isTemplate(model) || hidden.has(model)) return;
         sync(model);
         let timer = 0;
         model.onDidChangeContent(() => { clearTimeout(timer); timer = window.setTimeout(() => sync(model), 300); });
@@ -69,14 +97,17 @@ export function setupEmbedded() {
         for (const owner of touched) {
             const h = hidden.get(owner);
             if (!h) continue;
-            const markers = [h.css, h.js].flatMap((m) => monaco.editor.getModelMarkers({ resource: m.uri }).map((x) => ({ ...x, source: m === h.css ? 'css' : 'javascript' })));
+            const kind = componentOf(owner);
+            const markers = [h.css, h.js].flatMap((m) => monaco.editor.getModelMarkers({ resource: m.uri, owner: m === h.css ? 'css' : m.getLanguageId() })
+                .filter((x) => m === h.css || keepFinding(x.code, x.message, kind))
+                .map((x) => ({ ...x, source: m === h.css ? 'css' : h.js.getLanguageId() })));
             monaco.editor.setModelMarkers(owner, 'embedded', markers.map(({ resource, owner: _o, ...x }) => x));
         }
     });
 
     const KIND = monaco.languages.CompletionItemKind;
     const tsKind = (k) => ({ function: KIND.Function, method: KIND.Method, property: KIND.Property, var: KIND.Variable, let: KIND.Variable, const: KIND.Constant, class: KIND.Class, keyword: KIND.Keyword, module: KIND.Module, interface: KIND.Interface }[k] ?? KIND.Text);
-    monaco.languages.registerCompletionItemProvider(Object.keys(TEMPLATES), {
+    monaco.languages.registerCompletionItemProvider([...Object.keys(TEMPLATES), 'html'], {
         triggerCharacters: ['.'],
         async provideCompletionItems(model, position) {
             const h = hidden.get(model);
@@ -87,7 +118,8 @@ export function setupEmbedded() {
             const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
             if (inRegion(text, offset, 'javascript')) {
                 if (h.js.getValue() !== doc(model, text, 'javascript')) sync(model);
-                const worker = await (await monaco.languages.typescript.getJavaScriptWorker())(h.js.uri);
+                const ts = monaco.languages.typescript;
+                const worker = await (await (h.js.getLanguageId() === 'typescript' ? ts.getTypeScriptWorker() : ts.getJavaScriptWorker()))(h.js.uri);
                 const info = await worker.getCompletionsAtPosition(h.js.uri.toString(), offset);
                 return { suggestions: (info?.entries ?? []).slice(0, 300).map((e) => ({ label: e.name, kind: tsKind(e.kind), insertText: e.name, sortText: e.sortText, range })) };
             }

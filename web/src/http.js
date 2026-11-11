@@ -225,18 +225,23 @@ export function setupHttpClient(deps) {
         }
         await sendRequest(rel, text, request, undefined, true);
     }
-    // ------------------------------------------------------------ a WebSocket kept open (LiveSockets.cs)
+    // ------------------------------------------------------------ a WebSocket or a streaming gRPC call kept open (LiveSockets.cs, GrpcLive.cs)
     const liveBar = $('http-live'), liveText = $('http-live-text');
     let liveWs = null;
-    /** Opens a live connection and shows its talk as it goes; resolves when it has closed, with the answer as the one-shot request's. */
-    function liveSocket(start, label, subscription) {
+    /**
+     * Opens a live connection and shows its talk as it goes; resolves when it has closed, with the answer as the one-shot request's.
+     * `mode`: 'socket' (a WebSocket, messages typed), 'subscription' (GraphQL's, Stop), 'grpc' (a gRPC call: typed JSON messages for a
+     * client-streaming or bidirectional method, Close ends what is sent; a unary method's answer comes once).
+     */
+    function liveSocket(start, label, mode) {
         liveWs?.close();
+        const subscription = mode === 'subscription', grpc = mode === 'grpc';
         return new Promise((done) => {
             const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-            const ws = new WebSocket(`${scheme}://${location.host}/api/ws/live`);
+            const ws = new WebSocket(`${scheme}://${location.host}/api/${grpc ? 'grpc' : 'ws'}/live`);
             liveWs = ws;
             const transcript = [];
-            let headers = {}, opened = false, closed = null, ended = false, ms = 0;
+            let headers = {}, opened = false, closed = null, ended = false, ms = 0, call = null;
             const paint = () => { bodyView.textContent = websocketTranscript(transcript, closed); bodyView.scrollTop = bodyView.scrollHeight; };
             const finish = (answer) => {
                 if (ended)
@@ -255,8 +260,28 @@ export function setupHttpClient(deps) {
                     finish({ error: m.error });
                     return;
                 }
-                if (m.type === 'open') {
+                if (m.type === 'result') {
+                    finish({ ...m, size: (m.body ?? '').length });
+                    return;
+                }
+                if (m.type === 'open' && grpc) {
                     opened = true;
+                    const typing = m.streaming !== 'server';
+                    head.className = 'ok';
+                    head.textContent = `gRPC · open (${m.streaming === 'bidi' ? 'bidirectional' : m.streaming + ' streaming'}) · ${label}`;
+                    liveBar.hidden = false;
+                    liveText.hidden = !typing;
+                    liveText.placeholder = `A message of ${m.input} as JSON: Enter sends it`;
+                    $('http-live-send').hidden = !typing;
+                    $('http-live-close').textContent = typing ? 'Close' : 'Stop';
+                    $('http-live-close').title = typing ? 'End what is sent: the server then finishes the call' : 'Cancel the call';
+                    if (typing)
+                        liveText.focus();
+                }
+                else if (m.type === 'open') {
+                    opened = true;
+                    liveText.placeholder = 'A message to the server: Enter sends it';
+                    $('http-live-close').title = 'Close the connection (a subscription is stopped first)';
                     headers = m.headers ?? {};
                     head.className = 'ok';
                     head.textContent = `101 Switching Protocols · open${m.protocol ? ` (${m.protocol})` : ''} · ${label}`;
@@ -267,8 +292,14 @@ export function setupHttpClient(deps) {
                     if (!subscription)
                         liveText.focus();
                 }
-                else if (m.type === 'sent' || m.type === 'received') {
+                else if (m.type === 'sent' || m.type === 'received' || m.type === 'note') {
                     transcript.push({ dir: m.type, text: m.text, ms: m.ms });
+                    paint();
+                }
+                else if (m.type === 'closed' && grpc) {
+                    call = m;
+                    headers = m.headers ?? {};
+                    closed = { status: `${m.status} ${m.reason}`, description: m.message ?? '' };
                     paint();
                 }
                 else if (m.type === 'closed') {
@@ -276,7 +307,10 @@ export function setupHttpClient(deps) {
                     paint();
                 }
             };
-            ws.onclose = () => finish(opened
+            ws.onclose = () => finish(grpc && opened
+                ? (call ? { status: call.status, reason: call.reason, message: call.message, headers, ms, body: websocketTranscript(transcript, closed), transcript, size: transcript.reduce((n, t) => n + t.text.length, 0) }
+                    : { error: 'the call ended without a status' })
+                : opened
                 ? { status: 101, reason: 'Switching Protocols', headers, ms, body: websocketTranscript(transcript, closed), transcript, size: transcript.reduce((n, t) => n + t.text.length, 0) }
                 : { error: 'the connection to PyMagic closed' });
         });
@@ -361,10 +395,10 @@ export function setupHttpClient(deps) {
         // a GraphQL subscription (a ws:// address, or a subscription operation) goes over a WebSocket kept open, its events shown as they come
         const subscription = kind === 'graphql' && (/^wss?:\/\//i.test(r.url) || /^\s*subscription\b/.test(graphqlPayload(r.body).query));
         if (subscription)
-            answer = await liveSocket({ url: r.url, headers: Object.fromEntries(r.headers), graphql: graphqlPayload(r.body), fromFile: true }, `${r.method} ${r.url}`, true);
+            answer = await liveSocket({ url: r.url, headers: Object.fromEntries(r.headers), graphql: graphqlPayload(r.body), fromFile: true }, `${r.method} ${r.url}`, 'subscription');
         // a WebSocket request sent from the editor stays open: what is typed below the status goes to the server until Close
         else if (kind === 'websocket' && live)
-            answer = await liveSocket({ url: r.url, headers: Object.fromEntries(r.headers), messages: websocketMessages(r.body), fromFile: true }, `${r.method} ${r.url}`, false);
+            answer = await liveSocket({ url: r.url, headers: Object.fromEntries(r.headers), messages: websocketMessages(r.body), fromFile: true }, `${r.method} ${r.url}`, 'socket');
         else if (kind === 'graphql') {
             // POSTed as JSON, {query, variables}, as PyCharm sends it; the request's own Content-Type stays when it has one
             const headers = Object.fromEntries(r.headers);
@@ -376,6 +410,9 @@ export function setupHttpClient(deps) {
             const ws = await post('/api/ws', { url: r.url, headers: Object.fromEntries(r.headers), messages: websocketMessages(r.body), fromFile: true });
             answer = ws.error ? ws : { status: 101, reason: 'Switching Protocols', headers: ws.headers ?? {}, ms: ws.ms, body: websocketTranscript(ws.transcript, ws.closed), transcript: ws.transcript, size: (ws.transcript ?? []).reduce((n, t) => n + t.text.length, 0) };
         }
+        // a gRPC request sent from the editor: a streaming call stays open, what is typed below the status sent as it is typed
+        else if (kind === 'grpc' && live && grpcTarget(r.url))
+            answer = await liveSocket({ ...grpcTarget(r.url), metadata: Object.fromEntries(r.headers), body: r.body ?? '', fromFile: true }, `${r.method} ${r.url}`, 'grpc');
         else if (kind === 'grpc') {
             const target = grpcTarget(r.url);
             answer = !target ? { error: 'a gRPC address: host:port/package.Service/Method' }

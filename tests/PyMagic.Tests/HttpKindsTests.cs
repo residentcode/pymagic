@@ -175,7 +175,7 @@ public class HttpKindsTests
     static Task Say(WebSocket ws, string text) => ws.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, CancellationToken.None);
 
     /// <summary>PyMagic's side (the page's socket to LiveSockets.Relay) on another port; the test drives the page's side.</summary>
-    static async Task<List<JsonNode>> Live(JsonObject start, Func<ClientWebSocket, List<JsonNode>, Task> drive)
+    static async Task<List<JsonNode>> Live(JsonObject start, Func<ClientWebSocket, List<JsonNode>, Task> drive, Func<WebSocket, Task>? relay = null)
     {
         int port = FreePort();
         using var listener = new HttpListener();
@@ -185,7 +185,7 @@ public class HttpKindsTests
         {
             var ctx = await listener.GetContextAsync();
             var wsc = await ctx.AcceptWebSocketAsync(null);
-            await LiveSockets.Relay(wsc.WebSocket, LiveSockets.StartOf(start)!, CancellationToken.None);
+            await (relay ?? (ws => LiveSockets.Relay(ws, LiveSockets.StartOf(start)!, CancellationToken.None)))(wsc.WebSocket);
             try { await wsc.WebSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); } catch (WebSocketException) { }
         });
         using var page = new ClientWebSocket();
@@ -300,6 +300,8 @@ public class HttpKindsTests
           rpc SayHello (HelloRequest) returns (HelloReply);
           rpc Count (CountRequest) returns (stream Number);
           rpc Fail (HelloRequest) returns (HelloReply);
+          rpc Sum (stream Number) returns (Number);
+          rpc Chat (stream HelloRequest) returns (stream HelloReply);
         }
         enum Mood { MOOD_UNKNOWN = 0; HAPPY = 1; }
         message HelloRequest { string name = 1; int32 times = 2; repeated string tags = 3; map<string, int64> extra = 4; Mood mood = 5; }
@@ -329,6 +331,11 @@ public class HttpKindsTests
                     yield demo_pb2.Number(value=i)
             def Fail(self, request, context):
                 context.abort(grpc.StatusCode.NOT_FOUND, "no one called " + request.name)
+            def Sum(self, requests, context):
+                return demo_pb2.Number(value=sum(r.value for r in requests))
+            def Chat(self, requests, context):
+                for r in requests:
+                    yield demo_pb2.HelloReply(message="hi " + r.name)
 
         server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
         demo_pb2_grpc.add_GreeterServicer_to_server(Greeter(), server)
@@ -381,12 +388,55 @@ public class HttpKindsTests
             Assert.Equal("NOT_FOUND", failed.StatusName);
             Assert.Equal("no one called Bob", failed.Message);
 
+            // kept open (GrpcLive): a client-streaming call's messages, the request's and one typed, then Close and its one answer
+            JsonObject Start(string method, string body) => new() { ["address"] = address, ["service"] = "demo.Greeter", ["method"] = method, ["body"] = body };
+            Func<WebSocket, Task> Relay(JsonObject start) => ws => GrpcLive.Relay(ws, GrpcLive.StartOf(start)!, null, CancellationToken.None);
+            var sum = Start("Sum", "[{\"value\": 1}, {\"value\": 2}]");
+            var summed = Live(sum, async (page, seen) =>
+            {
+                Assert.Equal("client", (await Until(page, seen, "open"))["streaming"]!.GetValue<string>());
+                await Say(page, """{"type":"send","text":"{\"value\": 3}"}""");
+                await Until(page, seen, "sent", x => x["text"]!.GetValue<string>() == "{\"value\":3}");
+                await Say(page, """{"type":"send","text":"{\"valu\": 4}"}""");
+                Assert.Contains("Number has no field valu", (await Until(page, seen, "note"))["text"]!.GetValue<string>());
+                await Say(page, """{"type":"close"}""");
+                await Until(page, seen, "closed");
+            }, Relay(sum)).GetAwaiter().GetResult();
+            Assert.Equal("sent sent sent note received closed", string.Join(" ", summed.Where(x => x["type"]!.GetValue<string>() != "open").Select(x => x["type"]!.GetValue<string>())));
+            Assert.Equal("{\"value\":6}", JsonNode.Parse(summed.First(x => x["type"]!.GetValue<string>() == "received")["text"]!.GetValue<string>())!.ToJsonString());
+            Assert.Equal(0, summed.Last()["status"]!.GetValue<int>());
+
+            // bidirectional: each answer comes before the next message is typed
+            var chat = Start("Chat", "{\"name\": \"Ada\"}");
+            var chatted = Live(chat, async (page, seen) =>
+            {
+                Assert.Equal("bidi", (await Until(page, seen, "open"))["streaming"]!.GetValue<string>());
+                await Until(page, seen, "received", x => x["text"]!.GetValue<string>().Contains("hi Ada"));
+                await Say(page, """{"type":"send","text":"{\"name\": \"Bob\"}"}""");
+                await Until(page, seen, "received", x => x["text"]!.GetValue<string>().Contains("hi Bob"));
+                await Say(page, """{"type":"close"}""");
+                await Until(page, seen, "closed");
+            }, Relay(chat)).GetAwaiter().GetResult();
+            Assert.Equal("open sent received sent received closed", string.Join(" ", chatted.Select(x => x["type"]!.GetValue<string>())));
+            Assert.Equal("OK", chatted.Last()["reason"]!.GetValue<string>());
+
+            // server streaming shows each message as it comes; a unary method answers once, as /api/grpc does
+            var count = Start("Count", "{\"upTo\": 3}");
+            var counted = Live(count, async (page, seen) => await Until(page, seen, "closed"), Relay(count)).GetAwaiter().GetResult();
+            Assert.Equal("server", counted[0]["streaming"]!.GetValue<string>());
+            Assert.Equal(3, counted.Count(x => x["type"]!.GetValue<string>() == "received"));
+            var hello = Start("SayHello", "{\"name\": \"Cy\", \"times\": 1}");
+            var once = Live(hello, async (page, seen) => await Until(page, seen, "result"), Relay(hello)).GetAwaiter().GetResult();
+            Assert.Contains("hello Cy", once.Last()["body"]!.GetValue<string>());
+            var fail = Start("Fail", "{\"name\": \"Dee\"}");
+            Assert.Equal(5, Live(fail, async (page, seen) => await Until(page, seen, "result"), Relay(fail)).GetAwaiter().GetResult().Last()["status"]!.GetValue<int>());
+
             string Why(string service, string method, string json)
             {
                 try { GrpcRequests.Call(address, service, method, json, Array.Empty<KeyValuePair<string, string>>()).GetAwaiter().GetResult(); return "(no error)"; }
                 catch (ServiceException e) { return e.Message; }
             }
-            Assert.Equal("demo.Greeter has no method Hello (it has SayHello, Count, Fail)", Why("demo.Greeter", "Hello", "{}"));
+            Assert.Equal("demo.Greeter has no method Hello (it has SayHello, Count, Fail, Sum, Chat)", Why("demo.Greeter", "Hello", "{}"));
             Assert.Equal("HelloRequest has no field nam (it has name, times, tags, extra, mood)", Why("demo.Greeter", "SayHello", "{\"nam\": \"x\"}"));
             string noService = Why("demo.Nothing", "Go", "{}");
             Assert.True(noService.StartsWith("gRPC reflection answered NOT_FOUND"), noService);

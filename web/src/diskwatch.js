@@ -53,6 +53,7 @@ export function setupDiskWatch(deps) {
         // a node_modules changed (npm install or uninstall settled): the tree shows it, package.json beside it is checked again
         if (event.kind === 'node') {
             window.dispatchEvent(new CustomEvent('pymagic:nodeModules', { detail: event.path }));
+            window.dispatchEvent(new CustomEvent('pymagic:diskChanged', { detail: [event] }));
             busy = busy.then(() => deps.refreshTree()).catch(() => { });
             return;
         }
@@ -63,6 +64,8 @@ export function setupDiskWatch(deps) {
         timer = setTimeout(() => {
             const events = batch;
             batch = [];
+            // (the TypeScript service's project reads again what changed: tsproject.js)
+            window.dispatchEvent(new CustomEvent('pymagic:diskChanged', { detail: events }));
             busy = busy.then(() => handle(events)).catch(() => { });
         }, 300);
     };

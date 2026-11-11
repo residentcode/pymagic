@@ -61,7 +61,7 @@ export function grpcTarget(url) {
 
 /** The talk of a WebSocket request as text: each message sent (→) and received (←), with when it was, from the connection's start. */
 export function websocketTranscript(transcript, closed) {
-    const lines = (transcript ?? []).map((t) => `${t.dir === 'sent' ? '→' : '←'} ${String(t.ms).padStart(5)} ms  ${t.text.replace(/\n/g, '\n            ')}`);
+    const lines = (transcript ?? []).map((t) => `${t.dir === 'sent' ? '→' : t.dir === 'note' ? '!' : '←'} ${String(t.ms).padStart(5)} ms  ${t.text.replace(/\n/g, '\n            ')}`);
     if (closed)
         lines.push(`× closed${closed.status ? ` (${closed.status}${closed.description ? ` ${closed.description}` : ''})` : ''}`);
     return lines.join('\n');
