@@ -12,6 +12,7 @@ const { missingWebPackages } = require('./web-packages');
 const { cloneAddressOk, repositoryName } = require('./clone-model');
 const { engineSettingsFile, customizeOf, withCustomize } = require('./customize-model');
 const { ghCommand, ghAccountOf, deviceCodeOf, ghWantsEnter, tokenOk, reposOf } = require('./github-model');
+const vcsHosts = require('./vcs-hosts-model');
 
 const repo = path.resolve(__dirname, '..');
 const packaged = app.isPackaged;
@@ -268,6 +269,25 @@ async function githubStatus() {
   return r.code === 0 && user ? { via: 'gh', user } : { via: null, gh: !r.missing };
 }
 const ghLogins = new Map();   // window -> the gh auth login running for it
+// ---- Get from VCS's other hosts (GitHub Enterprise, GitLab, Bitbucket): a token each, all kept in one file encrypted by Windows
+const vcsAccountsFile = () => path.join(app.getPath('userData'), 'vcs-accounts.bin');
+function vcsAccounts() {
+  try { return safeStorage.isEncryptionAvailable() ? JSON.parse(safeStorage.decryptString(fs.readFileSync(vcsAccountsFile()))) : {}; } catch { return {}; }
+}
+function keepVcsAccounts(accounts) {
+  if (!Object.keys(accounts).length) { try { fs.unlinkSync(vcsAccountsFile()); } catch { /* none */ } return; }
+  fs.mkdirSync(path.dirname(vcsAccountsFile()), { recursive: true });
+  fs.writeFileSync(vcsAccountsFile(), safeStorage.encryptString(JSON.stringify(accounts)));
+}
+async function vcsApi(a, apiPath) {
+  const label = vcsHosts.KINDS[a.kind].label;
+  let res;
+  try { res = await fetch(vcsHosts.apiBaseOf(a.kind, a.server) + apiPath, { headers: vcsHosts.headersOf(a.kind, a.token, a.user), signal: AbortSignal.timeout(30000) }); }
+  catch (e) { throw new Error(label + ' could not be reached (' + a.server + '): ' + (e.cause?.code ?? e.message)); }
+  if (res.status === 401 || res.status === 403) throw new Error(label + ' did not take the token (' + res.status + '): it may be wrong, expired, or lack the read scopes.');
+  if (!res.ok) throw new Error(label + ' answered ' + res.status + ' ' + res.statusText);
+  return res.json();
+}
 const REPOS_PATH = '/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member';
 
 /**
@@ -430,6 +450,36 @@ app.whenReady().then(async () => {
       // --paginate writes one array per page, one after the other
       const pages = JSON.parse('[' + r.out.trim().replace(/\]\s*\[/g, '],[') + ']');
       return { repos: reposOf(pages) };
+    } catch (err) { return { error: String(err.message ?? err) }; }
+  });
+  // the other hosts: the accounts kept (no token reaches the page), signing in to one, forgetting it, its repositories
+  ipcMain.handle('pymagic:vcs-accounts', () => ({ accounts: vcsHosts.accountsShown(vcsAccounts()), kinds: vcsHosts.KINDS }));
+  ipcMain.handle('pymagic:vcs-sign-in', async (_e, kind, server, user, token) => {
+    try {
+      const problem = vcsHosts.signInProblem(kind, { token, user });
+      if (problem) return { error: problem };
+      if (!safeStorage.isEncryptionAvailable()) return { error: 'Windows cannot keep the token encrypted here.' };
+      const a = { kind, server: vcsHosts.serverOf(kind, server), user: String(user ?? '').trim(), token: String(token).trim() };
+      a.login = vcsHosts.loginOf(kind, await vcsApi(a, '/user'));
+      const all = vcsAccounts();
+      const key = vcsHosts.accountKey(kind, a.server);
+      all[key] = a;
+      keepVcsAccounts(all);
+      return { key, accounts: vcsHosts.accountsShown(all) };
+    } catch (err) { return { error: String(err.message ?? err) }; }
+  });
+  ipcMain.handle('pymagic:vcs-forget', (_e, key) => { const all = vcsAccounts(); delete all[String(key)]; keepVcsAccounts(all); return { accounts: vcsHosts.accountsShown(all) }; });
+  ipcMain.handle('pymagic:vcs-repos', async (_e, key) => {
+    const a = vcsAccounts()[String(key)];
+    if (!a) return { error: 'That account is not signed in any more.' };
+    try {
+      const pages = [];
+      for (let page = 1; page <= 10; page++) {
+        const body = await vcsApi(a, vcsHosts.reposPathOf(a.kind, page));
+        pages.push(body);
+        if (!vcsHosts.morePages(a.kind, body)) break;
+      }
+      return { repos: vcsHosts.hostReposOf(a.kind, pages) };
     } catch (err) { return { error: String(err.message ?? err) }; }
   });
   ipcMain.handle('pymagic:all-settings', (e) => { const w = windowOf(e.sender); if (!w.project) return welcomeTool(w, 'settings'); });

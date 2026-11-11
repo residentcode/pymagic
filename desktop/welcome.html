@@ -93,6 +93,23 @@
       <pre class="progress" id="vcs-progress" hidden></pre>
       <div class="row"><button class="primary" id="vcs-clone">Clone</button><button id="vcs-cancel">Cancel</button></div>
       <div class="gh" id="gh">
+        <div class="field"><label for="vcs-host">Your repositories on</label><select id="vcs-host"><option value="github">GitHub</option><option value="ghe">GitHub Enterprise</option><option value="gitlab">GitLab</option><option value="bitbucket">Bitbucket</option></select></div>
+        <div id="host-other" hidden>
+          <div class="gh-status" id="acc-status"></div>
+          <div id="acc-signin" hidden>
+            <p class="note" id="acc-help"></p>
+            <div id="acc-server-row"><label for="acc-server">The server's address</label><input id="acc-server" spellcheck="false"></div>
+            <div id="acc-user-row"><label for="acc-user">Your Atlassian account's email</label><input id="acc-user" autocomplete="off" spellcheck="false"></div>
+            <label for="acc-token">The token (Windows keeps it encrypted for PyMagic)</label>
+            <div class="row"><input id="acc-token" type="password" autocomplete="off" spellcheck="false"><button id="acc-save">Sign in</button></div>
+          </div>
+          <div id="acc-list" hidden>
+            <input id="acc-filter" placeholder="Filter your repositories" spellcheck="false">
+            <ul class="gh-repos" id="acc-repos"></ul>
+          </div>
+          <div class="error" id="acc-error" hidden></div>
+        </div>
+        <div id="host-github">
         <div class="gh-status" id="gh-status">GitHub: …</div>
         <div id="gh-signin" hidden>
           <p class="note" id="gh-why">Sign in to GitHub to choose one of your repositories here (your own, your collaborations, your organizations').</p>
@@ -108,6 +125,7 @@
           <ul class="gh-repos" id="gh-repos"></ul>
         </div>
         <div class="error" id="gh-error" hidden></div>
+        </div>
       </div>
     </div>
     <h2>Recent projects</h2>
@@ -204,10 +222,11 @@
   // ---- GitHub: signed in (the GitHub CLI's own, or a token kept for PyMagic), the person's repositories to choose from
   let repos = [];
   const ghError = (text) => { $('gh-error').textContent = text ?? ''; $('gh-error').hidden = !text; };
-  function paintRepos() {
-    const q = $('gh-filter').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const paintRepos = () => paintList($('gh-repos'), $('gh-filter'), repos, paintRepos);
+  /** A host's repositories in `list`, those `filter` matches; one chosen fills the address and the folder. */
+  function paintList(list, filter, repos, repaint) {
+    const q = filter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const shown = repos.filter((r) => q.every((w) => r.name.toLowerCase().includes(w) || r.description.toLowerCase().includes(w)));
-    const list = $('gh-repos');
     list.replaceChildren();
     for (const r of shown.slice(0, 300)) {
       const li = document.createElement('li');
@@ -226,7 +245,7 @@
       about.textContent = r.description;
       text.append(name, about);
       li.append(text);
-      const choose = () => { $('vcs-url').value = r.url; void suggest(); paintRepos(); };
+      const choose = () => { $('vcs-url').value = r.url; void suggest(); repaint(); };
       li.addEventListener('click', choose);
       li.addEventListener('keydown', (e) => { if (e.key === 'Enter') choose(); });
       list.append(li);
@@ -296,6 +315,80 @@
   $('gh-filter').addEventListener('input', paintRepos);
   let ghAsked = false;
 
+  // ---- the other hosts (GitHub Enterprise, GitLab, Bitbucket): an account each server, signed in with a token, its repositories
+  let accounts = [], kinds = {}, accKey = null, accRepos = [], accAsked = false;
+  const accError = (text) => { $('acc-error').textContent = text ?? ''; $('acc-error').hidden = !text; };
+  const paintAcc = () => paintList($('acc-repos'), $('acc-filter'), accRepos, paintAcc);
+  function showHost() {
+    const kind = $('vcs-host').value;
+    $('host-github').hidden = kind !== 'github';
+    $('host-other').hidden = kind === 'github';
+    if (kind === 'github') return;
+    accError('');
+    const mine = accounts.filter((a) => a.kind === kind);
+    if (!mine.some((a) => a.key === accKey)) accKey = mine[0]?.key ?? null;
+    const status = $('acc-status');
+    status.replaceChildren();
+    const k = kinds[kind] ?? {};
+    const a = mine.find((x) => x.key === accKey);
+    // another host's list (or a signed-out account's) goes
+    accRepos = [];
+    $('acc-repos').replaceChildren();
+    if (!a) { signInForm(kind); return; }
+    status.append(k.label + ': ', Object.assign(document.createElement('b'), { textContent: a.user }), ' on ' + a.server.replace(/^https:\/\//, ''));
+    if (mine.length > 1) {
+      const pick = Object.assign(document.createElement('select'), { id: 'acc-pick', title: 'Your accounts on ' + k.label });
+      for (const x of mine) pick.append(new Option(x.user + ' on ' + x.server.replace(/^https:\/\//, ''), x.key, false, x.key === accKey));
+      pick.addEventListener('change', () => { accKey = pick.value; showHost(); });
+      status.append(pick);
+    }
+    const out = Object.assign(document.createElement('button'), { textContent: 'Sign out', title: 'Forget the token PyMagic keeps (it stays valid on ' + k.label + ' until you revoke it there)' });
+    out.addEventListener('click', async () => { accounts = (await desktop.vcsForget(a.key)).accounts ?? []; accKey = null; showHost(); });
+    status.append(out);
+    if (kind !== 'bitbucket') {
+      const another = Object.assign(document.createElement('button'), { textContent: 'Another server…' });
+      another.addEventListener('click', () => signInForm(kind, true));
+      status.append(another);
+    }
+    $('acc-signin').hidden = true;
+    $('acc-list').hidden = false;
+    $('acc-filter').value = '';
+    $('acc-repos').replaceChildren(Object.assign(document.createElement('li'), { className: 'empty', textContent: 'Reading your repositories…' }));
+    const asked = a.key;
+    void desktop.vcsRepos(a.key).then((r) => { if (accKey !== asked) return; if (r?.error) accError(r.error); accRepos = r?.repos ?? []; paintAcc(); });
+  }
+  function signInForm(kind, another = false) {
+    const k = kinds[kind] ?? {};
+    if (!another) $('acc-status').textContent = k.label + ': not signed in';
+    $('acc-help').textContent = 'Sign in to choose one of your repositories here. ' + (k.tokenHelp ?? '');
+    $('acc-server-row').hidden = kind === 'bitbucket';
+    $('acc-user-row').hidden = kind !== 'bitbucket';
+    $('acc-server').value = another ? '' : k.server ?? '';
+    $('acc-server').placeholder = kind === 'ghe' ? 'https://github.example.com' : 'https://gitlab.example.com';
+    $('acc-signin').hidden = false;
+    $('acc-list').hidden = !another;
+    (kind === 'bitbucket' ? $('acc-user') : kind === 'ghe' || another ? $('acc-server') : $('acc-token')).focus();
+  }
+  const accSave = async () => {
+    const kind = $('vcs-host').value;
+    accError('');
+    $('acc-save').disabled = true;
+    const r = await desktop.vcsSignIn(kind, $('acc-server').value, $('acc-user').value, $('acc-token').value);
+    $('acc-save').disabled = false;
+    if (r?.error) { accError(r.error); return; }
+    $('acc-token').value = '';
+    accounts = r.accounts ?? [];
+    accKey = r.key;
+    showHost();
+  };
+  $('acc-save').addEventListener('click', () => void accSave());
+  $('acc-token').addEventListener('keydown', (e) => { if (e.key === 'Enter') void accSave(); });
+  $('acc-filter').addEventListener('input', paintAcc);
+  $('vcs-host').addEventListener('change', async () => {
+    if (!accAsked && desktop.vcsAccounts) { accAsked = true; const r = await desktop.vcsAccounts(); accounts = r?.accounts ?? []; kinds = r?.kinds ?? {}; }
+    showHost();
+  });
+
   // ---- Get from VCS: git clone into a new folder, then the project opens here
   let dirTouched = false;
   const suggest = async () => { if (!dirTouched) $('vcs-dir').value = await desktop.cloneNear($('vcs-url').value); };
@@ -307,7 +400,7 @@
     // who is signed in to GitHub, asked once a window
     if (!ghAsked) { ghAsked = true; void desktop.githubStatus?.().then(signedIn); }
   });
-  $('vcs-url').addEventListener('input', () => { void suggest(); if (repos.length) paintRepos(); });
+  $('vcs-url').addEventListener('input', () => { void suggest(); if (repos.length) paintRepos(); if (accRepos.length) paintAcc(); });
   $('vcs-dir').addEventListener('input', () => { dirTouched = true; });
   $('vcs-browse').addEventListener('click', async () => {
     const chosen = await desktop.pickFolder($('vcs-dir').value);

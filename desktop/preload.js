@@ -33,5 +33,10 @@ contextBridge.exposeInMainWorld('pymagicDesktop', {
   githubForget: () => ipcRenderer.invoke('pymagic:github-forget'),
   githubRepos: () => ipcRenderer.invoke('pymagic:github-repos'),
   onGithubCode: (fn) => { const on = (_e, c) => fn({ code: String(c?.code ?? ''), url: String(c?.url ?? '') }); ipcRenderer.on('pymagic:github-code', on); return () => ipcRenderer.off('pymagic:github-code', on); },
+  // Get from VCS's other hosts (GitHub Enterprise, GitLab, Bitbucket): the accounts kept, signing in with a token, forgetting one, its repositories
+  vcsAccounts: () => ipcRenderer.invoke('pymagic:vcs-accounts'),
+  vcsSignIn: (kind, server, user, token) => ipcRenderer.invoke('pymagic:vcs-sign-in', String(kind), String(server ?? ''), String(user ?? ''), String(token ?? '')),
+  vcsForget: (key) => ipcRenderer.invoke('pymagic:vcs-forget', String(key)),
+  vcsRepos: (key) => ipcRenderer.invoke('pymagic:vcs-repos', String(key)),
   showWelcome: () => ipcRenderer.invoke('pymagic:show-welcome'),
 });
