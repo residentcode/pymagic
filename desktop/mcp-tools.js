@@ -61,7 +61,7 @@ const TOOLS = [
     directoryPath: str('The folder, from the project folder (the project itself when empty).'),
     maxDepth: int('How many levels deep (default 5).'),
   }, [], reads),
-  tool('get_file_problems', 'The errors and warnings PyMagic\'s inspections find in a file: Python files always, other files when they are open in the editor.', {
+  tool('get_file_problems', 'The errors and warnings PyMagic finds in a file: its inspections for Python, the editor\'s checks for every other kind (a file that is not open is read for it).', {
     filePath: str('The file, from the project folder.'),
     errorsOnly: bool('Only the errors (default false).'),
   }, ['filePath'], reads),
@@ -69,12 +69,12 @@ const TOOLS = [
     errorsOnly: bool('Only the errors (default false).'),
     maxCount: int('At most this many (default 500).'),
   }, [], reads),
-  tool('get_symbol_info', 'What PyMagic knows of the name at a place in a Python file: its kind, type, signature and documentation, as the editor\'s hover shows it, and where it is defined.', {
+  tool('get_symbol_info', 'What PyMagic knows of the name at a place in a Python, JavaScript, TypeScript or PHP file: its kind, type, signature and documentation, as the editor\'s hover shows it, and where it is defined.', {
     filePath: str('The file, from the project folder.'),
     line: int('The line, from 1.'),
     column: int('The column, from 1.'),
   }, ['filePath', 'line', 'column'], reads),
-  tool('rename_refactoring', 'Renames a symbol of a Python file (a class, function, method, variable or parameter) and every use of it in the project, as Refactor > Rename does.', {
+  tool('rename_refactoring', 'Renames a symbol of a Python, JavaScript, TypeScript or PHP file (a class, function, method, variable or parameter) and every use of it in the project, as Refactor > Rename does.', {
     pathInProject: str('The file the symbol is defined in.'),
     symbolName: str('Its name; Class.method for a member.'),
     newName: str('The new name.'),
@@ -99,6 +99,25 @@ const TOOLS = [
     timeout: int('How long to wait in milliseconds (default 120000); the command is stopped then.'),
     maxLinesCount: int('At most this many lines of output, the last ones (default 1000).'),
   }, ['command'], { destructiveHint: true, openWorldHint: true }),
+  tool('get_quick_fixes', 'The quick fixes PyMagic offers in a Python file (Alt+Enter on a problem): each with its line and title. Without a line, those of every line that has a problem.', {
+    filePath: str('The file, from the project folder.'),
+    line: int('Only this line, from 1.'),
+  }, ['filePath'], reads),
+  tool('apply_quick_fix', 'Carries out a quick fix of a Python file\'s line (as get_quick_fixes names it) and saves what it changed.', {
+    filePath: str('The file, from the project folder.'),
+    line: int('The line, from 1.'),
+    title: str('The fix\'s title, or a part of it.'),
+  }, ['filePath', 'line', 'title']),
+  tool('get_project_vcs_status', 'The project\'s Git state: its branch, what it tracks, and every changed file with what happened to it.', {}, [], reads),
+  tool('find_commit_by_message', 'The commits whose message has a text, the newest first: hash, date, author and subject.', {
+    text: str('The text to find in commit messages.'),
+    maxCount: int('At most this many (default 50).'),
+  }, ['text'], reads),
+  tool('toggle_debugger_breakpoint', 'Sets a breakpoint on a line of a file, or takes away the one that is there.', {
+    filePathInProject: str('The file, from the project folder.'),
+    line: int('The line, from 1.'),
+  }, ['filePathInProject', 'line']),
+  tool('get_debugger_breakpoints', 'The breakpoints of the files PyMagic has read: file, line and, when set, condition and log message.', {}, [], reads),
   tool('get_project_dependencies', 'The packages installed in the project\'s Python interpreter, with their versions.', {}, [], reads),
   tool('get_project_info', 'The project: its folder, its Python interpreter, and the other projects open in PyMagic.', {}, [], reads),
 ];

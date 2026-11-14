@@ -415,10 +415,14 @@ const SPECIAL = {
         };
         const input = (value, placeholder, onInput, cls = '') => {
             if (cls === 'scope') {
-                // where a snippet is offered: Python files, or the text of Django templates
+                // where a snippet is offered: the languages its scope names, as VS Code writes them (none: Python)
                 const sel = document.createElement('select');
-                sel.add(new Option('Python', ''));
-                sel.add(new Option('Django template', 'django-html'));
+                for (const [scope, name] of [['', 'Python'], ['django-html', 'Django template'], ['javascript,typescript', 'JavaScript and TypeScript'], ['typescript', 'TypeScript'],
+                    ['html', 'HTML'], ['css,scss,less', 'CSS, SCSS and Less'], ['sql', 'SQL'], ['shell', 'Shell script'], ['http', 'HTTP request'], ['php', 'PHP'], ['blade', 'Blade'],
+                    ['json', 'JSON'], ['yaml', 'YAML'], ['xml', 'XML'], ['markdown', 'Markdown']])
+                    sel.add(new Option(name, scope));
+                // a scope written by hand in the file is kept as it is
+                if (value && ![...sel.options].some((o) => o.value === value)) sel.add(new Option(value, value));
                 sel.value = value ?? '';
                 sel.className = 'tpl-field';
                 sel.onchange = () => onInput(sel.value);
@@ -464,6 +468,7 @@ const SPECIAL = {
             save.onclick = async () => {
                 const res = await fetch('/api/file?path=' + encodeURIComponent(file), { method: 'PUT', body: write(items) }).catch(() => null);
                 save.textContent = res?.ok ? 'Saved' : 'Not saved';
+                if (res?.ok && file === SNIPPETS) window.dispatchEvent(new Event('pymagic:snippets'));   // the editor reads them again
                 window.setTimeout(() => { save.textContent = 'Save'; }, 1500);
             };
             fetch('/api/file?path=' + encodeURIComponent(file)).then((r) => (r.ok ? r.text() : '')).catch(() => '').then((text) => { items = read(text); draw(); });

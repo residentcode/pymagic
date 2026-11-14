@@ -1,11 +1,12 @@
-// Get from VCS's other hosts than github.com, without Electron: GitHub Enterprise Server, GitLab (gitlab.com or a server of its own) and
-// Bitbucket Cloud. Each is signed in to with a token the person pastes (checked by the host's API, kept encrypted by Windows through
+// Get from VCS's other hosts than github.com, without Electron: GitHub Enterprise Server, GitLab (gitlab.com or a server of its own),
+// Bitbucket Cloud and Bitbucket Data Center (a company's own Bitbucket server). Each is signed in to with a token the person pastes (checked by the host's API, kept encrypted by Windows through
 // Electron's safeStorage); then the person's repositories, the latest changed first, as github-model.js's reposOf gives GitHub's.
 
 const KINDS = {
   ghe: { label: 'GitHub Enterprise', server: '', tokenHelp: 'A personal access token of your GitHub Enterprise server (Settings › Developer settings › Personal access tokens), with read access to your repositories.' },
   gitlab: { label: 'GitLab', server: 'https://gitlab.com', tokenHelp: 'A personal access token of GitLab (Preferences › Access tokens) with the read_api and read_repository scopes.' },
   bitbucket: { label: 'Bitbucket', server: 'https://bitbucket.org', tokenHelp: 'An API token of Bitbucket (your Atlassian account › Security › API tokens, with the read:repository and read:user scopes) and your account\'s email.' },
+  bbserver: { label: 'Bitbucket Data Center', server: '', tokenHelp: 'An HTTP access token of your Bitbucket server (your picture › Manage account › HTTP access tokens) with the Repository read permission.' },
 };
 
 /**
@@ -33,6 +34,7 @@ function serverOf(kind, text) {
 function apiBaseOf(kind, server, env = process.env) {
   if (kind === 'ghe') return server + '/api/v3';
   if (kind === 'gitlab') return server + '/api/v4';
+  if (kind === 'bbserver') return server + '/rest/api/1.0';
   return env.PYMAGIC_BITBUCKET_API || 'https://api.bitbucket.org/2.0';
 }
 
@@ -40,6 +42,7 @@ function apiBaseOf(kind, server, env = process.env) {
 function headersOf(kind, token, user) {
   const h = { 'User-Agent': 'PyMagic', Accept: 'application/json' };
   if (kind === 'ghe') { h.Authorization = 'Bearer ' + token; h.Accept = 'application/vnd.github+json'; }
+  else if (kind === 'bbserver') h.Authorization = 'Bearer ' + token;
   else if (kind === 'gitlab') h['PRIVATE-TOKEN'] = token;
   else h.Authorization = 'Basic ' + Buffer.from(String(user) + ':' + token).toString('base64');
   return h;
@@ -55,8 +58,17 @@ function signInProblem(kind, { token, user } = {}) {
   return null;
 }
 
-/** The account the API's /user names. */
-function loginOf(kind, body) {
+/** The API path that says whose token it is (a Bitbucket server has none: any answer carries the name in its X-AUSERNAME header). */
+const whoPathOf = (kind) => (kind === 'bbserver' ? '/repos?limit=1' : '/user');
+
+/** The account the API's /user names (a Bitbucket server's: the name its answer's header carries). */
+function loginOf(kind, body, header) {
+  if (kind === 'bbserver') {
+    let who = String(header ?? '').trim();
+    try { who = decodeURIComponent(who); } catch { /* as it is */ }
+    if (!who || !Array.isArray(body?.values)) throw new Error('The server did not say whose token it is.');
+    return who;
+  }
   const name = kind === 'ghe' ? body?.login : kind === 'gitlab' ? body?.username : body?.username ?? body?.nickname ?? body?.display_name;
   if (typeof name !== 'string' || !name) throw new Error('The server did not say whose token it is.');
   return name;
@@ -66,18 +78,20 @@ function loginOf(kind, body) {
 function reposPathOf(kind, page) {
   if (kind === 'ghe') return '/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member&page=' + page;
   if (kind === 'gitlab') return '/projects?membership=true&order_by=last_activity_at&sort=desc&per_page=100&page=' + page;
+  if (kind === 'bbserver') return '/repos?limit=100&start=' + (page - 1) * 100;
   return '/repositories?role=member&sort=-updated_on&pagelen=100&page=' + page;
 }
 
 /** Whether there is a page after this one. */
 function morePages(kind, body) {
   if (kind === 'bitbucket') return typeof body?.next === 'string' && body.next.length > 0;
+  if (kind === 'bbserver') return body?.isLastPage === false;
   return Array.isArray(body) && body.length >= 100;
 }
 
 /** A host's repositories (its API's pages) as the welcome screen lists them, the latest changed first, one entry each. */
 function hostReposOf(kind, pages) {
-  const items = [].concat(...(pages ?? []).map((p) => (kind === 'bitbucket' ? p?.values ?? [] : Array.isArray(p) ? p : [])));
+  const items = [].concat(...(pages ?? []).map((p) => (kind === 'bitbucket' || kind === 'bbserver' ? p?.values ?? [] : Array.isArray(p) ? p : [])));
   const seen = new Set();
   const out = [];
   for (const r of items) {
@@ -90,6 +104,11 @@ function hostReposOf(kind, pages) {
       const https = (r.links?.clone ?? []).find((c) => c?.name === 'https')?.href;
       // Bitbucket writes the account into the address (https://name@bitbucket.org/…): left out, git asks its credential helper
       if (typeof https === 'string') e = { name: r.full_name, url: https.replace(/^https:\/\/[^@/]+@/, 'https://'), description: r.description ?? '', private: !!r.is_private, fork: !!r.parent, archived: false, pushed: r.updated_on ?? '' };
+    }
+    else if (kind === 'bbserver' && typeof r?.slug === 'string' && typeof r.project?.key === 'string') {
+      // PROJECT/repo (a person's own: ~name/repo), its http address without the account in it
+      const http = (r.links?.clone ?? []).find((c) => c?.name === 'http' || c?.name === 'https')?.href;
+      if (typeof http === 'string') e = { name: r.project.key + '/' + r.slug, url: http.replace(/^(https?:\/\/)[^@/]+@/, '$1'), description: r.description ?? '', private: r.public === false, fork: !!r.origin, archived: !!r.archived, pushed: '' };
     }
     if (!e || seen.has(e.name)) continue;
     seen.add(e.name);
@@ -108,4 +127,4 @@ function accountsShown(accounts) {
     .sort((a, b) => a.key.localeCompare(b.key));
 }
 
-module.exports = { KINDS, serverOf, apiBaseOf, headersOf, signInProblem, loginOf, reposPathOf, morePages, hostReposOf, accountKey, accountsShown };
+module.exports = { KINDS, serverOf, apiBaseOf, headersOf, signInProblem, loginOf, whoPathOf, reposPathOf, morePages, hostReposOf, accountKey, accountsShown };

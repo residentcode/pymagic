@@ -1984,6 +1984,8 @@ export function setupRun(deps) {
         /** Stopped on a value the debugger shows in its popup: the language's own hover stands aside. */
         debugValueAt,
         onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null, runForAgent,
+        /** For the MCP server's tools: a file's breakpoints, and one set or taken away. */
+        breakpointsOf, toggleBreakpoint,
         /** A file run under the profiler (the tree's More Run/Debug > Profile). */
         profileScript: (rel) => launch(rel, false, true, ''),
         /** `python -m module args`; false when a run is going. */

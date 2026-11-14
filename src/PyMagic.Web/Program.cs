@@ -1019,12 +1019,19 @@ app.Map("/api/ws/live", async (HttpContext ctx) =>
 app.MapGet("/api/ts/project", () =>
 {
     if (!TsProject.IsJsProject(root)) return Results.Json(new { js = false });
-    var code = TsProject.Code(root);
-    return Results.Json(new { js = true, config = TsProject.Config(root), files = code.List.Select(f => new { path = f.Path, text = f.Text }), truncated = code.Truncated });
+    // (the limits can be set lower by the checks, which have no project of thousands of files)
+    var code = int.TryParse(Environment.GetEnvironmentVariable("PYMAGIC_TS_MAX_FILES"), out var maxFiles) && maxFiles > 0 ? TsProject.Code(root, maxFiles) : TsProject.Code(root);
+    return Results.Json(new { js = true, config = TsProject.Config(root), configs = TsProject.Configs(root), files = code.List.Select(f => new { path = f.Path, text = f.Text }), truncated = code.Truncated });
 });
 app.MapGet("/api/ts/packages", () =>
 {
-    var p = TsProject.Packages(root);
+    var p = long.TryParse(Environment.GetEnvironmentVariable("PYMAGIC_TS_MAX_PACKAGE_BYTES"), out var maxBytes) && maxBytes > 0 ? TsProject.Packages(root, maxBytes) : TsProject.Packages(root);
+    return Results.Json(new { files = p.List.Select(f => new { path = f.Path, text = f.Text }), truncated = p.Truncated });
+});
+// one package's types, when the packages' types did not all fit and a file in the editor imports it
+app.MapGet("/api/ts/package", (string name) =>
+{
+    var p = TsProject.Package(root, name);
     return Results.Json(new { files = p.List.Select(f => new { path = f.Path, text = f.Text }), truncated = p.Truncated });
 });
 

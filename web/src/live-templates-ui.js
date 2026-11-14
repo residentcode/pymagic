@@ -5,7 +5,7 @@ import { change, settings } from './settings';
 import { openMenu } from './menu';
 import {
     CONTEXTS, EXPAND_KEYS, keyName, contextNames, allTemplates, groupsOf, cleanConf, setOn, edited, restored, added, removed,
-    groupAdded, groupRenamed, groupRemoved, preview,
+    groupAdded, groupRenamed, groupRemoved, preview, placesOf, EXPRESSIONS,
 } from './live-templates-model.js';
 
 const el = (tag, cls, text) => {
@@ -122,7 +122,9 @@ export function liveTemplatesSection(page, source) {
         restoreBtn.disabled = !((t && t.builtIn && (t.changed || !t.on)) || (g && g.templates.some((x) => x.builtIn && (x.changed || !x.on))));
     }
 
+    let drawVars = () => {};
     function drawEdit() {
+        drawVars = () => {};
         edit.replaceChildren();
         const t = current(), g = currentGroup();
         if (g) {
@@ -167,8 +169,19 @@ export function liveTemplatesSection(page, source) {
         const desc = el('label', 'lt-line lt-wide', 'Description ');
         desc.append(field('lt-description', t.description, (v) => patch({ description: v })));
         top.append(abbr, desc);
+        if (!t.builtIn) {
+            // one of the person's own can go to another of their groups
+            const into = el('select');
+            into.id = 'lt-group';
+            for (const g of groups.filter((x) => x.own)) into.add(new Option(g.name, g.name));
+            into.value = t.group;
+            into.onchange = () => { open.add(into.value); save(edited(conf, t, { group: into.value })); refresh(); draw(); };
+            const line = el('label', 'lt-line', 'Group ');
+            line.append(into);
+            top.append(line);
+        }
 
-        const body = field('lt-body', t.body, (v) => { patch({ body: v }); shows.textContent = preview(v); }, 'textarea');
+        const body = field('lt-body', t.body, (v) => { patch({ body: v }); shows.textContent = preview(v, current()?.vars); drawVars(); }, 'textarea');
         body.onkeydown = (e) => {
             // Tab writes an indentation in the text, as in an editor
             if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.altKey) return;
@@ -198,14 +211,70 @@ export function liveTemplatesSection(page, source) {
         start.onchange = () => patch({ lineStart: start.checked });
         const startLine = el('label', 'lt-check');
         startLine.append(start, ' Only at the start of a line');
-        right.append(keyLine, startLine);
+        const tidy = el('input');
+        tidy.type = 'checkbox';
+        tidy.id = 'lt-reformat';
+        tidy.checked = !!t.reformat;
+        tidy.disabled = postfix;
+        tidy.onchange = () => patch({ reformat: tidy.checked });
+        const tidyLine = el('label', 'lt-check');
+        tidyLine.title = 'Once the template is filled in, its lines are formatted by the language\'s formatter';
+        tidyLine.append(tidy, ' Reformat according to style');
+        const varsBtn = el('button', 'lt-tool', 'Edit Variables…');
+        varsBtn.id = 'lt-vars-button';
+        varsBtn.disabled = postfix;
+        right.append(keyLine, startLine, tidyLine, varsBtn);
+        // the places of the text, each with what fills it: an expression, a default, and whether it is still stopped at
+        const varsBox = el('div', 'lt-vars');
+        varsBox.id = 'lt-vars';
+        varsBox.hidden = true;
+        varsBtn.onclick = () => { varsBox.hidden = !varsBox.hidden; drawVars(); };
+        const list = el('datalist');
+        list.id = 'lt-expressions';
+        for (const [form, what] of EXPRESSIONS) { const o = new Option(what, form); list.append(o); }
+        drawVars = () => {
+            if (varsBox.hidden) return;
+            const now = current();
+            const names = placesOf(now?.body ?? '');
+            varsBox.replaceChildren(list);
+            if (!names.length) { varsBox.append(el('p', 'set-note', 'The text has no $name$ places yet.')); return; }
+            for (const h of ['Name', 'Expression', 'Default value', 'Skip if defined']) varsBox.append(el('div', 'lt-label', h));
+            for (const name of names) {
+                const v = now.vars?.[name] ?? { expr: '', def: '', skip: false };
+                const change = (part) => {
+                    const fresh = current();
+                    const vars = { ...(fresh.vars ?? {}) };
+                    const one = { expr: '', def: '', skip: false, ...(vars[name] ?? {}), ...part };
+                    if (one.expr.trim() || one.def) vars[name] = one; else delete vars[name];
+                    patch({ vars });
+                    shows.textContent = preview(fresh.body, vars);
+                };
+                const expr = el('input', 'lt-field');
+                expr.value = v.expr;
+                expr.setAttribute('list', 'lt-expressions');
+                expr.placeholder = 'fileName(), date(), capitalize(other)…';
+                expr.dataset.name = name;
+                expr.oninput = () => change({ expr: expr.value });
+                const def = el('input', 'lt-field');
+                def.value = v.def;
+                def.placeholder = name;
+                def.dataset.default = name;
+                def.oninput = () => change({ def: def.value });
+                const skip = el('input');
+                skip.type = 'checkbox';
+                skip.checked = !!v.skip;
+                skip.dataset.skip = name;
+                skip.onchange = () => change({ skip: skip.checked });
+                varsBox.append(el('code', '', name), expr, def, skip);
+            }
+        };
         if (!postfix) {
             const shows = el('pre', 'lt-preview');
             shows.id = 'lt-preview';
             right.append(el('div', 'lt-label', 'Writes'), shows);
         }
         const shows = right.querySelector('#lt-preview') ?? el('pre');
-        shows.textContent = preview(t.body);
+        shows.textContent = preview(t.body, t.vars);
 
         const mid = el('div', 'lt-mid');
         mid.append(left, right);
@@ -239,7 +308,7 @@ export function liveTemplatesSection(page, source) {
         choose.onclick = () => { boxes.hidden = !boxes.hidden; };
         where.append(says, ' ', choose, boxes);
 
-        edit.append(top, mid, where);
+        edit.append(top, mid, varsBox, where);
         const hints = [];
         if (t.note) hints.push(t.note);
         if (!postfix) hints.push('In the text, $name$ is a place Tab goes to (the same name twice is typed once), $END$ where the cursor ends and $SELECTION$ the selected text; $1, ${1:name} and $0 are read too.');

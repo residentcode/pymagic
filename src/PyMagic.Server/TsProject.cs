@@ -31,6 +31,10 @@ public static class TsProject
         var list = new List<File>();
         long bytes = 0;
         bool cut = false;
+        // folder by folder, the nearest to the root first: a project too large for the limits keeps its own top (src, its entry files) and
+        // loses the deepest folders, whose files the page reads when a file that imports them is opened (/api/ts/package, /api/file)
+        var queue = new Queue<(string Dir, int Depth)>();
+        queue.Enqueue((root, 0));
         void Walk(string dir, int depth)
         {
             if (depth > 20 || cut) return;
@@ -52,11 +56,69 @@ public static class TsProject
             {
                 string name = System.IO.Path.GetFileName(d);
                 if (name.StartsWith('.') && name != ".storybook" || SkipDirs.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
-                Walk(d, depth + 1);
+                queue.Enqueue((d, depth + 1));
             }
         }
-        Walk(root, 0);
+        while (queue.Count > 0 && !cut) { var (dir, depth) = queue.Dequeue(); Walk(dir, depth); }
         return new Files(list, cut);
+    }
+
+    /// <summary>
+    /// One package's types, for a project whose packages' types did not all fit: the .d.ts files of node_modules/<paramref name="name"/> and of
+    /// its @types package, at most <paramref name="maxBytes"/>. A name that is no package's (a path, "..") gives none.
+    /// </summary>
+    public static Files Package(string root, string name, long maxBytes = 12 << 20)
+    {
+        var list = new List<File>();
+        if (!System.Text.RegularExpressions.Regex.IsMatch(name, @"^(@[\w.-]+/)?[\w.-]+$") || name.Contains("..")) return new Files(list, false);
+        long bytes = 0;
+        bool cut = false;
+        string types = "@types/" + (name.StartsWith('@') ? name[1..].Replace('/', '_') : name);
+        foreach (var n in new[] { name, types })
+        {
+            string dir = System.IO.Path.Combine(root, "node_modules", n.Replace('/', System.IO.Path.DirectorySeparatorChar));
+            if (!Directory.Exists(dir)) continue;
+            foreach (var f in DeclarationFiles(dir))
+            {
+                long size;
+                try { size = new FileInfo(f).Length; } catch (IOException) { continue; }
+                if (size > 4 << 20) continue;
+                if (bytes + size > maxBytes) { cut = true; break; }
+                try { list.Add(new File(Rel(root, f), System.IO.File.ReadAllText(f))); bytes += size; }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        return new Files(list, cut);
+    }
+
+    /// <summary>
+    /// Every tsconfig and jsconfig of the project (tsconfig.json, tsconfig.app.json, a package's own in a monorepo), each as
+    /// <see cref="ConfigOf"/> gives it: the page uses the one that covers the file in the editor.
+    /// </summary>
+    public static List<JsonObject> Configs(string root, int max = 64)
+    {
+        var found = new List<JsonObject>();
+        var queue = new Queue<(string Dir, int Depth)>();
+        queue.Enqueue((root, 0));
+        while (queue.Count > 0 && found.Count < max)
+        {
+            var (dir, depth) = queue.Dequeue();
+            string[] files, dirs;
+            try { files = Directory.GetFiles(dir, "*.json"); dirs = Directory.GetDirectories(dir); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            Array.Sort(files, StringComparer.Ordinal);
+            foreach (var f in files)
+                if (found.Count < max && System.Text.RegularExpressions.Regex.IsMatch(System.IO.Path.GetFileName(f), @"^(tsconfig|jsconfig)(\.[\w.-]+)?\.json$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    found.Add(ConfigOf(root, f));
+            if (depth >= 6) continue;
+            foreach (var d in dirs.OrderBy(x => x, StringComparer.Ordinal))
+            {
+                string name = System.IO.Path.GetFileName(d);
+                if (name.StartsWith('.') || SkipDirs.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
+                queue.Enqueue((d, depth + 1));
+            }
+        }
+        return found;
     }
 
     /// <summary>
@@ -159,8 +221,27 @@ public static class TsProject
     public static JsonObject? Config(string root)
     {
         string? file = new[] { "tsconfig.json", "jsconfig.json" }.Select(f => System.IO.Path.Combine(root, f)).FirstOrDefault(System.IO.File.Exists);
-        if (file == null) return null;
+        return file == null ? null : ConfigOf(root, file);
+    }
+
+    /// <summary>
+    /// One config file: { path, dir, compilerOptions, include, exclude, files, references } with what it extends merged under it. include,
+    /// exclude and files (its own, else the ones of what it extends) are written from the project's folder; references are the configs it
+    /// names (a solution's tsconfig.json: "files": [] and references to tsconfig.app.json and tsconfig.node.json).
+    /// </summary>
+    public static JsonObject ConfigOf(string root, string file)
+    {
         var options = new JsonObject();
+        var lists = new Dictionary<string, JsonArray>();
+        JsonArray Under(string dir, JsonArray patterns)
+        {
+            string at = Rel(root, dir);
+            var result = new JsonArray();
+            foreach (var p in patterns)
+                if (p is JsonValue pv && pv.TryGetValue<string>(out var text))
+                    result.Add(Rel(root, System.IO.Path.GetFullPath(System.IO.Path.Combine(root, at == "." ? "" : at, text.Replace("${configDir}", ".")))));
+            return result;
+        }
         string? error = null;
         var chain = new List<string>();
         void Read(string path, int depth)
@@ -187,9 +268,32 @@ public static class TsProject
                 }
                 if (own["paths"] != null && own["baseUrl"] == null && options["baseUrl"] == null) options["pathsBase"] = Rel(root, dir);
             }
+            // which files: its own lists, over those of what it extends
+            foreach (var key in new[] { "include", "exclude", "files" })
+                if (doc?[key] is JsonArray patterns) lists[key] = Under(System.IO.Path.GetDirectoryName(path)!, patterns);
         }
         Read(file, 0);
-        var result = new JsonObject { ["path"] = Rel(root, file), ["compilerOptions"] = options };
+        string folder = Rel(root, System.IO.Path.GetDirectoryName(file)!);
+        var result = new JsonObject { ["path"] = Rel(root, file), ["dir"] = folder == "." ? "" : folder, ["compilerOptions"] = options };
+        foreach (var (key, patterns) in lists) result[key] = patterns;
+        // the configs it refers to: a folder's tsconfig.json, or the file named
+        try
+        {
+            if (JsonNode.Parse(System.IO.File.ReadAllText(file), documentOptions: Loose)?["references"] is JsonArray refs)
+            {
+                var named = new JsonArray();
+                foreach (var r in refs)
+                {
+                    if (r?["path"] is not JsonValue rv || !rv.TryGetValue<string>(out var to)) continue;
+                    string full = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(file)!, to));
+                    if (Directory.Exists(full)) full = System.IO.Path.Combine(full, "tsconfig.json");
+                    else if (!System.IO.File.Exists(full) && System.IO.File.Exists(full + ".json")) full += ".json";
+                    named.Add(Rel(root, full));
+                }
+                result["references"] = named;
+            }
+        }
+        catch (Exception e) when (e is IOException or JsonException) { /* told above */ }
         if (error != null) result["error"] = error;
         return result;
     }

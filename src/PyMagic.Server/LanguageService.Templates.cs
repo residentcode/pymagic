@@ -115,7 +115,7 @@ public sealed partial class LanguageService
 
     // ------------------------------------------------------------ the user's own snippets
 
-    /// <param name="Scope">python (the default) or template: where the snippet is offered.</param>
+    /// <param name="Scope">python (the default), template, or other (a scope naming other languages: the editor offers those itself).</param>
     sealed record UserSnippet(string Prefix, string Description, string Body, string Scope = "python");
 
     /// <summary>Live templates of Django templates, typed in the text of a template (outside the tags): each writes a whole tag, a block one with its end.</summary>
@@ -175,7 +175,9 @@ public sealed partial class LanguageService
                         : new List<string> { entry.Name };
                     string description = entry.Value.TryGetProperty("description", out var d) ? d.GetString() ?? entry.Name : entry.Name;
                     // VS Code's "scope" names languages: a template one is offered in templates
-                    string scope = entry.Value.TryGetProperty("scope", out var sc) && sc.GetString() is { } sv && (sv.Contains("html") || sv.Contains("template") || sv.Contains("jinja")) ? "template" : "python";
+                    string named = entry.Value.TryGetProperty("scope", out var sc) && sc.ValueKind == JsonValueKind.String ? (sc.GetString() ?? "").ToLowerInvariant() : "";
+                    string scope = named.Contains("django") || named.Contains("jinja") || named.Contains("template") ? "template"
+                        : named.Trim().Length == 0 || named.Split(',').Any(x => x.Trim() == "python") ? "python" : "other";
                     foreach (var prefix in prefixes.Where(x => x.Length > 0)) list.Add(new UserSnippet(prefix, description, text, scope));
                 }
             }

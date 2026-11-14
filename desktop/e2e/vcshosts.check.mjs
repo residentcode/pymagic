@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { launch, project, sleep } from './app.mjs';
 
-const LAB = 'glpat-' + 'L'.repeat(20), BB = 'ATATT' + 'B'.repeat(30), GHE = 'ghp_' + 'E'.repeat(36);
+const LAB = 'glpat-' + 'L'.repeat(20), BB = 'ATATT' + 'B'.repeat(30), GHE = 'ghp_' + 'E'.repeat(36), BBS = 'BBDC-' + 'S'.repeat(40);
 const seen = [];
 const api = createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
@@ -29,6 +29,16 @@ const api = createServer((req, res) => {
     if (req.headers.authorization !== 'Basic ' + Buffer.from('me@example.com:' + BB).toString('base64')) return no();
     if (u.pathname === '/bb/user') return res.end(JSON.stringify({ username: 'bucket-user', display_name: 'Bucket' }));
     if (u.pathname === '/bb/repositories') return res.end(JSON.stringify({ values: [{ full_name: 'team/site', is_private: true, updated_on: '2026-05-05T00:00:00Z', description: 'The site', links: { clone: [{ name: 'https', href: 'https://bucket-user@bitbucket.org/team/site.git' }] } }] }));
+  }
+  // Bitbucket Data Center: a Bearer token, the account named in a header, pages by their start
+  if (u.pathname.startsWith('/bbs/rest/api/1.0/')) {
+    if (req.headers.authorization !== 'Bearer ' + BBS) return no();
+    res.setHeader('X-AUSERNAME', 'dc-user');
+    if (u.pathname === '/bbs/rest/api/1.0/repos') {
+      const start = Number(u.searchParams.get('start'));
+      const r = (key, slug) => ({ slug, project: { key }, public: false, links: { clone: [{ name: 'ssh', href: 'ssh://git@dc.example:7999/x.git' }, { name: 'http', href: `https://dc-user@dc.example/scm/${key.toLowerCase()}/${slug}.git` }] } });
+      return res.end(JSON.stringify(start === 0 ? { values: [r('SHOP', 'api')], isLastPage: false, nextPageStart: 100 } : { values: [r('SHOP', 'web')], isLastPage: true }));
+    }
   }
   if (u.pathname.startsWith('/ghe/api/v3/')) {
     if (req.headers.authorization !== 'Bearer ' + GHE) return no();
@@ -125,6 +135,19 @@ try {
   assert.deepEqual(await w.until(names, "Enterprise's repositories"), ['corp/api']);
   console.log('GitHub Enterprise:', await w.run(status));
   assert.match(await w.run(status), /^GitHub Enterprise: corp-user on http:\/\/127\.0\.0\.1:\d+\/ghe/);
+
+  // Bitbucket Data Center: a server of its own, a token alone; two pages, the clone address without the account
+  await w.run(host('bbserver'));
+  await w.until(`!document.getElementById('acc-signin').hidden && !document.getElementById('acc-server-row').hidden && document.getElementById('acc-user-row').hidden`, 'Data Center sign-in');
+  assert.equal(await w.run(`document.getElementById('acc-server').placeholder`), 'https://bitbucket.example.com');
+  await w.run(fill({ 'acc-server': base + '/bbs', 'acc-token': 'BBDC-' + 'W'.repeat(40) }));
+  assert.match(await w.until(`!document.getElementById('acc-error').hidden && document.getElementById('acc-error').textContent`, 'a wrong token'), /did not take the token/);
+  await w.run(fill({ 'acc-server': base + '/bbs', 'acc-token': BBS }));
+  assert.deepEqual(await w.until(names, "Data Center's repositories"), ['SHOP/api', 'SHOP/web']);
+  console.log('Bitbucket Data Center:', await w.run(status));
+  assert.match(await w.run(status), /^Bitbucket Data Center: dc-user on http:\/\/127\.0\.0\.1:\d+\/bbs/);
+  await w.run(`document.querySelector('#acc-repos li').click()`);
+  assert.equal(await w.until(`document.getElementById('vcs-url').value.includes('dc.example') && document.getElementById('vcs-url').value`, 'the address'), 'https://dc.example/scm/shop/api.git');
 
   // the page again (as a new window would): the accounts are kept, encrypted; Sign out forgets GitLab's only
   w.reload();

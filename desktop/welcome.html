@@ -93,7 +93,7 @@
       <pre class="progress" id="vcs-progress" hidden></pre>
       <div class="row"><button class="primary" id="vcs-clone">Clone</button><button id="vcs-cancel">Cancel</button></div>
       <div class="gh" id="gh">
-        <div class="field"><label for="vcs-host">Your repositories on</label><select id="vcs-host"><option value="github">GitHub</option><option value="ghe">GitHub Enterprise</option><option value="gitlab">GitLab</option><option value="bitbucket">Bitbucket</option></select></div>
+        <div class="field"><label for="vcs-host">Your repositories on</label><select id="vcs-host"><option value="github">GitHub</option><option value="ghe">GitHub Enterprise</option><option value="gitlab">GitLab</option><option value="bitbucket">Bitbucket</option><option value="bbserver">Bitbucket Data Center</option></select></div>
         <div id="host-other" hidden>
           <div class="gh-status" id="acc-status"></div>
           <div id="acc-signin" hidden>
@@ -364,10 +364,10 @@
     $('acc-server-row').hidden = kind === 'bitbucket';
     $('acc-user-row').hidden = kind !== 'bitbucket';
     $('acc-server').value = another ? '' : k.server ?? '';
-    $('acc-server').placeholder = kind === 'ghe' ? 'https://github.example.com' : 'https://gitlab.example.com';
+    $('acc-server').placeholder = kind === 'ghe' ? 'https://github.example.com' : kind === 'bbserver' ? 'https://bitbucket.example.com' : 'https://gitlab.example.com';
     $('acc-signin').hidden = false;
     $('acc-list').hidden = !another;
-    (kind === 'bitbucket' ? $('acc-user') : kind === 'ghe' || another ? $('acc-server') : $('acc-token')).focus();
+    (kind === 'bitbucket' ? $('acc-user') : kind === 'ghe' || kind === 'bbserver' || another ? $('acc-server') : $('acc-token')).focus();
   }
   const accSave = async () => {
     const kind = $('vcs-host').value;

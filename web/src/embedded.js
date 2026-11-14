@@ -2,7 +2,7 @@
 // CSS and JavaScript blocks a hidden document each (embedded-model.js) that Monaco's CSS and TypeScript services check; their findings
 // are copied onto the template. Inside a <script> block the TypeScript service completes; inside <style> or style="" the CSS properties.
 import * as monaco from 'monaco-editor';
-import { embeddedDocument, inRegion, CSS_PROPERTIES, scriptIsTs, componentPrelude, keepFinding } from './embedded-model.js';
+import { embeddedDocument, inRegion, CSS_PROPERTIES, scriptIsTs, componentPrelude, keepFinding, withMarkupCode } from './embedded-model.js';
 
 // the templates that get this, and how their expressions are read inside code (Blade's own: {!! !!}, @json, directives)
 const TEMPLATES = { 'django-html': 'django', twig: 'django', blade: 'blade' };
@@ -28,7 +28,8 @@ export function setupEmbedded() {
     const doc = (model, text, language) => {
         const kind = componentOf(model);
         const out = embeddedDocument(text, language, kind ? 'component' : TEMPLATES[model.getLanguageId()]);
-        return kind && language === 'javascript' ? out + componentPrelude(kind, out) : out;
+        // a component's script, the expressions of its markup at their places, and what both may use without declaring it
+        return kind && language === 'javascript' ? withMarkupCode(text, out, kind) + componentPrelude(kind, out) : out;
     };
     /**
      * Where a block's document is: a component's beside it (pymagic:/src/App.svelte.3.ts), so its imports of the project's files resolve as
@@ -98,8 +99,11 @@ export function setupEmbedded() {
             const h = hidden.get(owner);
             if (!h) continue;
             const kind = componentOf(owner);
+            const text = owner.getValue(), last = owner.getLineCount();
+            // (what is after the file's last line is the script's prelude; a finding outside the script is one of a markup expression)
+            const inMarkup = (x) => !!kind && !inRegion(text, owner.getOffsetAt({ lineNumber: x.startLineNumber, column: x.startColumn }), 'javascript');
             const markers = [h.css, h.js].flatMap((m) => monaco.editor.getModelMarkers({ resource: m.uri, owner: m === h.css ? 'css' : m.getLanguageId() })
-                .filter((x) => m === h.css || keepFinding(x.code, x.message, kind))
+                .filter((x) => m === h.css || (x.startLineNumber <= last && keepFinding(x.code, x.message, kind, inMarkup(x))))
                 .map((x) => ({ ...x, source: m === h.css ? 'css' : h.js.getLanguageId() })));
             monaco.editor.setModelMarkers(owner, 'embedded', markers.map(({ resource, owner: _o, ...x }) => x));
         }
@@ -131,6 +135,61 @@ export function setupEmbedded() {
                 return { suggestions: CSS_PROPERTIES.map((p) => ({ label: p, kind: KIND.Property, insertText: `${p}: `, range, command: { id: 'editor.action.triggerSuggest', title: '' } })) };
             }
             return { suggestions: [] };
+        },
+    });
+
+    // a component's script and the expressions of its markup: what the TypeScript service says of the name under the cursor, and where
+    // it is defined (in the component, another file of the project or a package's types)
+    const serviceAt = async (model, position) => {
+        const h = hidden.get(model);
+        if (!h || !componentOf(model)) return null;
+        const text = model.getValue();
+        if (h.js.getValue() !== doc(model, text, 'javascript')) sync(model);
+        const ts = monaco.languages.typescript;
+        const worker = await (await (h.js.getLanguageId() === 'typescript' ? ts.getTypeScriptWorker() : ts.getJavaScriptWorker()))(h.js.uri);
+        return { worker, offset: model.getOffsetAt(position), name: h.js.uri.toString(), length: text.length };
+    };
+    const said = (list) => (list ?? []).map((p) => p.text).join('');
+    monaco.languages.registerHoverProvider('html', {
+        async provideHover(model, position) {
+            const s = await serviceAt(model, position).catch(() => null);
+            const info = s && await s.worker.getQuickInfoAtPosition(s.name, s.offset).catch(() => null);
+            if (!info || model.isDisposed()) return null;
+            const a = model.getPositionAt(info.textSpan.start), b = model.getPositionAt(info.textSpan.start + info.textSpan.length);
+            const notes = said(info.documentation);
+            return {
+                range: new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column),
+                contents: [{ value: '```typescript\n' + said(info.displayParts) + '\n```' }, ...(notes ? [{ value: notes }] : [])],
+            };
+        },
+    });
+    /** A place of a text as a range: the text of an open file, or of a file the service was given (tsproject.js). */
+    const rangeIn = (text, start, length) => {
+        const at = (offset) => { const before = text.slice(0, offset).split('\n'); return [before.length, before[before.length - 1].length + 1]; };
+        const [l1, c1] = at(start), [l2, c2] = at(start + length);
+        return new monaco.Range(l1, c1, l2, c2);
+    };
+    monaco.languages.registerDefinitionProvider('html', {
+        async provideDefinition(model, position) {
+            const s = await serviceAt(model, position).catch(() => null);
+            const found = s && await s.worker.getDefinitionAtPosition(s.name, s.offset).catch(() => null);
+            if (!found || model.isDisposed()) return null;
+            const ts = monaco.languages.typescript;
+            const out = [];
+            for (const d of found) {
+                if (d.fileName === s.name) {
+                    // in the component itself (what is declared after its end, a macro or a rune, has no place to go to)
+                    if (d.textSpan.start >= s.length) continue;
+                    const a = model.getPositionAt(d.textSpan.start), b = model.getPositionAt(d.textSpan.start + d.textSpan.length);
+                    out.push({ uri: model.uri, range: new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column) });
+                    continue;
+                }
+                const uri = monaco.Uri.parse(d.fileName);
+                const text = monaco.editor.getModel(uri)?.getValue() ?? ts.typescriptDefaults.getExtraLibs()[d.fileName]?.content ?? ts.javascriptDefaults.getExtraLibs()[d.fileName]?.content;
+                if (text === undefined || /^lib\.[\w.]*d\.ts$/.test(d.fileName)) continue;
+                out.push({ uri, range: rangeIn(text, d.textSpan.start, d.textSpan.length) });
+            }
+            return out;
         },
     });
 }

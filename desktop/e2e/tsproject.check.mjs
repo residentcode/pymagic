@@ -16,6 +16,9 @@ const root = project({
     'src/checked.js': '// @ts-check\nlet n = 5;\nn.toUpperCase();\n',
     'src/Comp.vue': '<template>\n  <p>{{ shown }}</p>\n</template>\n<script setup lang="ts">\nconst props = defineProps<{ title: string }>();\nconst shown = props.title;\nconst wrong: number = "x";\n</script>\n<style lang="scss">\n$c: red;\np { color: $c; }\n</style>\n',
     'src/App.svelte': '<script lang="ts">\n  import { writable } from "./store";\n  const count = writable(0);\n  let total: number = "y";\n  $: doubled = $count * 2;\n</script>\n<p>{doubled} {total}</p>\n',
+    // the expressions of a component's markup, Svelte's $: values with their types, hover and Go to Definition
+    'src/Card.vue': '<template>\n  <div :class="{ on: state.open }">\n    <p>{{ props.titel }}</p>\n    <li v-for="item in props.items" :key="item.id">{{ item.nmae }}</li>\n    <p>{{ count.value }}</p>\n  </div>\n</template>\n<script setup lang="ts">\nimport { twice } from "./util";\nconst props = defineProps<{ title: string, items: { id: number }[] }>();\nconst state = { open: true };\nconst n = twice(2);\n</script>\n',
+    'src/List.svelte': '<script lang="ts">\n  import { twice } from "./util";\n  let user = { name: "a" };\n  let n = 2;\n  $: doubled = twice(n);\n  $: label = doubled.toFixed(1);\n  $: bad = doubled.toUpperCase();\n</script>\n<h1>{user.nmae}</h1>\n<p>{doubled.toFixed(2)} {label.length} {twice()}</p>\n',
     'src/store.ts': 'export function writable<T>(v: T) { return { subscribe(f: (v: T) => void) { f(v); return () => {}; } }; }\n',
     'node_modules/shouty/package.json': '{"name":"shouty","version":"1.0.0","types":"index.d.ts"}',
     'node_modules/shouty/index.d.ts': 'export declare function shout(s: string): string;\n',
@@ -90,6 +93,29 @@ try {
     const svelte = await settled('src/App.svelte', (m) => m.length > 0);
     console.log('App.svelte:', svelte);
     assert.deepEqual(svelte, ["4: Type 'string' is not assignable to type 'number'."]);
+
+    // the markup's expressions: a property that is not there is told where it is written; a v-for's item and an unknown name are not
+    await open('src/Card.vue');
+    const card = await settled('src/Card.vue', (m) => m.length > 0);
+    console.log('Card.vue:', card);
+    assert.equal(card.length, 1);
+    assert.match(card[0], /^3: Property 'titel' does not exist on type .*Did you mean 'title'\?$/);
+    // Svelte: $: values have the type of what they are given (doubled is a number), and {expr} is checked
+    await open('src/List.svelte');
+    const list = await settled('src/List.svelte', (m) => m.length >= 3);
+    console.log('List.svelte:', list);
+    assert.equal(list.length, 3);
+    assert.match(list[0], /^10: Expected 1 arguments, but got 0\.$/);
+    assert.match(list[1], /^7: Property 'toUpperCase' does not exist on type 'number'\./);
+    assert.match(list[2], /^9: Property 'nmae' does not exist on type '\{ name: string; \}'\./);
+    // hover on a name of the script; Go to Definition from the markup to the other file
+    await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 6, column: 16 }); ed.focus(); ed.trigger('keyboard', 'editor.action.showHover', {}); })()`);
+    const hover = await page.waitFor(`[...document.querySelectorAll('.monaco-hover-content')].map((e) => e.textContent).find((t) => t.includes('doubled'))`, 15000, 'the hover');
+    console.log('hover:', hover.slice(0, 60));
+    assert.match(hover, /var doubled: number/);
+    await page.evaluate(`(() => { const ed = window.pymagic.editor; ed.setPosition({ lineNumber: 10, column: 44 }); ed.focus(); ed.trigger('keyboard', 'editor.action.revealDefinition', {}); })()`);
+    await page.waitFor(`window.pymagic.editor.getModel()?.uri.path.endsWith('/src/util.ts')`, 15000, 'util.ts opened by Go to Definition');
+    assert.equal(await page.evaluate(`window.pymagic.editor.getModel().getWordAtPosition(window.pymagic.editor.getPosition())?.word`), 'twice');
     console.log('OK');
 } finally {
     await app.close();

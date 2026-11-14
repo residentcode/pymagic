@@ -4,14 +4,28 @@
 // through liveTemplateItems, which leaves out the ones switched off and gives the edited ones their text. Not in a string or a comment.
 import * as monaco from 'monaco-editor';
 import { settings, onSettings } from './settings';
-import { allTemplates, cleanConf, matchAt, offered, servedByServer, serverItems, toSnippet, preview, applicable } from './live-templates-model.js';
+import { openMenu } from './menu';
+import { readSnippets } from './codegen-model.js';
+import { allTemplates, cleanConf, matchesAt, offered, servedByServer, serverItems, toSnippet, preview, projectTemplates } from './live-templates-model.js';
 
+const reformatCommand = 'pymagic.liveTemplate.reformat';
 let server = null;          // the language server's built-in templates, once it has answered
 let serverSource = null;
+let project = [];           // the project's own templates (.pymagic/snippets.json)
 let templates = allTemplates(null, cleanConf(settings().templates));
 
 let conf = cleanConf(settings().templates);
-const rebuild = () => { conf = cleanConf(settings().templates); templates = allTemplates(server, conf); };
+const rebuild = () => { conf = cleanConf(settings().templates); templates = allTemplates(server, conf, project); };
+
+/** Reads the project's templates again: when the window opens, comes back to the front, and when the Templates page saves them. */
+async function readProject() {
+    try {
+        const res = await fetch('/api/file?path=' + encodeURIComponent('.pymagic/snippets.json'));
+        project = projectTemplates(res.ok ? readSnippets(await res.text()) ?? [] : []);
+    }
+    catch { project = []; }
+    rebuild();
+}
 
 /** The language server's templates (pymagic/templates), asked once it is there; the page asks again through this. */
 export async function serverTemplates() {
@@ -47,6 +61,9 @@ const HTML_LIKE = new Set(['html', 'django-html', 'ejs', 'handlebars', 'twig', '
 export function setupLiveTemplates(editor, { source, suggestions }) {
     serverSource = source;
     onSettings(rebuild);
+    readProject();
+    window.addEventListener('focus', readProject);
+    window.addEventListener('pymagic:snippets', readProject);
     // the language server starts after the page: asked until it answers
     const ask = (left) => serverTemplates().then((list) => { if (!list && left > 0) window.setTimeout(() => ask(left - 1), 2000); });
     ask(60);
@@ -64,9 +81,11 @@ export function setupLiveTemplates(editor, { source, suggestions }) {
             return {
                 suggestions: offered(templates, languageId, before).filter((t) => /^\w/.test(t.abbr)).map((t) => ({
                     label: t.abbr, kind: monaco.languages.CompletionItemKind.Snippet, detail: t.description || t.group,
-                    documentation: { value: '```\n' + preview(t.body) + '\n```' },
-                    insertText: toSnippet(t.body), insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                    documentation: { value: '```\n' + preview(t.body, t.vars) + '\n```' },
+                    insertText: toSnippet(t.body, t.vars), insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
                     sortText: '3' + t.abbr, range,
+                    // (a template to reformat is tidied once it is filled in)
+                    command: t.reformat ? { id: reformatCommand, title: '', arguments: [position.lineNumber, toSnippet(t.body, t.vars).split('\n').length] } : undefined,
                 })),
             };
         },
@@ -77,45 +96,80 @@ export function setupLiveTemplates(editor, { source, suggestions }) {
         if (key === 'tab') editor.trigger('keyboard', 'tab', {});
         else editor.trigger('keyboard', 'type', { text: key === 'enter' ? '\n' : ' ' });
     };
-    const insert = (snippet, length, edits) => {
+    const inSnippet = () => !!editor.getContribution('snippetController2')?.isInSnippet?.();
+
+    /** "Reformat according to style": the lines a template wrote are formatted once its places are filled in (the language's own formatter). */
+    function reformatLater(firstLine, lineCount) {
+        const model = editor.getModel();
+        if (!model) return;
+        const last = Math.min(model.getLineCount(), firstLine + lineCount - 1);
+        // the lines are followed as they move and grow while the places are typed
+        const marks = editor.createDecorationsCollection([{ range: new monaco.Range(firstLine, 1, last, model.getLineMaxColumn(last)), options: { stickiness: monaco.editor.TrackedRangeStickiness.AlwaysGrowsWhenTypingAtEdges } }]);
+        const run = async () => {
+            const range = marks.getRange(0);
+            marks.clear();
+            if (!range || editor.getModel() !== model) return;
+            const cursor = editor.getPosition();
+            editor.setSelection(new monaco.Range(range.startLineNumber, 1, range.endLineNumber, model.getLineMaxColumn(range.endLineNumber)));
+            try { await editor.getAction('editor.action.formatSelection')?.run(); }
+            catch { /* no formatter for this language */ }
+            if (cursor && editor.getModel() === model) editor.setPosition(model.validatePosition(cursor));
+        };
+        if (!inSnippet()) { run(); return; }
+        const watch = editor.onDidChangeCursorSelection(() => {
+            if (inSnippet()) return;
+            watch.dispose();
+            window.setTimeout(run, 0);
+        });
+    }
+    monaco.editor.registerCommand(reformatCommand, (_accessor, firstLine, lineCount) => reformatLater(firstLine, lineCount));
+
+    const insert = (snippet, length, edits, reformat) => {
+        const line = editor.getPosition()?.lineNumber ?? 1;
+        // the lines an import adds above move the template down
+        const above = (edits ?? []).filter((e) => e.range.endLineNumber <= line).reduce((n, e) => n + e.text.split('\n').length - 1 - (e.range.endLineNumber - e.range.startLineNumber), 0);
         editor.pushUndoStop();
         if (edits?.length) editor.executeEdits('live-template', edits.map((e) => ({ range: e.range, text: e.text })));
         editor.getContribution('snippetController2')?.insert(snippet, { overwriteBefore: length, overwriteAfter: 0 });
         editor.pushUndoStop();
+        if (reformat) reformatLater(line + above, snippet.split('\n').length);
     };
+
+    /** Writes one template over its abbreviation; a language server's one through its completion (which may say it is not one for this place). */
+    function expand(t, key, model, position) {
+        editor.getContribution('editor.contrib.suggestController')?.cancelSuggestWidget?.();
+        if (!servedByServer(t)) { insert(toSnippet(t.body, t.vars), t.abbr.length, null, t.reformat); return; }
+        if (!suggestions) { plain(key); return; }
+        const version = model.getVersionId();
+        const sort = t.server === 'project' ? '3' : '4';
+        Promise.resolve(suggestions(model, position)).catch(() => []).then((items) => {
+            if (editor.getModel() !== model || model.getVersionId() !== version) return;
+            const item = (items ?? []).find((s) => s.label === t.abbr && s.kind === monaco.languages.CompletionItemKind.Snippet && (s.sortText ?? '').startsWith(sort));
+            if (!item) { plain(key); return; }
+            insert(item.insertText, t.abbr.length, item.additionalTextEdits, t.reformat);
+        });
+    }
+
     editor.onKeyDown((e) => {
         const key = e.keyCode === K.Tab ? 'tab' : e.keyCode === K.Enter ? 'enter' : e.keyCode === K.Space ? 'space' : null;
         if (!key || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
         const model = editor.getModel(), sel = editor.getSelection();
         if (!model || !sel?.isEmpty() || editor.getSelections().length > 1 || editor.getOption(monaco.editor.EditorOption.readOnly)) return;
         // Tab in a template being filled in goes to its next place; Tab and Enter with the completion list open take its item
-        const keys = editor._contextKeyService;
-        if (editor.getContribution('snippetController2')?.isInSnippet?.()) return;
-        if (key !== 'space' && keys?.getContextKeyValue('suggestWidgetVisible')) return;
+        if (inSnippet()) return;
+        if (key !== 'space' && editor._contextKeyService?.getContextKeyValue('suggestWidgetVisible')) return;
         const position = sel.getPosition(), languageId = model.getLanguageId();
         const before = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
-        const t = matchAt(templates, conf, languageId, before, key);
-        if (!t || !inCode(model, position)) return;
-        const head = before.slice(0, before.length - t.abbr.length);
-        if (HTML_LIKE.has(languageId) && applicable(t, languageId) && inTag(head)) return;
-        if (!servedByServer(t)) {
-            e.preventDefault();
-            e.stopPropagation();
-            editor.getContribution('editor.contrib.suggestController')?.cancelSuggestWidget?.();
-            insert(toSnippet(t.body), t.abbr.length);
-            return;
-        }
-        // the language server's own: it says whether the template is one for this place, and brings the import
-        if (!suggestions) return;
+        const found = matchesAt(templates, conf, languageId, before, key);
+        if (!found.length || !inCode(model, position)) return;
+        if (HTML_LIKE.has(languageId) && inTag(before.slice(0, before.length - found[0].abbr.length))) return;
         e.preventDefault();
         e.stopPropagation();
-        const version = model.getVersionId();
-        Promise.resolve(suggestions(model, position)).catch(() => []).then((items) => {
-            if (editor.getModel() !== model || model.getVersionId() !== version) return;
-            const item = (items ?? []).find((s) => s.label === t.abbr && s.kind === monaco.languages.CompletionItemKind.Snippet && /^[34]/.test(s.sortText ?? ''));
-            if (!item) { plain(key); return; }
-            editor.getContribution('editor.contrib.suggestController')?.cancelSuggestWidget?.();
-            insert(item.insertText, t.abbr.length, item.additionalTextEdits);
-        });
+        if (found.length === 1) { expand(found[0], key, model, position); return; }
+        // templates sharing the abbreviation: which one is asked, at the cursor
+        const box = editor.getDomNode()?.getBoundingClientRect(), at = editor.getScrolledVisiblePosition(position);
+        openMenu(box && at ? { x: box.left + at.left, y: box.top + at.top + at.height } : { x: 200, y: 200 },
+            found.map((t) => ({ label: `${t.abbr}  ${t.description || preview(t.body, t.vars).split('\n')[0]}  (${t.group})`, run: () => { editor.focus(); expand(t, key, model, position); } })));
     });
 }
+

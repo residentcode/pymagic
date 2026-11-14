@@ -733,3 +733,7 @@ button.nb-var-caret::before { content: '▸'; } button.nb-var-caret.open::before
 .lt :disabled { opacity: .6; }
 .lt input[type=checkbox]:indeterminate { background: var(--accent); border-color: var(--accent); }
 .lt input[type=checkbox]:indeterminate::after { content: ""; position: absolute; left: 2.5px; top: 5px; width: 7px; height: 2px; background: #fff; }
+.lt-vars { display: grid; grid-template-columns: auto minmax(0, 2fr) minmax(0, 1fr) auto; gap: 5px 12px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
+.lt-vars[hidden] { display: none; }
+.lt-vars .set-note { grid-column: 1 / -1; }
+.lt-vars code { font-family: var(--mono, Consolas, monospace); }

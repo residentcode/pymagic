@@ -69,7 +69,7 @@ test("a component's script: TypeScript with lang=ts, its macros declared after t
     assert.ok(componentPrelude('vue').startsWith('\n'));
     // Svelte's $: declares what it assigns, unless the script declares it; $:'s comparisons declare nothing
     const reactive = componentPrelude('svelte', '  let total = 1;\n  $: doubled = total * 2;\n  $: total = 3;\n  $: if (x == 1) go();\n  $: $x = 2;\n');
-    assert.match(reactive, /declare let doubled: any;/);
+    assert.match(reactive, /var doubled = \(total \* 2\);/);        // with the type of what it is given
     assert.match(reactive, /declare let \$x: any;/);
     assert.ok(!/declare let total/.test(reactive));
     assert.ok(!/declare let if/.test(reactive));

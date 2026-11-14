@@ -9,6 +9,7 @@ import { launch, project, sleep } from './app.mjs';
 const app = await launch(project({
     'main.py': 'x = 1\n', 'manage.py': 'import django\n', 'app.js': '\n', 'types.ts': '\n', 'page.html': '\n', 'style.css': '\n', 'query.sql': '\n',
     'run.sh': '\n', 'api.http': '\n', 'index.php': '<?php\n', 'api.yaml': '\n', 'shop/templates/shop/list.html': '{% extends "base.html" %}\n',
+    '.pymagic/snippets.json': JSON.stringify({ header: { prefix: 'hdr', body: ['# ${1:title}'], description: 'a header' }, query: { prefix: 'q', body: 'SELECT ${1:*} FROM ${2:t};', scope: 'sql' } }),
 }));
 const { page } = app;
 const value = () => page.evaluate(`window.pymagic.editor.getModel().getValue(1)`);
@@ -166,5 +167,65 @@ try {
     await open('app.js');
     assert.equal(await expand('', 'fori'), 'for (let i = 0; i < array.length; i++) {\n    \n}');
     assert.equal(await expand('', 'log'), 'console.log();');
+
+    // --- variables, reformat, a shared abbreviation, another group, the project's own
+    const addOwn = async (abbr, body, context) => {
+        await js(`document.getElementById('lt-add').click();`);
+        await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((x) => x.textContent.trim() === 'Live Template')`, 5000, 'the Add menu');
+        await js(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((x) => x.textContent.trim() === 'Live Template').click();`);
+        await page.waitFor(`document.getElementById('lt-abbr')?.value === ''`, 5000, 'the new template');
+        await setField('lt-abbr', abbr);
+        await setField('lt-body', body);
+        await js(`document.getElementById('lt-contexts').click(); document.querySelector('.lt-contexts input[value=${context}]').click();`);
+    };
+    await settingsPage();
+    await addOwn('cls', '# $file$\nclass $Name$:\n    $name$ = None', 'python');
+    await js(`document.getElementById('lt-vars-button').click();`);
+    assert.deepEqual(await js(`return [...document.querySelectorAll('#lt-vars code')].map((c) => c.textContent);`), ['file', 'Name', 'name']);
+    const setVar = (name, expr) => js(`const f = document.querySelector('#lt-vars input[data-name=${name}]'); f.value = ${JSON.stringify(expr)}; f.dispatchEvent(new Event('input', { bubbles: true }));`);
+    await setVar('file', 'fileName()');
+    await js(`document.querySelector('#lt-vars input[data-skip=file]').click();`);
+    await setVar('name', 'lowerCase(Name)');
+    assert.equal(await js(`return document.getElementById('lt-preview').textContent;`), '# views.py\nclass Name:\n    name = None');
+    await addOwn('msy', 'x=[ 1,2 ]', 'python');
+    await js(`document.getElementById('lt-reformat').click();`);
+    await addOwn('fori', 'for (;;) {}', 'javascript');
+    // a group of its own, the last template moved to it
+    await js(`document.getElementById('lt-add').click();`);
+    await page.waitFor(`[...document.querySelectorAll('.ctx-menu .ctx-item')].some((x) => x.textContent.trim() === 'Template Group')`, 5000, 'the Add menu');
+    await js(`[...document.querySelectorAll('.ctx-menu .ctx-item')].find((x) => x.textContent.trim() === 'Template Group').click();`);
+    await page.waitFor(`document.getElementById('lt-group-name')?.value === 'New group'`, 5000, 'the new group');
+    const own = await js(`return [...document.querySelectorAll('#lt-tree .lt-row')].find((r) => r.querySelector('.lt-abbr').textContent === 'fori' && r.dataset.id.startsWith('own/')).dataset.id;`);
+    await selectTemplate('user', own);
+    await js(`const g = document.getElementById('lt-group'); g.value = 'New group'; g.dispatchEvent(new Event('change'));`);
+    assert.deepEqual(await js(`return [...document.querySelectorAll('#lt-tree .lt-group')].filter((g) => ['user', 'New group'].includes(g.dataset.group)).map((g) => g.dataset.group + ' ' + g.querySelector('.lt-count').textContent);`),
+        ['New group 1', 'user 2']);
+    // the project's own templates: one for SQL beside the Python one
+    assert.deepEqual(await js(`return [...document.querySelectorAll('.tpl-row select')].map((s) => s.value);`), ['', 'sql']);
+    await closeSettings();
+
+    await open('main.py');
+    assert.equal(await expand('', 'cls'), '# main.py\nclass Name:\n    Name = None');      // (the place that follows is written when Name is left)
+    for (const ch of 'Shop') { await page.evaluate(`window.pymagic.editor.trigger('keyboard', 'type', { text: '${ch}' })`); await sleep(60); }
+    await page.evaluate(`window.pymagic.editor.trigger('keyboard', 'hideSuggestWidget', {})`);
+    await press('tab');
+    assert.equal(await value(), '# main.py\nclass Shop:\n    shop = None');
+    await type('', 'msy');
+    await press('tab');
+    await page.waitFor(`window.pymagic.editor.getModel().getValue(1).trim() === 'x = [1, 2]'`, 10000, 'the template reformatted');
+    assert.equal(await expand('', 'hdr'), '# title');                                      // the project's, the language server's to offer
+    await open('query.sql');
+    assert.equal(await expand('', 'q'), 'SELECT * FROM t;');                               // the project's, for SQL
+    await open('app.js');
+    await type('', 'fori');
+    await page.key(9, 'Tab');
+    await page.waitFor(`document.querySelectorAll('.ctx-menu .ctx-item').length === 2`, 5000, 'the two templates named fori');
+    const asked = await js(`return [...document.querySelectorAll('.ctx-menu .ctx-item')].map((x) => x.textContent.trim().replace(/\\s+/g, ' '));`);
+    console.log('asked:', asked);
+    assert.ok(/JavaScript\)$/.test(asked[0]) && /New group\)$/.test(asked[1]), asked.join(' | '));
+    await js(`document.querySelectorAll('.ctx-menu .ctx-item')[1].click();`);
+    await sleep(600);
+    assert.equal(await value(), 'for (;;) {}');
+    console.log('variables, reformat, a shared abbreviation, another group, the project\'s own');
     console.log('OK');
 } finally { await app.close(); }

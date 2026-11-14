@@ -82,3 +82,73 @@ export function planRefresh(events) {
     if (plan.project) plan.files = [];
     return plan;
 }
+
+// ------------------------------------------------------------ several configs: the one that covers a file
+
+/** A tsconfig pattern (src, src/**\/*, **\/*.test.ts, vite.config.ts), written from the project's folder, as a test of a project path. */
+function patternTest(pattern) {
+    const p = String(pattern).replace(/^\.\//, '').replace(/\/+$/, '');
+    if (p === '' || p === '.') return () => true;
+    if (!/[*?]/.test(p)) return (path) => path === p || path.startsWith(p + '/');      // a file, or a folder with all it holds
+    const source = p.split('/').map((part) => (part === '**' ? '\u0000' : part.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')))
+        .join('/').replace(/\u0000\//g, '(?:.*/)?').replace(/\/\u0000/g, '(?:/.*)?').replace(/\u0000/g, '.*');
+    // (a pattern that ends in a folder's name takes what the folder holds)
+    const re = new RegExp('^' + source + '(?:/.*)?$');
+    return (path) => re.test(path);
+}
+
+/** Whether a config (/api/ts/project's configs: { path, dir, include, exclude, files, references }) is the one a project file is checked by. */
+export function covers(config, path) {
+    if ((config.files ?? []).includes(path)) return true;
+    const inDir = !config.dir || path.startsWith(config.dir + '/');
+    if ((config.exclude ?? []).some((x) => patternTest(x)(path))) return false;
+    if (config.include) return config.include.some((x) => patternTest(x)(path));
+    // no include: everything under its folder, unless it names its files (a solution's "files": [])
+    return !config.files && inDir && !/(^|\/)node_modules\//.test(path);
+}
+
+/**
+ * The config a project file is checked by: the nearest folder's above it; there the config a solution's tsconfig.json refers to
+ * (tsconfig.app.json for src, tsconfig.node.json for vite.config.ts), else the folder's tsconfig.json or jsconfig.json when it covers
+ * the file, else another of the folder's that does. None covers it: the project's own tsconfig.json (null when it has none).
+ */
+export function configFor(path, configs) {
+    const list = configs ?? [];
+    const byPath = new Map(list.map((c) => [c.path, c]));
+    const main = (c) => /(^|\/)(tsconfig|jsconfig)\.json$/i.test(c.path);
+    const dirs = [...new Set(list.map((c) => c.dir ?? ''))].filter((d) => !d || path.startsWith(d + '/')).sort((a, b) => b.length - a.length);
+    for (const dir of dirs) {
+        const here = list.filter((c) => (c.dir ?? '') === dir);
+        for (const c of here.filter(main)) {
+            for (const r of c.references ?? []) { const to = byPath.get(r); if (to && covers(to, path)) return to; }
+            if (covers(c, path)) return c;
+        }
+        for (const c of here.filter((x) => !main(x))) if (covers(c, path)) return c;
+    }
+    return list.find((c) => !c.dir && main(c)) ?? null;
+}
+
+// ------------------------------------------------------------ a project too large to be given whole: what a file imports
+
+/** What a file imports: { files: the project paths a relative import may be (in the order TypeScript tries them), packages: the packages' names }. */
+export function importsOf(path, text) {
+    const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+    const files = [], packages = [];
+    const specs = new Set();
+    for (const m of String(text).matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)(["'])([^"'\n]+)\1/g)) specs.add(m[2]);
+    for (const spec of specs) {
+        if (spec.startsWith('.')) {
+            const parts = (dir ? dir.split('/') : []);
+            for (const part of spec.split('/')) { if (part === '..') parts.pop(); else if (part && part !== '.') parts.push(part); }
+            const base = parts.join('/').replace(/\.(js|jsx|mjs|cjs)$/, '');      // (./a.js is a.ts to TypeScript)
+            const own = parts.join('/');
+            files.push([...new Set([own, ...['.ts', '.tsx', '.d.ts', '.js', '.jsx', '.mts', '.mjs'].map((e) => base + e), ...['/index.ts', '/index.tsx', '/index.js', '/index.d.ts'].map((e) => own + e)])]
+                .filter((p) => CODE.test(p)));
+        }
+        else if (!/^[a-z]+:/.test(spec) && !spec.startsWith('/') && !spec.startsWith('#') && !spec.startsWith('@/') && !spec.startsWith('~')) {
+            const name = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
+            if (/^(@[\w.-]+\/)?[\w.-]+$/.test(name) && !packages.includes(name)) packages.push(name);
+        }
+    }
+    return { files, packages };
+}

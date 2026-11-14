@@ -45,6 +45,7 @@ import './ejs-language';
 import './blade-language';
 import { setupIndentRules } from './indent-rules.js';
 import { setupBraceIndent } from './brace-indent.js';
+import { setupHtmlIndent } from './html-indent.js';
 import { setupLiveTemplates, liveTemplateItems, serverTemplates } from './live-templates.js';
 import './gherkin-language';
 import './toml-language';
@@ -510,6 +511,8 @@ function registerProviders() {
             if (!uri)
                 return [];
             try {
+                // the server formats the text as it is now (a template just written, lines just typed), not the one of a moment ago
+                lsp.notify('textDocument/didChange', { textDocument: { uri, version: model.getVersionId() }, contentChanges: [{ text: model.getValue() }] });
                 const edits = (await lsp.request('textDocument/rangeFormatting', {
                     textDocument: { uri },
                     range: { start: { line: range.startLineNumber - 1, character: range.startColumn - 1 }, end: { line: range.endLineNumber - 1, character: range.endColumn - 1 } },
@@ -1240,6 +1243,7 @@ async function main() {
     setupSyntaxChecks();
     setupIndentRules(editor);
     setupBraceIndent();
+    setupHtmlIndent();
     window.pymagic.tsProject = setupTsProject();
     setupHtmlComments();
     // Ctrl+Shift+/ comments the selection as one block ({{-- --}} in Blade, /* */ in CSS and JavaScript, <!-- --> in HTML), as PhpStorm's key

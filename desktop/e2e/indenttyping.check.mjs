@@ -106,5 +106,31 @@ try {
         await page.waitFor(`window.pymagic.editor.getModel().getValue().replace(/\\r\\n/g, '\\n') === ${JSON.stringify(good)}`, 10000, `${f} fixed`);
         assert.deepEqual(await settle((m) => m.length === 0), []);
     }
+
+    // markup (html-indent.js): a template, a Blade view, a Vue and a Svelte component with a line out of place; the same fix
+    const markupMarks = () => page.evaluate(`window.pymagic.monaco.editor.getModelMarkers({ owner: 'markup-indent', resource: window.pymagic.editor.getModel().uri }).map((m) => m.startLineNumber + ' ' + m.message)`);
+    const settleMarkup = async (want, ms = 10000) => {
+        const end = Date.now() + ms;
+        let found = [];
+        while (Date.now() < end) { found = await markupMarks(); if (want(found)) return found; await sleep(250); }
+        assert.fail(`the marks stayed ${JSON.stringify(found)}`);
+    };
+    const MARKUP = [
+        ['templates/t.html', '<ul>\n    {% for i in items %}\n        <li>{{ i }}</li>\n  {% empty %}\n        <li>none</li>\n    {% endfor %}\n</ul>\n', ['4'],
+            '<ul>\n    {% for i in items %}\n        <li>{{ i }}</li>\n    {% empty %}\n        <li>none</li>\n    {% endfor %}\n</ul>\n'],
+        ['resources/views/v.blade.php', "@if ($a > 1)\n    <div>\n  <p>{{ $a }}</p>\n    </div>\n@endif\n", ['3'], "@if ($a > 1)\n    <div>\n        <p>{{ $a }}</p>\n    </div>\n@endif\n"],
+        ['C.vue', '<template>\n  <div>\n    <p>a</p>\n      <p>b</p>\n  </div>\n</template>\n', ['4'], '<template>\n  <div>\n    <p>a</p>\n    <p>b</p>\n  </div>\n</template>\n'],
+        ['C.svelte', '{#if a}\n  <p>a</p>\n  {:else}\n  <p>b</p>\n{/if}\n', ['3'], '{#if a}\n  <p>a</p>\n{:else}\n  <p>b</p>\n{/if}\n'],
+    ];
+    for (const [f, bad, lines, good] of MARKUP) {
+        await open(f);
+        await page.evaluate(`window.pymagic.editor.getModel().setValue(${JSON.stringify(bad)})`);
+        const told = await settleMarkup((m) => m.length === lines.length);
+        console.log(f, told);
+        assert.deepEqual(told.map((m) => m.split(' ')[0]), lines);
+        await fix(+lines[0]);
+        await page.waitFor(`window.pymagic.editor.getModel().getValue().replace(/\\r\\n/g, '\\n') === ${JSON.stringify(good)}`, 10000, `${f} fixed`);
+        assert.deepEqual(await settleMarkup((m) => m.length === 0), []);
+    }
     console.log('OK');
 } finally { await app.close(); }

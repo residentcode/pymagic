@@ -280,13 +280,15 @@ function keepVcsAccounts(accounts) {
   fs.mkdirSync(path.dirname(vcsAccountsFile()), { recursive: true });
   fs.writeFileSync(vcsAccountsFile(), safeStorage.encryptString(JSON.stringify(accounts)));
 }
-async function vcsApi(a, apiPath) {
+async function vcsApi(a, apiPath, seen = null) {
   const label = vcsHosts.KINDS[a.kind].label;
   let res;
   try { res = await fetch(vcsHosts.apiBaseOf(a.kind, a.server) + apiPath, { headers: vcsHosts.headersOf(a.kind, a.token, a.user), signal: AbortSignal.timeout(30000) }); }
   catch (e) { throw new Error(label + ' could not be reached (' + a.server + '): ' + (e.cause?.code ?? e.message)); }
   if (res.status === 401 || res.status === 403) throw new Error(label + ' did not take the token (' + res.status + '): it may be wrong, expired, or lack the read scopes.');
   if (!res.ok) throw new Error(label + ' answered ' + res.status + ' ' + res.statusText);
+  // (a Bitbucket server names the token's account in a header of every answer)
+  if (seen) seen.user = res.headers.get('x-ausername');
   return res.json();
 }
 const REPOS_PATH = '/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member';
@@ -476,7 +478,8 @@ app.whenReady().then(async () => {
       if (problem) return { error: problem };
       if (!safeStorage.isEncryptionAvailable()) return { error: 'Windows cannot keep the token encrypted here.' };
       const a = { kind, server: vcsHosts.serverOf(kind, server), user: String(user ?? '').trim(), token: String(token).trim() };
-      a.login = vcsHosts.loginOf(kind, await vcsApi(a, '/user'));
+      const seen = {};
+      a.login = vcsHosts.loginOf(kind, await vcsApi(a, vcsHosts.whoPathOf(kind), seen), seen.user);
       const all = vcsAccounts();
       const key = vcsHosts.accountKey(kind, a.server);
       all[key] = a;
