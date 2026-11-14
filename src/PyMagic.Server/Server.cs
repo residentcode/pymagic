@@ -328,6 +328,9 @@ public sealed class Server
                 return _service.Routes();
             case "pymagic/problems":
                 return _service.Problems(p?["leastSevere"]?.GetValue<int>() ?? 3);
+            // one file's findings, as the editor shows them (the MCP server's get_file_problems)
+            case "pymagic/fileProblems":
+                return _service.Diagnostics(UriOf(p));
             case "pymagic/todos":
                 return _service.Todos();
             case "pymagic/inheritance":

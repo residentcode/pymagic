@@ -178,8 +178,39 @@ internal static class DjangoTemplateParser
         }
         foreach (var open in stack)
             result.Problems.Add(new TemplateProblem(open.Start, open.End, $"Unclosed tag '{open.Name}': add {{% {closers[open.Name]} %}}", "template-structure", true));
+        UnclosedDelimiters(text, jinja, result);
         _ = sawExtends;
         return result;
+    }
+
+    /// <summary>
+    /// A {{, {% or {# that is never closed (`{{ name }</p>`): Django reads a tag only within its line, so its closer must be on the same line
+    /// (else Django prints the text as it is); Jinja's may be on a later line, and one missing is its "unexpected end of template". The text
+    /// of {% verbatim %}, {% comment %} and Jinja's {% raw %} is not looked at.
+    /// </summary>
+    static void UnclosedDelimiters(string text, bool jinja, ParsedTemplate result)
+    {
+        var opaque = new List<(int Start, int End)>();
+        var names = jinja ? JinjaOpaque : Opaque;
+        for (int t = 0; t < result.Tags.Count; t++)
+            if (names.Contains(result.Tags[t].Name) && t + 1 < result.Tags.Count && result.Tags[t + 1].Name == "end" + result.Tags[t].Name)
+                opaque.Add((result.Tags[t].End, result.Tags[t + 1].Start));
+        int i = 0;
+        while (i < text.Length - 1)
+        {
+            int at = text.IndexOf('{', i);
+            if (at < 0 || at + 1 >= text.Length) break;
+            char kind = text[at + 1];
+            if (kind is not ('{' or '%' or '#') || opaque.Any(o => at >= o.Start && at < o.End)) { i = at + 1; continue; }
+            string closer = kind switch { '{' => "}}", '%' => "%}", _ => "#}" };
+            int limit = jinja ? text.Length : (text.IndexOf('\n', at) is int nl and >= 0 ? nl : text.Length);
+            int close = text.IndexOf(closer, at + 2, limit - at - 2, StringComparison.Ordinal);
+            if (close >= 0) { i = close + 2; continue; }
+            string what = kind switch { '{' => "variable", '%' => "tag", _ => "comment" };
+            string where = jinja ? "" : " on the same line";
+            result.Problems.Add(new TemplateProblem(at, at + 2, $"Unclosed {what} '{{{kind}': add {closer}{where}", "template-structure", true));
+            i = at + 2;
+        }
     }
 
     /// <summary>The arguments of a tag split like Django does: whitespace apart from quoted strings.</summary>

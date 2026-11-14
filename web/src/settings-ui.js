@@ -271,6 +271,78 @@ const SPECIAL = {
             sel.value = shells.some((s) => s.id === want) ? want : 'auto';
         }).catch(() => { /* only Automatic */ });
     },
+    // the MCP server for AI agents (desktop/mcp-main.js): on or off, its port, asking before commands, the clients PyMagic adds itself to, the last calls
+    mcp(page) {
+        const d = window.pymagicDesktop;
+        page.append(note('An AI agent on this computer (Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Gemini CLI, Codex) connects to PyMagic over MCP, the Model Context Protocol, and uses its tools on the project open here: it reads and changes files, searches, gets the problems the inspections find, renames symbols, formats files and runs the run configurations and shell commands. Only programs of this computer reach it (127.0.0.1).'));
+        if (!d?.mcpStatus) { page.append(note('The MCP server is part of the app (PyMagic.exe); this browser tab cannot start it.')); return; }
+        const box = document.createElement('div');
+        page.append(box);
+        const copy = (text, button) => { void navigator.clipboard.writeText(text).then(() => { const was = button.textContent; button.textContent = 'Copied'; window.setTimeout(() => { button.textContent = was; }, 1200); }); };
+        const paint = (st, said = '') => {
+            box.replaceChildren();
+            const on = document.createElement('input');
+            on.type = 'checkbox';
+            on.checked = st.enabled;
+            on.onchange = async () => paint(await d.mcpSet({ enabled: on.checked }));
+            box.append(row('Enable the MCP server', on, st.enabled ? (st.running ? `Listening: ${st.url} (Streamable HTTP) and ${st.sseUrl} (HTTP with SSE).` : st.error || 'Starting…') : 'Off: nothing listens.'));
+            const port = document.createElement('input');
+            port.type = 'number';
+            port.min = '1024';
+            port.max = '65535';
+            port.value = String(st.port);
+            port.onchange = async () => { const n = Number(port.value); if (Number.isInteger(n) && n >= 1024 && n <= 65535) paint(await d.mcpSet({ port: n })); };
+            box.append(row('Port', port, 'Of 127.0.0.1. A client set up before a change of port has to be configured again.'));
+            const brave = document.createElement('input');
+            brave.type = 'checkbox';
+            brave.checked = st.brave;
+            brave.onchange = async () => paint(await d.mcpSet({ brave: brave.checked }));
+            box.append(row('Run shell commands and run configurations without asking (brave mode)', brave, 'Off: PyMagic shows each command or configuration an agent wants to run, and runs it only when you choose Run.'));
+            const urls = document.createElement('div');
+            urls.className = 'set-buttons';
+            const cu = document.createElement('button');
+            cu.textContent = 'Copy the address';
+            cu.onclick = () => copy(st.url, cu);
+            urls.append(cu);
+            box.append(urls);
+            const h = document.createElement('h3');
+            h.textContent = 'Clients';
+            box.append(h, note("Configure adds PyMagic to the client's own settings file (only its entry named pymagic; the rest stays as it is). Restart the client after it. Copy gives the entry to add by hand."));
+            for (const c of st.clients) {
+                const line = document.createElement('div');
+                line.className = 'set-buttons mcp-client';
+                const conf = document.createElement('button');
+                conf.textContent = c.configured ? 'Configure again' : 'Configure';
+                conf.onclick = async () => { conf.disabled = true; const r = await d.mcpConfigure(c.id); paint(r.status, `${c.name}: ${r.message}`); };
+                const cp = document.createElement('button');
+                cp.textContent = c.command ? 'Copy the command' : 'Copy the entry';
+                cp.onclick = () => copy(c.command ?? c.snippet, cp);
+                const state = document.createElement('span');
+                state.className = 'set-unit';
+                state.textContent = c.configured ? 'configured' : 'not configured';
+                state.title = c.file;
+                line.append(conf, cp, state);
+                box.append(row(c.name, line, c.file));
+            }
+            if (said) { const p2 = note(said); p2.style.whiteSpace = 'pre-wrap'; box.append(p2); }
+            if (st.calls.length) {
+                const h2 = document.createElement('h3');
+                h2.textContent = 'Last calls';
+                const list = document.createElement('div');
+                list.className = 'keymap';
+                for (const k of st.calls) {
+                    const a = document.createElement('span');
+                    a.textContent = new Date(k.at).toLocaleTimeString();
+                    const b = document.createElement('span');
+                    b.className = 'about-value';
+                    b.textContent = `${k.tool}${k.ok === false ? ' (failed)' : k.ok === null ? ' (running)' : ''}`;
+                    list.append(a, b);
+                }
+                box.append(h2, list);
+            }
+        };
+        void d.mcpStatus().then((st) => paint(st));
+    },
     git(page) {
         page.append(
             mirrorCheck($('git-annotate'), 'Show who last changed each line', 'In the line numbers.'),
@@ -623,7 +695,7 @@ const SPECIAL = {
     },
 };
 
-const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections', 'Inspections'], ['schemas', 'JSON Schemas'], ['terminal', 'Terminal'], ['git', 'Git'], ['django', 'Django'], ['templates', 'Templates'], ['keymap', 'Keymap'], ['plugins', 'Plugins'], ['about', 'About']];
+const EXTRA = [['formatter', 'Formatter'], ['python', 'Python'], ['inspections', 'Inspections'], ['schemas', 'JSON Schemas'], ['terminal', 'Terminal'], ['mcp', 'MCP Server'], ['git', 'Git'], ['django', 'Django'], ['templates', 'Templates'], ['keymap', 'Keymap'], ['plugins', 'Plugins'], ['about', 'About']];
 
 let isOpen = false;
 

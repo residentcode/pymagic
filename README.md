@@ -25,6 +25,11 @@ What it does, in short:
 - **Environments**: venv, uv projects (`uv add` / `uv remove`), conda, and interpreters in WSL, Docker and on SSH hosts.
 - **Tools**: Git (commit, log graph, rebase, three-way merge, changelists, shelf, pull requests), a database tool, an HTTP client, deployment
   to servers, JSON Schema checks of config files, local history.
+- **MCP server** (as PyCharm's): AI agents on this computer (Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Gemini CLI, Codex)
+  use PyMagic's tools on the open project over the Model Context Protocol: reading, changing and finding files, search, a file's or the
+  project's problems, a symbol's information, Rename, Reformat, the run configurations, shell commands (asked first, unless you choose not
+  to be). Switched on in *Settings > MCP Server*, which also adds PyMagic to those clients' settings; it listens on 127.0.0.1 only
+  (`http://127.0.0.1:64352/mcp`, and `/sse` for older clients).
 - **Plugins**: the optional features can each be switched off in Settings > Plugins. See [Making a plugin](docs/plugins.md).
 
 Every setting is made in the app (Settings, Ctrl+,). Nothing has to be edited by hand in a `.json` file.

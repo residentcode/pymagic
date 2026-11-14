@@ -16,6 +16,7 @@ import { setupPythonConsole } from './pyconsole';
 import { setupDiagrams } from './diagram';
 import { setupTemplateLinks } from './templatelinks';
 import { setupEmbedded } from './embedded';
+import { setupSyntaxChecks } from './htmlcheck.js';
 import { setupTsProject } from './tsproject';
 import { setupHtmlComments } from './html-comment.js';
 import { setupTemplatePreview } from './templatepreview';
@@ -90,6 +91,7 @@ import { requote } from './quotes-model';
 import { defineCommand, setupCommands, applyKeybindings, currentKeyLabel, runById } from './commands.js';
 import { keymapChanges } from './keymap-model.js';
 import { setKeyLabels } from './menu';
+import { setupMcpTools } from './mcp-tools.js';
 // each language service runs in its worker; the rest share the editor's
 self.MonacoEnvironment = {
     getWorker: (_id, label) => new Worker(
@@ -1219,6 +1221,8 @@ async function main() {
         if (word) void diagrams.openModel(word);
     });
     setupEmbedded();
+    // HTML's tags and YAML's syntax checked while typing
+    setupSyntaxChecks();
     window.pymagic.tsProject = setupTsProject();
     setupHtmlComments();
     // Ctrl+Shift+/ comments the selection as one block ({{-- --}} in Blade, /* */ in CSS and JavaScript, <!-- --> in HTML), as PhpStorm's key
@@ -1539,6 +1543,11 @@ async function main() {
     });
     window.pymagic.split = split;
     window.pymagic.tabs = tabs;
+    // the MCP server's tools (Settings > MCP Server): the app sends an AI agent's calls here
+    window.pymagic.mcp = setupMcpTools({
+        monaco, lsp, root: info.root, openModel: (rel) => models.get(normalise(uriFor(rel))) ?? null, ensureModel, uriOf: (model) => serverUri.get(model) ?? null, relOfUri, modelForUri,
+        openFile, saveFile, applyTextEdits, tidyFile, tabs: () => tabs, runConfigs: () => runConfigs, runHooks: () => runHooks,
+    });
     // the person's keys (Settings > Keymap), now that every command and action is defined, and again whenever they change
     let keysNow = '';
     // (the keymap's keys first: PyCharm's or VS Code's, then the person's own over them)

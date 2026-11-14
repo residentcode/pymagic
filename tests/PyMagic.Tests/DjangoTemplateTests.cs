@@ -73,6 +73,20 @@ public class DjangoTemplateTests
     }
 
     [Fact]
+    public void AVariableOrTagNeverClosedIsAnError()
+    {
+        // Django reads a tag within its line: {{ name } is printed as it is
+        var d = DiagnosticsOf(Make("<p>{{ count }</p>\n<p>{{ count }}</p>\n{% if count\n %}x{% endif %}\n{# note\n"));
+        var msgs = string.Join(" | ", d.Select(x => $"{x.Range.Start.Line}:{x.Range.Start.Character} {x.Message}"));
+        Assert.Contains("0:3 Unclosed variable '{{': add }} on the same line", msgs);
+        Assert.Contains("2:0 Unclosed tag '{%': add %} on the same line", msgs);
+        Assert.Contains("4:0 Unclosed comment '{#': add #} on the same line", msgs);
+        Assert.True(!msgs.Contains("1:"), msgs);
+        // inside {% verbatim %} and {% comment %} it is text
+        Assert.True(!DiagnosticsOf(Make("{% verbatim %}{{ x }{% endverbatim %}\n{% comment %}{% if{% endcomment %}\n")).Any(x => x.Message.StartsWith("Unclosed variable") || x.Message.StartsWith("Unclosed tag '{%'")));
+    }
+
+    [Fact]
     public void AnEndWithoutItsStartIsAnError()
     {
         Assert.True(DiagnosticsOf(Make("text\n{% endif %}\n")).Any(x => x.Message.Contains("'endif' has no matching")));

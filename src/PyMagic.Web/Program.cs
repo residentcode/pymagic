@@ -1498,6 +1498,14 @@ app.MapPost("/api/php/analyse", async (HttpRequest req) =>
     try { return Results.Json(new { problems = await Task.Run(() => PhpAnalysis.Analyse(root, PhpSetting("phpPath"), file)) }); }
     catch (ServiceException e) { return Results.Json(new { error = e.Message }, statusCode: 400); }
 });
+// PHP's syntax check of the editor's text while it is typed (php -l): { line, message }, { ok: true }, or { error } when it cannot be checked
+app.MapPost("/api/php/lint", async (HttpRequest req) =>
+{
+    var b = await JsonNode.ParseAsync(req.Body);
+    if (!Plugins.On("laravel") || b?["text"]?.GetValue<string>() is not { } text) return Results.Json(new { ok = true });
+    try { return await Task.Run(() => PhpLint.Lint(root, PhpSetting("phpPath"), text)) is { } f ? Results.Json(new { line = f.Line, message = f.Message }) : Results.Json(new { ok = true }); }
+    catch (ServiceException e) { return Results.Json(new { error = e.Message, noPhp = e.Message == PhpLint.NoPhp }); }
+});
 app.MapPost("/api/laravel/complete", async (HttpRequest req) =>
 {
     var b = await JsonNode.ParseAsync(req.Body);

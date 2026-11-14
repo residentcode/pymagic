@@ -68,6 +68,15 @@ public class JinjaTemplateTests
     }
 
     [Fact]
+    public void AVariableNeverClosedIsAnErrorButJinjasOverSeveralLinesAreFine()
+    {
+        var d = DiagnosticsOf(Make("{{ title\n  |upper }}\n{% if x\n   and y %}z{% endif %}\n<p>{{ title }</p>\n"));
+        string msgs = string.Join(" | ", d.Select(x => $"{x.Range.Start.Line}:{x.Range.Start.Character} {x.Message}"));
+        Assert.Contains("4:3 Unclosed variable '{{': add }}", msgs);
+        Assert.True(!msgs.Contains("0:0") && !msgs.Contains("2:0") && !msgs.Contains("same line"), msgs);
+    }
+
+    [Fact]
     public void DjangoTagsAreErrorsInJinja()
     {
         var d = DiagnosticsOf(Make("{% load static %}\n{% url 'index' %}\n{% for b in books %}{% empty %}{% endfor %}\n{% comment %}x{% endcomment %}\n"), "jinja-tag");

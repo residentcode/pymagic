@@ -39,4 +39,8 @@ contextBridge.exposeInMainWorld('pymagicDesktop', {
   vcsForget: (key) => ipcRenderer.invoke('pymagic:vcs-forget', String(key)),
   vcsRepos: (key) => ipcRenderer.invoke('pymagic:vcs-repos', String(key)),
   showWelcome: () => ipcRenderer.invoke('pymagic:show-welcome'),
+  // Settings > MCP Server: its state (switched on, port, the clients' configurations, the last calls), changing it, and adding PyMagic to a client
+  mcpStatus: () => ipcRenderer.invoke('pymagic:mcp-status'),
+  mcpSet: (patch) => ipcRenderer.invoke('pymagic:mcp-set', patch && typeof patch === 'object' ? { ...patch } : {}),
+  mcpConfigure: (id) => ipcRenderer.invoke('pymagic:mcp-configure', String(id)),
 });

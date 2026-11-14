@@ -13,6 +13,7 @@ const { cloneAddressOk, repositoryName } = require('./clone-model');
 const { engineSettingsFile, customizeOf, withCustomize } = require('./customize-model');
 const { ghCommand, ghAccountOf, deviceCodeOf, ghWantsEnter, tokenOk, reposOf } = require('./github-model');
 const vcsHosts = require('./vcs-hosts-model');
+const { setupMcp } = require('./mcp-main');
 
 const repo = path.resolve(__dirname, '..');
 const packaged = app.isPackaged;
@@ -328,6 +329,9 @@ function createWindow() {
   // the page has its own menu (the mark at the left of its command bar); the app's menu stays for its keys and shows with Alt
   const w = { win: new BrowserWindow(windowOptions(1400, 900)), host: null, port: 0, project: null };
   windows.add(w);
+  // the MCP server's calls without a projectPath go to the window used last
+  w.used = Date.now();
+  w.win.on('focus', () => { w.used = Date.now(); });
   // Open Tab in New Window: the page opens itself again (?open=<file>) in a window of PyMagic; any other address goes to the browser
   w.win.webContents.setWindowOpenHandler(({ url }) => {
     let own = false;
@@ -364,8 +368,16 @@ function splash(w, text) {
     .then(() => w.win.webContents.executeJavaScript(`document.getElementById('t').textContent = ${JSON.stringify(text)}`));
 }
 
+let mcp = null;
+
 app.whenReady().then(async () => {
   const first = createWindow();
+  // Settings > MCP Server: the server for AI agents (Claude Code, Cursor, VS Code, …), when it is switched on
+  mcp = setupMcp({ windows, readSettings, writeSettings, dialog, version: app.getVersion() });
+  void mcp.apply();
+  ipcMain.handle('pymagic:mcp-status', () => mcp.status());
+  ipcMain.handle('pymagic:mcp-set', (_e, patch) => mcp.set(patch && typeof patch === 'object' ? { ...patch } : {}));
+  ipcMain.handle('pymagic:mcp-configure', (_e, id) => ({ ...mcp.configure(String(id)), status: mcp.status() }));
   ipcMain.handle('pymagic:choose-folder', (e) => chooseFolder(windowOf(e.sender)));
   ipcMain.handle('pymagic:open-project', async (e, folder, where) => {
     if (typeof folder === 'string' && fs.existsSync(folder) && fs.statSync(folder).isDirectory())

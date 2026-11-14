@@ -993,6 +993,7 @@ export function setupRun(deps) {
                 void refreshWatches();
                 break;
             case 'exited':
+                lastExit = m.detached ? null : m.code ?? null;
                 append(cellMode === 'console' ? '\nThe debugger is detached from the Python console.\n' : cellMode === 'compound' ? `\nThe debugger of ${compoundDebugged} is stopped.\n` : cellMode ? '\nThe cell is done; the debugger is detached.\n' : m.detached ? (serving ? '\nDebug server stopped; a program that was connected goes on running.\n' : '\nDetached; the program goes on running.\n') : `\nProcess finished with exit code ${m.code}\n`, 'info');
                 clearInterval(logTimer);
                 openBrowser = false;
@@ -1030,6 +1031,19 @@ export function setupRun(deps) {
     }
     // ------------------------------------------------------------ commands
     let profiling = false;
+    let lastExit = null;
+    /** The MCP server's execute_run_configuration: starts `config` (not choosing it) and waits until it ends or `timeout` ms pass. */
+    async function runForAgent(config, timeout) {
+        if (run) return { started: false, note: 'A program is running in PyMagic already; it has to end first.' };
+        const before = config.kind === 'compound' || startOf(config).http || startOf(config).tests || startOf(config).browser || startOf(config).debugServer;
+        if (before) return { started: false, note: `A ${config.kind} configuration's result is not output that ends (it goes to its own panel); run it from PyMagic.` };
+        lastExit = null;
+        await start(false, false, config);
+        if (!run) return { started: false, note: output.textContent.trim() || 'It did not start.' };
+        const end = Date.now() + timeout;
+        while (run && Date.now() < end) await new Promise((r) => setTimeout(r, 200));
+        return { started: true, timedOut: !!run, exitCode: lastExit, output: output.textContent };
+    }
     // afterExit: called with the exit code when the program of a Before launch task ends (null when it did not end by itself)
     let afterExit = null, stoppedByUser = false;
     // what a configuration adds while it runs: the browser opened at the server's address, log files followed in the console
@@ -1051,10 +1065,11 @@ export function setupRun(deps) {
         void poll();
         logTimer = window.setInterval(() => void poll(), 1000);
     }
-    async function start(debug, profile = false) {
+    // `given`: a configuration to start instead of the chosen one (the MCP server's execute_run_configuration)
+    async function start(debug, profile = false, given = undefined) {
         if (run)
             return;
-        const chosen = deps.runConfig?.();
+        const chosen = given !== undefined ? given : deps.runConfig?.();
         if (chosen?.kind === 'compound') {
             await startCompound(chosen, debug, profile);
             return;
@@ -1968,7 +1983,7 @@ export function setupRun(deps) {
     return {
         /** Stopped on a value the debugger shows in its popup: the language's own hover stands aside. */
         debugValueAt,
-        onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null,
+        onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null, runForAgent,
         /** A file run under the profiler (the tree's More Run/Debug > Profile). */
         profileScript: (rel) => launch(rel, false, true, ''),
         /** `python -m module args`; false when a run is going. */

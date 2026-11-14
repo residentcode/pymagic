@@ -77,8 +77,8 @@ class Page {
     }
 }
 
-/** Starts PyMagic.exe on `root`; resolves when its page has the editor. */
-export async function launch(root, settings = null) {
+/** Starts PyMagic.exe on `root`; resolves when its page has the editor. `appSettings`: the app's own settings.json (Settings > MCP Server's). */
+export async function launch(root, settings = null, appSettings = null) {
     if (!existsSync(EXE))
         throw new Error(`${EXE} is not built: run node desktop/package.mjs --no-installer first`);
     const port = await freePort();
@@ -86,6 +86,8 @@ export async function launch(root, settings = null) {
     // settings the run starts with (Settings > PHP's PHP, …), in the test's own settings file
     if (settings)
         writeFileSync(join(profile, 'pymagic-settings.json'), JSON.stringify(settings, null, 2));
+    if (appSettings)
+        writeFileSync(join(profile, 'settings.json'), JSON.stringify(appSettings, null, 2));
     // the person's settings are the test's own too (the engine keeps them in a file of its own, not in the user-data folder)
     const env = { ...process.env, PYMAGIC_SETTINGS_FILE: join(profile, 'pymagic-settings.json') };
     const child = spawn(EXE, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, root], { stdio: 'ignore', env });
