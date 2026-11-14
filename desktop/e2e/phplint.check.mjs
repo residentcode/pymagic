@@ -1,6 +1,6 @@
 // PHP's syntax errors while typing in the built PyMagic.exe (php -l on the editor's text, PhpLint.cs): with Settings > PHP naming a php.exe (the
 // test's, PYMAGIC_PHP), a missing semicolon typed into a file is marked as an error at the line PHP names, gone when it is fixed, and a broken
-// function and an unclosed brace are marked too, with nothing saved; without any PHP the editor says once that PHP's syntax is not checked.
+// function and an unclosed brace are marked too, with nothing saved; without any PHP the bundled parser marks Route::...{,22 at its column.
 // Run: PYMAGIC_PHP=C:\path\php.exe node desktop/e2e/phplint.check.mjs
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -56,7 +56,7 @@ try {
     assert.equal(readFileSync(join(app.root, 'index.php'), 'utf8'), files['index.php']);
 } finally { await app.close(); }
 
-// without any PHP: said once
+// without any PHP: the bundled parser (php-syntax-model.js) marks the error instead, at its column, and nothing is said
 const env = process.env.PYMAGIC_PHP;
 delete process.env.PYMAGIC_PHP;
 app = await launch(project(files), { phpPath: 'C:\\no\\such\\php.exe' });
@@ -64,8 +64,15 @@ try {
     const { page } = app;
     await page.evaluate(`window.pymagic.openFile('index.php')`);
     await page.waitFor(`window.pymagic.editor.getModel()?.uri.path.endsWith('index.php')`, 20000, 'index.php');
-    const said = await page.waitFor(`document.getElementById('toast')?.style.display === 'block' && document.getElementById('toast').textContent`, 20000, 'the notice');
-    console.log('without PHP:', said);
-    assert.match(said, /PHP's syntax is not checked: PHP was not found/);
+    assert.deepEqual(await errorsOf(page, (f) => f.length === 0), []);
+    await page.evaluate(`window.pymagic.editor.getModel().setValue("<?php\\nRoute::prefix('admin')->group(function () {\\n    Route::get('/', [A::class, 'index']);\\n});\\n")`);
+    await typeAt(page, 2, 44, ',22');
+    const found = await errorsOf(page, (f) => f.length === 1);
+    console.log('without PHP:', found);
+    assert.deepEqual(found, [{ line: 2, severity: 8, source: 'PHP', message: "Syntax error: unexpected ','" }]);
+    assert.equal(await page.evaluate(`window.pymagic.monaco.editor.getModelMarkers({ owner: 'php-lint' })[0].startColumn`), 44);
+    await page.evaluate(`window.pymagic.editor.getModel().setValue("<?php\\nRoute::prefix('admin')->group(function () {\\n});\\n")`);
+    assert.deepEqual(await errorsOf(page, (f) => f.length === 0), []);
+    assert.notEqual(await page.evaluate(`document.getElementById('toast')?.style.display`), 'block');
     console.log('OK');
 } finally { await app.close(); process.env.PYMAGIC_PHP = env; }

@@ -3,6 +3,7 @@
 // warnings of the file with PHPStan's identifier and tip. A project without PHPStan asks nothing.
 import * as monaco from 'monaco-editor';
 import { toast } from './toast';
+import { phpSyntaxError } from './php-syntax-model.js';
 
 const OWNER = 'phpstan';
 const LINT = 'php-lint';
@@ -51,17 +52,20 @@ export function setupPhpAnalysis({ editor, relOf }) {
         const res = await fetch('/api/php/lint', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: model.getValue() }) }).catch(() => null);
         const body = await res?.json().catch(() => null);
         if (!body || mine !== lintTicket || model.isDisposed() || model.getVersionId() !== version) return;
+        let found = body.line ? { line: body.line, column: 0, message: body.message.replace(/^syntax error, /, 'Syntax error: ') } : null;
         if (body.error) {
-            monaco.editor.setModelMarkers(model, LINT, []);
-            if (!saidNoPhp) { saidNoPhp = true; toast(body.error, true); }
-            return;
+            // no PHP to run (or Sail's container stopped): the bundled parser checks instead (php-syntax-model.js)
+            try { found = phpSyntaxError(model.getValue()); } catch { found = null; }
+            if (!body.noPhp && !saidNoPhp) { saidNoPhp = true; toast(body.error, true); }
         }
-        if (!body.line) { monaco.editor.setModelMarkers(model, LINT, []); return; }
-        const line = Math.min(Math.max(1, body.line), model.getLineCount());
-        const first = model.getLineFirstNonWhitespaceColumn(line) || 1;
+        if (!found) { monaco.editor.setModelMarkers(model, LINT, []); return; }
+        const line = Math.min(Math.max(1, found.line), model.getLineCount());
+        const end = model.getLineMaxColumn(line);
+        // the parser's column when it gives one inside the line, else the line from its first non-blank character
+        const first = found.column > 1 && found.column < end ? found.column : (model.getLineFirstNonWhitespaceColumn(line) || 1);
         monaco.editor.setModelMarkers(model, LINT, [{
-            startLineNumber: line, startColumn: first, endLineNumber: line, endColumn: Math.max(first + 1, model.getLineMaxColumn(line)),
-            severity: monaco.MarkerSeverity.Error, source: 'PHP', message: body.message.replace(/^syntax error, /, 'Syntax error: '),
+            startLineNumber: line, startColumn: first, endLineNumber: line, endColumn: Math.max(first + 1, end),
+            severity: monaco.MarkerSeverity.Error, source: 'PHP', message: found.message,
         }]);
     }
     const lintSoon = (delay = 500) => { clearTimeout(lintTimer); const model = editor.getModel(); lintTimer = window.setTimeout(() => void lint(model), delay); };

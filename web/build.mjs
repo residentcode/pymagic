@@ -22,7 +22,8 @@ function stamp() {
 }
 
 const options = {
-  define: { __BUILD__: JSON.stringify(stamp()) },
+  // process.arch: php-parser's lexer reads it when it loads (PHP's 64-bit integers); the page has no process
+  define: { __BUILD__: JSON.stringify(stamp()), 'process.arch': '"x64"' },
   entryPoints: {
     main: 'src/main.js',
     // the welcome screen's New project and Plugins: their dialog alone (welcome-tool.html)

@@ -12,6 +12,7 @@
     "emmet-monaco-es": "5.7.0",
     "mermaid": "12.3.0",
     "monaco-editor": "0.52.2",
+    "php-parser": "3.7.0",
     "tailwindcss": "4.3.3",
     "yaml": "2.6.1"
   },
