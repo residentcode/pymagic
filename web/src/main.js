@@ -43,6 +43,8 @@ import { setupDatabase } from './database';
 import { setupHttpClient } from './http';
 import './ejs-language';
 import './blade-language';
+import { setupIndentRules } from './indent-rules.js';
+import { setupBraceIndent } from './brace-indent.js';
 import './gherkin-language';
 import './toml-language';
 import { languageFor as languageForFile } from './file-language';
@@ -1074,6 +1076,7 @@ async function main() {
         cursorSmoothCaretAnimation: 'on',
         roundedSelection: true,
         quickSuggestions: { other: true, comments: false, strings: false },
+        autoIndent: 'full',   // each language's indentationRules (indent-rules.js): a } or </div> typed on its own line moves left
         scrollBeyondLastLine: false,
         glyphMargin: true,
         suggestSelection: 'recentlyUsed', // what was picked for a prefix before comes first next time
@@ -1230,6 +1233,8 @@ async function main() {
     setupEmbedded();
     // HTML's tags and YAML's syntax checked while typing
     setupSyntaxChecks();
+    setupIndentRules(editor);
+    setupBraceIndent();
     window.pymagic.tsProject = setupTsProject();
     setupHtmlComments();
     // Ctrl+Shift+/ comments the selection as one block ({{-- --}} in Blade, /* */ in CSS and JavaScript, <!-- --> in HTML), as PhpStorm's key

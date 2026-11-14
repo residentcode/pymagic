@@ -2,6 +2,7 @@
 // HTML is tokenized here as Monaco's html tokenizer names its parts (tag, attribute.name, attribute.value, delimiter, comment), and the code of each
 // tag is Monaco's javascript, embedded, also inside an attribute's value (href="<%= url %>"); <%# %> is a comment.
 import * as monaco from 'monaco-editor';
+import { INDENT_RULES, INDENT_OUTDENT } from './indent-rules-model.js';
 
 monaco.languages.register({ id: 'ejs', extensions: ['.ejs', '.eta'], aliases: ['EJS', 'ejs'] });
 
@@ -60,6 +61,10 @@ monaco.languages.setMonarchTokensProvider('ejs', {
 monaco.languages.setLanguageConfiguration('ejs', {
     comments: { blockComment: ['<%#', '%>'] },
     brackets: [['<%', '%>'], ['{', '}'], ['(', ')'], ['[', ']']],
-    autoClosingPairs: [{ open: '<%', close: ' %>' }, { open: '{', close: '}' }, { open: '(', close: ')' }, { open: '[', close: ']' }, { open: '"', close: '"' }, { open: "'", close: "'" }],
+    // no <% → %> and no { → }: typed as people type them (<% if (a) { %> … <% } %>), they left a second %> and a } after the tag
+    autoClosingPairs: [{ open: '(', close: ')' }, { open: '[', close: ']' }, { open: '"', close: '"' }, { open: "'", close: "'" }],
     surroundingPairs: [{ open: '"', close: '"' }, { open: "'", close: "'" }, { open: '<', close: '>' }],
+    // Enter after <% if (a) { %> or an element left open indents; <% } %> and a closing tag typed on their own line move left
+    indentationRules: INDENT_RULES.ejs,
+    onEnterRules: INDENT_OUTDENT.ejs.map((r) => ({ ...r, action: { indentAction: monaco.languages.IndentAction.IndentOutdent } })),
 });

@@ -3,6 +3,7 @@
 // language: the HTML is tokenized as Monaco's html tokenizer names its parts (so Emmet, tag pairs and Tailwind read it as HTML), and the PHP
 // of each place is tokenized here as Monaco's php tokenizer names its tokens (variables, strings, numbers, keywords). @{{ and @@ are escapes.
 import * as monaco from 'monaco-editor';
+import { INDENT_RULES, INDENT_OUTDENT } from './indent-rules-model.js';
 
 monaco.languages.register({ id: 'blade', extensions: ['.blade.php'], aliases: ['Blade', 'blade'] });
 
@@ -113,7 +114,11 @@ try { monaco.languages.setMonarchTokensProvider('blade', {
 monaco.languages.setLanguageConfiguration('blade', {
     comments: { blockComment: ['{{--', '--}}'] },
     brackets: [['<!--', '-->'], ['<', '>'], ['{{', '}}'], ['{!!', '!!}'], ['{', '}'], ['(', ')'], ['[', ']']],
-    autoClosingPairs: [{ open: '{{', close: ' }}' }, { open: '{!!', close: ' !!}' }, { open: '"', close: '"' }, { open: "'", close: "'" }, { open: '(', close: ')' }, { open: '[', close: ']' }],
+    // a plain { → } (typed over when the } is typed): {{ → }} and {!! → !!} left a second }} when the closing was typed
+    autoClosingPairs: [{ open: '{', close: '}' }, { open: '"', close: '"' }, { open: "'", close: "'" }, { open: '(', close: ')' }, { open: '[', close: ']' }],
+    // Enter after @if (…), @foreach, @section('x') or an element left open indents; @endif, @else and a closing tag move left
+    indentationRules: INDENT_RULES.blade,
+    onEnterRules: INDENT_OUTDENT.blade.map((r) => ({ ...r, action: { indentAction: monaco.languages.IndentAction.IndentOutdent } })),
     surroundingPairs: [{ open: '"', close: '"' }, { open: "'", close: "'" }, { open: '<', close: '>' }, { open: '(', close: ')' }],
     // @if … @endif, @foreach … @endforeach, @section … @endsection and their kind fold like tags
     folding: { markers: { start: /^\s*(<(?!\/)[\w-]+[^>]*>?$|@(if|unless|isset|empty|auth|guest|foreach|forelse|for|while|switch|section|push|prepend|component|slot|php|once|production|env|error|can|cannot|verbatim)\b)/, end: /^\s*(<\/[\w-]+>|@end\w+\b)/ } },
