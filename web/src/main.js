@@ -27,6 +27,7 @@ import { setupRoutes } from './routes';
 import { setupDjango } from './django';
 import { setupLaravel, setupLaravelLinks } from './laravel';
 import { setupPhpAnalysis } from './php-analysis.js';
+import { formatPhpText } from './php-format-model.js';
 import { setupProblems, setupTodo } from './problems';
 import { setupTerminal } from './terminal';
 import { setupCoverage } from './coverage';
@@ -357,11 +358,17 @@ async function refreshFormatters() {
 async function phpFormatted(model, quiet) {
     const res = await fetch('/api/php/format', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: model.getValue() }) }).catch(() => null);
     const body = await res?.json().catch(() => null);
-    if (!res?.ok || typeof body?.text !== 'string') {
-        if (!quiet) toast(body?.error ?? 'The file cannot be formatted.', true);
+    if (res?.ok && typeof body?.text === 'string') return body.text;
+    // Pint or PHP CS Fixer could not run (no PHP, no formatter in the project): Prettier's PHP plugin, built in (php-format-model.js), when
+    // asked for (Reformat Code), not on save: a project laid out by Pint is not rewritten in another style behind the person's back
+    if (quiet) return null;
+    try {
+        return await formatPhpText(model.getValue());
+    }
+    catch (e) {
+        if (!quiet) toast(/SyntaxError|Parse Error/i.test(String(e?.name) + String(e?.message)) ? 'The file has a syntax error: it cannot be formatted until it is fixed.' : (body?.error ?? 'The file cannot be formatted.'), true);
         return null;
     }
-    return body.text;
 }
 async function formatPhp(model, quiet) {
     const before = model.getValue();

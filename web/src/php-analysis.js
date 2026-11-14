@@ -4,9 +4,11 @@
 import * as monaco from 'monaco-editor';
 import { toast } from './toast';
 import { phpSyntaxError } from './php-syntax-model.js';
+import { indentProblems, fixIndentation } from './php-format-model.js';
 
 const OWNER = 'phpstan';
 const LINT = 'php-lint';
+const INDENT = 'php-indent';
 
 export function setupPhpAnalysis({ editor, relOf }) {
     let available = true;            // false once the server said the project has no PHPStan (asked again when a file is opened)
@@ -46,8 +48,13 @@ export function setupPhpAnalysis({ editor, relOf }) {
     // PHP's syntax check while typing (PhpLint.cs: php -l on the editor's text), half a second after the last key: PHP's first error at its line
     let lintTimer = 0, lintTicket = 0, saidNoPhp = false;
     const isPhp = (model) => { const rel = model && relOf(model); return !!rel && /\.php$/i.test(rel) && !/\.blade\.php$/i.test(rel) && model.getLanguageId() === 'php'; };
-    async function lint(model) {
-        if (!isPhp(model) || model.isDisposed()) return;
+    async function lint(model, tries = 0) {
+        if (!model || model.isDisposed()) return;
+        if (!isPhp(model)) {
+            // a file just opened may not have its project path (or its language) yet: asked again shortly, while it is the editor's
+            if (tries < 20 && (!relOf(model) || /\.php$/i.test(relOf(model))) && editor.getModel() === model) window.setTimeout(() => void lint(model, tries + 1), 250);
+            return;
+        }
         const mine = ++lintTicket, version = model.getVersionId();
         const res = await fetch('/api/php/lint', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: model.getValue() }) }).catch(() => null);
         const body = await res?.json().catch(() => null);
@@ -58,7 +65,8 @@ export function setupPhpAnalysis({ editor, relOf }) {
             try { found = phpSyntaxError(model.getValue()); } catch { found = null; }
             if (!body.noPhp && !saidNoPhp) { saidNoPhp = true; toast(body.error, true); }
         }
-        if (!found) { monaco.editor.setModelMarkers(model, LINT, []); return; }
+        if (!found) { monaco.editor.setModelMarkers(model, LINT, []); markIndentation(model); return; }
+        monaco.editor.setModelMarkers(model, INDENT, []);   // a file with a syntax error: its indentation is told once it reads again
         const line = Math.min(Math.max(1, found.line), model.getLineCount());
         const end = model.getLineMaxColumn(line);
         // the parser's column when it gives one inside the line, else the line from its first non-blank character
@@ -68,6 +76,35 @@ export function setupPhpAnalysis({ editor, relOf }) {
             severity: monaco.MarkerSeverity.Error, source: 'PHP', message: found.message,
         }]);
     }
+    // indentation that does not follow the file's { } blocks (php-format-model.js), as a weak warning; Alt+Enter: Fix indentation
+    function markIndentation(model) {
+        let found = [];
+        try { found = indentProblems(model.getValue()); } catch { found = []; }
+        monaco.editor.setModelMarkers(model, INDENT, found.map((p) => {
+            const end = model.getLineFirstNonWhitespaceColumn(p.line) || model.getLineMaxColumn(p.line);
+            return {
+                startLineNumber: p.line, startColumn: 1, endLineNumber: p.line, endColumn: Math.max(2, end),
+                severity: monaco.MarkerSeverity.Info, source: 'PHP', code: INDENT, message: p.message,
+            };
+        }));
+    }
+    monaco.languages.registerCodeActionProvider('php', {
+        provideCodeActions(model, _range, context) {
+            const marks = context.markers.filter((m) => m.code === INDENT);
+            if (!marks.length) return { actions: [], dispose() { } };
+            const text = model.getValue();
+            const fixed = fixIndentation(text);
+            if (fixed === text) return { actions: [], dispose() { } };
+            return {
+                actions: [{
+                    title: 'Fix indentation of the file', kind: 'quickfix', isPreferred: true, diagnostics: marks,
+                    edit: { edits: [{ resource: model.uri, versionId: model.getVersionId(), textEdit: { range: model.getFullModelRange(), text: fixed } }] },
+                }],
+                dispose() { },
+            };
+        },
+    });
+
     const lintSoon = (delay = 500) => { clearTimeout(lintTimer); const model = editor.getModel(); lintTimer = window.setTimeout(() => void lint(model), delay); };
     editor.onDidChangeModelContent(() => lintSoon());
 

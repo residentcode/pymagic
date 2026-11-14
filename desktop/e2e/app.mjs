@@ -89,7 +89,10 @@ export async function launch(root, settings = null, appSettings = null) {
     if (appSettings)
         writeFileSync(join(profile, 'settings.json'), JSON.stringify(appSettings, null, 2));
     // the person's settings are the test's own too (the engine keeps them in a file of its own, not in the user-data folder)
-    const env = { ...process.env, PYMAGIC_SETTINGS_FILE: join(profile, 'pymagic-settings.json') };
+    // the test's windows open minimized, out of the person's way (PYMAGIC_E2E_SHOW=1 leaves them on screen); focus is emulated below, so
+    // typing and clicks still reach the editor
+    const minimized = !process.env.PYMAGIC_E2E_SHOW;
+    const env = { ...process.env, PYMAGIC_SETTINGS_FILE: join(profile, 'pymagic-settings.json'), ...(minimized ? { PYMAGIC_MINIMIZED: '1' } : {}) };
     const child = spawn(EXE, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, root], { stdio: 'ignore', env });
     let target = null;
     for (let i = 0; i < 120 && !target; i++) {
@@ -108,7 +111,7 @@ export async function launch(root, settings = null, appSettings = null) {
     await new Promise((ok, fail) => { ws.addEventListener('open', ok); ws.addEventListener('error', fail); });
     const page = new Page(ws);
     // the page behaves as focused even when other windows are in front, so typing and clicks reach the editor every time
-    await page.send('Page.bringToFront');
+    if (!minimized) await page.send('Page.bringToFront');
     await page.send('Emulation.setFocusEmulationEnabled', { enabled: true });
     await page.waitFor('!!(window.pymagic && window.pymagic.openFile && window.pymagic.editor.getModel())', 60000, 'the editor');
     return {

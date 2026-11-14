@@ -323,12 +323,16 @@ function inPage(code) {
   w?.win.webContents.executeJavaScript(code).catch(() => {});
 }
 
-const windowOptions = (width, height) => ({ width, height, backgroundColor: '#0f111a', title: 'PyMagic', icon, autoHideMenuBar: true, webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.js') } });
+// PYMAGIC_MINIMIZED=1 (the e2e checks): windows open minimized, out of the person's way, their page running at full speed as when in front
+const minimized = process.env.PYMAGIC_MINIMIZED === '1';
+const windowOptions = (width, height) => ({ width, height, backgroundColor: '#0f111a', title: 'PyMagic', icon, autoHideMenuBar: true, ...(minimized ? { show: false } : {}),
+  webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.js'), ...(minimized ? { backgroundThrottling: false } : {}) } });
 
 function createWindow() {
   // the page has its own menu (the mark at the left of its command bar); the app's menu stays for its keys and shows with Alt
   const w = { win: new BrowserWindow(windowOptions(1400, 900)), host: null, port: 0, project: null };
   windows.add(w);
+  if (minimized) w.win.minimize();
   // the MCP server's calls without a projectPath go to the window used last
   w.used = Date.now();
   w.win.on('focus', () => { w.used = Date.now(); });

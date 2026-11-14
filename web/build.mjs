@@ -24,6 +24,8 @@ function stamp() {
 const options = {
   // process.arch: php-parser's lexer reads it when it loads (PHP's 64-bit integers); the page has no process
   define: { __BUILD__: JSON.stringify(stamp()), 'process.arch': '"x64"' },
+  // Prettier's PHP plugin requires fs and path (for composer.json's PHP version, which php-format-model.js gives): empty in the page
+  alias: { fs: './src/node-stub.js', path: './src/node-stub.js' },
   entryPoints: {
     main: 'src/main.js',
     // the welcome screen's New project and Plugins: their dialog alone (welcome-tool.html)
