@@ -45,6 +45,7 @@ import './ejs-language';
 import './blade-language';
 import { setupIndentRules } from './indent-rules.js';
 import { setupBraceIndent } from './brace-indent.js';
+import { setupLiveTemplates, liveTemplateItems, serverTemplates } from './live-templates.js';
 import './gherkin-language';
 import './toml-language';
 import { languageFor as languageForFile } from './file-language';
@@ -455,6 +456,9 @@ async function organizeImports() {
 }
 /** Python and Django templates share hover, go to definition, completion, usages and rename. */
 const CODE_LANGUAGES = ['python', 'django-html'];
+/** The language server's completion, for the key that expands one of its live templates. */
+let serverCompletion = null;
+
 function registerProviders() {
     // PHP: the project's Pint or PHP CS Fixer, for Monaco's own Format Document as for the toolbar's Format
     monaco.languages.registerDocumentFormattingEditProvider('php', {
@@ -580,7 +584,7 @@ function registerProviders() {
                 });
             const res = await lsp.request('textDocument/completion', { textDocument: { uri }, position: cell ? cell.position : toPos(position) }, token);
             return {
-                suggestions: (res?.items ?? []).map((i) => ({
+                suggestions: liveTemplateItems(res?.items ?? [], model.getLanguageId()).map((i) => ({
                     label: i.label,
                     kind: completionKinds[i.kind] ?? K.Text,
                     detail: i.detail,
@@ -598,6 +602,7 @@ function registerProviders() {
             };
         },
     });
+    serverCompletion = completionProvider([]);
     monaco.languages.registerCompletionItemProvider('python', completionProvider(['.']));
     // in a template the names after `{%`, `|` and a quote are what is typed next
     monaco.languages.registerCompletionItemProvider('django-html', completionProvider(['.', '|', '"', "'", ' ', '%']));
@@ -1252,7 +1257,12 @@ async function main() {
     });
     const codeGen = setupCodeGen();
     codeGen.attach(editor);
-    setLiveTemplateSource(() => lsp.request('pymagic/templates', {}));
+    setLiveTemplateSource(serverTemplates);
+    setupLiveTemplates(editor, {
+        source: () => lsp.request('pymagic/templates', {}),
+        suggestions: async (model, position) => (['python', 'django-html'].includes(model.getLanguageId())
+            ? (await serverCompletion?.provideCompletionItems(model, position, {}, new monaco.CancellationTokenSource().token))?.suggestions ?? [] : []),
+    });
     window.addEventListener('pymagic:folders', () => lsp.notify('pymagic/foldersChanged', {}));
     setupSemantic({ lsp, uriOf: (model) => model && serverUri.get(model) });
     const codeVision = setupCodeVision({ editor, lsp, uriOf: (model) => model && serverUri.get(model), relOf: (model) => model && relPathOf.get(normalise(serverUri.get(model) ?? '')), savedText: (rel) => savedText.get(rel) });

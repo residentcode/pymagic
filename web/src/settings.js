@@ -1,6 +1,8 @@
 // The settings of the person using PyMagic: what they are, where they are kept (the engine keeps one file for the person, /api/settings), and how
 // they change the page and every editor. The dialog that edits them is settings-ui.js.
 
+import { cleanConf } from './live-templates-model.js';
+
 export const MONO = '"Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace';
 
 export const DEFAULTS = {
@@ -46,7 +48,8 @@ export const DEFAULTS = {
     grammarLanguage: 'en-US', // the language LanguageTool checks in
     spelling: true,           // typos in comments, strings, names and Markdown, marked as hints (Windows' own spell checker)
     strictUnions: true,       // a union argument fits only when every member does (PyCharm 2026.1's default); off: when one member does
-    quotes: 'single',         // single | double | preserve: the quotes the formatter gives strings when the project's pyproject.toml, ruff.toml or .editorconfig does not say
+    templates: cleanConf(null), // Settings > Templates: the key that expands, the templates switched off or edited, the person's own (live-templates-model.js)
+    quotes: 'single',        // single | double | preserve: the quotes the formatter gives strings when the project's pyproject.toml, ruff.toml or .editorconfig does not say
 };
 
 /** A completion's text as the settings want it: without the call's parentheses when those are not to be written. */
@@ -76,6 +79,7 @@ export function merged(stored) {
     // only text keys of command ids (a broken file changes no key)
     out.plugins = out.plugins && !Array.isArray(out.plugins) ? Object.fromEntries(Object.entries(out.plugins).filter(([k, v]) => k && v === false)) : {};
     out.keybindings = out.keybindings && !Array.isArray(out.keybindings) ? Object.fromEntries(Object.entries(out.keybindings).filter(([k, v]) => k && typeof v === 'string')) : {};
+    out.templates = cleanConf(out.templates);
     return out;
 }
 
@@ -104,7 +108,7 @@ export function change(patch) {
     }, 300);
 }
 
-export function resetAll() { change({ ...DEFAULTS, plugins: current.plugins }); }   // the plugins are not the editor's look: Settings > Plugins switches them
+export function resetAll() { change({ ...DEFAULTS, plugins: current.plugins, templates: current.templates }); }   // the plugins are not the editor's look: Settings > Plugins switches them
 
 /** The theme in force: the setting, or what the system says when it is "system". */
 export function themeNow(s = current) {

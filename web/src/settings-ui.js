@@ -9,6 +9,7 @@ import { keymapCommands, defineCommand } from './commands.js';
 import { keyFromEvent, effectiveKeys, clashes, withKey, KEYMAPS, withKeymap } from './keymap-model.js';
 import { readSnippets, writeSnippets, readFileTemplates } from './codegen-model.js';
 import { schemaMappingsPage } from './schema-picker.js';
+import { liveTemplatesSection } from './live-templates-ui.js';
 
 const SNIPPETS = '.pymagic/snippets.json', FILE_TEMPLATES = '.pymagic/fileTemplates.json';
 let liveTemplateSource = null;
@@ -468,35 +469,8 @@ const SPECIAL = {
             fetch('/api/file?path=' + encodeURIComponent(file)).then((r) => (r.ok ? r.text() : '')).catch(() => '').then((text) => { items = read(text); draw(); });
         }
 
-        section('Live templates', 'Typed at the start of a statement, then Tab or Enter. Postfix templates are typed after an expression: items.for, x.if, value.par. The Django template ones are typed in the text of a template.');
-        const builtIn = document.createElement('div');
-        builtIn.className = 'keymap';
-        page.append(builtIn);
-        liveTemplateSource?.().then((list) => {
-            for (const t of list?.live ?? []) {
-                const a = document.createElement('kbd');
-                a.textContent = t.prefix;
-                const b = document.createElement('span');
-                b.textContent = t.description + (t.classBody ? ' (in a class)' : '') + (t.import ? ` (imports ${t.import})` : '');
-                b.title = t.body.replace(/\$\{\d+:([^}]*)\}/g, '$1').replace(/\$\{?\d+\}?/g, '').replaceAll('\t', '    ');
-                builtIn.append(b, a);
-            }
-            for (const t of list?.template ?? []) {
-                const a = document.createElement('kbd');
-                a.textContent = t.prefix;
-                const b = document.createElement('span');
-                b.textContent = 'Django template: ' + t.description;
-                b.title = t.body.replace(/\$\{\d+:([^}]*)\}/g, '$1').replace(/\$\{?\d+\}?/g, '').replaceAll('\t', '    ');
-                builtIn.append(b, a);
-            }
-            for (const t of list?.postfix ?? []) {
-                const a = document.createElement('kbd');
-                a.textContent = '.' + t.key;
-                const b = document.createElement('span');
-                b.textContent = 'postfix: ' + t.example;
-                builtIn.append(b, a);
-            }
-        }).catch(() => { /* the server is not there yet */ });
+        section('Live templates', "An abbreviation typed in a file and the key below write the template; the templates of the file's language are in the completion list too. Abbreviations written in HTML and CSS as ul>li*3 or m10 are Emmet's (Settings > Plugins).");
+        liveTemplatesSection(page, liveTemplateSource);
 
         section('This project\'s templates', `Kept in ${SNIPPETS}, in VS Code's form. In the text, $1 and \${1:name} are the places Tab goes to and $0 is where the cursor ends.`);
         editable(SNIPPETS, (text) => readSnippets(text) ?? [], writeSnippets, () => ({ name: '', prefix: '', description: '', body: '', scope: '' }),

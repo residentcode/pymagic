@@ -136,6 +136,19 @@ public sealed partial class LanguageService
         new("comment", "{# … #}", "{# $0 #}"),
         new("var", "{{ … }}", "{{ ${1:value} }}$0"),
         new("trans", "{% translate \"…\" %}", "{% translate \"${1:text}\" %}$0"),
+        new("blocktrans", "{% blocktranslate %} … {% endblocktranslate %}", "{% blocktranslate %}$0{% endblocktranslate %}"),
+        new("autoescape", "{% autoescape %} … {% endautoescape %}", "{% autoescape ${1:off} %}\n\t$0\n{% endautoescape %}"),
+        new("cycle", "{% cycle %}", "{% cycle ${1:'odd' 'even'} %}$0"),
+        new("debug", "{% debug %}", "{% debug %}$0"),
+        new("filter", "{% filter %} … {% endfilter %}", "{% filter ${1:lower} %}\n\t$0\n{% endfilter %}"),
+        new("firstof", "{% firstof %}", "{% firstof ${1:first} ${2:second} %}$0"),
+        new("ifch", "{% ifchanged %} … {% endifchanged %}", "{% ifchanged ${1:value} %}\n\t$0\n{% endifchanged %}"),
+        new("now", "{% now %}", "{% now \"${1:Y-m-d}\" %}$0"),
+        new("regroup", "{% regroup %}", "{% regroup ${1:items} by ${2:field} as ${3:groups} %}$0"),
+        new("spaceless", "{% spaceless %} … {% endspaceless %}", "{% spaceless %}\n\t$0\n{% endspaceless %}"),
+        new("verbatim", "{% verbatim %} … {% endverbatim %}", "{% verbatim %}\n\t$0\n{% endverbatim %}"),
+        new("widthratio", "{% widthratio %}", "{% widthratio ${1:value} ${2:max} ${3:width} %}$0"),
+        new("super", "{{ block.super }}", "{{ block.super }}$0"),
     };
 
     (string Path, DateTime Stamp, List<UserSnippet> Snippets)? _userSnippets;
