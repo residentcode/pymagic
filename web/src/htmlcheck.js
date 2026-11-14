@@ -3,9 +3,10 @@
 // out: their markup has syntax of its own.
 import * as monaco from 'monaco-editor';
 import { templateProblems, yamlProblems, isYamlTemplate } from './htmlcheck-model.js';
+import { pugProblems } from './pug-model.js';
 
 const OWNER = 'syntax';
-const KINDS = { 'django-html': ['HTML', templateProblems], yaml: ['YAML', yamlProblems] };
+const KINDS = { 'django-html': ['HTML', templateProblems], yaml: ['YAML', yamlProblems], pug: ['Pug', pugProblems] };   // Pug: its indentation (pug-model.js)
 
 export function setupSyntaxChecks() {
     const timers = new Map();

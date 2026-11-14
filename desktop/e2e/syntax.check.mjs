@@ -1,6 +1,7 @@
 // Syntax errors of HTML, templates and YAML while typing in the built PyMagic.exe: an HTML file's element never closed, a closing tag that
 // matches nothing and a tag never ended, gone when fixed; a template whose {% if %} branches each open a <div> without a false finding, and a
-// {{ name } never closed (Django's) marked; a YAML file's wrong indentation and duplicate key, and a Helm template left alone.
+// {{ name } never closed (Django's) marked; a YAML file's wrong indentation and duplicate key, and a Helm template left alone; a Pug view's
+// line come back to a level none above is at.
 // Run: node desktop/e2e/syntax.check.mjs
 import assert from 'node:assert/strict';
 import { launch, project, sleep } from './app.mjs';
@@ -11,6 +12,7 @@ const app = await launch(project({
     'shop/templates/shop/list.html': '{% extends "base.html" %}\n{% block content %}\n{% if wide %}<div class="wide">{% else %}<div>{% endif %}\n<p>{{ count }}</p>\n</div>\n{% endblock %}\n',
     'conf.yaml': 'name: shop\nlist:\n  - a\n',
     'chart/templates/deploy.yaml': 'kind: Deployment\n{{- if .Values.on }}\nspec: {}\n{{- end }}\n',
+    'views/index.pug': "extends layout\n\nblock content\n  h1= title\n  ul\n    li a\n  p Welcome\n",
 }));
 const { page } = app;
 const errors = (owner) => page.evaluate(`window.pymagic.monaco.editor.getModelMarkers({ ${owner ? `owner: '${owner}', ` : ''}resource: window.pymagic.editor.getModel().uri }).filter((m) => m.severity === 8).map((m) => m.startLineNumber + ':' + m.startColumn + ' ' + m.message)`);
@@ -68,5 +70,15 @@ try {
     await open('chart/templates/deploy.yaml');
     await sleep(1500);
     assert.deepEqual(await errors('syntax'), []);
+
+    // Pug: a line come back to a level none above is at (Pug's "Inconsistent indentation"), gone when put right
+    await open('views/index.pug');
+    assert.deepEqual(await settle('syntax', (f) => f.length === 0), []);
+    await page.evaluate(`(() => { const m = window.pymagic.editor.getModel(); m.pushEditOperations([], [{ range: new window.pymagic.monaco.Range(7, 1, 7, 3), text: '   ' }], () => null); })()`);
+    const pug = await settle('syntax', (f) => f.length === 1);
+    console.log('Pug:', pug);
+    assert.deepEqual(pug, ['7:1 Inconsistent indentation: 3 spaces, the lines above are at 2 spaces or 4 spaces']);
+    await page.evaluate(`(() => { const m = window.pymagic.editor.getModel(); m.pushEditOperations([], [{ range: new window.pymagic.monaco.Range(7, 1, 7, 4), text: '  ' }], () => null); })()`);
+    assert.deepEqual(await settle('syntax', (f) => f.length === 0), []);
     console.log('OK');
 } finally { await app.close(); }
