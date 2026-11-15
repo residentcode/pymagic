@@ -44,7 +44,9 @@ public static class TsProject
             foreach (var f in files)
             {
                 string name = System.IO.Path.GetFileName(f);
-                if (!CodeExtensions.Contains(System.IO.Path.GetExtension(f), StringComparer.OrdinalIgnoreCase) || name.Contains(".min.", StringComparison.OrdinalIgnoreCase)) continue;
+                // a package.json of the project's own too: its "type" says whether its .ts and .js files are ES modules (module nodenext reads it)
+                bool manifest = name.Equals("package.json", StringComparison.OrdinalIgnoreCase);
+                if (!manifest && (!CodeExtensions.Contains(System.IO.Path.GetExtension(f), StringComparer.OrdinalIgnoreCase) || name.Contains(".min.", StringComparison.OrdinalIgnoreCase))) continue;
                 long size;
                 try { size = new FileInfo(f).Length; } catch (IOException) { continue; }
                 if (size > 1 << 20) continue;   // a bundle, not code of the project's own
@@ -67,10 +69,18 @@ public static class TsProject
         foreach (var config in cut ? new List<JsonObject>() : Configs(root))
         {
             var options = config["compilerOptions"] as JsonObject;
+            // its outDir and declarationDir (the config's folder's), and its rootDirs (the project's, see ConfigOf): generated declarations
+            // there (SvelteKit's ./$types in .svelte-kit/types) are what its imports find
+            var places = new List<string>();
             foreach (var key in new[] { "declarationDir", "outDir" })
+                if (options?[key] is JsonValue v && v.TryGetValue<string>(out var outDir) && !string.IsNullOrWhiteSpace(outDir))
+                    places.Add(System.IO.Path.Combine(config["dir"]?.GetValue<string>() ?? "", outDir));
+            if (options?["rootDirs"] is JsonArray rootDirs)
+                foreach (var d in rootDirs)
+                    if (d is JsonValue dv && dv.TryGetValue<string>(out var ds) && ds != ".") places.Add(ds);
+            foreach (var place in places)
             {
-                if (options?[key] is not JsonValue v || !v.TryGetValue<string>(out var outDir) || string.IsNullOrWhiteSpace(outDir)) continue;
-                string dir = System.IO.Path.GetFullPath(System.IO.Path.Combine(root, config["dir"]?.GetValue<string>() ?? "", outDir));
+                string dir = System.IO.Path.GetFullPath(System.IO.Path.Combine(root, place));
                 if (!IsUnder(root, dir) || !Directory.Exists(dir)) continue;
                 IEnumerable<string> found;
                 try { found = Directory.EnumerateFiles(dir, "*.d.ts", new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = 12, IgnoreInaccessible = true }).OrderBy(f => f, StringComparer.Ordinal).ToList(); }
@@ -298,6 +308,9 @@ public static class TsProject
                     // the paths of a base config are its own folder's: written relative to the project
                     var value = v?.DeepClone();
                     if (k is "baseUrl" && value is JsonValue bv && bv.TryGetValue<string>(out var bu)) value = Rel(root, System.IO.Path.GetFullPath(System.IO.Path.Combine(dir, bu)));
+                    // rootDirs (SvelteKit's: the project and .svelte-kit/types, from node_modules/$app/tsconfig.json): each one the project's path
+                    if (k is "rootDirs" && value is JsonArray dirs)
+                        value = new JsonArray(dirs.Select(d => d is JsonValue dv && dv.TryGetValue<string>(out var ds) ? (JsonNode)JsonValue.Create(Rel(root, System.IO.Path.GetFullPath(System.IO.Path.Combine(dir, ds)))) : null).Where(d => d != null).ToArray());
                     options[k] = value;
                 }
                 if (own["paths"] != null && own["baseUrl"] == null && options["baseUrl"] == null) options["pathsBase"] = Rel(root, dir);

@@ -13,7 +13,7 @@ const RESOLUTIONS = { classic: 1, node: 2, node10: 2, node16: 3, nodenext: 99, b
 const JSX = { preserve: 1, react: 2, 'react-native': 3, 'react-jsx': 4, 'react-jsxdev': 5 };
 const DETECTION = { legacy: 1, auto: 2, force: 3 };
 // what only building writes or reads, not what the editor checks
-const LEFT_OUT = new Set(['outDir', 'outFile', 'rootDir', 'rootDirs', 'declarationDir', 'tsBuildInfoFile', 'composite', 'incremental', 'plugins', 'pathsBase', 'emitDeclarationOnly', 'sourceRoot', 'mapRoot']);
+const LEFT_OUT = new Set(['outDir', 'outFile', 'rootDir', 'declarationDir', 'tsBuildInfoFile', 'composite', 'incremental', 'plugins', 'pathsBase', 'emitDeclarationOnly', 'sourceRoot', 'mapRoot']);
 
 /** Without a tsconfig.json: what a project of today's tools (Vite, Node) is checked with. */
 export const DEFAULT_OPTIONS = {
@@ -21,7 +21,8 @@ export const DEFAULT_OPTIONS = {
     allowJs: true, esModuleInterop: true, allowSyntheticDefaultImports: true, skipLibCheck: true, resolveJsonModule: true,
 };
 
-const under = (rel) => ROOT + String(rel ?? '').replace(/^\.\/?/, '').replace(/^\/+/, '').replace(/\/+$/, '');
+// ("./src" and "." are the project's; ".svelte-kit" keeps its dot)
+const under = (rel) => ROOT + String(rel ?? '').replace(/^\.(?:\/|$)/, '').replace(/^\/+/, '').replace(/\/+$/, '');
 
 /** A library's name in a tsconfig (DOM, ES2022, dom.iterable) as Monaco's worker names its file (lib.dom.d.ts). */
 export const libFile = (name) => `lib.${String(name).toLowerCase()}.d.ts`;
@@ -44,6 +45,8 @@ export function compilerOptionsOf(raw, language = 'typescript') {
         else if (k === 'lib' && Array.isArray(v)) out.lib = v.map(libFile);
         else if (k === 'baseUrl' && typeof v === 'string') out.baseUrl = under(v);
         else if (k === 'typeRoots' && Array.isArray(v)) out.typeRoots = v.map(under);
+        // (SvelteKit's: the project and .svelte-kit/types, so that ./$types is found beside a route; the server writes them from the project)
+        else if (k === 'rootDirs' && Array.isArray(v)) out.rootDirs = v.map((d) => under(d === '.' ? '' : d));
         else out[k] = v;
     }
     // paths without a baseUrl are the config's own folder's

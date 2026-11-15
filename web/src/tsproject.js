@@ -24,7 +24,11 @@ export function setupTsProject() {
         const had = map.get(path);
         if (had?.text === text) return;
         had?.disposables.forEach((d) => d.dispose());
-        map.set(path, { text, disposables: services.map((s) => s.addExtraLib(text, name(path))) });
+        // a declaration file whose name has a character an address encodes ($types.d.ts, SvelteKit's): also under the name TypeScript
+        // looks for when an import names it (./$types), which is the name as written
+        const names = [name(path)];
+        if (map === code && /\.d\.[mc]?ts$/i.test(path) && packageName(path) !== names[0]) names.push(packageName(path));
+        map.set(path, { text, disposables: names.flatMap((n) => services.map((s) => s.addExtraLib(text, n))) });
     }
     function drop(map, path) {
         map.get(path)?.disposables.forEach((d) => d.dispose());

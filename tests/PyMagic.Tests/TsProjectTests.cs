@@ -53,6 +53,32 @@ public class TsProjectTests
     }
 
     [Fact]
+    public void SvelteKitsGeneratedTypesAreFoundThroughItsRootDirs()
+    {
+        // sv create's project: its tsconfig extends $app/tsconfig (node_modules/$app/tsconfig.json, written by svelte-kit sync), whose
+        // rootDirs are the project and .svelte-kit/types, where ./$types of each route is
+        string root = Project(new()
+        {
+            ["package.json"] = """{ "name": "app", "type": "module" }""",
+            ["tsconfig.json"] = """{ "extends": "$app/tsconfig", "compilerOptions": { "strict": true }, "include": ["src"] }""",
+            ["node_modules/$app/tsconfig.json"] = """{ "compilerOptions": { "rootDirs": ["../..", "../../.svelte-kit/types"], "moduleResolution": "bundler" } }""",
+            [".svelte-kit/types/src/routes/$types.d.ts"] = "export type LayoutProps = { children: any };\n",
+            [".svelte-kit/generated/root.js"] = "generated\n",
+            ["src/routes/page.ts"] = "import type { LayoutProps } from './$types';\n",
+        });
+        try
+        {
+            var options = TsProject.Config(root)!["compilerOptions"]!;
+            Assert.Equal("[\".\",\".svelte-kit/types\"]", options["rootDirs"]!.ToJsonString());
+            var paths = TsProject.Code(root).List.Select(f => f.Path).ToList();
+            Assert.True(paths.Contains(".svelte-kit/types/src/routes/$types.d.ts"), string.Join(" ", paths));
+            Assert.True(!paths.Contains(".svelte-kit/generated/root.js"), "generated JavaScript is left out");
+            Assert.True(paths.Contains("package.json"), "the project's package.json");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void TheProjectsCodeConfigAndPackagesTypes()
     {
         string root = Project(new()
@@ -96,7 +122,7 @@ public class TsProjectTests
         {
             Assert.True(TsProject.IsJsProject(root));
             var code = TsProject.Code(root);
-            Assert.Equal("src/env.d.ts src/main.ts src/util.ts src/view.jsx", string.Join(" ", code.List.Select(f => f.Path).OrderBy(p => p, StringComparer.Ordinal)));
+            Assert.Equal("package.json src/env.d.ts src/main.ts src/util.ts src/view.jsx", string.Join(" ", code.List.Select(f => f.Path).OrderBy(p => p, StringComparer.Ordinal)));
             Assert.True(!code.Truncated);
             Assert.True(TsProject.Code(root, maxFiles: 2).Truncated);
 

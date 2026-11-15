@@ -78,7 +78,7 @@ class Page {
 }
 
 /** Starts PyMagic.exe on `root`; resolves when its page has the editor. `appSettings`: the app's own settings.json (Settings > MCP Server's). */
-export async function launch(root, settings = null, appSettings = null) {
+export async function launch(root, settings = null, appSettings = null, { keep = false } = {}) {
     if (!existsSync(EXE))
         throw new Error(`${EXE} is not built: run node desktop/package.mjs --no-installer first`);
     const port = await freePort();
@@ -119,7 +119,7 @@ export async function launch(root, settings = null, appSettings = null) {
         async close() {
             ws.close();
             stop(child, profile);
-            removeTree(root);
+            if (!keep) removeTree(root);   // (a project that is not the test's own, kept: { keep: true })
         },
     };
 }
