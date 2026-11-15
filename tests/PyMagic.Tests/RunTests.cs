@@ -485,6 +485,46 @@ public class RunTests
     }
 
     [Fact]
+    public void ABreakpointInAJinjaTemplateStopsWithItsVariables()
+    {
+        // PYMAGIC_TEST_JINJA: a Python with Jinja2 installed
+        if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_JINJA") is not { Length: > 0 } python) return;
+        using var h = new Harness();
+        Directory.CreateDirectory(Path.Combine(h.Root, "templates"));
+        File.WriteAllText(Path.Combine(h.Root, "templates", "base.html"), "<main>\n{% block content %}{% endblock %}\n</main>\n");
+        File.WriteAllText(Path.Combine(h.Root, "templates", "page.html"),
+            "{% extends 'base.html' %}\n{% block content %}\n<h1>{{ title }}</h1>\n{% for item in items %}\n  <li>{{ item.name }}</li>\n{% endfor %}\n{% endblock %}\n");
+        h.Script("show.py", "import jinja2\nenv = jinja2.Environment(loader=jinja2.FileSystemLoader('templates'))\n" +
+            "print(env.get_template('page.html').render(title='Shop', items=[{'name': 'pen'}, {'name': 'book'}]).strip())\n");
+        h.Session.Python = python;
+        h.Session.StartWithBreakpoints(h.Root, "show.py", true, Array.Empty<string>(),
+            new Dictionary<string, JsonArray> { ["templates/page.html"] = new JsonArray(3, 5) });
+        var stopped = h.Type("stopped");
+        Assert.True(stopped["frames"]![0]!["file"]!.GetValue<string>().EndsWith("page.html"), stopped.ToJsonString());
+        Assert.Equal(3, Line(stopped));
+        // the frames under it: the block's caller (base.html's root) shown at its template line, not the code's
+        var frames = stopped["frames"]!.AsArray().Select(f => $"{f!["name"]} {Path.GetFileName(f["file"]!.GetValue<string>())}:{f["line"]}").ToList();
+        Assert.True(frames.Contains("template base.html:2"), string.Join(" | ", frames));
+        var scopes = h.Request("scopes", new JsonObject { ["frameId"] = 0 })["scopes"]!.AsArray();
+        var locals = h.Request("variables", new JsonObject { ["ref"] = scopes.First(s => s!["name"]!.GetValue<string>() == "Locals")!["ref"]!.GetValue<int>() })["items"]!.AsArray()
+            .Select(v => $"{v!["name"]}={v["value"]}").ToList();
+        Assert.True(locals.Contains("title='Shop'") && !locals.Any(l => l.StartsWith("l_") || l.StartsWith("_pm_") || l.StartsWith("range=")), string.Join(" ", locals));
+        // in the loop: its item, once for each one
+        h.Command("continue");
+        stopped = h.Type("stopped");
+        Assert.Equal(5, Line(stopped));
+        scopes = h.Request("scopes", new JsonObject { ["frameId"] = 0 })["scopes"]!.AsArray();
+        locals = h.Request("variables", new JsonObject { ["ref"] = scopes.First(s => s!["name"]!.GetValue<string>() == "Locals")!["ref"]!.GetValue<int>() })["items"]!.AsArray()
+            .Select(v => $"{v!["name"]}={v["value"]}").ToList();
+        Assert.True(locals.Contains("item={'name': 'pen'}") && locals.Contains("title='Shop'"), string.Join(" ", locals));
+        h.Command("continue");
+        Assert.Equal(5, Line(h.Type("stopped")));
+        h.Command("continue");
+        h.Next(e => e["type"]?.GetValue<string>() == "exited", 90000);
+        Assert.Contains("<li>book</li>", h.AllOutput());
+    }
+
+    [Fact]
     public void TheDjangoConsoleHasDjangoSetUp()
     {
         if (Environment.GetEnvironmentVariable("PYMAGIC_TEST_DJANGO") is not { Length: > 0 } python) return;

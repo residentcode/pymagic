@@ -319,20 +319,27 @@ class Debugger(bdb.Bdb):
         else:
             self.template_breaks.pop(path, None)
         self.hook_templates()
+        self.jinja_sync(path)
 
     def hook_templates(self):
-        """Django's template nodes are wrapped once django.template.base is imported (now, or when the program imports it)."""
+        """Django's template nodes are wrapped once django.template.base is imported, and Jinja2's compiled templates are seen once
+        jinja2.environment is (now, or when the program imports it)."""
         if self.templates_hooked:
             return
         self.templates_hooked = True
-        if "django.template.base" in sys.modules:
-            self.patch_templates(sys.modules["django.template.base"])
+        patches = {"django.template.base": self.patch_templates, "jinja2.environment": self.patch_jinja}
+        waiting = {}
+        for name, patch in patches.items():
+            if name in sys.modules:
+                patch(sys.modules[name])
+            else:
+                waiting[name] = patch
+        if not waiting:
             return
-        debugger = self
 
         class Finder:
             def find_spec(self, name, path=None, target=None):
-                if name != "django.template.base":
+                if name not in waiting:
                     return None
                 import importlib.util
                 sys.meta_path.remove(self)
@@ -344,12 +351,125 @@ class Debugger(bdb.Bdb):
                     return spec
                 original = spec.loader.exec_module
 
+                patch = waiting.pop(name)
+                if not waiting and self in sys.meta_path:
+                    sys.meta_path.remove(self)
+
                 def exec_module(module):
                     original(module)
-                    debugger.patch_templates(module)
+                    patch(module)
                 spec.loader.exec_module = exec_module
                 return spec
         sys.meta_path.insert(0, Finder())
+
+    # ---------------------------------------------------------------- breakpoints in Jinja2 templates
+    #
+    # Jinja2 compiles a template to Python code whose file name is the template's own path and whose `debug_info` says which template
+    # line each piece of code comes from ("1=14&3=16": template line 1 from code line 14 on, line 3 from 16 on). A breakpoint on a
+    # template line is a breakpoint of bdb on the code lines of that line; stopped there, the template's line and its names are shown.
+
+    jinja_code = None    # normcase(abspath(template)) -> {code file (canonic): [(template line, code line)]}
+    jinja_set = None     # code file (canonic) -> the code lines given to bdb for it
+
+    def patch_jinja(self, module):
+        template = getattr(module, "Template", None)
+        if template is None or getattr(template, "_pm_wrapped", False):
+            return
+        template._pm_wrapped = True
+        original = template._from_namespace.__func__
+        debugger = self
+
+        def _from_namespace(cls, environment, namespace, globals):
+            made = original(cls, environment, namespace, globals)
+            try:
+                debugger.jinja_seen(made)
+            except Exception:
+                pass
+            return made
+        template._from_namespace = classmethod(_from_namespace)
+
+    def jinja_seen(self, template):
+        """A template compiled (or loaded again after a change): its lines are known, and the breakpoints on them are given to bdb."""
+        code = getattr(getattr(template, "root_render_func", None), "__code__", None)
+        if code is None or code.co_filename.startswith("<"):
+            return
+        if self.jinja_code is None:
+            self.jinja_code = {}
+        path = os.path.normcase(os.path.abspath(code.co_filename))
+        self.jinja_code.setdefault(path, {})[self.canonic(code.co_filename)] = list(template.debug_info)
+        self.jinja_sync(path)
+
+    def jinja_sync(self, path):
+        """bdb's breakpoints for the compiled code of a template, from its template breakpoints."""
+        for code_file, pairs in (self.jinja_code or {}).get(path, {}).items():
+            if self.jinja_set is None:
+                self.jinja_set = {}
+            for line in self.jinja_set.pop(code_file, ()):
+                try:
+                    self.clear_break(code_file, line)
+                except Exception:
+                    pass
+            wanted = (self.template_breaks or {}).get(path, ())
+            lines = sorted({code_line for template_line, code_line in pairs if template_line in wanted})
+            for line in lines:
+                # bdb's set_break would look for the line in the template's own text, which the code's lines are not
+                known = self.breaks.setdefault(code_file, [])
+                if line not in known:
+                    known.append(line)
+                bdb.Breakpoint(code_file, line)
+            if lines:
+                self.jinja_set[code_file] = lines
+
+    @staticmethod
+    def jinja_line(frame):
+        """The template line of a frame of Jinja2's compiled code, or None when the frame is not one."""
+        if "__jinja_template__" not in frame.f_globals:
+            return None
+        line = None
+        for pair in str(frame.f_globals.get("debug_info") or "").split("&"):
+            template_line, _, code_line = pair.partition("=")
+            if code_line.isdigit() and int(code_line) <= frame.f_lineno:
+                line = int(template_line)
+        return line or 1
+
+    def stop_in_jinja(self, frame):
+        """Stopped at a breakpoint of a Jinja2 template: the template's names (its context and the loop's, as written in it) become the
+        locals of a frame made for them, as in a Django template."""
+        values = {}
+        context = frame.f_locals.get("context")
+        try:
+            values.update(context.get_all())
+            defaults = getattr(sys.modules.get("jinja2.defaults"), "DEFAULT_NAMESPACE", {})
+            for name, value in defaults.items():
+                if values.get(name) is value:
+                    del values[name]
+        except Exception:
+            pass
+        missing = frame.f_globals.get("missing")
+        # the code's own names for the template's: l_0_title, l_1_item (deeper loops last, so they win)
+        found = []
+        for name, value in frame.f_locals.items():
+            m = re.match(r"l_(\d+)_(\w+)$", name)
+            if m and value is not missing:
+                found.append((int(m.group(1)), m.group(2), value))
+        for _, name, value in sorted(found, key=lambda t: t[0]):
+            values[name] = value
+        values = {k: v for k, v in values.items() if isinstance(k, str) and k.isidentifier() and not keyword.iskeyword(k) and not k.startswith("_pm_")}
+        place = (os.path.abspath(frame.f_code.co_filename), self.jinja_line(frame))
+        names = tuple(sorted(values))
+        make = self._template_frames.get(names)
+        if make is None:
+            source = "def template_frame(_pm_debugger, _pm_place%s):\n    _pm_debugger.template_stop(sys._getframe(), _pm_place)\n" % "".join(", " + n for n in names)
+            space = {"sys": sys}
+            exec(compile(source, "<template>", "exec"), space)
+            make = self._template_frames[names] = space["template_frame"]
+        self._jinja_below = frame
+        try:
+            make(self, place, **values)
+        finally:
+            self._jinja_below = None
+
+    _jinja_below = None   # the template's code frame while stopped in it: the made frame's callers are shown from it
 
     def patch_templates(self, module):
         node_class = getattr(module, "Node", None)
@@ -422,7 +542,9 @@ class Debugger(bdb.Bdb):
 
     def template_stop(self, frame, place):
         with self.stop_lock:
-            self.stack = self.collect(frame)
+            # a Jinja2 template's frame stands for its code's frame; under it, the frames that rendered the template
+            below = self._jinja_below
+            self.stack = [(frame, frame.f_lineno)] + self.collect(below.f_back) if below is not None else self.collect(frame)
             self.template_place = place
             try:
                 self.stop("stopped", "breakpoint")
@@ -700,6 +822,9 @@ class Debugger(bdb.Bdb):
 
     def user_line(self, frame):
         reason = "breakpoint" if self.break_here(frame) else "step"
+        if reason == "breakpoint" and "__jinja_template__" in frame.f_globals and not self.data_message:
+            self.stop_in_jinja(frame)
+            return
         message, self.data_message = self.data_message, None
         if message:
             reason = "data"
@@ -779,6 +904,11 @@ class Debugger(bdb.Bdb):
 
     @staticmethod
     def frame_info(i, f, line):
+        template_line = Debugger.jinja_line(f)
+        if template_line is not None:
+            # a frame of a Jinja2 template's code: the template and its line ("block content" for a block's)
+            name = "block " + f.f_code.co_name[6:] if f.f_code.co_name.startswith("block_") else "template"
+            return {"id": i, "name": name, "file": os.path.abspath(f.f_code.co_filename), "line": template_line, "first": template_line}
         return {"id": i, "name": f.f_code.co_name, "file": os.path.abspath(f.f_code.co_filename)
                 if not f.f_code.co_filename.startswith("<") else f.f_code.co_filename, "line": line, "first": f.f_code.co_firstlineno}
 
