@@ -287,6 +287,17 @@ try {
     const bladeStop = await page.waitFor(`!${$('b-over')}.disabled && document.querySelector('#frames div.sel')?.textContent`, 90000, 'the stop in the template');
     console.log('stopped in the template:', bladeStop);
     assert.ok(bladeStop.includes(`welcome.blade.php:${bladeLine}`), bladeStop);
+    // the template's line marked as the stopped one (its amber band, on the scrollbar too), the window asked to come up (left minimized here),
+    // and the selected text of a Variables row copied from its menu
+    const marked = await page.waitFor(`(() => { const m = window.pymagic.editor.getModel(); if (!m.uri.path.endsWith('welcome.blade.php')) return null;
+        const d = m.getAllDecorations().find((x) => x.options.className === 'debug-line'); const el = document.querySelector('.debug-line');
+        return d && el ? { line: d.range.startLineNumber, ruler: d.options.overviewRuler?.color ?? null, bg: getComputedStyle(el).backgroundColor } : null; })()`, 20000, 'the stopped line marked');
+    const focus = await page.evaluate('window.__pmLastStopFocus');
+    console.log('the template line marked:', JSON.stringify(marked), 'window:', JSON.stringify(focus));
+    assert.equal(marked.line, bladeLine);
+    assert.equal(marked.ruler, '#ffc861');
+    assert.match(marked.bg, /^rgba\(255, 200, 97/);
+    assert.equal(focus?.done, 'bring-up');
     await page.evaluate(`${$('b-debug')}.click()`);
     assert.equal((await home).status, 200);
 
