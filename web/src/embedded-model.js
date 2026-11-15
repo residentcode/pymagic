@@ -453,7 +453,70 @@ export function vueProps(text) {
     else if (runtime.startsWith('[')) for (const m of runtime.matchAll(/['"]([\w$-]+)['"]/g)) props.push({ name: m[1], type: 'any', required: false });
     else if (runtime.startsWith('{')) for (const [name, value] of members(runtime)) props.push({ name, ...runtimeProp(value === name ? '' : value) });
     if (!props.length) return null;
-    return { type: '{ ' + props.map((p) => `${JSON.stringify(p.name)}${p.required ? '' : '?'}: ${p.type};`).join(' ') + ' }', required: props.filter((p) => p.required).map((p) => p.name) };
+    return { type: '{ ' + props.map((p) => `${JSON.stringify(p.name)}${p.required ? '' : '?'}: ${p.type};`).join(' ') + ' }', required: props.filter((p) => p.required).map((p) => p.name),
+        ...typeNamesOf(script) };
+}
+
+/**
+ * The type names a component's script has that its props' types may use: `refs`, what it imports ({ Item: { from: './types', name: 'Item' } };
+ * a default import's name is "default"), and `locals`, the interfaces and types it declares itself ([{ name, text }]).
+ */
+function typeNamesOf(script) {
+    const refs = {}, locals = [];
+    for (const m of script.matchAll(/\bimport\s+(type\s+)?([^'";]*?)\s+from\s+(["'])([^"']+)\3/g)) {
+        const clause = m[2].trim();
+        if (/\.(vue|svelte|css|scss|png|svg|jpe?g|gif|webp)$/i.test(m[4])) continue;
+        const def = /^([A-Za-z_$][\w$]*)\s*(?:,|$)/.exec(clause);
+        if (def && !/^type$/.test(def[1])) refs[def[1]] = { from: m[4], name: 'default' };
+        const named = /\{([^}]*)\}/.exec(clause);
+        for (const part of (named?.[1] ?? '').split(',')) {
+            const x = /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/.exec(part);
+            if (x) refs[x[2] ?? x[1]] = { from: m[4], name: x[1] };
+        }
+    }
+    for (const m of script.matchAll(/(?:^|\n)\s*(?:export\s+)?interface\s+([A-Za-z_$][\w$]*)(\s*<[^>{]*>)?(\s*extends[^{]*)?\s*(?=\{)/g)) {
+        const body = bracketed(script, m.index + m[0].length, '{', '}');
+        locals.push({ name: m[1], text: `interface ${m[1]}${m[2] ?? ''}${m[3] ?? ''} {${body}}` });
+    }
+    for (const m of script.matchAll(/(?:^|\n)\s*(?:export\s+)?type\s+([A-Za-z_$][\w$]*)(\s*<[^>=]*>)?\s*=\s*/g)) {
+        const at = m.index + m[0].length;
+        const value = script[at] === '{' ? '{' + bracketed(script, at, '{', '}') + '}' : script.slice(at).split(/;|\n(?=\s*(?:export|const|let|var|function|type|interface|import|defineProps|withDefaults)\b)/)[0];
+        locals.push({ name: m[1], text: `type ${m[1]}${m[2] ?? ''} = ${value.trim()};` });
+    }
+    return { refs, locals };
+}
+
+/** A path's folders and file joined and tidied: "./widgets" + "../types" is "./types". */
+function joinPath(dir, spec) {
+    const parts = [];
+    for (const p of `${dir}/${spec}`.split('/')) {
+        if (p === '' || p === '.') continue;
+        if (p === '..' && parts.length && parts[parts.length - 1] !== '..') parts.pop();
+        else parts.push(p);
+    }
+    const out = parts.join('/');
+    return out.startsWith('..') ? out : './' + out;
+}
+
+/**
+ * A component's props' type as the markup's document of the component that uses it can read it: the names it imports written as
+ * import("…").Name with the path from the user's folder (the child is at `from`, as the user imports it), the ones its script declares in a
+ * namespace of their own (`ns`). { type, decls } with the namespace's declaration (TypeScript only: in JavaScript they are left as they are).
+ */
+function typeForUse(declared, from, ts, ns) {
+    const childDir = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : '.';
+    const names = new Map();
+    for (const [name, ref] of Object.entries(declared.refs ?? {}))
+        names.set(name, `import(${JSON.stringify(/^\.\.?\//.test(ref.from) ? joinPath(childDir, ref.from) : ref.from)})${ref.name === 'default' ? '.default' : '.' + ref.name}`);
+    const locals = ts ? (declared.locals ?? []) : [];
+    for (const l of locals) names.set(l.name, `${ns}.${l.name}`);
+    const rewrite = (text, inside = false) => text.replace(/(["'])(?:\\.|(?!\1).)*\1|(?<![\w$.])([A-Za-z_$][\w$]*)(?![\w$])(?!\s*\??:)/g, (all, quote, name) => {
+        if (quote || !names.has(name)) return all;
+        // inside the namespace its own names are its own
+        return inside && locals.some((l) => l.name === name) ? name : names.get(name);
+    });
+    const decls = locals.length ? [`declare namespace ${ns} { ${locals.map((l) => 'export ' + rewrite(l.text, true).replace(/\s*\n\s*/g, ' ')).join(' ')} }`] : [];
+    return { type: rewrite(declared.type), decls };
 }
 
 const camel = (s) => s.replace(/-([a-z0-9])/g, (m, c) => c.toUpperCase());
@@ -517,7 +580,9 @@ export function vuePropChecks(text, props, ts) {
         for (const name of declared.required) if (!given.has(name) && !use.attrs.some((a) => a.prop === 'vBind')) missing.push({ place: use.tag, message: `${use.component} needs the prop ${name}.` });
         const checked = use.attrs.filter((a) => known.has(a.prop));
         if (!checked.length) return;
-        code.push(ts ? `declare const __pm_c${k}: ${declared.type};` : `/** @type {${declared.type}} */ var __pm_c${k};`);
+        const { type, decls } = typeForUse(declared, use.from, ts, `__pm_t${k}`);
+        for (const d of decls) { code.push(d); places.push(null); }
+        code.push(ts ? `declare const __pm_c${k}: ${type};` : `/** @type {${type}} */ var __pm_c${k};`);
         places.push(null);
         for (const a of checked) {
             const value = a.bound ? `(${a.value ?? 'true'})` : a.value === null ? 'true' : JSON.stringify(a.value);

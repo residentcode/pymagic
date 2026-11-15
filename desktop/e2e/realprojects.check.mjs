@@ -66,8 +66,36 @@ const double = computed(() => count.value * 2)
   <Child label="ok" :count="count" />
 </template>
 `,
+    // a prop whose type the component imports from the project's types
+    'src/types.ts': 'export interface Item { id: number; name: string }\n',
+    'src/components/Card.vue': `<script setup lang="ts">
+import type { Item } from '../types'
+interface Props { item: Item }
+defineProps<Props>()
+</script>
+
+<template>
+  <b>{{ item.name }}</b>
+</template>
+`,
+    'src/components/Cards.vue': `<script setup lang="ts">
+import Card from './Card.vue'
+const good = { id: 1, name: 'a' }
+const bad = { id: 'x' }
+</script>
+
+<template>
+  <Card :item="good" />
+  <Card :item="bad" />
+</template>
+`,
 }, async (page) => {
-    for (const f of ['src/App.vue', 'src/components/HelloWorld.vue', 'src/main.ts', 'vite.config.ts', 'src/components/Child.vue']) await clean(page, f);
+    for (const f of ['src/App.vue', 'src/components/HelloWorld.vue', 'src/main.ts', 'vite.config.ts', 'src/components/Child.vue', 'src/components/Card.vue']) await clean(page, f);
+    await open(page, 'src/components/Cards.vue');
+    const cards = await settled(page, 'Cards.vue', (x) => x.length >= 1);
+    console.log('  Cards.vue:', cards);
+    assert.equal(cards.length, 1, cards.join(' | '));
+    assert.match(cards[0], /^9:9 .*Item/);
     await open(page, 'src/components/Probe.vue');
     const f = await settled(page, 'Probe.vue', (x) => x.length >= 3);
     console.log('  Probe.vue:', f);

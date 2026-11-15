@@ -92,13 +92,14 @@ test('Vue: a v-for item is its list element, an index a number, a slot names any
 });
 
 test('Vue: the props a component declares', () => {
+    const pick = (p) => p && { type: p.type, required: p.required };
     const typed = vueProps(L('<script setup lang="ts">', 'interface Props { label: string; count?: number }', 'defineProps<Props>()', '</script>'));
-    assert.deepEqual(typed, { type: '{ "label": string; "count"?: number; }', required: ['label'] });
+    assert.deepEqual(pick(typed), { type: '{ "label": string; "count"?: number; }', required: ['label'] });
     const inline = vueProps(L('<script setup lang="ts">', "const p = withDefaults(defineProps<{ title: string, size: 'a' | 'b' }>(), { size: 'a' })", '</script>'));
-    assert.deepEqual(inline, { type: '{ "title": string; "size"?: ' + "'a' | 'b'" + '; }', required: ['title'] });
+    assert.deepEqual(pick(inline), { type: '{ "title": string; "size"?: ' + "'a' | 'b'" + '; }', required: ['title'] });
     const runtime = vueProps(L('<script setup>', 'defineProps({ a: String, b: [String, Number], c: { type: Boolean, required: true }, d: { type: Number, required: true, default: 1 } })', '</script>'));
-    assert.deepEqual(runtime, { type: '{ "a"?: string; "b"?: string | number; "c": boolean; "d"?: number; }', required: ['c'] });
-    assert.deepEqual(vueProps(L('<script>', "export default { props: ['x', 'y'], data() { return {} } }", '</script>')), { type: '{ "x"?: any; "y"?: any; }', required: [] });
+    assert.deepEqual(pick(runtime), { type: '{ "a"?: string; "b"?: string | number; "c": boolean; "d"?: number; }', required: ['c'] });
+    assert.deepEqual(pick(vueProps(L('<script>', "export default { props: ['x', 'y'], data() { return {} } }", '</script>'))), { type: '{ "x"?: any; "y"?: any; }', required: [] });
     assert.equal(vueProps(L('<script setup>', 'const a = 1', '</script>')), null);
     assert.equal(vueProps('<template><b/></template>'), null);
 });
@@ -132,4 +133,20 @@ test('Vue: an options object is given to __pm_options in as many characters, so 
     const named = L('<script>', 'export default defineComponent({ data() { return {} } })', '</script>');
     assert.ok(vueScriptDocument(named, embeddedDocument(named, 'javascript', 'component'), false).includes('const __pm_o = defineComponent('));
     assert.ok(!keepFinding('7023', "'twice' implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions.", 'vue'));
+});
+
+test('Vue: a prop whose type the component imports or declares itself is checked with that type', () => {
+    const child = L('<script setup lang="ts">', "import type { Item, Kind as K } from '../models/types'", "import Money from '@/money'",
+        'interface Props { item: Item; kind?: K; price?: Money; tags?: Tag[] }', 'type Tag = { label: string; item?: Item }', 'defineProps<Props>()', '</script>');
+    const props = vueProps(child);
+    assert.deepEqual(props.refs, { Item: { from: '../models/types', name: 'Item' }, K: { from: '../models/types', name: 'Kind' }, Money: { from: '@/money', name: 'default' } });
+    assert.deepEqual(props.locals.map((l) => l.name), ['Props', 'Tag']);
+    const parent = L('<script setup lang="ts">', "import Child from './widgets/Child.vue'", 'const it = { id: 1 }', '</script>', '<template>', '  <Child :item="it" :tags="[]" />', '</template>');
+    const code = vuePropChecks(parent, { './widgets/Child.vue': props }, true).code;
+    assert.ok(code[0].startsWith('declare namespace __pm_t0 { export interface Props'), code[0]);
+    assert.ok(code[0].includes('export type Tag = { label: string; item?: import("./models/types").Item };'), code[0]);
+    assert.equal(code[1], 'declare const __pm_c0: { "item": import("./models/types").Item; "kind"?: import("./models/types").Kind; "price"?: import("@/money").default; "tags"?: __pm_t0.Tag[]; };');
+    assert.deepEqual(code.slice(2), ['__pm_c0["item"] = (it);', '__pm_c0["tags"] = ([]);']);
+    // in JavaScript: the imports as import("…") too, the component's own types as they are
+    assert.equal(vuePropChecks(parent, { './widgets/Child.vue': props }, false).code[0].includes('namespace'), false);
 });
