@@ -54,7 +54,7 @@ test('what is told of a markup expression', () => {
     assert.ok(!keepFinding('2304', "Cannot find name 'item'.", 'svelte', true));
     assert.ok(!keepFinding('1005', "')' expected.", 'vue', true));
     assert.ok(!keepFinding('2339', "Property 'name' does not exist on type 'Ref<{ name: string; }, { name: string; }>'.", 'vue', true));
-    assert.ok(!keepFinding('2554', 'Expected 1 arguments, but got 0.', 'vue', true));
+    assert.ok(keepFinding('2554', 'Expected 1 arguments, but got 0.', 'vue', true));
     assert.ok(!keepFinding('2339', "Property 'x' does not exist on type '$store'.", 'svelte', true));
     // in the script itself: as before
     assert.ok(keepFinding('1005', "')' expected.", 'vue'));

@@ -4,6 +4,8 @@
 
 /** The address of a project file as the TypeScript service sees the editor's models (pymagic:/path: Monaco writes no empty authority), which it resolves imports in. */
 export const ROOT = 'pymagic:/';
+/** The file that says what a component (.vue, .svelte) is when it is imported: a module (tsproject.js gives it to the services). */
+export const COMPONENT_SHIM = 'pymagic:/__pymagic_components.d.ts';
 
 const TARGETS = { es3: 0, es5: 1, es6: 2, es2015: 2, es2016: 3, es2017: 4, es2018: 5, es2019: 6, es2020: 7, es2021: 8, es2022: 9, es2023: 10, es2024: 11, esnext: 99 };
 const MODULES = { none: 0, commonjs: 1, amd: 2, umd: 3, system: 4, es6: 5, es2015: 5, es2020: 6, es2022: 7, esnext: 99, node16: 100, node18: 101, nodenext: 199, preserve: 200 };

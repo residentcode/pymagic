@@ -99,11 +99,11 @@ const TOOLS = [
     timeout: int('How long to wait in milliseconds (default 120000); the command is stopped then.'),
     maxLinesCount: int('At most this many lines of output, the last ones (default 1000).'),
   }, ['command'], { destructiveHint: true, openWorldHint: true }),
-  tool('get_quick_fixes', 'The quick fixes PyMagic offers in a Python file (Alt+Enter on a problem): each with its line and title. Without a line, those of every line that has a problem.', {
+  tool('get_quick_fixes', 'The quick fixes PyMagic offers in a file (Alt+Enter on a problem), Python or another language: each with its line and title. Without a line, those of every line that has a problem.', {
     filePath: str('The file, from the project folder.'),
     line: int('Only this line, from 1.'),
   }, ['filePath'], reads),
-  tool('apply_quick_fix', 'Carries out a quick fix of a Python file\'s line (as get_quick_fixes names it) and saves what it changed.', {
+  tool('apply_quick_fix', 'Carries out a quick fix of a file\'s line (as get_quick_fixes names it) and saves what it changed.', {
     filePath: str('The file, from the project folder.'),
     line: int('The line, from 1.'),
     title: str('The fix\'s title, or a part of it.'),
@@ -118,6 +118,39 @@ const TOOLS = [
     line: int('The line, from 1.'),
   }, ['filePathInProject', 'line']),
   tool('get_debugger_breakpoints', 'The breakpoints of the files PyMagic has read: file, line and, when set, condition and log message.', {}, [], reads),
+  tool('get_git_branches', 'The project\'s Git branches: the current one, the local ones and the remotes\'.', {}, [], reads),
+  tool('create_git_branch', 'Makes a Git branch at the current commit and switches to it (checkout: false leaves the current branch as it is).', {
+    name: str('The new branch\'s name.'),
+    checkout: bool('Switch to it (default true).'),
+  }, ['name']),
+  tool('checkout_git_branch', 'Switches the project to another Git branch (git switch); Git refuses when changes not committed would be lost. PyMagic asks the person first unless they chose not to be asked.', {
+    name: str('The branch.'),
+  }, ['name'], { destructiveHint: true }),
+  tool('commit_changes', 'Commits changed files to Git with a message, as PyMagic\'s Commit window does (files not tracked yet are added). PyMagic asks the person first unless they chose not to be asked.', {
+    message: str('The commit message.'),
+    paths: str('The files or folders to commit, from the project folder, separated by commas or line breaks; every changed file without it.'),
+  }, ['message'], { destructiveHint: true }),
+  tool('start_debugger_session', 'Starts a run configuration, or a file, under PyMagic\'s debugger and waits for its first stop (a breakpoint, an exception) or its end; says where it is paused, with the stack and the output. PyMagic asks the person first unless they chose not to be asked.', {
+    configurationName: str('The run configuration to debug (get_run_configurations lists them).'),
+    filePath: str('Or a file to debug, from the project folder.'),
+    arguments: str('The file\'s command-line arguments.'),
+    timeout: int('How long to wait for the first stop in milliseconds (default 30000); the program goes on after it.'),
+  }, [], { destructiveHint: true, openWorldHint: true }),
+  tool('get_debugger_state', 'What the debug session is at: paused where and why with its stack, running, or ended with its exit code; and the program\'s output.', {}, [], reads),
+  tool('debugger_step', 'Goes on with the paused program and waits for its next stop or its end: CONTINUE to the next breakpoint, STEP_OVER the line, STEP_INTO the call, STEP_OUT of the function; PAUSE stops a running one.', {
+    action: { type: 'string', enum: ['CONTINUE', 'STEP_OVER', 'STEP_INTO', 'STEP_OUT', 'PAUSE'], description: 'What to do.' },
+    timeout: int('How long to wait for the next stop in milliseconds (default 30000).'),
+  }, ['action']),
+  tool('get_debugger_variables', 'The values of a frame of the paused program: its local names, each with type and value; with an expression, that value\'s members (attributes, items).', {
+    frame: int('The frame, as the stack numbers it (default 0, the innermost).'),
+    expression: str('A name or expression whose members are wanted (self, config["db"], rows[0]).'),
+    maxCount: int('At most this many of each (default 200).'),
+  }, [], reads),
+  tool('evaluate_debugger_expression', 'Evaluates an expression in a frame of the paused program and gives its value.', {
+    expression: str('The expression, in the program\'s language.'),
+    frame: int('The frame, as the stack numbers it (default 0).'),
+  }, ['expression']),
+  tool('stop_debugger_session', 'Stops the program that is being run or debugged.', {}, []),
   tool('get_project_dependencies', 'The packages installed in the project\'s Python interpreter, with their versions.', {}, [], reads),
   tool('get_project_info', 'The project: its folder, its Python interpreter, and the other projects open in PyMagic.', {}, [], reads),
 ];

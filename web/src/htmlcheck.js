@@ -1,14 +1,18 @@
 // HTML's and YAML's syntax errors on the editor while typing (htmlcheck-model.js), a little after the last key: an HTML file's or template's
-// tags (django-html: every .html, Django's and Jinja's templates too), a Vue or Svelte component's and a Blade view's markup (each with its
-// own syntax around the tags), and a YAML file's errors.
+// tags (django-html: every .html, Django's and Jinja's templates too), a Vue, Svelte or Astro component's, a Blade view's, a Handlebars
+// template's and an EJS page's markup (each with its own syntax around the tags; markup-kinds-model.js), and a YAML file's errors.
 import * as monaco from 'monaco-editor';
 import { templateProblems, yamlProblems, isYamlTemplate, vueProblems, svelteProblems, bladeProblems } from './htmlcheck-model.js';
 import { pugProblems } from './pug-model.js';
+import { handlebarsProblems, ejsProblems, astroProblems } from './markup-kinds-model.js';
 
 const OWNER = 'syntax';
-const KINDS = { 'django-html': ['HTML', templateProblems], yaml: ['YAML', yamlProblems], pug: ['Pug', pugProblems], blade: ['Blade', bladeProblems] };   // Pug: its indentation (pug-model.js)
+const KINDS = {
+    'django-html': ['HTML', templateProblems], yaml: ['YAML', yamlProblems], pug: ['Pug', pugProblems], blade: ['Blade', bladeProblems],   // Pug: its indentation (pug-model.js)
+    handlebars: ['Handlebars', handlebarsProblems], ejs: ['EJS', ejsProblems],
+};
 /** Components are HTML to the editor: told by their file's name. */
-const COMPONENTS = [[/\.vue$/i, ['Vue', vueProblems]], [/\.svelte$/i, ['Svelte', svelteProblems]]];
+const COMPONENTS = [[/\.vue$/i, ['Vue', vueProblems]], [/\.svelte$/i, ['Svelte', svelteProblems]], [/\.astro$/i, ['Astro', astroProblems]]];
 
 export function setupSyntaxChecks() {
     const timers = new Map();

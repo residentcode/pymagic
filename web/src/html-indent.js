@@ -1,11 +1,11 @@
 // Indentation that does not follow the elements and blocks of markup, told while typing (html-indent-model.js) in HTML files and Django, Jinja
-// and Nunjucks templates, Blade views and Vue and Svelte components: a weak warning on each such line, a little after the last key;
+// and Nunjucks templates, Blade views, Handlebars templates, EJS pages and Vue, Svelte and Astro components: a weak warning on each such line, a little after the last key;
 // Alt+Enter: Fix indentation of the file (the wrong lines move, each with what it holds). The { } languages have brace-indent.js.
 import * as monaco from 'monaco-editor';
 import { markupKind, htmlIndentProblems, fixHtmlIndentation } from './html-indent-model.js';
 
 const OWNER = 'markup-indent';      // (brace-indent.js clears its own 'indent' marks in these files)
-const LANGUAGES = ['django-html', 'twig', 'blade', 'html'];
+const LANGUAGES = ['django-html', 'twig', 'blade', 'html', 'handlebars', 'ejs'];
 
 export function setupHtmlIndent() {
     const timers = new Map();

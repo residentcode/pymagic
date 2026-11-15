@@ -193,31 +193,7 @@ export function withMarkupCode(text, doc, kind) {
         return out.join('');
     }
 
-    // Vue: inside <template> … </template> (one written in another language, lang="pug", is left out)
-    const open = /<template\b([^>]*)>/i.exec(text);
-    const close = text.lastIndexOf('</template');
-    if (!open || close < 0 || /\blang\s*=/.test(open[1])) return out.join('');
-    const from = open.index + open[0].length;
-    const bound = new Set(['$event', '$slots', '$attrs', '$refs', '$emit', '$props', '$el', '$t', '$route', '$router', '$store']);
-    const spots = [];   // [start of the code, its end, the place of ";(", the place of ")"]
-    const body = text.slice(from, close);
-    for (const m of body.matchAll(/\s(v-for|v-slot(?::[\w.-]+)?|#[\w.-]+)\s*=\s*(["'])([\s\S]*?)\2/g)) {
-        const names = m[1] === 'v-for' ? m[3].split(/\s(?:in|of)\s/)[0] : m[3];
-        for (const n of names.match(IDENT) ?? []) bound.add(n);
-    }
-    for (const m of body.matchAll(/\{\{([\s\S]*?)\}\}/g)) {
-        const a = from + m.index;
-        // (in an attribute's value {{ }} is text to Vue)
-        const before = body.slice(0, m.index);
-        if (before.lastIndexOf('<') > before.lastIndexOf('>')) continue;
-        if (m[1].trim()) spots.push([a + 2, a + 2 + m[1].length, a, a + 2 + m[1].length]);
-    }
-    for (const m of body.matchAll(/\s(?:v-bind(?::[\w.[\]-]+)?|v-on:[\w.[\]-]+|[:@][\w.[\]-]+|v-if|v-else-if|v-show|v-html|v-text|v-model(?:[:.][\w.-]+)?)=(["'])([\s\S]*?)\1/g)) {
-        const q = from + m.index + m[0].length - m[2].length - 2;      // the opening quote
-        if (m[2].trim()) spots.push([q + 1, q + 1 + m[2].length, q - 1, q + 1 + m[2].length]);
-    }
-    for (const [a, z, at, shut] of spots) {
-        if ((text.slice(a, z).match(IDENT) ?? []).some((n) => bound.has(n))) continue;
+    for (const [a, z, at, shut] of vueSpots(text)) {
         out[at] = ';';
         out[at + 1] = '(';
         put(a, z);
@@ -227,16 +203,173 @@ export function withMarkupCode(text, doc, kind) {
 }
 
 /**
+ * The expressions of a Vue component's markup: [start of the code, its end, the place for ";(", the place for ")"] of each {{ expr }},
+ * :prop="expr", v-if="expr", @event="expr" inside <template> … </template> (one written in another language, lang="pug", is left out).
+ * An expression that uses a name the markup itself gives (a v-for's, a slot's, $event) is left out; `empty` keeps the ones with nothing in
+ * them yet (for completion).
+ */
+export function vueSpots(text, empty = false) {
+    const open = /<template\b([^>]*)>/i.exec(text);
+    const close = text.lastIndexOf('</template');
+    if (!open || close < 0 || /\blang\s*=/.test(open[1])) return [];
+    const from = open.index + open[0].length;
+    const bound = new Set(['$event', '$slots', '$attrs', '$refs', '$emit', '$props', '$el', '$t', '$route', '$router', '$store']);
+    const spots = [];
+    const body = text.slice(from, close);
+    const comments = [...body.matchAll(/<!--[\s\S]*?(?:-->|$)/g)].map((m) => [m.index, m.index + m[0].length]);
+    const commented = (i) => comments.some(([s, e]) => i >= s && i < e);
+    for (const m of body.matchAll(/\s(v-for|v-slot(?::[\w.-]+)?|#[\w.-]+)\s*=\s*(["'])([\s\S]*?)\2/g)) {
+        const names = m[1] === 'v-for' ? m[3].split(/\s(?:in|of)\s/)[0] : m[3];
+        for (const n of names.match(IDENT) ?? []) bound.add(n);
+    }
+    for (const m of body.matchAll(/\{\{([\s\S]*?)\}\}/g)) {
+        const a = from + m.index;
+        // (in an attribute's value {{ }} is text to Vue)
+        const before = body.slice(0, m.index);
+        if (before.lastIndexOf('<') > before.lastIndexOf('>') || commented(m.index)) continue;
+        if (m[1].trim() || empty) spots.push([a + 2, a + 2 + m[1].length, a, a + 2 + m[1].length]);
+    }
+    for (const m of body.matchAll(/\s(?:v-bind(?::[\w.[\]-]+)?|v-on:[\w.[\]-]+|[:@][\w.[\]-]+|v-if|v-else-if|v-show|v-html|v-text|v-model(?:[:.][\w.-]+)?)=(["'])([\s\S]*?)\1/g)) {
+        const q = from + m.index + m[0].length - m[2].length - 2;      // the opening quote
+        if (commented(m.index)) continue;
+        if (m[2].trim() || empty) spots.push([q + 1, q + 1 + m[2].length, q - 1, q + 1 + m[2].length]);
+    }
+    return spots.filter(([a, z]) => !(text.slice(a, z).match(IDENT) ?? []).some((n) => bound.has(n)));
+}
+
+const KEYWORDS = new Set(('true false null undefined this typeof instanceof in of new void delete await async function return if else for while do switch case break '
+    + 'continue var let const class extends super import export default try catch finally throw yield as is keyof NaN Infinity').split(' '));
+
+/** The names an expression takes from outside it: not a member (a.b's b), not an object's key ({ on: x }'s on), not a word of the language or of quoted text. */
+export function freeNames(code) {
+    const plain = String(code).replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"/g, (m) => ' '.repeat(m.length));
+    const out = [];
+    for (const m of plain.matchAll(/(?<![\w$.])[A-Za-z_$][\w$]*/g)) {
+        const name = m[0];
+        if (KEYWORDS.has(name) || out.includes(name)) continue;
+        const before = plain.slice(0, m.index).trimEnd().slice(-1), after = plain.slice(m.index + name.length);
+        if (/^\s*:(?!:)/.test(after) && (before === '{' || before === ',')) continue;
+        out.push(name);
+    }
+    return out;
+}
+
+/** The names a script declares at its top: const, let, var (a destructuring's too), function, class, enum, and what it imports. */
+export function topLevelNames(script) {
+    const names = new Set();
+    const add = (text) => { for (const part of String(text).split(',')) { const n = /([A-Za-z_$][\w$]*)\s*(?:=[^,]*)?$/.exec(part.replace(/^\s*\.\.\./, '').trim()); if (n && !KEYWORDS.has(n[1])) names.add(n[1]); } };
+    let depth = 0;
+    const re = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`|\/\/[^\n]*|\/\*[\s\S]*?\*\/|\bimport\s+(?:type\s+)?([^'"`;]*?)\s+from\b|\b(?:const|let|var)\s+(\{[^}=]*\}|\[[^\]=]*\]|[A-Za-z_$][\w$]*)|\b(?:function\*?|class|enum)\s+([A-Za-z_$][\w$]*)|[{}()[\]]/g;
+    for (const m of String(script).matchAll(re)) {
+        const t = m[0];
+        if (t.length === 1 && '{(['.includes(t)) depth++;
+        else if (t.length === 1 && '})]'.includes(t)) depth = Math.max(0, depth - 1);
+        else if (depth > 0) continue;
+        else if (m[1] !== undefined) add(m[1].replace(/\*\s*as\s+/g, '').replace(/[{}]/g, ',').replace(/\btype\s+/g, '').replace(/[\w$]+\s+as\s+/g, ''));
+        else if (m[2] !== undefined) add(/^[{[]/.test(m[2]) ? m[2].slice(1, -1).replace(/[\w$]+\s*:\s*(?=[A-Za-z_$])/g, '') : m[2]);
+        else if (m[3] !== undefined) names.add(m[3]);
+    }
+    return [...names];
+}
+
+/** The type argument or the argument of a call that starts at `at` (just after its name): its text between the brackets, or ''. */
+function bracketed(code, at, open, shut) {
+    if (code[at] !== open) return '';
+    let depth = 0, quote = null;
+    for (let i = at; i < code.length; i++) {
+        const c = code[i];
+        if (quote) { if (c === '\\') i++; else if (c === quote) quote = null; continue; }
+        if (c === '"' || c === "'" || c === '`') quote = c;
+        else if (c === open) depth++;
+        else if (c === '=' && code[i + 1] === '>') i++;      // (an arrow is not a closing bracket)
+        else if (c === shut && --depth === 0) return code.slice(at + 1, i);
+    }
+    return '';
+}
+
+const VUE_TYPES = 'declare function __pm_props<P>(p: P): P extends readonly (infer K extends string)[] ? { [X in K]: any } : { [K in keyof P]: any }; '
+    + 'declare function __pm_inst<O>(o: O): O extends new (...a: any) => infer I ? I : (O extends { data: (...a: any[]) => infer D } ? D : {}) '
+    + '& (O extends { computed: infer C } ? { [K in keyof C]: C[K] extends (...a: any[]) => infer R ? R : C[K] extends { get: (...a: any[]) => infer R } ? R : any } : {}) '
+    + '& (O extends { methods: infer M } ? M : {}) '
+    + '& (O extends { props: infer P } ? (P extends readonly (infer K extends string)[] ? { [X in K]: any } : { [K in keyof P]: any }) : {}) '
+    + '& (O extends { setup: (...a: any[]) => infer S } ? S : {});';
+
+/**
+ * A Vue component's script as the document the TypeScript service checks: the script at its own places, and after the document's end what
+ * the markup may use, for the markup's own document (vueMarkupDocument) to import: `__pm_s`, the names of a <script setup> (the ones it
+ * declares and the ones the markup uses) or the instance an options object makes (its data, computed, methods, props and setup's), and
+ * `__pm_p`, a <script setup>'s props. An options object's `export default` is written as a constant of the same length, to be read.
+ */
+export function vueScriptDocument(text, doc, ts) {
+    const setup = /<script\b[^>]*\bsetup\b/i.test(text);
+    let out = doc, tail;
+    if (setup) {
+        const used = vueSpots(text).flatMap(([a, z]) => freeNames(text.slice(a, z)));
+        const names = [...new Set([...topLevelNames(doc), ...used])].filter((n) => !n.startsWith('__pm_'));
+        const at = /\bdefineProps\s*/.exec(doc);
+        const after = at ? at.index + at[0].length : -1;
+        const type = at ? bracketed(doc, after, '<', '>') : '', arg = at && !type ? bracketed(doc, after, '(', ')') : '';
+        const props = type && ts ? `export declare const __pm_p: ${type};` : arg.trim() ? `export const __pm_p = __pm_props(${arg});` : 'export const __pm_p = {};';
+        tail = `export const __pm_s = { ${names.join(', ')} }; ${props}`;
+    }
+    else {
+        const m = /\bexport default(?=\s*(?:\{|[A-Za-z_$][\w$.]*\s*\())/.exec(doc);
+        if (m) out = doc.slice(0, m.index) + 'const __pm_o =' + doc.slice(m.index + 14);
+        tail = `export const __pm_s = ${m ? '__pm_inst(__pm_o)' : '{}'}; export const __pm_p = {};`;
+    }
+    return out + componentPrelude('vue', out) + VUE_TYPES + '\n' + tail + '\n';
+}
+
+/**
+ * The document of a Vue component's markup: blank but for its expressions, each written as ;(expr) at its own place, and after the
+ * document's end the names they use, taken from the script's document (`module`, its file's name without the extension): a ref is its
+ * value here, as Vue reads it in a template, and a prop is a name of its own.
+ */
+export function vueMarkupDocument(text, module, ts) {
+    const out = blankOut(text).split('');
+    const spots = vueSpots(text);
+    for (const [a, z, at, shut] of spots) {
+        out[at] = ';';
+        out[at + 1] = '(';
+        for (let i = a; i < z; i++) out[i] = text[i];
+        out[shut] = ')';
+    }
+    const names = [...new Set(spots.flatMap(([a, z]) => freeNames(text.slice(a, z))))].filter((n) => !n.startsWith('__pm_'));
+    const values = ts
+        ? 'type __pm_U<T> = 0 extends 1 & import("vue").Ref ? T : T extends import("vue").Ref<infer V> ? V : T; '
+            + 'declare const __pm_v: { [K in keyof typeof __pm.__pm_s as 0 extends 1 & (typeof __pm.__pm_s)[K] ? never : K]: __pm_U<(typeof __pm.__pm_s)[K]> } & typeof __pm.__pm_p;'
+        : 'const __pm_v = { ...__pm.__pm_p, ...__pm.__pm_s };';
+    return out.join('') + `\n;import * as __pm from ${JSON.stringify('./' + module)}; ${values}\n`
+        + names.map((n) => `var ${n} = __pm_v.${n};`).join(' ') + `\n;(__pm_v.${MEMBERS_AT});\n`;
+}
+/** The word after which the markup's document lists every name the markup may use (asked for completion). */
+export const MEMBERS_AT = '__pm_all';
+
+/** Where a name of the markup's document is taken from the script (its `var name = __pm_v.name;`): the offset of the member, or -1. */
+export function memberOffset(markupDoc, name) {
+    const at = markupDoc.lastIndexOf(`var ${name} = __pm_v.${name};`);
+    return at < 0 ? -1 : at + `var ${name} = __pm_v.`.length;
+}
+/** Where a <script setup>'s name is listed for the markup (in `__pm_s = { … }` after the script's document): its offset, or -1. */
+export function listedOffset(scriptDoc, name) {
+    const start = scriptDoc.lastIndexOf('export const __pm_s = {');
+    if (start < 0) return -1;
+    const end = scriptDoc.indexOf('}', start);
+    const m = new RegExp(`(?<![\\w$])${name.replace(/\$/g, '\\$')}(?![\\w$])`).exec(scriptDoc.slice(start + 22, end));
+    return m ? start + 22 + m.index : -1;
+}
+
+/**
  * Which findings of a block's checker a template shows: in a template's <script> its syntax errors only (its names are the page's, not
  * checked against the page's other scripts); in a component's, the type errors too, but not a name the markup uses (declared but not read)
  * nor, in Svelte, a store's $name.
  */
 export function keepFinding(code, message, kind, inMarkup = false) {
     const n = Number(typeof code === 'object' && code ? code.value : code);
-    // an expression of the markup: only a property or method that is not there, and (Svelte) a call with the wrong arguments. A name
-    // not found is the markup's own to give; Vue reads a ref's value by itself, so nothing about a Ref is told
+    // an expression of the markup: only a property or method that is not there, and a call with the wrong arguments. A name not found
+    // is the markup's own to give; a ref inside another value Vue does not read by itself, so nothing about a Ref is told
     if (inMarkup) {
-        if (!(kind === 'vue' ? [2339, 2551] : [2339, 2551, 2554, 2345]).includes(n)) return false;
+        if (![2339, 2551, 2554, 2345].includes(n)) return false;
         return !(kind === 'vue' && /Ref</.test(String(message))) && !/'\$\w+'/.test(String(message));
     }
     if (!Number.isFinite(n) || n < 2000) return true;

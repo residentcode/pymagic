@@ -59,7 +59,41 @@ export const EXPRESSIONS = [
     ['lowerCase(name)', 'another place in small letters', 'downcase', null],
     ['camelCase(name)', 'another place as camelCase', 'camelcase', null],
     ['pascalCase(name)', 'another place as PascalCase', 'pascalcase', null],
+    ['snakeCase(name)', 'another place as snake_case'], ['capitalizeAndUnderscore(name)', 'another place as CAPITALS_WITH_UNDERSCORES'],
+    ['lowercaseAndDash(name)', 'another place as lower-case-with-dashes'], ['spaceSeparated(name)', 'another place as words with spaces'],
+    ['underscoresToCamelCase(name)', 'another place, its _x as X'], ['underscoresToSpaces(name)', 'another place, its underscores as spaces'],
+    ['spacesToUnderscores(name)', 'another place, its spaces as underscores'], ['decapitalize(name)', 'another place, its first letter small'],
+    ['firstWord(name)', 'the first word of another place'], ['substringBefore(name, ".")', 'another place up to a text'],
+    ['regularExpression(name, "search", "replacement")', 'another place with every match of a regular expression replaced ($1 is its first group)'],
+    ['complete()', 'completion is offered when the place is reached'],
 ];
+// the functions that follow another place through a search and its replacement (the editor's ${1/search/replacement/flags}):
+// [search, replacement, flags, the same for the page's preview]
+const WORDS = (s) => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[\s_-]+/).filter(Boolean);
+const FOLLOW = {
+    snakeCase: ['([a-z0-9])([A-Z])|([\\s-]+)|([A-Z])', '$1${2:+_}${2:/downcase}${3:+_}${4:/downcase}', 'g', (s) => WORDS(s).join('_').toLowerCase()],
+    capitalizeAndUnderscore: ['([a-z0-9])([A-Z])|([\\s-]+)|(.)', '${1:/upcase}${2:+_}$2${3:+_}${4:/upcase}', 'g', (s) => WORDS(s).join('_').toUpperCase()],
+    lowercaseAndDash: ['([a-z0-9])([A-Z])|([\\s_]+)|([A-Z])', '$1${2:+-}${2:/downcase}${3:+-}${4:/downcase}', 'g', (s) => WORDS(s).join('-').toLowerCase()],
+    spaceSeparated: ['([a-z0-9])([A-Z])|([_-]+)', '$1${2:+ }$2${3:+ }', 'g', (s) => WORDS(s).join(' ')],
+    underscoresToCamelCase: ['_+([A-Za-z0-9])', '${1:/upcase}', 'g', (s) => s.replace(/_+([A-Za-z0-9])/g, (m, c) => c.toUpperCase())],
+    underscoresToSpaces: ['_', ' ', 'g', (s) => s.replaceAll('_', ' ')],
+    spacesToUnderscores: [' ', '_', 'g', (s) => s.replaceAll(' ', '_')],
+    decapitalize: ['^(.)', '${1:/downcase}', '', (s) => s.charAt(0).toLowerCase() + s.slice(1)],
+    firstWord: ['^\\s*(\\S+).*$', '$1', '', (s) => s.trim().split(/\s+/)[0] ?? ''],
+};
+/** A call's arguments: [{ name } or { text }] (names of places, "quoted" texts), or null when they are not that. */
+function argumentsOf(text) {
+    const out = [];
+    const re = /\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([A-Za-z_]\w*))\s*(,|$)/y;
+    if (!text.trim()) return out;
+    let m, at = 0;
+    while (at < text.length && (m = (re.lastIndex = at, re.exec(text)))) {
+        out.push(m[3] ? { name: m[3] } : { text: (m[1] ?? m[2]).replace(/\\(["'])/g, '$1') });
+        at = re.lastIndex;
+        if (m[4] !== ',') return at >= text.length ? out : null;
+    }
+    return null;
+}
 const SAMPLE = {
     capitalize: (s) => s.charAt(0).toUpperCase() + s.slice(1), upcase: (s) => s.toUpperCase(), downcase: (s) => s.toLowerCase(),
     camelcase: (s) => s.replace(/[_\-\s]+(\w)/g, (m, c) => c.toUpperCase()).replace(/^\w/, (c) => c.toLowerCase()),
@@ -70,9 +104,30 @@ const SAMPLE = {
 function expression(expr) {
     const e = (expr ?? '').trim();
     if (!e) return null;
+    const wide = /^(\w+)\(([\s\S]*)\)$/.exec(e);
+    const args = wide && argumentsOf(wide[2]);
+    if (!args) return null;
+    const of = args[0]?.name;
+    if (wide[1] === 'complete' || wide[1] === 'completeSmart') return args.length ? null : { complete: true };
+    if (FOLLOW[wide[1]]) {
+        const [search, replace, flags, sample] = FOLLOW[wide[1]];
+        return args.length === 1 && of ? { search, replace, flags, of, change: sample, format: true } : null;
+    }
+    if (wide[1] === 'substringBefore') {
+        const sep = args[1]?.text;
+        if (args.length !== 2 || !of || !sep) return null;
+        return { search: '^([\\s\\S]*?)' + sep.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\s\\S]*$', replace: '$1', flags: '', of, change: (s) => (s.includes(sep) ? s.slice(0, s.indexOf(sep)) : s) };
+    }
+    if (wide[1] === 'regularExpression') {
+        const search = args[1]?.text, replace = args[2]?.text;
+        if (args.length !== 3 || !of || !search || replace === undefined) return null;
+        try { new RegExp(search); } catch { return null; }
+        return { search, replace, flags: 'g', of, change: (s) => s.replace(new RegExp(search, 'g'), replace) };
+    }
     const call = /^(\w+)\(\s*(\w*)\s*\)$/.exec(e);
     if (!call) return null;
     for (const [form, , snippet, sample] of EXPRESSIONS) {
+        if (snippet === undefined) continue;
         if (form.slice(0, form.indexOf('(')) !== call[1]) continue;
         if (sample === null) return call[2] ? { transform: snippet, of: call[2] } : null;
         return call[2] ? null : { snippet, sample };
@@ -92,7 +147,8 @@ export function placesOf(body) {
  * (vars[name]: { expr, def, skip }) gives it another default, a value (the file's name, the date...) that is typed over or, with skip, just
  * written, or makes it follow another place. With <paramref name="plain"/> the text is given as it would be written, nothing typed.
  */
-export function fromNamedForm(text, vars = {}, plain = false) {
+export function fromNamedForm(text, vars = {}, plain = false, info = null) {
+    const slash = (s) => s.replace(/\//g, '\\/');
     const order = [];
     const index = (name) => {
         let n = order.indexOf(name);
@@ -104,6 +160,8 @@ export function fromNamedForm(text, vars = {}, plain = false) {
         const v = vars[name], e = expression(v?.expr);
         if (e?.sample) return e.sample;
         if (e?.transform && !seen.includes(name)) return SAMPLE[e.transform](shown(e.of, [...seen, name]));
+        if (e?.search && !seen.includes(name)) return e.change(shown(e.of, [...seen, name]));
+        if (e?.complete) return v?.def || '';
         return v?.def || name;
     };
     let out = '', last = 0;
@@ -117,6 +175,13 @@ export function fromNamedForm(text, vars = {}, plain = false) {
         else {
             const v = vars[name], e = expression(v?.expr);
             if (e?.transform && e.of !== name) out += '${' + index(e.of) + '/(.*)/${1:/' + e.transform + '}/}';
+            else if (e?.search && e.of !== name) out += '${' + index(e.of) + '/' + slash(e.search) + '/' + (e.format ? e.replace : slash(e.replace)) + '/' + e.flags + '}';
+            else if (e?.complete) {
+                // (nothing written: completion is asked at the place when it is reached; live-templates.js)
+                const n = index(name);
+                if (info && !info.complete.includes(n)) info.complete.push(n);
+                out += v?.def ? '${' + n + ':' + literal(v.def) + '}' : '${' + n + '}';
+            }
             else if (e?.snippet && v.skip) out += e.snippet;
             else out += '${' + index(name) + ':' + (e?.snippet ?? literal(v?.def || name)) + '}';
         }
@@ -129,6 +194,13 @@ const indented = (body) => body.replace(/^( {4})+/gm, (m) => '\t'.repeat(m.lengt
 /** The snippet the editor inserts for a template's text: $name$ places when it has some, else the snippet it already is ($1, ${1:name}, $0). */
 export function toSnippet(body, vars) {
     return HAS_NAMED.test(body) ? fromNamedForm(indented(body), vars ?? {}) : indented(body);
+}
+
+/** The places of a template (the numbers of its snippet's stops) where completion is to be offered: its variables' complete(). */
+export function completeStops(body, vars) {
+    const info = { complete: [] };
+    if (HAS_NAMED.test(body)) fromNamedForm(indented(body), vars ?? {}, false, info);
+    return info.complete;
 }
 
 /** A template's text as plain text, its places by their names: what the page and a completion's side panel show. */
@@ -148,7 +220,7 @@ function varsOf(v) {
     const out = {};
     for (const [name, one] of Object.entries(v && typeof v === 'object' && !Array.isArray(v) ? v : {})) {
         if (!/^[A-Za-z_]\w*$/.test(name) || !one || typeof one !== 'object') continue;
-        const expr = text(one.expr, 80).trim(), def = text(one.def, 200);
+        const expr = text(one.expr, 200).trim(), def = text(one.def, 200);
         if (expr || def) out[name] = { expr, def, skip: one.skip === true };
     }
     return out;

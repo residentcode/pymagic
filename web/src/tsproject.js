@@ -7,7 +7,7 @@
 // tsconfig.node.json, a monorepo's packages) is checked by the one that covers the file in the editor: the service has one set of options,
 // so they follow the file. A project too large to be given whole has what the file in the editor imports read as it is opened.
 import * as monaco from 'monaco-editor';
-import { ROOT, compilerOptionsOf, planRefresh, configFor, importsOf, isCodePath } from './tsproject-model.js';
+import { ROOT, COMPONENT_SHIM, compilerOptionsOf, planRefresh, configFor, importsOf, isCodePath } from './tsproject-model.js';
 
 export function setupTsProject() {
     const ts = monaco.languages.typescript;
@@ -34,11 +34,15 @@ export function setupTsProject() {
 
     /** The options of a config in force: set only when they differ from the ones in force (the service checks every file again). */
     let inForce = '';
-    function use(config) {
+    /** A config's options for each of the two services. */
+    function optionsOf(config) {
         const raw = config?.compilerOptions ?? null;
         // a jsconfig.json is a project of JavaScript: its files are allowed and checked as it says
         const jsconfig = /jsconfig(\.[\w.-]+)?\.json$/i.test(config?.path ?? '');
-        const forTs = compilerOptionsOf(raw, 'typescript'), forJs = compilerOptionsOf(jsconfig ? { allowJs: true, ...raw } : raw, 'javascript');
+        return { typescript: compilerOptionsOf(raw, 'typescript'), javascript: compilerOptionsOf(jsconfig ? { allowJs: true, ...raw } : raw, 'javascript') };
+    }
+    function use(config) {
+        const { typescript: forTs, javascript: forJs } = optionsOf(config);
         const key = JSON.stringify([forTs, forJs]);
         state.used = config?.path ?? null;
         if (key === inForce) return;
@@ -59,6 +63,23 @@ export function setupTsProject() {
         return null;
     };
 
+    // a component imported by a script or by another component (import Card from './Card.vue') is a module to TypeScript, unless the
+    // project or the framework's own package says what one is (an env.d.ts with declare module '*.vue', Svelte's types)
+    let shim = null;
+    function components() {
+        const declared = (ext) => {
+            const re = new RegExp(`declare\\s+module\\s+['"]\\*\\.${ext}['"]`);
+            for (const f of code.values()) if (re.test(f.text)) return true;
+            for (const [path, f] of packages) if (path.startsWith(`node_modules/${ext}/`) && re.test(f.text)) return true;
+            return false;
+        };
+        const text = ['vue', 'svelte'].filter((e) => !declared(e)).map((e) => `declare module '*.${e}' { const component: any; export default component; }`).join('\n');
+        if ((shim?.text ?? '') === text) return;
+        shim?.disposables.forEach((d) => d.dispose());
+        shim = text ? { text, disposables: services.map((s) => s.addExtraLib(text, COMPONENT_SHIM)) } : null;
+    }
+    components();
+
     async function readProject() {
         const r = await getJson('/api/ts/project');
         if (!r?.js) {
@@ -78,6 +99,7 @@ export function setupTsProject() {
             put(code, codeName, f.path, f.text);
         }
         for (const path of [...code.keys()]) if (!seen.has(path) && !asked.has(path)) drop(code, path);
+        components();
     }
     async function readPackages() {
         if (!state.js) return;
@@ -90,6 +112,7 @@ export function setupTsProject() {
             put(packages, packageName, f.path, f.text);
         }
         for (const path of [...packages.keys()]) if (!seen.has(path) && !askedPackageFiles.has(path)) drop(packages, path);
+        components();
     }
     async function readFile(path) {
         const res = await fetch('/api/file?path=' + encodeURIComponent(path)).catch(() => null);
@@ -141,6 +164,95 @@ export function setupTsProject() {
     for (const ed of monaco.editor.getEditors()) watch(ed);
     monaco.editor.onDidCreateEditor(watch);
 
+    // ---- an open file of another config than the one in force (two editors side by side, a file whose problems are asked while another
+    // is in the editor): the service checks it with the options in force, so it is checked again by a service of its own with its config's
+    // options, and those findings stand in place of the service's
+    const others = new Map();       // language + options -> { worker, used, libs }
+    const mine = new Map();         // a model's address -> the findings set for it here
+    const pending = new Set();
+    let libsVersion = 0;
+    for (const s of services) s.onDidExtraLibsChange(() => { libsVersion++; });
+    const defaultsOf = (language) => (language === 'typescript' ? ts.typescriptDefaults : ts.javascriptDefaults);
+    /** The options a model's own config asks for, when they are not the ones in force; null when it is checked as it should be. */
+    function ownOptions(model) {
+        const language = model.getLanguageId();
+        if ((language !== 'typescript' && language !== 'javascript') || state.configs.length < 2) return null;
+        // (a component's hidden documents are checked as the component)
+        const path = pathOf(model)?.replace(/\.(vue|svelte)\.\d+(\.m)?\.(ts|js)$/i, '.$1');
+        if (!path || !(isCodePath(path) || /\.(vue|svelte)$/i.test(path))) return null;
+        const own = optionsOf(configFor(path, state.configs) ?? state.config)[language];
+        return JSON.stringify(own) === JSON.stringify(defaultsOf(language).getCompilerOptions()) ? null : own;
+    }
+    async function serviceOf(options, language) {
+        const key = language + JSON.stringify(options);
+        let s = others.get(key);
+        if (!s) {
+            const worker = monaco.editor.createWebWorker({
+                moduleId: 'vs/language/typescript/tsWorker', label: language, keepIdleModels: true,
+                createData: { compilerOptions: options, extraLibs: defaultsOf(language).getExtraLibs(), customWorkerPath: undefined, inlayHintsOptions: {} },
+            });
+            s = { worker, libs: libsVersion };
+            others.set(key, s);
+        }
+        s.used = Date.now();
+        const client = await s.worker.withSyncedResources(monaco.editor.getModels().filter((m) => m.getLanguageId() === language).map((m) => m.uri));
+        if (s.libs !== libsVersion) {
+            s.libs = libsVersion;
+            await client.updateExtraLibs(defaultsOf(language).getExtraLibs());
+        }
+        return client;
+    }
+    const S = monaco.MarkerSeverity;
+    const flat = (t, depth = 0) => (typeof t === 'string' ? t : t ? '  '.repeat(depth) + t.messageText + (t.next ?? []).map((n) => '\n' + flat(n, depth + 1)).join('') : '');
+    const keyOf = (list) => JSON.stringify(list.map((k) => [k.startLineNumber, k.startColumn, k.endLineNumber, k.endColumn, k.severity, k.message]));
+    async function recheck(model) {
+        const uri = model.uri.toString(), language = model.getLanguageId();
+        const options = ownOptions(model);
+        if (!options) { mine.delete(uri); return; }
+        // (the findings there are the ones set here: nothing to do)
+        if (mine.get(uri) === keyOf(monaco.editor.getModelMarkers({ resource: model.uri, owner: language })) || pending.has(uri)) return;
+        pending.add(uri);
+        try {
+            const client = await serviceOf(options, language);
+            const version = model.getVersionId();
+            const off = defaultsOf(language).getDiagnosticsOptions();
+            const found = (await Promise.all([
+                off.noSyntaxValidation ? [] : client.getSyntacticDiagnostics(uri), off.noSemanticValidation ? [] : client.getSemanticDiagnostics(uri),
+                off.noSuggestionDiagnostics ? [] : client.getSuggestionDiagnostics(uri),
+            ])).flat().filter((d) => !(off.diagnosticCodesToIgnore ?? []).includes(d.code));
+            if (model.isDisposed() || model.getVersionId() !== version || !ownOptions(model)) return;
+            const markers = found.map((d) => {
+                const a = model.getPositionAt(d.start ?? 0), b = model.getPositionAt((d.start ?? 0) + (d.length ?? 0));
+                return {
+                    severity: d.category === 1 ? S.Error : d.category === 0 ? S.Warning : d.category === 3 ? S.Info : S.Hint,
+                    startLineNumber: a.lineNumber, startColumn: a.column, endLineNumber: b.lineNumber, endColumn: b.column,
+                    message: flat(d.messageText), code: String(d.code), tags: [...(d.reportsUnnecessary ? [1] : []), ...(d.reportsDeprecated ? [2] : [])],
+                };
+            });
+            mine.set(uri, keyOf(markers));
+            monaco.editor.setModelMarkers(model, language, markers);
+        }
+        catch { /* the service's own findings stay */ }
+        finally { pending.delete(uri); }
+    }
+    monaco.editor.onDidChangeMarkers((uris) => {
+        if (state.configs.length < 2) return;
+        for (const uri of uris) {
+            const model = monaco.editor.getModel(uri);
+            if (model && (model.getLanguageId() === 'typescript' || model.getLanguageId() === 'javascript')) void recheck(model);
+        }
+    });
+    monaco.editor.onWillDisposeModel((model) => mine.delete(model.uri.toString()));
+    // a service of another config that nothing has asked for a while is let go (each holds the project's files and its packages' types)
+    window.setInterval(() => {
+        for (const [key, s] of others) {
+            if (Date.now() - s.used < 120000) continue;
+            if (monaco.editor.getModels().some((m) => { const o = ownOptions(m); return o && m.getLanguageId() + JSON.stringify(o) === key; })) continue;
+            s.worker.dispose();
+            others.delete(key);
+        }
+    }, 30000);
+
     window.addEventListener('pymagic:diskChanged', (e) => {
         const plan = planRefresh(e.detail);
         busy = busy.then(async () => {
@@ -152,7 +264,7 @@ export function setupTsProject() {
     // for the checks: what the service was given
     return {
         ready: () => busy,
-        state: () => ({ ...state, files: code.size, packages: packages.size }),
+        state: () => ({ ...state, files: code.size, packages: packages.size, otherServices: others.size }),
         has: (path) => code.has(path) || packages.has(path),
     };
 }

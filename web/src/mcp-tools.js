@@ -1,6 +1,7 @@
 // The MCP server's tools, carried out in the project's page (desktop/mcp-main.js sends each call here: window.pymagic.mcp.call(name, args)).
 // They use what the editor uses: the open files' texts, the project's files and search (/api/tree, /api/search), the language server (problems,
 // hover, rename, formatting), the run configurations and the Run panel. Each answers { text, isError? }.
+import { codeActionsOf } from './code-actions.js';
 import { projectPath, truncateLines, replaceText, filesByName, filesByGlob, treeText, findSymbol, problemsText, matchesText, includeOf, hoverText, relativeToRoot } from './mcp-model.js';
 
 /**
@@ -38,7 +39,7 @@ export function setupMcpTools(deps) {
         }
         const res = await fetch(fileUrl(r), { method: 'PUT', body: text });
         if (!res.ok) throw new Error(`${r} cannot be written: ${await res.text().catch(() => res.status)}`);
-        window.dispatchEvent(new CustomEvent('pymagic:diskChanged', { detail: { paths: [r] } }));
+        window.dispatchEvent(new CustomEvent('pymagic:diskChanged', { detail: [{ kind: 'changed', path: r }] }));
     }
     let tree = null, treeAt = 0;
     async function projectTree() {
@@ -260,6 +261,11 @@ export function setupMcpTools(deps) {
     }
     /** A file's findings once the editor's checks have settled: the same twice, a little apart (a file just opened is checked a moment later). */
     async function settledMarkers(m, ms = 9000) {
+        // (a script's service is asked once first: started and with the file read, its findings follow soon after)
+        if (m.getLanguageId() === 'typescript' || m.getLanguageId() === 'javascript') {
+            const ts = deps.monaco.languages.typescript;
+            try { await (await (await (m.getLanguageId() === 'typescript' ? ts.getTypeScriptWorker() : ts.getJavaScriptWorker()))(m.uri)).getSemanticDiagnostics(m.uri.toString()); } catch { /* as it is */ }
+        }
         const read = () => deps.monaco.editor.getModelMarkers({ resource: m.uri });
         const key = (list) => JSON.stringify(list.map((k) => [k.startLineNumber, k.startColumn, k.message, k.owner]));
         const end = Date.now() + ms;
@@ -380,6 +386,7 @@ export function setupMcpTools(deps) {
 
     /** The quick fixes of a Python file's line (or of every line with a finding): [{ line, title, edit }]. */
     async function quickFixes(r, line) {
+        if (!isPython(r)) return otherFixes(r, line);
         const { m, uri } = await pythonModel(r);
         let lines = [line];
         if (!line) {
@@ -395,6 +402,62 @@ export function setupMcpTools(deps) {
         }
         return out;
     }
+    /** The quick fixes of a file of another language: what the editor's own providers give for its findings (JavaScript and TypeScript's service, PyMagic's own for markup, PHP and the rest). */
+    async function otherFixes(r, line) {
+        if (!(await exists(r))) throw new Error(`${r} is not a file of the project`);
+        const m = deps.openModel(r) ?? await deps.ensureModel(r);
+        if (!m) throw new Error(`${r} cannot be opened`);
+        const markers = await settledMarkers(m);
+        const lines = line ? [line] : [...new Set(markers.map((k) => k.startLineNumber))].sort((a, b) => a - b).slice(0, 200);
+        const out = [];
+        for (const l of lines) {
+            if (l < 1 || l > m.getLineCount()) continue;
+            for (const f of await codeActionsOf(m, l)) out.push({ line: l, title: f.title, edits: f.edits });
+        }
+        return out;
+    }
+    /** A fix of the editor's providers carried out: each file changed in its model (one undo step) and saved. */
+    async function applyEdits(edits, done) {
+        const byFile = new Map();
+        for (const e of edits) {
+            const key = e.resource.toString();
+            if (!byFile.has(key)) byFile.set(key, []);
+            byFile.get(key).push(e);
+        }
+        const changed = [];
+        for (const [key, list] of byFile) {
+            const m = deps.monaco.editor.getModel(deps.monaco.Uri.parse(key));
+            const tr = m && (deps.relOfUri(deps.uriOf(m) ?? '') ?? (m.uri.scheme === 'pymagic' ? decodeURIComponent(m.uri.path.replace(/^\//, '')) : null));
+            if (!m || !tr) continue;
+            m.pushEditOperations([], list.map((e) => ({ range: e.range, text: e.text })), () => null);
+            await deps.saveFile(tr);
+            changed.push(`${tr} (${list.length})`);
+        }
+        return changed.length ? say(done + changed.join(', ') + '.') : { text: 'The fix changed nothing.', isError: true };
+    }
+    const gitJson = async (url, body) => {
+        const res = await fetch(url, body === undefined ? undefined : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.error ?? data?.message ?? 'Git refused it.');
+        return data;
+    };
+    const STEPS = { CONTINUE: 'continue', STEP_OVER: 'next', STEP_INTO: 'stepIn', STEP_OUT: 'stepOut', PAUSE: 'pause' };
+    const WHY = { breakpoint: 'at a breakpoint', step: 'after the step', pause: 'paused', exception: 'on an exception', data: 'on a changed value', entry: 'at its first line' };
+    /** What a debug session is at, as text: where it is paused with its stack, or that it runs or has ended, and what it wrote. */
+    function sessionText(debug, maxLines = 200) {
+        const s = debug.state();
+        const lines = [];
+        if (s.session === 'none') lines.push(s.exitCode === null || s.exitCode === undefined ? 'No program is being debugged.' : `The program ended with exit code ${s.exitCode}.`);
+        else if (s.session === 'running') lines.push(s.debugging ? 'The program is running (not paused).' : 'A program is running without the debugger.');
+        else {
+            const top = s.frames[0];
+            lines.push(`Paused ${WHY[s.reason] ?? (s.reason ? `(${s.reason})` : '')}${top ? ` at ${top.file}:${top.line} in ${top.name}` : ''}${s.message ? `: ${s.message}` : ''}`.replace(/\s+/g, ' '));
+            lines.push('Stack:', ...s.frames.map((f) => `#${f.index} ${f.name} ${f.file}:${f.line}${f.thread ? ` [thread ${f.thread}]` : ''}`));
+        }
+        const out = truncateLines(s.output.replace(/\s+$/, ''), maxLines, 'START').text;
+        if (out) lines.push('Output:', out);
+        return lines.join('\n');
+    }
     const STATUS = { M: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'copied', U: 'conflict', '?': 'not tracked', '!': 'ignored', T: 'type changed' };
 
     Object.assign(tools, {
@@ -409,6 +472,7 @@ export function setupMcpTools(deps) {
             const wanted = String(a.title).trim().toLowerCase();
             const fix = fixes.find((f) => f.title.toLowerCase() === wanted) ?? fixes.find((f) => f.title.toLowerCase().includes(wanted));
             if (!fix) return { text: `No quick fix named "${a.title}" at ${r}:${a.line}${fixes.length ? ` (there: ${fixes.map((f) => f.title).join('; ')})` : ''}.`, isError: true };
+            if (fix.edits) return applyEdits(fix.edits, `Applied "${fix.title}" in: `);
             return applyWorkspaceEdit(fix.edit, `Applied "${fix.title}" in: `, 'The fix changed nothing.');
         },
         async get_project_vcs_status() {
@@ -449,6 +513,114 @@ export function setupMcpTools(deps) {
                 for (const b of run.breakpointsOf(m)) out.push({ file: r, line: b.line, ...(b.condition ? { condition: b.condition } : {}), ...(b.enabled === false ? { enabled: false } : {}), ...(b.logMessage ? { logMessage: b.logMessage } : {}) });
             }
             return json(out);
+        },
+
+        // ---- Git: branches and committing (PyMagic commits the files chosen, as its Commit window does; there is no staging of its own)
+        async get_git_branches() {
+            const b = await gitJson('/api/git/branches');
+            const local = (b.local ?? []).map((n) => (n === b.current ? `* ${n}` : `  ${n}`));
+            return say([`Current: ${b.detached ? 'detached HEAD' : b.current ?? 'none yet'}`, 'Local:', ...(local.length ? local : ['  (none)']), ...((b.remote ?? []).length ? ['Remote:', ...b.remote.map((n) => `  ${n}`)] : [])].join('\n'));
+        },
+        async create_git_branch(a) {
+            const before = await gitJson('/api/git/branches');
+            if ((before.local ?? []).includes(a.name)) return { text: `There is a branch ${a.name} already.`, isError: true };
+            if (a.checkout === false) {
+                const head = (await gitJson('/api/git/log?limit=1'))?.[0]?.hash ?? (await gitJson('/api/git/log?limit=1'))?.commits?.[0]?.hash;
+                if (!head) return { text: 'The project has no commit yet: a branch starts at one.', isError: true };
+                await gitJson('/api/git/action', { op: 'createBranchAt', name: a.name, hash: head, checkout: false });
+                return say(`Made the branch ${a.name} (still on ${before.current ?? 'the same commit'}).`);
+            }
+            await gitJson('/api/git/branch', { name: a.name });
+            window.dispatchEvent(new Event('pymagic:saved'));
+            return say(`Made the branch ${a.name} and switched to it.`);
+        },
+        async checkout_git_branch(a) {
+            await gitJson('/api/git/checkout', { branch: a.name });
+            window.dispatchEvent(new Event('pymagic:saved'));
+            return say(`Switched to ${a.name}.`);
+        },
+        async commit_changes(a) {
+            const message = String(a.message ?? '').trim();
+            if (!message) return { text: 'A commit needs a message.', isError: true };
+            const s = await gitJson('/api/git/status');
+            if (!s?.available) return { text: 'The project is not under Git.', isError: true };
+            const changed = (s.files ?? []).filter((f) => f.worktree !== '!' && f.index !== '!').map((f) => f.path);
+            let paths = changed;
+            if (a.paths) {
+                const wanted = String(a.paths).split(/[\n,]/).map((p) => p.trim()).filter(Boolean).map((p) => rel(p, { allowRoot: true }));
+                paths = changed.filter((p) => wanted.some((w) => w === '' || p === w || p.startsWith(w.replace(/\/$/, '') + '/')));
+                const none = wanted.filter((w) => !changed.some((p) => w === '' || p === w || p.startsWith(w.replace(/\/$/, '') + '/')));
+                if (none.length) return { text: `Nothing has changed in: ${none.join(', ')} (get_project_vcs_status lists what has).`, isError: true };
+            }
+            if (!paths.length) return { text: 'Nothing has changed; there is nothing to commit.', isError: true };
+            // what the editor has not saved yet belongs to the commit
+            for (const p of paths) if (deps.openModel(p)) await deps.saveFile(p).catch(() => { });
+            const r = await gitJson('/api/git/commit', { message, paths });
+            window.dispatchEvent(new Event('pymagic:saved'));
+            return say(`Committed ${paths.length} file${paths.length === 1 ? '' : 's'} as ${String(r?.hash ?? '').slice(0, 10)}: ${paths.join(', ')}`);
+        },
+
+        // ---- the debugger: a session started, stepped, looked into and stopped
+        async start_debugger_session(a) {
+            const debug = deps.runHooks()?.agentDebug;
+            if (!debug) return { text: 'Debugging is not available in this window.', isError: true };
+            let target;
+            if (a.configurationName) {
+                const config = deps.runConfigs()?.byName(a.configurationName);
+                if (!config) return { text: `There is no run configuration ${a.configurationName}; get_run_configurations lists them.`, isError: true };
+                target = { config };
+            }
+            else if (a.filePath) {
+                const r = rel(a.filePath);
+                if (!(await exists(r))) return { text: `${r} is not a file of the project`, isError: true };
+                target = { rel: r, args: a.arguments ?? '' };
+            }
+            else return { text: 'Say what to debug: configurationName or filePath.', isError: true };
+            const res = await debug.start(target, a.timeout ?? 30000);
+            if (!res.started) return { text: res.note ?? 'It did not start.', isError: true };
+            return say(sessionText(debug));
+        },
+        async get_debugger_state() {
+            const debug = deps.runHooks()?.agentDebug;
+            if (!debug) return { text: 'Debugging is not available in this window.', isError: true };
+            return say(sessionText(debug));
+        },
+        async debugger_step(a) {
+            const debug = deps.runHooks()?.agentDebug;
+            if (!debug) return { text: 'Debugging is not available in this window.', isError: true };
+            const res = await debug.go(STEPS[a.action], a.timeout ?? 30000);
+            if (!res.ok) return { text: res.note, isError: true };
+            return say(sessionText(debug));
+        },
+        async get_debugger_variables(a) {
+            const debug = deps.runHooks()?.agentDebug;
+            if (!debug) return { text: 'Debugging is not available in this window.', isError: true };
+            const res = await debug.variables(a.frame ?? 0, a.expression ? String(a.expression) : '');
+            if (res.note) return { text: res.note, isError: true };
+            const max = a.maxCount ?? 200;
+            const lines = [];
+            if (a.expression) lines.push(`${a.expression}: ${res.type ?? ''} = ${res.value}`);
+            for (const s of res.scopes) {
+                if (!a.expression) lines.push(s.items ? `${s.name}:` : `${s.name}: (not read; ask for a name of it with expression)`);
+                for (const v of (s.items ?? []).slice(0, max)) lines.push(`  ${v.name}: ${v.type ?? ''} = ${v.value}${v.ref > 0 ? '  (has members)' : ''}`);
+                if ((s.items ?? []).length > max) lines.push(`  (${s.items.length - max} more)`);
+                if (s.items && !s.items.length && !a.expression) lines.push('  (empty)');
+            }
+            return say(lines.join('\n'));
+        },
+        async evaluate_debugger_expression(a) {
+            const debug = deps.runHooks()?.agentDebug;
+            if (!debug) return { text: 'Debugging is not available in this window.', isError: true };
+            const res = await debug.evaluate(a.frame ?? 0, String(a.expression));
+            if (res.note) return { text: res.note, isError: true };
+            return say(`${res.type ? res.type + ': ' : ''}${res.value}${res.hasMembers ? '\n(it has members: get_debugger_variables with this expression lists them)' : ''}`);
+        },
+        async stop_debugger_session() {
+            const debug = deps.runHooks()?.agentDebug;
+            if (!debug) return { text: 'Debugging is not available in this window.', isError: true };
+            if (!debug.stop()) return say('No program is running.');
+            for (let i = 0; i < 50 && debug.state().session !== 'none'; i++) await new Promise((r) => setTimeout(r, 100));
+            return say(debug.state().session === 'none' ? 'Stopped.' : 'Asked to stop; the program has not ended yet.');
         },
     });
 

@@ -11,7 +11,10 @@ test('which files', () => {
     assert.equal(markupKind('blade', '/a/x.blade.php'), 'blade');
     assert.equal(markupKind('html', '/a/Card.vue'), 'vue');
     assert.equal(markupKind('html', '/a/List.svelte'), 'svelte');
-    assert.equal(markupKind('html', '/a/page.astro'), null);
+    assert.equal(markupKind('html', '/a/page.astro'), 'astro');
+    assert.equal(markupKind('handlebars', '/a/row.hbs'), 'handlebars');
+    assert.equal(markupKind('ejs', '/a/page.ejs'), 'ejs');
+    assert.equal(markupKind('html', '/a/page.htm'), null);
     assert.equal(markupKind('javascript', '/a/a.js'), null);
 });
 

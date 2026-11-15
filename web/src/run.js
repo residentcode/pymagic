@@ -874,6 +874,8 @@ export function setupRun(deps) {
     void refreshWatches();
     // ------------------------------------------------------------ frames and messages
     let stoppedThread = null;
+    // (for the MCP server's debugger tools: how many stops there were, and why the last one)
+    let stops = 0, lastStop = null;
     function renderFrames() {
         const holder = $('frames');
         holder.textContent = '';
@@ -965,6 +967,8 @@ export function setupRun(deps) {
                 clearTimeout(pauseTimer);
                 frames = framesOfStop(m);
                 stoppedThread = m.thread ?? null;
+                stops++;
+                lastStop = { reason: m.reason ?? null, message: m.message ?? null };
                 if (m.reason === 'pause')
                     append('Paused\n', 'info');
                 if (m.reason === 'data')
@@ -1980,9 +1984,94 @@ export function setupRun(deps) {
         }
         return got;
     }
+    // ------------------------------------------------------------ the debugger for the MCP server's tools
+    let agentFrom = 0;      // where the Output of the agent's session starts
+    /** Waits for the next stop after `from`, or the program's end: 'paused', 'ended', or 'running' when `ms` pass first. */
+    async function agentWait(from, ms) {
+        const end = Date.now() + ms;
+        while (Date.now() < end) {
+            if (!run) return 'ended';
+            if (paused && stops !== from) return 'paused';
+            await new Promise((r) => setTimeout(r, 100));
+        }
+        return !run ? 'ended' : paused && stops !== from ? 'paused' : 'running';
+    }
+    const agentDebug = {
+        /** What the session is at: { session: 'none' | 'running' | 'paused', debugging, reason, message, frames, exitCode, output }. */
+        state() {
+            const text = output.textContent ?? '';
+            return {
+                session: !run ? 'none' : paused ? 'paused' : 'running', debugging: !!run && debugging,
+                reason: paused ? lastStop?.reason ?? null : null, message: paused ? lastStop?.message ?? null : null,
+                frames: paused ? frames.map((f, i) => ({ index: i, name: f.name, file: relOfAbsolute(f.file) ?? f.file, line: f.line, thread: f.thread ?? null })) : [],
+                exitCode: run ? null : lastExit, output: text.length >= agentFrom ? text.slice(agentFrom) : text,
+            };
+        },
+        /** Debug of a run configuration, or of a file: waits for its first stop or its end. */
+        async start({ config, rel, args }, timeout) {
+            if (run) return { started: false, note: 'A program is running in PyMagic already; it has to end (or be stopped) first.' };
+            if (config) {
+                const s = startOf(config);
+                if (config.kind === 'compound' || s.http || s.tests || s.browser || s.debugServer)
+                    return { started: false, note: `A ${config.kind} configuration is debugged from PyMagic itself (its stops are not one program's).` };
+            }
+            lastExit = null;
+            lastStop = null;
+            agentFrom = (output.textContent ?? '').length;
+            const from = stops;
+            if (config) await start(true, false, config);
+            else await launch(rel, true, false, args ?? '');
+            if (!run) return { started: false, note: (output.textContent ?? '').slice(agentFrom).trim() || 'It did not start.' };
+            return { started: true, now: await agentWait(from, timeout) };
+        },
+        /** continue, next, stepIn, stepOut: goes on and waits for the next stop or the end; pause: asks for a stop. */
+        async go(type, timeout) {
+            if (!run || !debugging) return { ok: false, note: 'No program is being debugged.' };
+            const from = stops;
+            if (type === 'pause') {
+                if (paused) return { ok: false, note: 'The program is paused already.' };
+                run.send({ type: 'pause' });
+                return { ok: true, now: await agentWait(from, timeout) };
+            }
+            if (!paused) return { ok: false, note: 'The program is running: it can be stepped only while it is paused.' };
+            run.send({ type });
+            // (the stop that was is over: the next one counts, even on the same line)
+            return { ok: true, now: await agentWait(from, timeout) };
+        },
+        stop() {
+            if (!run) return false;
+            if (afterExit) stoppedByUser = true;
+            run.send({ type: 'stop' });
+            return true;
+        },
+        /** The values of a frame: its scopes' names, or the members of what an expression gives. */
+        async variables(frame, expression) {
+            if (!run || !paused) return { note: 'The program is not paused.' };
+            if (!frames[frame]) return { note: `There is no frame ${frame} (the stack has ${frames.length}).` };
+            if (expression) {
+                const r = await run.ask({ type: 'evaluate', frameId: frame, expression, evalOnly: true });
+                if (r.error) return { note: r.error };
+                const items = r.ref > 0 ? (await run.ask({ type: 'variables', ref: r.ref })).items : [];
+                return { value: r.result, type: r.valueType, scopes: [{ name: expression, items }] };
+            }
+            const scopes = (await run.ask({ type: 'scopes', frameId: frame })).scopes;
+            const out = [];
+            for (const s of scopes) {
+                if (!(s.name === 'Locals' || s.name === 'Return values' || scopes.indexOf(s) === 0)) { out.push({ name: s.name, items: null }); continue; }
+                out.push({ name: s.name, items: (await run.ask({ type: 'variables', ref: s.ref })).items });
+            }
+            return { scopes: out };
+        },
+        async evaluate(frame, expression) {
+            if (!run || !paused) return { note: 'The program is not paused.' };
+            if (!frames[frame]) return { note: `There is no frame ${frame} (the stack has ${frames.length}).` };
+            const r = await run.ask({ type: 'evaluate', frameId: frame, expression, evalOnly: true, limit: 20000 });
+            return r.error ? { note: r.error } : { value: r.result, type: r.valueType, hasMembers: r.ref > 0 };
+        },
+    };
     return {
         /** Stopped on a value the debugger shows in its popup: the language's own hover stands aside. */
-        debugValueAt,
+        debugValueAt, agentDebug,
         onModelCreated, runScript: (rel, args, debug = false) => launch(rel, debug, false, args), isRunning: () => run !== null, runForAgent,
         /** For the MCP server's tools: a file's breakpoints, and one set or taken away. */
         breakpointsOf, toggleBreakpoint,

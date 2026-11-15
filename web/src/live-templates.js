@@ -6,7 +6,7 @@ import * as monaco from 'monaco-editor';
 import { settings, onSettings } from './settings';
 import { openMenu } from './menu';
 import { readSnippets } from './codegen-model.js';
-import { allTemplates, cleanConf, matchesAt, offered, servedByServer, serverItems, toSnippet, preview, projectTemplates } from './live-templates-model.js';
+import { allTemplates, cleanConf, matchesAt, offered, servedByServer, serverItems, toSnippet, preview, projectTemplates, completeStops } from './live-templates-model.js';
 
 const reformatCommand = 'pymagic.liveTemplate.reformat';
 let server = null;          // the language server's built-in templates, once it has answered
@@ -85,7 +85,8 @@ export function setupLiveTemplates(editor, { source, suggestions }) {
                     insertText: toSnippet(t.body, t.vars), insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
                     sortText: '3' + t.abbr, range,
                     // (a template to reformat is tidied once it is filled in)
-                    command: t.reformat ? { id: reformatCommand, title: '', arguments: [position.lineNumber, toSnippet(t.body, t.vars).split('\n').length] } : undefined,
+                    command: t.reformat || completeStops(t.body, t.vars).length
+                        ? { id: reformatCommand, title: '', arguments: [t.reformat ? position.lineNumber : 0, toSnippet(t.body, t.vars).split('\n').length, completeStops(t.body, t.vars)] } : undefined,
                 })),
             };
         },
@@ -122,9 +123,24 @@ export function setupLiveTemplates(editor, { source, suggestions }) {
             window.setTimeout(run, 0);
         });
     }
-    monaco.editor.registerCommand(reformatCommand, (_accessor, firstLine, lineCount) => reformatLater(firstLine, lineCount));
+    monaco.editor.registerCommand(reformatCommand, (_accessor, firstLine, lineCount, stops) => { if (firstLine) reformatLater(firstLine, lineCount); completeLater(stops ?? []); });
+    /** A variable's complete(): completion is offered when its place is reached (the first one at once, the others as Tab comes to them). */
+    function completeLater(stops) {
+        if (!stops.length) return;
+        const done = new Set();
+        // (which place the snippet is at is the editor's own to know: read from its session; nothing is offered when it cannot be)
+        const at = () => { const sn = editor.getContribution('snippetController2')?._session?._snippets?.[0]; return sn?._placeholderGroups?.[sn._placeholderGroupsIdx]?.[0]?.index; };
+        const look = () => {
+            const n = at();
+            if (!stops.includes(n) || done.has(n)) return;
+            done.add(n);
+            window.setTimeout(() => { if (inSnippet()) editor.trigger('live-template', 'editor.action.triggerSuggest', {}); }, 30);
+        };
+        look();
+        const watch = editor.onDidChangeCursorSelection(() => { if (!inSnippet()) { watch.dispose(); return; } look(); });
+    }
 
-    const insert = (snippet, length, edits, reformat) => {
+    const insert = (snippet, length, edits, reformat, stops = []) => {
         const line = editor.getPosition()?.lineNumber ?? 1;
         // the lines an import adds above move the template down
         const above = (edits ?? []).filter((e) => e.range.endLineNumber <= line).reduce((n, e) => n + e.text.split('\n').length - 1 - (e.range.endLineNumber - e.range.startLineNumber), 0);
@@ -133,12 +149,13 @@ export function setupLiveTemplates(editor, { source, suggestions }) {
         editor.getContribution('snippetController2')?.insert(snippet, { overwriteBefore: length, overwriteAfter: 0 });
         editor.pushUndoStop();
         if (reformat) reformatLater(line + above, snippet.split('\n').length);
+        completeLater(stops);
     };
 
     /** Writes one template over its abbreviation; a language server's one through its completion (which may say it is not one for this place). */
     function expand(t, key, model, position) {
         editor.getContribution('editor.contrib.suggestController')?.cancelSuggestWidget?.();
-        if (!servedByServer(t)) { insert(toSnippet(t.body, t.vars), t.abbr.length, null, t.reformat); return; }
+        if (!servedByServer(t)) { insert(toSnippet(t.body, t.vars), t.abbr.length, null, t.reformat, completeStops(t.body, t.vars)); return; }
         if (!suggestions) { plain(key); return; }
         const version = model.getVersionId();
         const sort = t.server === 'project' ? '3' : '4';

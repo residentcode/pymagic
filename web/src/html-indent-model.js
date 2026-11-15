@@ -6,12 +6,15 @@
 // Left alone: lines of text, the lines of a tag spread over several, what is inside <script>, <style>, <pre>, <textarea> and comments, a file
 // whose elements do not balance (the syntax check tells that), and a file where most lines differ (its own layout). No DOM, no Monaco here.
 import { VOID, OPTIONAL_END, ENDS, ENDS_P, blankTemplate, djangoBlocks, templateProblems, vueText, vueProblems, svelteParts, svelteProblems, bladeParts, bladeProblems } from './htmlcheck-model.js';
+import { handlebarsParts, handlebarsProblems, ejsParts, ejsProblems, astroText, astroProblems } from './markup-kinds-model.js';
 
 /** The kind of markup a file is, by the editor's language and the file's name; null for none. */
 export function markupKind(languageId, path = '') {
     if (languageId === 'django-html' || languageId === 'twig') return 'django';
     if (languageId === 'blade') return 'blade';
-    if (languageId === 'html') return /\.vue$/i.test(path) ? 'vue' : /\.svelte$/i.test(path) ? 'svelte' : null;
+    if (languageId === 'handlebars') return 'handlebars';
+    if (languageId === 'ejs') return 'ejs';
+    if (languageId === 'html') return /\.vue$/i.test(path) ? 'vue' : /\.svelte$/i.test(path) ? 'svelte' : /\.astro$/i.test(path) ? 'astro' : null;
     return null;
 }
 
@@ -23,6 +26,10 @@ function parts(source, kind) {
     if (kind === 'vue') return { text: vueText(source), blocks: [], strict: true, sound: vueProblems(source).length === 0 };
     if (kind === 'svelte') return { ...svelteParts(source), strict: true, sound: svelteProblems(source).length === 0 };
     if (kind === 'blade') return { ...bladeParts(source), strict: false, sound: bladeProblems(source).length === 0 };
+    if (kind === 'handlebars') return { ...handlebarsParts(source), strict: false, sound: handlebarsProblems(source).length === 0 };
+    if (kind === 'ejs') return { ...ejsParts(source), strict: false, sound: ejsProblems(source).length === 0 };
+    // (what an expression of several lines holds is laid out as code: its elements are not judged)
+    if (kind === 'astro') return { text: astroText(source, { elements: false }), blocks: [], strict: false, sound: astroProblems(source).length === 0 };
     return { text: blankTemplate(source), blocks: djangoBlocks(source), strict: false, sound: templateProblems(source).length === 0 };
 }
 

@@ -38,10 +38,10 @@ function setupMcp(deps) {
   }
 
   /** Asks the person in the project's window; `brave` (Settings) skips it, and "Don't ask again" sets it. */
-  async function confirm(w, title, message, detail) {
+  async function confirm(w, title, message, detail, verb = 'Run') {
     if (config().brave) return true;
     const r = await deps.dialog.showMessageBox(w.win, {
-      type: 'question', title, message, detail, buttons: ['Run', 'Don\'t run'], defaultId: 1, cancelId: 1, noLink: true,
+      type: 'question', title, message, detail, buttons: [verb, `Don't ${verb.toLowerCase()}`], defaultId: 1, cancelId: 1, noLink: true,
       checkboxLabel: 'Don\'t ask again (Settings > MCP Server)',
     });
     if (r.response !== 0) return false;
@@ -103,9 +103,14 @@ function setupMcp(deps) {
           openProjects: projects().map((o) => o.project) }, null, 2) };
       }
       else {
-        if (name === 'execute_run_configuration'
-          && !(await confirm(w, 'MCP: run a configuration', 'An AI agent connected over MCP wants to run this run configuration:', String(args.configurationName))))
-          r = { text: 'The person chose not to run it.', isError: true };
+        // what runs the person's code or changes the repository is asked first
+        const asked = name === 'execute_run_configuration' ? ['MCP: run a configuration', 'An AI agent connected over MCP wants to run this run configuration:', String(args.configurationName), 'Run']
+          : name === 'start_debugger_session' ? ['MCP: debug', 'An AI agent connected over MCP wants to start this under the debugger:', String(args.configurationName ?? args.filePath ?? ''), 'Debug']
+          : name === 'commit_changes' ? ['MCP: commit', 'An AI agent connected over MCP wants to commit to Git:', `${args.message}\n\n${args.paths ? String(args.paths) : 'Every changed file'}`, 'Commit']
+          : name === 'checkout_git_branch' ? ['MCP: switch branch', 'An AI agent connected over MCP wants to switch the project to this branch:', String(args.name), 'Switch']
+          : null;
+        if (asked && !(await confirm(w, ...asked)))
+          r = { text: `The person chose not to ${asked[3].toLowerCase()} it.`, isError: true };
         else {
           const { projectPath, ...rest } = args;
           // a project still opening sets its tools up last: waited for, up to 30 seconds

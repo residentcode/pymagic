@@ -59,6 +59,18 @@ await run('configs', async ({ page, open, settled, state }) => {
     assert.equal((await state()).used, 'tsconfig.node.json');
     assert.ok(vite.some((x) => /^1: Cannot find name 'document'/.test(x)), vite.join(' | '));
     assert.ok(vite.includes("2: Type 'null' is not assignable to type 'string'."));
+    // the app's file, open but not in the editor now, keeps its own config's findings (the DOM is known there): both configs at once
+    const ofMain = () => page.evaluate(`window.pymagic.monaco.editor.getModelMarkers({ resource: window.pymagic.monaco.Uri.parse('pymagic:/src/main.ts'), owner: 'typescript' }).filter((m) => m.severity === 8).map((m) => m.startLineNumber + ': ' + m.message.split('\\n')[0]).sort()`);
+    let behind = null;
+    for (let i = 0; i < 40; i++) {
+        behind = await ofMain();
+        if (behind.length === 3 && !behind.some((x) => /document/.test(x))) break;
+        await sleep(1000);
+    }
+    console.log('src/main.ts behind vite.config.ts:', behind, 'services of other configs:', (await state()).otherServices);
+    assert.deepEqual(behind, main);
+    assert.equal((await state()).otherServices, 1);
+    assert.ok((await settled((m) => m.length > 0)).some((x) => /^1: Cannot find name 'document'/.test(x)), 'vite.config.ts keeps its own');
     // back to the app's file: its config again, document known
     await open('src/main.ts');
     const again = await settled((m) => m.length === 3 && !m.some((x) => /document/.test(x)));
