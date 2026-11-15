@@ -713,6 +713,16 @@ public sealed partial class TypeEvaluator
                  ?? targets.FirstOrDefault(t => t.Problems.Count == 0);
         if (pick != null) return pick;
         var typed = targets.Where(t => t.Problems.All(p => p.Kind != CallProblemKind.Arity)).ToList();
+        // no overload takes the call, but the function itself does (its overloads leave out a way it is called, as bs4's find(attrs={...})
+        // with no name): not told; the call returns what the one overload taking the arguments' count returns, else what the function does
+        // (only a function whose parameters say their types: one without them takes anything, and would hide a mistake the overloads see)
+        if (o.Implementation is { Info.Node: FunctionDef { Params: var ps } } && ps.Skip(o.Implementation.Info.Owner != null && !o.Implementation.Info.IsStatic ? 1 : 0).All(x => x.Annotation != null))
+        {
+            var loose = new List<CallProblem>();
+            var whole = CallFunction(o.Implementation, args, callNode, loose);
+            if (whole.Problems.Count == 0 && loose.Count == 0)
+                return typed.Count == 1 ? typed[0] with { Problems = Array.Empty<CallProblem>() } : whole;
+        }
         if (typed.Count >= 2) return UnexpectedTypes(typed, args, callNode);
         if (typed.Count == 1) return typed[0];
         return new CallTarget(o, PyType.Unknown, Array.Empty<ArgumentMapping>(),
@@ -883,7 +893,7 @@ public sealed partial class TypeEvaluator
             var withoutCls = MapMembers(BoundMember(@new!, receiver, true), t => t switch
             {
                 FunctionType f => f with { BoundFirst = true },
-                OverloadedType o => new OverloadedType(o.Overloads.Select(f => f with { BoundFirst = true }).ToList()),
+                OverloadedType o => new OverloadedType(o.Overloads.Select(f => f with { BoundFirst = true }).ToList(), o.Implementation == null ? null : o.Implementation with { BoundFirst = true }),
                 SignatureType { Origin: not null, Params: [{ Category: ParamCategory.PositionalOnly or ParamCategory.Normal }, ..] } s => s with { Params = s.Params.Skip(1).ToList() },
                 _ => t,
             });

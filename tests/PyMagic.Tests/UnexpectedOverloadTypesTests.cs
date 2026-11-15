@@ -82,4 +82,22 @@ public class UnexpectedOverloadTypesTests
             + "f([], 1)\nf(x='s', y=[1])\nOpt('d', [])\n";
         Assert.Equal(0, Found(src).Count);
     }
+
+    // bs4's Tag.find (4.13 and later, inline types): find(attrs={...}) with no name fits none of its overloads (the one for attrs wants a name)
+    const string Find = "from typing import Optional, Union, overload\n\n\nclass Tag:\n"
+        + "    @overload\n    def find(self, name: None = None, attrs: None = None, *, string: str) -> str | None: ...\n"
+        + "    @overload\n    def find(self, name: None = None, attrs: None = None, string: None = None) -> 'Tag | None': ...\n"
+        + "    @overload\n    def find(self, name: None, attrs: dict[str, Union[str, bool]], string: Optional[str] = None) -> 'Tag | None': ...\n"
+        + "    @overload\n    def find(self, name: str, attrs: Optional[dict[str, Union[str, bool]]] = None) -> 'Tag | None': ...\n"
+        + "    def find(self, name: Optional[str] = None, attrs: Optional[dict[str, Union[str, bool]]] = None, string: Optional[str] = None) -> 'Tag | str | None':\n"
+        + "        return None\n\n\nsoup = Tag()\n";
+
+    [Fact]
+    public void ACallNoOverloadTakesButTheTypedFunctionItselfDoesIsNotTold()
+    {
+        // as PyCharm: the call is valid for the function; it returns what the overload for attrs does
+        Assert.Equal(0, Found(Find + "r = soup.find(attrs={'data-listing-view': True})\nr.find('a')\n").Count);
+        // a mistake the function itself does not take either is still told
+        Assert.True(Found(Find + "soup.find(attrs={'data-listing-view': 1.5})\n").Count > 0);
+    }
 }

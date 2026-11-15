@@ -510,20 +510,81 @@ public sealed partial class RunSession : IDisposable
             lock (_gate)
             {
                 _channel = stream;
-                if (breakpoints != null)
-                    foreach (var (file, lines) in breakpoints)
-                        WriteLocked(new JsonObject { ["type"] = "setBreakpoints", ["file"] = Path.GetFullPath(Path.Combine(root, file)), ["lines"] = JsonNode.Parse(lines.ToJsonString()) });
+                _channels.Add(stream);
+                SendBreakpointsLocked(root, breakpoints);
                 foreach (var line in _pending) WriteRawLocked(line);
                 _pending.Clear();
                 WriteLocked(new JsonObject { ["type"] = "go" });
             }
+            _ = Task.Run(() => AcceptChildren(token, root, breakpoints));
 
+            ReadDebugger(stream, reader);
+            // the helper hung up: close our end now (a tunnel through ssh keeps the session alive until both ends are closed)
+            EndConsoleRelay();
+            client.Dispose();
+        }
+        catch (IOException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    readonly List<Stream> _channels = new();   // the debugger's connections: the program's, then those of the Python programs it started
+
+    /// <summary>
+    /// The Python programs the debugged program starts (Django's and Flask's reloaders start it again as a child that serves the requests) run
+    /// under pm_debug.py too and connect here with the same token: each is given the breakpoints and settings in force, and the commands
+    /// go to the one that stopped last (else to the newest), until it hangs up.
+    /// </summary>
+    void AcceptChildren(string token, string root, IReadOnlyDictionary<string, JsonArray>? breakpoints)
+    {
+        while (true)
+        {
+            TcpClient client;
+            try { client = _listener!.AcceptTcpClient(); }
+            catch (Exception e) when (e is SocketException or ObjectDisposedException or InvalidOperationException or NullReferenceException) { return; }
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    var stream = client.GetStream();
+                    var reader = new StreamReader(stream, new UTF8Encoding(false));
+                    string? hello = reader.ReadLine();
+                    if (hello == null || JsonNode.Parse(hello)?["token"]?.GetValue<string>() != token) { client.Dispose(); return; }
+                    lock (_gate)
+                    {
+                        _channels.Add(stream);
+                        _channel = stream;
+                        SendBreakpointsLocked(root, breakpoints);
+                        foreach (var json in _sticky.Values) WriteRawLocked(json);   // what the page changed since the start
+                        WriteLocked(new JsonObject { ["type"] = "go" });
+                    }
+                    ReadDebugger(stream, reader);
+                }
+                catch (Exception e) when (e is IOException or ObjectDisposedException or System.Text.Json.JsonException) { }
+                finally { client.Dispose(); }
+            });
+        }
+    }
+
+    void SendBreakpointsLocked(string root, IReadOnlyDictionary<string, JsonArray>? breakpoints)
+    {
+        if (breakpoints != null)
+            foreach (var (file, lines) in breakpoints)
+                WriteLocked(new JsonObject { ["type"] = "setBreakpoints", ["file"] = Path.GetFullPath(Path.Combine(root, file)), ["lines"] = JsonNode.Parse(lines.ToJsonString()) });
+    }
+
+    /// <summary>Tells the page what one of the debugger's connections says, until it hangs up.</summary>
+    void ReadDebugger(Stream stream, StreamReader reader)
+    {
+        try
+        {
             string? text;
             while ((text = reader.ReadLine()) != null)
             {
                 var msg = JsonNode.Parse(text);
                 if (msg == null) continue;
                 if (TakeConsoleDebugMessage(msg)) continue;   // the debugger of a console elsewhere, on its way to the debug server
+                // the program that stops is the one the page's commands are for (stepping, variables) while it is stopped
+                if (msg["type"]?.GetValue<string>() == "stopped") lock (_gate) { if (_channels.Contains(stream)) _channel = stream; }
                 // the debugger names files as its target does (/mnt/c/proj/a.py in WSL): the editor knows them as paths of this machine
                 if (!Target.IsLocal)
                 {
@@ -535,13 +596,16 @@ public sealed partial class RunSession : IDisposable
                 }
                 _emit(msg);
             }
-            // the helper hung up: close our end now (a tunnel through ssh keeps the session alive until both ends are closed)
-            EndConsoleRelay();
-            lock (_gate) { try { _channel?.Dispose(); } catch (IOException) { } _channel = null; }
-            client.Dispose();
         }
-        catch (IOException) { }
-        catch (ObjectDisposedException) { }
+        finally
+        {
+            lock (_gate)
+            {
+                _channels.Remove(stream);
+                if (_channel == stream) _channel = _channels.LastOrDefault();
+                try { stream.Dispose(); } catch (IOException) { }
+            }
+        }
     }
 
     void WriteLocked(JsonNode msg)
@@ -601,7 +665,11 @@ public sealed partial class RunSession : IDisposable
                         if (type == "consoleAttach") PrepareConsoleAttachLocked(msg);
                         string json = msg.ToJsonString();
                         if (_serving) { RememberLocked(type!, msg, json); SendToProgramsLocked(type!, json); }
-                        else if (_channel == null) _pending.Add(json); else WriteRawLocked(json);
+                        else
+                        {
+                            RememberLocked(type!, msg, json);   // a Python program the program starts later is told it too (AcceptChildren)
+                            if (_channel == null) _pending.Add(json); else WriteRawLocked(json);
+                        }
                     }
                 }
                 break;
@@ -636,6 +704,8 @@ public sealed partial class RunSession : IDisposable
         lock (_gate)
         {
             try { _listener?.Stop(); } catch (SocketException) { }
+            foreach (var c in _channels.ToList()) { try { c.Dispose(); } catch (IOException) { } }
+            _channels.Clear();
             try { _channel?.Dispose(); } catch (IOException) { }
             _channel = null;
         }

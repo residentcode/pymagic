@@ -454,7 +454,8 @@ public sealed partial class TypeEvaluator
     {
         var types = decls.Select(d => TypeOfDeclaration(m, d)).ToList();
         var overloads = types.OfType<FunctionType>().Where(f => (f.Info.Flags & FuncFlags.Overload) != 0).ToList();
-        if (overloads.Count > 0) return new OverloadedType(overloads);
+        if (overloads.Count > 0)
+            return new OverloadedType(overloads, m.IsStub ? null : types.OfType<FunctionType>().LastOrDefault(f => (f.Info.Flags & FuncFlags.Overload) == 0));
         // property: prefer the getter over setters/deleters
         var getter = types.OfType<FunctionType>().FirstOrDefault(f => f.Info.IsProperty && (f.Info.Flags & FuncFlags.PropertySetter) == 0);
         if (getter != null) return getter;
@@ -780,8 +781,11 @@ public sealed partial class TypeEvaluator
     });
 }
 
-/// <summary>Several @overload signatures of one function.</summary>
-public sealed record OverloadedType(IReadOnlyList<FunctionType> Overloads) : PyType
+/// <summary>
+/// Several @overload signatures of one function. <see cref="Implementation"/>: the function's own def after them, when it is read from
+/// source (a package's .py file, not a stub): a call no overload takes but it does is not told as a mistake (bs4's find(attrs={...})).
+/// </summary>
+public sealed record OverloadedType(IReadOnlyList<FunctionType> Overloads, FunctionType? Implementation = null) : PyType
 {
     public bool Equals(OverloadedType? o) => o != null && Overloads.SequenceEqual(o.Overloads);
     public override int GetHashCode() => Overloads.Count;

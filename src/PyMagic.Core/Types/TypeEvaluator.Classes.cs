@@ -600,7 +600,8 @@ public sealed partial class TypeEvaluator
                     // overloads that pick by an explicit self (`def get(self: Box[int]) -> int`): those the receiver is not are left out
                     var fitting = receiverIsInstance && receiver is ClassType ? o.Overloads.Where(f => SelfAccepts(f, receiver)).ToList() : o.Overloads.ToList();
                     if (fitting.Count == 0) fitting = o.Overloads.ToList();
-                    return new OverloadedType(fitting.Select(f => (FunctionType)BindFunction(f, subst, receiverIsInstance, allowProperty: false)).ToList());
+                    return new OverloadedType(fitting.Select(f => (FunctionType)BindFunction(f, subst, receiverIsInstance, allowProperty: false)).ToList(),
+                        o.Implementation == null ? null : BindFunction(o.Implementation, subst, receiverIsInstance, allowProperty: false) as FunctionType);
                 }
                 case SignatureType { Origin.BoundFirst: false } s: return BindSignature(s, subst, receiverIsInstance);
                 default: return Substitute(t, subst);

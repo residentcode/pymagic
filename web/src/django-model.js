@@ -2,7 +2,7 @@
 // [label, arguments, debug, hint]
 export const COMMANDS = [
     ['Run server', ['runserver'], false, 'manage.py runserver'],
-    ['Debug server', ['runserver', '--noreload'], true, 'manage.py runserver --noreload, under the debugger: breakpoints in your views stop the request (the reloader would start a second process the debugger does not see)'],
+    ['Debug server', ['runserver', '--noreload'], true, 'manage.py runserver --noreload, under the debugger: breakpoints in your views stop the request'],
     ['migrate', ['migrate'], false, 'Apply the migrations'],
     ['makemigrations', ['makemigrations'], false, 'Create migrations for the changes of the models'],
     ['Missing migrations?', ['makemigrations', '--check', '--dry-run'], false, 'Changes nothing: fails when the models have changes without a migration'],

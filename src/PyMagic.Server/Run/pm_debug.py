@@ -1267,17 +1267,19 @@ class Debugger(bdb.Bdb):
 
     # ---------------------------------------------------------------- running the program
 
-    def run_script(self, path, script_args, package=None, add_folder=True):
-        with open(path, "rb") as f:
-            source = f.read()
+    def run_script(self, path, script_args, package=None, add_folder=True, source=None):
+        """Runs a file (or, with `source`, python -c's code, named "<string>") as the program's __main__."""
+        if source is None:
+            with open(path, "rb") as f:
+                source = f.read()
         code = compile(source, path, "exec")
-        sys.argv = [path] + script_args
+        sys.argv = (["-c"] if path == "<string>" else [path]) + script_args
         if add_folder:
             sys.path.insert(0, os.path.dirname(path))
         # the program's own __main__ module, as python gives it: code that reaches its globals through sys.modules["__main__"]
         # (enum.global_enum, pickle, doctest) must not find this helper's
         main_module = types.ModuleType("__main__")
-        main_module.__dict__.update({"__file__": path, "__builtins__": builtins, "__package__": package})
+        main_module.__dict__.update({"__builtins__": builtins, "__package__": package, **({} if path == "<string>" else {"__file__": path})})
         sys.modules["__main__"] = main_module
         globs = main_module.__dict__
 
@@ -1418,6 +1420,73 @@ def connect(host, port, token="", root=None, sock=None):
     return dbg
 
 
+# ---------------------------------------------------------------- Python programs the program starts
+
+PYTHON_NAME = re.compile(r"^python([0-9]+([.][0-9]+)*)?w?([.]exe)?$", re.IGNORECASE)
+
+
+def python_command(argv):
+    """What a command that starts Python runs: (the interpreter with its own options, "script" / "-m" / "-c", the file, module or
+    code, its arguments); None for any other program, and for Python reading stdin or starting its prompt."""
+    if not argv:
+        return None
+    exe = os.fspath(argv[0])
+    if not PYTHON_NAME.match(os.path.basename(exe)) and os.path.normcase(os.path.abspath(exe)) != os.path.normcase(sys.executable):
+        return None
+    words = [os.fspath(a) for a in argv]
+    interpreter, i = [words[0]], 1
+    while i < len(words):
+        word = words[i]
+        if word in ("-W", "-X"):
+            interpreter += words[i:i + 2]
+            i += 2
+            continue
+        if word in ("-m", "-c"):
+            return (interpreter, word, words[i + 1], words[i + 2:]) if i + 1 < len(words) else None
+        if word[:2] in ("-m", "-c") and len(word) > 2 and not word.startswith("--"):
+            return interpreter, word[:2], word[2:], words[i + 1:]
+        if word == "--":
+            i += 1
+            break
+        if word == "-" or not word.startswith("-"):
+            break
+        if word[:2] in ("-W", "-X"):   # -Wignore::DeprecationWarning, -Xutf8: one word
+            interpreter.append(word)
+            i += 1
+            continue
+        if "c" in word[1:] or "m" in word[1:] or word.startswith("--"):
+            return None   # -uc "code", --help: left as they are
+        interpreter.append(word)
+        i += 1
+    if i >= len(words) or words[i] == "-":
+        return None
+    return interpreter, "script", words[i], words[i + 1:]
+
+
+def follow_children(lead):
+    """Python programs the program starts with subprocess (Django's and Flask's reloaders start the program again as a child of their
+    own, the one that serves the requests) run under this debugger too: they connect to the host as this one did, with `lead`
+    (--port, --token, --root...), and their breakpoints stop as the program's do. Other programs start as they are."""
+    import subprocess
+    helper = os.path.abspath(__file__)
+    original = subprocess.Popen.__init__
+    if getattr(original, "_pm_follows", False):
+        return
+
+    def __init__(self, args, *rest, **kwargs):
+        try:
+            found = python_command(list(args)) if isinstance(args, (list, tuple)) and not kwargs.get("shell") and not kwargs.get("executable") else None
+        except Exception:
+            found = None
+        if found is not None:
+            interpreter, kind, what, program_args = found
+            option = {"script": "--script", "-m": "--module", "-c": "--command"}[kind]
+            args = interpreter + [helper] + lead + ["--child", option, what, "--"] + program_args
+        original(self, args, *rest, **kwargs)
+    __init__._pm_follows = True
+    subprocess.Popen.__init__ = __init__
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, required=True)
@@ -1428,6 +1497,8 @@ def main():
     parser.add_argument("--module", help="or the module to run, as python -m does")
     parser.add_argument("--all-code", action="store_true", help="also step into library code")
     parser.add_argument("--tests", help="or PyMagic's test runner (pm_tests.py), whose results go through this connection")
+    parser.add_argument("--command", help="or the code to run, as python -c does")
+    parser.add_argument("--child", action="store_true", help="started by the debugged program (follow_children): it keeps its working folder")
     parser.add_argument("args", nargs="*")
     options = parser.parse_args()
 
@@ -1445,7 +1516,10 @@ def main():
     dbg.reader_ident = reader.ident
     dbg.go.wait()
 
-    os.chdir(options.root)
+    lead = ["--port", str(options.port), "--host", options.host, "--token", options.token, "--root", options.root] + (["--all-code"] if options.all_code else [])
+    follow_children(lead)
+    if not options.child:
+        os.chdir(options.root)
     if options.tests:
         # the test runner's messages (collected, testStarted, testResult) share this helper's connection
         class TestChannel(types.ModuleType):
@@ -1457,6 +1531,9 @@ def main():
         channel.go.set()
         sys.modules["pymagic_test_channel"] = channel
         code = dbg.run_script(os.path.abspath(options.tests), ["--port", "0", "--token", "-", "--root", options.root] + options.args)
+    elif options.command is not None:
+        sys.path.insert(0, "")
+        code = dbg.run_script("<string>", options.args, add_folder=False, source=options.command)
     elif options.module:
         # python -m: the module's file (a package's __main__), run as __main__ of its package, with the folder the run starts in first on sys.path
         import importlib.util
