@@ -69,7 +69,12 @@ const output = (page) => page.evaluate(`${$('output')}.textContent`);
         await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x - 40, y: at.y + 60 });
         await sleep(100);
         await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y });
-        const popup = await page.waitFor(`document.querySelectorAll('.value-popup li > div').length > 3 && [...document.querySelectorAll('.value-popup li > div')].map((d) => d.textContent.replace(/\\s+/g, ' ').trim())`, 15000, 'the value popup');
+        // a mouse that arrives while the line is drawn again (its inline values coming) is taken for one that left the editor; a person's
+        // mouse moves again, so a small move follows when nothing shows
+        const popupRows = `document.querySelectorAll('.value-popup li > div').length > 3 && [...document.querySelectorAll('.value-popup li > div')].map((d) => d.textContent.replace(/\\s+/g, ' ').trim())`;
+        if (!(await page.waitFor(popupRows, 4000, 'the value popup').catch(() => null)))
+            await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x + 2, y: at.y });
+        const popup = await page.waitFor(popupRows, 15000, 'the value popup');
         console.log('value popup of items:', popup.slice(0, 5));
         assert.match(popup[0], /items = \[10, 20, 12\] Array/);
         assert.ok(popup.some((r) => /^0 = 10 number/.test(r.replace(/^[▸▾]\s*/, ''))), 'its first item');
@@ -142,9 +147,19 @@ const output = (page) => page.evaluate(`${$('output')}.textContent`);
         console.log('package.json lenses:', lenses);
         assert.deepEqual(lenses, ['▶ Run', 'Debug']);
         // a click as a person makes it (Monaco's lenses answer the mouse, not an element's click())
-        const lens = await page.evaluate(`(() => { ${$('output')}.textContent = ''; const r = [...document.querySelectorAll('.codelens-decoration a')].find((a) => a.textContent.trim() === '▶ Run').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+        // (the lenses fade in and are drawn again once their commands come: a click is made once they stay where they are, and again when the
+        // first one landed on a lens being drawn again)
+        const lensAt = `(() => { const a = [...document.querySelectorAll('.codelens-decoration a')].find((x) => x.textContent.trim() === '▶ Run'); if (!a) return null; const r = a.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`;
+        await sleep(1500);
+        await page.evaluate(`${$('output')}.textContent = ''`);
+        const started = `(() => { const m = /listening on (\\d+)/.exec(${$('output')}.textContent); return m ? ${$('output')}.textContent : null; })()`;
+        let lens = await page.evaluate(lensAt);
         await page.click(lens.x, lens.y);
-        const again = await page.waitFor(`(() => { const m = /listening on (\\d+)/.exec(${$('output')}.textContent); return m ? ${$('output')}.textContent : null; })()`, 60000, 'npm start from the lens');
+        if (!(await page.waitFor(`${$('output')}.textContent.trim().length > 0`, 8000, 'the lens run').catch(() => null))) {
+            lens = await page.evaluate(lensAt);
+            await page.click(lens.x, lens.y);
+        }
+        const again = await page.waitFor(started, 60000, 'npm start from the lens');
         console.log('▶ Run of the start script:', JSON.stringify(again.trim().split('\n').slice(0, 4)));
         assert.match(again, /> node app\.js/);
         await page.evaluate(`${$('b-stop')}.click()`);

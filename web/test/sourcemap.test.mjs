@@ -29,6 +29,9 @@ test("the bundlers' names of sources are the project's files", () => {
     assert.equal(sourceFile('../src/a.ts', '', mapFile, ROOT), join(ROOT, 'src', 'a.ts'));
     assert.equal(sourceFile('App.tsx', '', 'http://localhost:5173/src/App.tsx', ROOT), join(ROOT, 'src', 'App.tsx'));
     assert.equal(sourceFile('a.ts', 'src', mapFile, ROOT), join(ROOT, 'dist', 'src', 'a.ts'));
+    // a script named by its path (Vite's server-side modules, with an inline map): beside it, not under the project's root
+    const scriptPath = process.platform === 'win32' ? 'C:/proj/src/routes/dbg/+page.server.ts' : '/proj/src/routes/dbg/+page.server.ts';
+    assert.equal(sourceFile('+page.server.ts', undefined, scriptPath, ROOT), join(ROOT, 'src', 'routes', 'dbg', '+page.server.ts'));
 });
 
 const TS = [

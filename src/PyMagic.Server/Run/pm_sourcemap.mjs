@@ -69,6 +69,10 @@ export function sourceFile(name, sourceRoot, mapUrl, root) {
     if (mapUrl && /^https?:\/\//.test(mapUrl)) {
         try { return join(root, decodeURIComponent(new URL(s, mapUrl).pathname).replace(/^\/(@fs\/)?/, '')); } catch { return null; }
     }
+    // a script named by its path (Vite's server-side modules: C:/app/src/routes/+page.server.ts, its inline map naming "+page.server.ts")
+    if (mapUrl && (/^[A-Za-z]:[\\/]/.test(mapUrl) || (process.platform !== 'win32' && mapUrl.startsWith('/')))) {
+        try { return resolve(dirname(mapUrl), s); } catch { return null; }
+    }
     if (s.startsWith('/') && process.platform === 'win32') return join(root, s);
     return isAbsolute(s) ? s : join(root, s);
 }

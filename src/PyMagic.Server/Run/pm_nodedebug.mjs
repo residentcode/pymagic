@@ -707,8 +707,20 @@ class Session {
             }
         }
         this.stepsSkipped = 0;
-        // a hit condition is counted here: a stop it does not allow goes on at once
         const hitIds = params.hitBreakpoints ?? [];
+        // a file run under its own name after a tool changed it (Vite's server-side modules: a SvelteKit +page.server.ts, an Astro page, run by
+        // Vite with a map back to the file): the breakpoint set by the file's name and line is on a line of the changed code, not of the
+        // file; the ones set through its map are where the file's lines are, so a stop of only the former goes on
+        if (hitIds.length && top) {
+            const prepared = this.maps.get(top.location.scriptId);
+            const own = fileOf(this.scripts.get(top.location.scriptId) ?? '');
+            const mapped = new Set(this.mapIds.get(top.location.scriptId) ?? []);
+            if (prepared && own && prepared.bySource.has(canonical(own)) && hitIds.every((id) => !mapped.has(id))) {
+                await this.cdp('Debugger.resume').catch(() => {});
+                return;
+            }
+        }
+        // a hit condition is counted here: a stop it does not allow goes on at once
         if (hitIds.length) {
             let stop = false, counted = false;
             for (const id of hitIds) {
