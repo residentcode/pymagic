@@ -47,7 +47,7 @@
 #watch-log .q { color: var(--dim); } #watch-log .e { color: var(--red); }
 #watch-in { border: 0; border-top: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 5px 8px; font: 12.5px Consolas, monospace; outline: none; }
 .bp-glyph { background: var(--red); border-radius: 50%; width: 11px !important; height: 11px !important; margin: 4px 0 0 5px; }
-.debug-line { background: var(--sel-soft); }
+.debug-line { background: var(--debug-line); box-shadow: inset 3px 0 0 var(--amber); }
 .debug-arrow { background: var(--amber); clip-path: polygon(0 20%, 60% 20%, 60% 0, 100% 50%, 60% 100%, 60% 80%, 0 80%); width: 12px !important; height: 12px !important; margin: 3px 0 0 4px; }
 #tree-col { width: 46%; } #detail-col { flex: 1; }
 #tests-bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 3px 6px; background: var(--panel); border-bottom: 1px solid var(--line); }

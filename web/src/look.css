@@ -42,6 +42,8 @@
   --hover3: rgba(255, 255, 255, .14);
   --sel: rgba(138, 107, 255, .26);
   --sel-soft: rgba(138, 107, 255, .15);
+  /* the line the debugger stopped at: its own colour, seen at once (the arrow's amber) */
+  --debug-line: rgba(255, 200, 97, .24);
   --shadow: 0 14px 40px rgba(2, 3, 9, .62);
   --shadow-sm: 0 6px 18px rgba(2, 3, 9, .5);
 
@@ -385,6 +387,7 @@ input[type=checkbox]:checked::after { content: ""; position: absolute; left: 3.5
   --hover3: rgba(24, 28, 56, .13);
   --sel: rgba(106, 77, 240, .18);
   --sel-soft: rgba(106, 77, 240, .1);
+  --debug-line: rgba(255, 184, 0, .32);
   --shadow: 0 14px 40px rgba(30, 36, 80, .22);
   --shadow-sm: 0 6px 18px rgba(30, 36, 80, .18);
 }

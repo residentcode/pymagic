@@ -47,7 +47,8 @@ export const DEFAULTS = {
     grammar: false,           // sentences of comments, docstrings, Markdown and commit messages checked by LanguageTool (downloaded once, with a yes)
     grammarLanguage: 'en-US', // the language LanguageTool checks in
     spelling: true,           // typos in comments, strings, names and Markdown, marked as hints (Windows' own spell checker)
-    strictUnions: true,       // a union argument fits only when every member does (PyCharm 2026.1's default); off: when one member does
+    focusOnStop: true,        // a stop of the debugger (a breakpoint, an exception) brings the window up, restored when minimized (PyCharm's "Focus application on breakpoint")
+    strictUnions: true,      // a union argument fits only when every member does (PyCharm 2026.1's default); off: when one member does
     templates: cleanConf(null), // Settings > Templates: the key that expands, the templates switched off or edited, the person's own (live-templates-model.js)
     quotes: 'single',        // single | double | preserve: the quotes the formatter gives strings when the project's pyproject.toml, ruff.toml or .editorconfig does not say
 };

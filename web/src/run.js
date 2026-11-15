@@ -10,6 +10,11 @@ import { colouredSpans } from './terminal';
 import { inlineLines, inlineText, callsOn, expressionAt, phpExpressionAt, stackText, functionBreakpoint, childExpression, readWatches, moveItem, declarationLine, historyStep, framesOfStop, threadHeadings, serverProgramNote } from './debug-model.js';
 import { openMenu } from './menu';
 import { toast } from './toast';
+import { settings } from './settings';
+
+// the line the debugger stopped at: its colour, the arrow in the margin, and a mark on the scrollbar and the minimap, to be seen at once
+const STOP_LINE = { isWholeLine: true, className: 'debug-line', glyphMarginClassName: 'debug-arrow', stickiness: 1,
+    overviewRuler: { color: '#ffc861', position: 7 }, minimap: { color: '#ffc861', position: 1 } };
 import { linkPieces } from './tracelink-model.js';
 import { defineCommand } from './commands.js';
 import { scriptEntries, isPackageJson, folderOf as npmFolderOf } from './npm-model.js';
@@ -329,7 +334,7 @@ export function setupRun(deps) {
         if (cell) {
             const ids = cell.model.deltaDecorations([], [{
                     range: new monaco.Range(f.line, 1, f.line, 1),
-                    options: { isWholeLine: true, className: 'debug-line', glyphMarginClassName: 'debug-arrow' },
+                    options: STOP_LINE,
                 }]);
             currentLine = { model: cell.model, ids };
             void showInline(f, cell.model);
@@ -340,7 +345,7 @@ export function setupRun(deps) {
             if (model) {
                 const ids = model.deltaDecorations([], [{
                         range: new monaco.Range(f.line, 1, f.line, 1),
-                        options: { isWholeLine: true, className: 'debug-line', glyphMarginClassName: 'debug-arrow' },
+                        options: STOP_LINE,
                     }]);
                 currentLine = { model, ids };
                 editor.revealLineInCenterIfOutsideViewport(f.line);
@@ -977,6 +982,9 @@ export function setupRun(deps) {
                 stoppedThread = m.thread ?? null;
                 stops++;
                 lastStop = { reason: m.reason ?? null, message: m.message ?? null };
+                // the window comes up (Settings > System), as PyCharm's "Focus application on breakpoint"
+                if (m.reason !== 'pause')
+                    window.__pmLastStopFocus = window.pymagicDesktop?.debugStopped?.(settings().focusOnStop !== false)?.catch?.(() => null);
                 if (m.reason === 'pause')
                     append('Paused\n', 'info');
                 if (m.reason === 'data')

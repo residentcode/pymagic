@@ -43,4 +43,6 @@ contextBridge.exposeInMainWorld('pymagicDesktop', {
   mcpStatus: () => ipcRenderer.invoke('pymagic:mcp-status'),
   mcpSet: (patch) => ipcRenderer.invoke('pymagic:mcp-set', patch && typeof patch === 'object' ? { ...patch } : {}),
   mcpConfigure: (id) => ipcRenderer.invoke('pymagic:mcp-configure', String(id)),
+  // the debugger stopped: the window comes up (restored when minimized), or with bringUp false only its taskbar button flashes
+  debugStopped: (bringUp) => ipcRenderer.invoke('pymagic:debug-stopped', !!bringUp),
 });

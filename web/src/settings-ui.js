@@ -74,6 +74,7 @@ const PAGES = [
         { key: 'previewTab', label: 'Preview tab', type: 'bool', hint: 'A file opened with one click in the project tree replaces the one opened so before (its name in italics) until it is edited or double-clicked.' },
     ]],
     ['system', 'System', [
+        { key: 'focusOnStop', label: 'Bring PyMagic to the front when the debugger stops', type: 'bool', hint: 'At a breakpoint or an exception the window comes up, restored when it was minimized. Off: only its taskbar button flashes.' },
         { key: 'openProjectIn', label: 'Open project in', type: 'choice', options: OPEN_PROJECT_IN, hint: 'Where a project opened from the menu, the recent projects or New Project goes. Ask shows the Open Project dialog, whose "Don\'t ask again" sets this.' },
     ]],
     ['files', 'Files', [

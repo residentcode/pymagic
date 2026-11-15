@@ -311,6 +311,28 @@ async function chooseFolder(w) {
 }
 
 /** The window a request of a page came from (a tab opened in a window of its own belongs to the window whose engine it uses). */
+/**
+ * The debugger stopped in this window: it comes up in front, restored when minimized (Windows lets a program in the background only flash
+ * its taskbar button, so it is put on top for a moment), or with bringUp false its taskbar button flashes until it is looked at. The e2e
+ * checks' windows (PYMAGIC_MINIMIZED) stay as they are: what would be done is only told back.
+ */
+function debugStopped(win, bringUp) {
+  if (!win || win.isDestroyed()) return { done: 'none' };
+  const was = { minimized: win.isMinimized(), focused: win.isFocused() };
+  if (was.focused && !was.minimized) return { done: 'none', ...was };
+  const done = bringUp ? 'bring-up' : 'flash';
+  if (minimized) return { done, test: true, ...was };
+  if (!bringUp) { win.flashFrame(true); win.once('focus', () => win.flashFrame(false)); return { done, ...was }; }
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.setAlwaysOnTop(true);
+  win.moveTop();
+  win.focus();
+  win.setAlwaysOnTop(false);
+  if (!win.isFocused()) { win.flashFrame(true); win.once('focus', () => win.flashFrame(false)); }
+  return { done, ...was };
+}
+
 function windowOf(sender) {
   const own = [...windows].find(w => w.win.webContents === sender);
   if (own) return own;
@@ -384,6 +406,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('pymagic:mcp-status', () => mcp.status());
   ipcMain.handle('pymagic:mcp-set', (_e, patch) => mcp.set(patch && typeof patch === 'object' ? { ...patch } : {}));
   ipcMain.handle('pymagic:mcp-configure', (_e, id) => ({ ...mcp.configure(String(id)), status: mcp.status() }));
+  ipcMain.handle('pymagic:debug-stopped', (e, bringUp) => debugStopped(windowOf(e.sender).win, !!bringUp));
   ipcMain.handle('pymagic:choose-folder', (e) => chooseFolder(windowOf(e.sender)));
   ipcMain.handle('pymagic:open-project', async (e, folder, where) => {
     if (typeof folder === 'string' && fs.existsSync(folder) && fs.statSync(folder).isDirectory())
