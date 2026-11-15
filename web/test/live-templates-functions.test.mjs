@@ -2,7 +2,7 @@
 // words' form, a text cut or a regular expression's replacement, and complete() for completion at the place.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toSnippet, preview, completeStops, EXPRESSIONS } from '../src/live-templates-model.js';
+import { toSnippet, preview, completeStops, EXPRESSIONS, contextAt } from '../src/live-templates-model.js';
 
 /** What the editor writes for a snippet's ${n/search/replacement/flags} when `typed` is in place n: the search and replacement read as it reads them. */
 function follows(snippet, typed) {
@@ -66,4 +66,30 @@ test('every form the page offers is one that is read', () => {
         const snippet = toSnippet('$a$ $b$', { b: { expr } });
         assert.notEqual(snippet, '${1:a} ${2:b}', form);
     }
+});
+
+test('user(), the class and function of the place, and concat()', () => {
+    const at = { user: 'pat', className: 'Shop', functionName: 'total' };
+    const vars = { a: { expr: 'user()' }, b: { expr: 'pyClassName()' }, c: { expr: 'pyFunctionName()', skip: true }, d: { expr: 'concat(date(), " by ", user())' } };
+    assert.equal(toSnippet('$a$ $b$ $c$ $d$', vars, at), '${1:pat} ${2:Shop} total ${3:${CURRENT_YEAR}-${CURRENT_MONTH}-${CURRENT_DATE} by pat}');
+    assert.equal(toSnippet('$a$', { a: { expr: 'jsMethodName()' } }, { functionName: 'add' }), '${1:add}');
+    assert.equal(toSnippet('$a$', { a: { expr: 'className()' } }, { className: 'A$b' }), '${1:A\\$b}');
+    assert.equal(preview('$a$ / $b$', { a: { expr: 'concat("by ", user())' }, b: { expr: 'methodName()' } }), 'by user / method');
+    // a place's name in concat, or arguments where none are taken: not read
+    for (const expr of ['concat(a, "x")', 'concat()', 'user(a)', 'concat(nothing())'])
+        assert.equal(toSnippet('$a$', { a: { expr } }, at), '${1:a}', expr);
+});
+
+test('the class and the function a place is in', () => {
+    const lines = (...l) => l;
+    const py = lines('class Shop:', '    def total(self, items):', '        x = 1', '        # a note', '', 'def free():', '    pass', '');
+    assert.deepEqual(contextAt(py, 2, 'python'), { className: 'Shop', functionName: 'total' });
+    assert.deepEqual(contextAt(py, 6, 'python'), { className: '', functionName: 'free' });
+    assert.deepEqual(contextAt(py, 7, 'python', 1), { className: '', functionName: '' });
+    assert.deepEqual(contextAt(lines('class A:', '    x = 1'), 1, 'python'), { className: 'A', functionName: '' });
+    const js = lines('class Cart {', '  add(item) {', '    if (x) {', '      y("}");', '    }', '    ', '  }', '}', 'const run = async () => {', '  go();', '};', 'function plain(a) {', '  b(); // {', '}');
+    assert.deepEqual(contextAt(js, 5, 'javascript', 5), { className: 'Cart', functionName: 'add' });
+    assert.deepEqual(contextAt(js, 9, 'typescript', 3), { className: '', functionName: 'run' });
+    assert.deepEqual(contextAt(js, 12, 'javascript', 3), { className: '', functionName: 'plain' });
+    assert.deepEqual(contextAt(js, 8, 'javascript', 1), { className: '', functionName: '' });
 });

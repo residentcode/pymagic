@@ -4,6 +4,7 @@
 // expands changed to Space, a template switched off, one edited and restored, one of the person's own added for CSS, and a group switched off.
 // Run: node desktop/e2e/livetemplates.check.mjs
 import assert from 'node:assert/strict';
+import { userInfo } from 'node:os';
 import { launch, project, sleep } from './app.mjs';
 
 const app = await launch(project({
@@ -187,6 +188,14 @@ try {
     await js(`document.querySelector('#lt-vars input[data-skip=file]').click();`);
     await setVar('name', 'lowerCase(Name)');
     assert.equal(await js(`return document.getElementById('lt-preview').textContent;`), '# views.py\nclass Name:\n    name = None');
+    // the place's own values: the user, the class and the function it is written in (concat of a text and one)
+    await addOwn('who', '# $a$ in $c$.$f$', 'python');
+    await js(`document.getElementById('lt-vars-button').click();`);
+    await setVar('a', 'concat("by ", user())');
+    await setVar('c', 'pyClassName()');
+    await setVar('f', 'pyFunctionName()');
+    for (const v of ['a', 'c', 'f']) await js(`document.querySelector('#lt-vars input[data-skip=${v}]').click();`);
+    assert.equal(await js(`return document.getElementById('lt-preview').textContent;`), '# by user in MyClass.method');
     await addOwn('msy', 'x=[ 1,2 ]', 'python');
     await js(`document.getElementById('lt-reformat').click();`);
     await addOwn('fori', 'for (;;) {}', 'javascript');
@@ -199,7 +208,7 @@ try {
     await selectTemplate('user', own);
     await js(`const g = document.getElementById('lt-group'); g.value = 'New group'; g.dispatchEvent(new Event('change'));`);
     assert.deepEqual(await js(`return [...document.querySelectorAll('#lt-tree .lt-group')].filter((g) => ['user', 'New group'].includes(g.dataset.group)).map((g) => g.dataset.group + ' ' + g.querySelector('.lt-count').textContent);`),
-        ['New group 1', 'user 2']);
+        ['New group 1', 'user 3']);
     // the project's own templates: one for SQL beside the Python one
     assert.deepEqual(await js(`return [...document.querySelectorAll('.tpl-row select')].map((s) => s.value);`), ['', 'sql']);
     await closeSettings();
@@ -210,6 +219,9 @@ try {
     await page.evaluate(`window.pymagic.editor.trigger('keyboard', 'hideSuggestWidget', {})`);
     await press('tab');
     assert.equal(await value(), '# main.py\nclass Shop:\n    shop = None');
+    const who = await expand('class Shop:\n    def total(self):\n        ', 'who');
+    console.log('who:', JSON.stringify(who));
+    assert.equal(who, `class Shop:\n    def total(self):\n        # by ${userInfo().username} in Shop.total`);
     await type('', 'msy');
     await press('tab');
     await page.waitFor(`window.pymagic.editor.getModel().getValue(1).trim() === 'x = [1, 2]'`, 10000, 'the template reformatted');

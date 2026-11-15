@@ -19,6 +19,40 @@ public class TsProjectTests
     }
 
     [Fact]
+    public void AReferencedProjectsBuiltDeclarationsAreGivenToo()
+    {
+        // packages/lib builds its declarations into dist (left out as a build folder), which the app imports by that path or as a package
+        string root = Project(new()
+        {
+            ["tsconfig.json"] = """{ "files": [], "references": [{ "path": "./packages/lib" }, { "path": "./app" }] }""",
+            ["packages/lib/tsconfig.json"] = """{ "compilerOptions": { "composite": true, "declaration": true, "outDir": "dist" }, "include": ["src"] }""",
+            ["packages/lib/package.json"] = """{ "name": "@acme/lib", "types": "dist/index.d.ts" }""",
+            ["packages/lib/src/index.ts"] = "export const twice = (n: number) => n * 2;\n",
+            ["packages/lib/dist/index.d.ts"] = "export declare const twice: (n: number) => number;\n",
+            ["packages/lib/dist/index.js"] = "built\n",
+            ["packages/lib/dist/deep/more.d.ts"] = "export declare const more: string;\n",
+            ["app/tsconfig.json"] = """{ "compilerOptions": { "outDir": "../build/app", "declarationDir": "types" }, "references": [{ "path": "../packages/lib" }] }""",
+            ["app/main.ts"] = "import { twice } from '../packages/lib/dist/index';\n",
+            ["build/app/main.js"] = "built\n",
+            ["dist/other.d.ts"] = "export declare const notOurs: 1;\n",
+        });
+        try
+        {
+            var paths = TsProject.Code(root).List.Select(f => f.Path).ToList();
+            Assert.True(paths.Contains("packages/lib/dist/index.d.ts"), "packages/lib/dist/index.d.ts is given");
+            Assert.True(paths.Contains("packages/lib/dist/deep/more.d.ts"), "packages/lib/dist/deep/more.d.ts is given");
+            Assert.True(paths.Contains("packages/lib/src/index.ts"), "packages/lib/src/index.ts is given");
+            Assert.True(paths.Contains("app/main.ts"), "app/main.ts is given");
+            // built JavaScript, and a dist no config builds into, are still left out
+            Assert.True(!paths.Contains("packages/lib/dist/index.js"), "packages/lib/dist/index.js is left out");
+            Assert.True(!paths.Contains("build/app/main.js"), "build/app/main.js is left out");
+            Assert.True(!paths.Contains("dist/other.d.ts"), "dist/other.d.ts is left out");
+            Assert.Equal(paths.Count, paths.Distinct().Count());
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void TheProjectsCodeConfigAndPackagesTypes()
     {
         string root = Project(new()

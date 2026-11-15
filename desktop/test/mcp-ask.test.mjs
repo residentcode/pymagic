@@ -26,6 +26,11 @@ const ASKING = [
     ['start_debugger_session', { filePath: 'main.py' }, 'Debug', /main\.py/],
     ['commit_changes', { message: 'Fix the total', paths: 'a.py' }, 'Commit', /Fix the total[\s\S]*a\.py/],
     ['checkout_git_branch', { name: 'release' }, 'Switch', /release/],
+    ['git_pull', { mode: 'rebase' }, 'Pull', /rebase/],
+    ['git_push', { forceWithLease: true }, 'Push', /force-with-lease/],
+    ['git_merge', { branch: 'feature', noFastForward: true }, 'Merge', /feature \(--no-ff\)/],
+    ['git_abort', {}, 'Abort', /abort/],
+    ['apply_quick_fix', { filePath: 'main.py', line: 1, title: "Install package 'requests'" }, 'Install', /requests[\s\S]*main\.py:1/],
 ];
 
 test('asked first, and refused: nothing reaches the project', async () => {

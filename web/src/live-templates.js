@@ -6,7 +6,7 @@ import * as monaco from 'monaco-editor';
 import { settings, onSettings } from './settings';
 import { openMenu } from './menu';
 import { readSnippets } from './codegen-model.js';
-import { allTemplates, cleanConf, matchesAt, offered, servedByServer, serverItems, toSnippet, preview, projectTemplates, completeStops } from './live-templates-model.js';
+import { allTemplates, cleanConf, matchesAt, offered, servedByServer, serverItems, toSnippet, preview, projectTemplates, completeStops, contextAt } from './live-templates-model.js';
 
 const reformatCommand = 'pymagic.liveTemplate.reformat';
 let server = null;          // the language server's built-in templates, once it has answered
@@ -58,6 +58,12 @@ function inCode(model, position) {
 const inTag = (before) => before.lastIndexOf('<') > before.lastIndexOf('>');
 const HTML_LIKE = new Set(['html', 'django-html', 'ejs', 'handlebars', 'twig', 'razor', 'blade', 'liquid', 'xml']);
 
+// the computer's user, for a template's user(): read once from the server
+let userName = '';
+fetch('/api/info').then((r) => (r.ok ? r.json() : null)).then((i) => { userName = i?.user ?? ''; }).catch(() => { });
+/** Where a template is written, for its user(), className() and methodName(). */
+const placeOf = (model, position) => ({ user: userName, ...contextAt(model.getLinesContent(), position.lineNumber - 1, model.getLanguageId(), position.column) });
+
 export function setupLiveTemplates(editor, { source, suggestions }) {
     serverSource = source;
     onSettings(rebuild);
@@ -78,15 +84,16 @@ export function setupLiveTemplates(editor, { source, suggestions }) {
             const before = model.getLineContent(position.lineNumber).slice(0, word.startColumn - 1);
             if (!inCode(model, position) || (HTML_LIKE.has(languageId) && inTag(before))) return { suggestions: [] };
             const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
+            const place = placeOf(model, new monaco.Position(position.lineNumber, word.startColumn));
             return {
                 suggestions: offered(templates, languageId, before).filter((t) => /^\w/.test(t.abbr)).map((t) => ({
                     label: t.abbr, kind: monaco.languages.CompletionItemKind.Snippet, detail: t.description || t.group,
                     documentation: { value: '```\n' + preview(t.body, t.vars) + '\n```' },
-                    insertText: toSnippet(t.body, t.vars), insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                    insertText: toSnippet(t.body, t.vars, place), insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
                     sortText: '3' + t.abbr, range,
                     // (a template to reformat is tidied once it is filled in)
                     command: t.reformat || completeStops(t.body, t.vars).length
-                        ? { id: reformatCommand, title: '', arguments: [t.reformat ? position.lineNumber : 0, toSnippet(t.body, t.vars).split('\n').length, completeStops(t.body, t.vars)] } : undefined,
+                        ? { id: reformatCommand, title: '', arguments: [t.reformat ? position.lineNumber : 0, toSnippet(t.body, t.vars, place).split('\n').length, completeStops(t.body, t.vars)] } : undefined,
                 })),
             };
         },
@@ -155,7 +162,7 @@ export function setupLiveTemplates(editor, { source, suggestions }) {
     /** Writes one template over its abbreviation; a language server's one through its completion (which may say it is not one for this place). */
     function expand(t, key, model, position) {
         editor.getContribution('editor.contrib.suggestController')?.cancelSuggestWidget?.();
-        if (!servedByServer(t)) { insert(toSnippet(t.body, t.vars), t.abbr.length, null, t.reformat, completeStops(t.body, t.vars)); return; }
+        if (!servedByServer(t)) { insert(toSnippet(t.body, t.vars, placeOf(model, position.delta(0, -t.abbr.length))), t.abbr.length, null, t.reformat, completeStops(t.body, t.vars)); return; }
         if (!suggestions) { plain(key); return; }
         const version = model.getVersionId();
         const sort = t.server === 'project' ? '3' : '4';

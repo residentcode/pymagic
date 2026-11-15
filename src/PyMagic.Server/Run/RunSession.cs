@@ -372,6 +372,14 @@ public sealed partial class RunSession : IDisposable
             args2.Add("--token"); args2.Add(token);
             args2.Add("--root"); args2.Add(root);
         }
+        else if (OperatingSystem.IsWindows() && Target.IsLocal && leading.SequenceEqual(new[] { "-m", "uvicorn" }) && args.Contains("--reload"))
+        {
+            // uvicorn's reloader ends its server by a Ctrl+C that a run here never gets: the helper (without the debugger) lets it end it
+            string helperPath = ExtractHelper(helper);
+            helperDirs.Add(Path.GetDirectoryName(helperPath)!);
+            args2.Add(helperPath);
+            args2.Add("--plain");
+        }
         foreach (var a in leading) { args2.Add(a); if (a.EndsWith(".py", StringComparison.OrdinalIgnoreCase) && Path.GetDirectoryName(a) is { Length: > 0 } d && d.StartsWith(Path.Combine(Path.GetTempPath(), "pymagic"), StringComparison.OrdinalIgnoreCase)
                 && !IsInside(d, root)) helperDirs.Add(d); }   // a project that lives in a folder named pymagic* of the temp folder is the project, not a helper
         args2.AddRange(args);

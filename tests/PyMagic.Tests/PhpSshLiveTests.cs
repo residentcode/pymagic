@@ -305,6 +305,20 @@ public class PhpSshLiveTests
     }
 
     [Fact]
+    public void PhpsLintThereFindsTheSyntaxErrorOfTheEditorsText()
+    {
+        if (Spec is not { } spec || PhpTools.FindPhp(null) != null) return;   // (a PHP of this computer would be asked first)
+        string dir = Project("lint");
+        var found = PhpLint.Lint(dir, spec, "<?php\n$total = 1;\n$x = ;\n$y = 2;\n");
+        Assert.True(found != null, "a finding");
+        Assert.Equal(3, found!.Line);
+        Assert.Contains("syntax error", found.Message);
+        // a text with quotes, dollars and non-ASCII letters goes there as it is: no error
+        Assert.True(PhpLint.Lint(dir, spec, "<?php\n$name = \"Zoë's \\$cost\";\necho `ls` . '$x' . \"\\n\";\n") == null, "no finding");
+        try { Directory.Delete(dir, true); } catch (IOException) { }
+    }
+
+    [Fact]
     public void PintThereFormatsTheEditorsText()
     {
         if (Spec is not { } spec || LaravelDir is not { } source || !File.Exists(Path.Combine(source, "vendor", "bin", "pint"))) return;

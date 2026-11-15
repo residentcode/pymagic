@@ -2,7 +2,7 @@
 // CSS and JavaScript blocks a hidden document each (embedded-model.js) that Monaco's CSS and TypeScript services check; their findings
 // are copied onto the template. Inside a <script> block the TypeScript service completes; inside <style> or style="" the CSS properties.
 import * as monaco from 'monaco-editor';
-import { embeddedDocument, inRegion, CSS_PROPERTIES, scriptIsTs, componentPrelude, keepFinding, withMarkupCode, vueScriptDocument, vueMarkupDocument, vueSpots, memberOffset, listedOffset, MEMBERS_AT } from './embedded-model.js';
+import { embeddedDocument, inRegion, CSS_PROPERTIES, scriptIsTs, componentPrelude, keepFinding, withMarkupCode, vueScriptDocument, vueMarkupDocument, vueSpots, memberOffset, listedOffset, MEMBERS_AT, vueImports, vueProps, vuePropChecks, PROPS_AT } from './embedded-model.js';
 
 // the templates that get this, and how their expressions are read inside code (Blade's own: {!! !!}, @json, directives)
 const TEMPLATES = { 'django-html': 'django', twig: 'django', blade: 'blade' };
@@ -35,7 +35,36 @@ export function setupEmbedded() {
         return withMarkupCode(text, out, kind) + componentPrelude(kind, out);
     };
     /** A Vue component's markup document: its expressions, with the names of the script's document (named without its extension). */
-    const markupDoc = (text, js) => vueMarkupDocument(text, js.uri.path.split('/').pop().replace(/\.(ts|js)$/, ''), js.getLanguageId() === 'typescript');
+    const markupDoc = (text, js, props) => vueMarkupDocument(text, js.uri.path.split('/').pop().replace(/\.(ts|js)$/, ''), js.getLanguageId() === 'typescript', props);
+    // the components a component imports: their files' text (the editor's when one is open), read again after a while, for their props
+    const childTexts = new Map();   // project path -> { text, at }
+    function propsFor(model, text) {
+        const out = {};
+        const dir = decodeURIComponent(model.uri.path).replace(/^\//, '').replace(/[^/]*$/, '');
+        for (const from of Object.values(vueImports(text))) {
+            if (!/^\.\.?\//.test(from)) continue;
+            const parts = [];
+            for (const part of (dir + from).split('/')) { if (part === '..') parts.pop(); else if (part && part !== '.') parts.push(part); }
+            const path = parts.join('/');
+            const open = monaco.editor.getModel(model.uri.with({ path: '/' + path }));
+            let childText = open?.getValue();
+            if (childText === undefined) {
+                const known = childTexts.get(path);
+                if (!known || Date.now() - known.at > 10000) {
+                    childTexts.set(path, { text: known?.text ?? null, at: Date.now() });
+                    fetch('/api/file?path=' + encodeURIComponent(path)).then((r) => (r.ok ? r.text() : null)).then((t) => {
+                        const before = childTexts.get(path)?.text;
+                        childTexts.set(path, { text: t, at: Date.now() });
+                        if (t !== before && !model.isDisposed() && hidden.has(model)) sync(model);
+                    }).catch(() => { });
+                }
+                childText = known?.text ?? null;
+            }
+            const declared = childText ? vueProps(childText) : null;
+            if (declared) out[from] = declared;
+        }
+        return out;
+    }
     const markupUri = (js) => monaco.Uri.parse(js.uri.toString().replace(/\.(ts|js)$/, '.m.$1'));
     function syncMarkup(model, h, text) {
         if (componentOf(model) !== 'vue') return;
@@ -45,11 +74,13 @@ export function setupEmbedded() {
             h.markup.dispose();
             h.markup = null;
         }
+        const props = propsFor(model, text);
+        h.checks = vuePropChecks(text, props, h.js.getLanguageId() === 'typescript');
         if (!h.markup) {
-            h.markup = monaco.editor.createModel(markupDoc(text, h.js), h.js.getLanguageId(), markupUri(h.js));
+            h.markup = monaco.editor.createModel(markupDoc(text, h.js, props), h.js.getLanguageId(), markupUri(h.js));
             owners.set(h.markup.uri.toString(), model);
         }
-        else h.markup.setValue(markupDoc(text, h.js));
+        else h.markup.setValue(markupDoc(text, h.js, props));
     }
     /**
      * Where a block's document is: a component's beside it (pymagic:/src/App.svelte.3.ts), so its imports of the project's files resolve as
@@ -129,6 +160,17 @@ export function setupEmbedded() {
             const markers = [h.css, h.js, ...(h.markup ? [h.markup] : [])].flatMap((m) => monaco.editor.getModelMarkers({ resource: m.uri, owner: m === h.css ? 'css' : m.getLanguageId() })
                 .filter((x) => m === h.css || (x.startLineNumber <= last && keepFinding(x.code, x.message, kind, inMarkup(x, m))))
                 .map((x) => ({ ...x, source: m === h.css ? 'css' : h.js.getLanguageId() })));
+            // the props given to the components it uses: a value of the wrong type is told at the attribute, a required one left out at the tag
+            if (h.markup && h.checks) {
+                const at = h.markup.getValue().split('\n').indexOf(PROPS_AT) + 1;
+                const range = ([a, z]) => { const s = owner.getPositionAt(a), e = owner.getPositionAt(z); return { startLineNumber: s.lineNumber, startColumn: s.column, endLineNumber: e.lineNumber, endColumn: e.column }; };
+                for (const x of monaco.editor.getModelMarkers({ resource: h.markup.uri, owner: h.markup.getLanguageId() })) {
+                    const place = at > 0 ? h.checks.places[x.startLineNumber - at - 1] : null;
+                    if (!place || ![2322, 2820, 2741].includes(Number(typeof x.code === 'object' && x.code ? x.code.value : x.code))) continue;
+                    markers.push({ ...x, ...range(place), source: h.js.getLanguageId() });
+                }
+                for (const miss of h.checks.missing) markers.push({ ...range(miss.place), severity: monaco.MarkerSeverity.Warning, message: miss.message, source: 'vue' });
+            }
             monaco.editor.setModelMarkers(owner, 'embedded', markers.map(({ resource, owner: _o, ...x }) => x));
         }
     });

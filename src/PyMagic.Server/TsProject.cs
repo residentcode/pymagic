@@ -60,7 +60,41 @@ public static class TsProject
             }
         }
         while (queue.Count > 0 && !cut) { var (dir, depth) = queue.Dequeue(); Walk(dir, depth); }
+
+        // a project's built declarations (its config's outDir or declarationDir, which a dist or build folder usually is, left out above):
+        // what another project imports by that path, or by a package whose "types" names it (a referenced project, a workspace's package)
+        var seen = new HashSet<string>(list.Select(f => f.Path), StringComparer.OrdinalIgnoreCase);
+        foreach (var config in cut ? new List<JsonObject>() : Configs(root))
+        {
+            var options = config["compilerOptions"] as JsonObject;
+            foreach (var key in new[] { "declarationDir", "outDir" })
+            {
+                if (options?[key] is not JsonValue v || !v.TryGetValue<string>(out var outDir) || string.IsNullOrWhiteSpace(outDir)) continue;
+                string dir = System.IO.Path.GetFullPath(System.IO.Path.Combine(root, config["dir"]?.GetValue<string>() ?? "", outDir));
+                if (!IsUnder(root, dir) || !Directory.Exists(dir)) continue;
+                IEnumerable<string> found;
+                try { found = Directory.EnumerateFiles(dir, "*.d.ts", new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = 12, IgnoreInaccessible = true }).OrderBy(f => f, StringComparer.Ordinal).ToList(); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+                foreach (var f in found)
+                {
+                    string rel = Rel(root, f);
+                    if (rel.Contains("/node_modules/", StringComparison.Ordinal) || !seen.Add(rel)) continue;
+                    long size;
+                    try { size = new FileInfo(f).Length; } catch (IOException) { continue; }
+                    if (size > 1 << 20) continue;
+                    if (list.Count >= maxFiles || bytes + size > maxBytes) { cut = true; break; }
+                    try { list.Add(new File(rel, System.IO.File.ReadAllText(f))); bytes += size; }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+                }
+            }
+        }
         return new Files(list, cut);
+    }
+
+    static bool IsUnder(string root, string path)
+    {
+        string r = System.IO.Path.GetFullPath(root).TrimEnd(System.IO.Path.DirectorySeparatorChar) + System.IO.Path.DirectorySeparatorChar;
+        return path.StartsWith(r, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

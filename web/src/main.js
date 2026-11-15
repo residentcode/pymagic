@@ -1573,6 +1573,8 @@ async function main() {
     window.pymagic.mcp = setupMcpTools({
         monaco, lsp, root: info.root, openModel: (rel) => models.get(normalise(uriFor(rel))) ?? null, ensureModel, uriOf: (model) => serverUri.get(model) ?? null, relOfUri, modelForUri,
         openFile, saveFile, applyTextEdits, tidyFile, tabs: () => tabs, runConfigs: () => runConfigs, runHooks: () => runHooks,
+        // a quick fix that only runs a command of the editor (Install package, Save to the dictionary) runs it as the light bulb does
+        runCommand: (id, args) => editor._commandService.executeCommand(id, ...(args ?? [])),
     });
     // the person's keys (Settings > Keymap), now that every command and action is defined, and again whenever they change
     let keysNow = '';

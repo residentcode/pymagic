@@ -514,6 +514,9 @@ public sealed class XdebugBridge : IDisposable
 
     sealed class DbgpException(string message) : Exception(message);
 
+    /// <summary>Whether an expression is one a hover, a watch or an AI agent may have PHP run while the program is paused: it changes nothing.</summary>
+    public static bool ExpressionChangesNothing(string expression) => DbgpSession.ChangesNothing(expression);
+
     /// <summary>One connection of Xdebug: a PHP process, or a request of PHP's server.</summary>
     internal sealed class DbgpSession
     {
@@ -973,6 +976,35 @@ public sealed class XdebugBridge : IDisposable
 
         static readonly Regex Chain = new(@"^\$[A-Za-z_]\w*((\??->[A-Za-z_]\w*)|\[('[^']*'|""[^""]*""|\d+)\])*$");
 
+        // what an expression may have and still change nothing: variables and their members, numbers, quoted texts (single-quoted, or
+        // double-quoted without a variable in them), true/false/null, and operators other than assignments and ++/--
+        static readonly Regex Token = new(@"\G\s*(?:\$[A-Za-z_]\w*|\??->[A-Za-z_]\w*|\d+(?:\.\d+)?(?:[eE][-+]?\d+)?|'(?:[^'\\]|\\.)*'|""(?:[^""\\$]|\\.)*""|(?i:true|false|null|and|or|xor|instanceof)\b|===|!==|==|!=|<>|<=>|<=|>=|&&|\|\||\?\?|\*\*|[-+*/%.<>!?:()\[\],&|^~])", RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// Whether running an expression cannot change the program (a hover's, a watch's, an AI agent's): no call, no assignment, no ++ or --,
+        /// no new, include, backticks or a variable variable; read by its words, so what is not one of them is refused.
+        /// </summary>
+        internal static bool ChangesNothing(string expression)
+        {
+            string e = expression.Trim();
+            if (e.Length == 0 || e.Length > 500) return false;
+            int at = 0;
+            string? last = null;
+            while (at < e.Length)
+            {
+                var m = Token.Match(e, at);
+                if (!m.Success || m.Length == 0)
+                    return e[at..].Trim().Length == 0;
+                string t = m.Value.Trim();
+                // ( right after a name or a ) is a call: $f(), $obj->m(), ($x)()
+                if (t == "(" && last != null && (last.StartsWith('$') || last.Contains("->") || last == ")")) return false;
+                if ((t == "+" || t == "-") && last == t) return false;   // ++ and --
+                last = t;
+                at += m.Length;
+            }
+            return true;
+        }
+
         /// <summary>An expression's value: a variable and its members read as they are; anything else run by PHP (in the innermost frame).</summary>
         public async Task<JsonObject> Evaluate(int frameId, string expression, bool evalOnly, bool detail)
         {
@@ -994,7 +1026,7 @@ public sealed class XdebugBridge : IDisposable
                 }
                 if (evalOnly) return new JsonObject { ["error"] = $"{expression} is not set here." };
             }
-            if (evalOnly) return new JsonObject { ["error"] = "This expression may change the program; evaluate it in the Evaluate window (Alt+F8)." };
+            if (evalOnly && !ChangesNothing(expression)) return new JsonObject { ["error"] = "This expression may change the program; evaluate it in the Evaluate window (Alt+F8)." };
             if (frameId != 0) return new JsonObject { ["error"] = "Xdebug runs expressions in the innermost frame only: select it, or name a variable of this frame." };
             var e = await Ask("eval", "", expression);
             p = e.Elements().FirstOrDefault(x => x.Name.LocalName == "property");

@@ -208,7 +208,7 @@ export function withMarkupCode(text, doc, kind) {
  * An expression that uses a name the markup itself gives (a v-for's, a slot's, $event) is left out; `empty` keeps the ones with nothing in
  * them yet (for completion).
  */
-export function vueSpots(text, empty = false) {
+export function vueSpots(text, empty = false, declared = null) {
     const open = /<template\b([^>]*)>/i.exec(text);
     const close = text.lastIndexOf('</template');
     if (!open || close < 0 || /\blang\s*=/.test(open[1])) return [];
@@ -220,7 +220,7 @@ export function vueSpots(text, empty = false) {
     const commented = (i) => comments.some(([s, e]) => i >= s && i < e);
     for (const m of body.matchAll(/\s(v-for|v-slot(?::[\w.-]+)?|#[\w.-]+)\s*=\s*(["'])([\s\S]*?)\2/g)) {
         const names = m[1] === 'v-for' ? m[3].split(/\s(?:in|of)\s/)[0] : m[3];
-        for (const n of names.match(IDENT) ?? []) bound.add(n);
+        for (const n of names.match(IDENT) ?? []) if (!declared?.has(n)) bound.add(n);
     }
     for (const m of body.matchAll(/\{\{([\s\S]*?)\}\}/g)) {
         const a = from + m.index;
@@ -287,7 +287,15 @@ function bracketed(code, at, open, shut) {
     return '';
 }
 
-const VUE_TYPES = 'declare function __pm_props<P>(p: P): P extends readonly (infer K extends string)[] ? { [X in K]: any } : { [K in keyof P]: any }; '
+const VUE_THIS = 'type __pm_PP<P> = P extends readonly (infer K extends string)[] ? { [X in K]: any } : { [K in keyof P]: any }; '
+    + 'type __pm_CC<C> = { [K in keyof C]: C[K] extends (...a: any[]) => infer R ? R : C[K] extends { get: (...a: any[]) => infer R } ? R : any }; '
+    + 'type __pm_Vm = { $emit: (event: string, ...args: any[]) => void; $refs: any; $el: any; $props: any; $attrs: any; $slots: any; $data: any; $options: any; $parent: any; $root: any; '
+    + '$nextTick: (f?: () => void) => Promise<void>; $watch: (...a: any[]) => any; $forceUpdate: () => void; [k: `$${string}`]: any }; '
+    + 'type __pm_This<P, D, C, M> = __pm_PP<P> & D & __pm_CC<C> & M & __pm_Vm; '
+    + 'declare function __pm_options<P = {}, D = {}, C = {}, M = {}>(o: { props?: P; data?: (this: __pm_PP<P> & __pm_Vm, vm: any) => D; computed?: C & ThisType<__pm_This<P, D, C, M>>; '
+    + 'methods?: M & ThisType<__pm_This<P, D, C, M>>; [k: string]: any } & ThisType<__pm_This<P, D, C, M>>): { props: P; data: () => D; computed: C; methods: M }; '
+    + 'declare const _o_: typeof __pm_options; ';
+const VUE_TYPES = VUE_THIS + 'declare function __pm_props<P>(p: P): P extends readonly (infer K extends string)[] ? { [X in K]: any } : { [K in keyof P]: any }; '
     + 'declare function __pm_inst<O>(o: O): O extends new (...a: any) => infer I ? I : (O extends { data: (...a: any[]) => infer D } ? D : {}) '
     + '& (O extends { computed: infer C } ? { [K in keyof C]: C[K] extends (...a: any[]) => infer R ? R : C[K] extends { get: (...a: any[]) => infer R } ? R : any } : {}) '
     + '& (O extends { methods: infer M } ? M : {}) '
@@ -314,33 +322,241 @@ export function vueScriptDocument(text, doc, ts) {
     }
     else {
         const m = /\bexport default(?=\s*(?:\{|[A-Za-z_$][\w$.]*\s*\())/.exec(doc);
-        if (m) out = doc.slice(0, m.index) + 'const __pm_o =' + doc.slice(m.index + 14);
+        // a plain object (export default { ... }): given to __pm_options in as many characters, so that its methods' this is the instance
+        const wrap = m && /^ \{/.test(doc.slice(m.index + 14)) ? closingBrace(doc, m.index + 15) : -1;
+        // (its ")" takes the place of the first space or ";" after the brace, past line ends, which stay: every line keeps its number)
+        let shut = wrap + 1;
+        while (shut > 0 && (doc[shut] === '\n' || doc[shut] === '\r')) shut++;
+        if (wrap > 0 && /[ \t;]/.test(doc[shut] ?? '')) out = doc.slice(0, m.index) + 'let __pm_o=_o_(' + doc.slice(m.index + 15, shut) + ')' + doc.slice(shut + 1);
+        else if (m) out = doc.slice(0, m.index) + 'const __pm_o =' + doc.slice(m.index + 14);
         tail = `export const __pm_s = ${m ? '__pm_inst(__pm_o)' : '{}'}; export const __pm_p = {};`;
     }
     return out + componentPrelude('vue', out) + VUE_TYPES + '\n' + tail + '\n';
 }
 
 /**
+ * The names a component's markup gives (v-for="(item, i) in list", v-slot="{ row }", #name="props"): [{ names, source, kind }] with the
+ * names' text as written (a destructuring's braces kept) and, for a v-for, the list's expression. Only names given once in the file are
+ * declared for the markup's document (one given twice may stand for two kinds of value: its expressions are left out, as before).
+ */
+export function vueBindings(text) {
+    const open = /<template\b([^>]*)>/i.exec(text);
+    const close = text.lastIndexOf('</template');
+    if (!open || close < 0 || /\blang\s*=/.test(open[1])) return { list: [], declared: new Set() };
+    const body = text.slice(open.index + open[0].length, close).replace(/<!--[\s\S]*?(?:-->|$)/g, (m) => ' '.repeat(m.length));
+    const list = [];
+    for (const m of body.matchAll(/\s(v-for|v-slot(?::[\w.-]+)?|#[\w.-]+)\s*=\s*(["'])([\s\S]*?)\2/g)) {
+        if (m[1] === 'v-for') {
+            const f = /^\s*([\s\S]*?)\s+(?:in|of)\s+([\s\S]+?)\s*$/.exec(m[3]);
+            if (f) list.push({ kind: 'for', names: f[1].replace(/^\(([\s\S]*)\)$/, '$1').trim(), source: f[2] });
+        }
+        else list.push({ kind: 'slot', names: m[3].trim(), source: '' });
+    }
+    const count = new Map();
+    for (const b of list) for (const n of b.names.match(IDENT) ?? []) count.set(n, (count.get(n) ?? 0) + 1);
+    const declared = new Set([...count].filter(([n, k]) => k === 1 && !KEYWORDS.has(n)).map(([n]) => n));
+    return { list: list.filter((b) => (b.names.match(IDENT) ?? []).every((n) => declared.has(n))), declared };
+}
+
+/** A v-for's or a slot's names as declarations of the markup's document: an item is its list's element, an index or key what it is, a slot's any. */
+function bindingCode(b, ts) {
+    const any = ts ? '(0 as any)' : '/** @type {any} */ (0)';
+    if (b.kind === 'slot') return `var ${b.names} = ${any};`;
+    if (/^[{[]/.test(b.names)) return `var ${b.names} = __pm_each((${b.source}));`;
+    const [item, key, index] = b.names.split(',').map((x) => x.trim());
+    return [item && `var ${item} = __pm_each((${b.source}));`, key && `var ${key} = __pm_key((${b.source}));`, index && `var ${index} = 0;`].filter(Boolean).join(' ');
+}
+const EACH_TS = 'declare function __pm_each<T>(x: T): T extends readonly (infer E)[] ? E : T extends number ? number : T extends string ? string : T extends Iterable<infer E> ? E : T extends object ? T[keyof T] : any; '
+    + 'declare function __pm_key<T>(x: T): T extends readonly any[] ? number : T extends number ? number : T extends object ? keyof T & string : any;';
+const EACH_JS = '/** @type {<T>(x: T) => (T extends readonly (infer E)[] ? E : T extends number ? number : T extends string ? string : T extends Iterable<infer E> ? E : T extends object ? T[keyof T] : any)} */ var __pm_each; '
+    + '/** @type {<T>(x: T) => (T extends readonly any[] ? number : T extends number ? number : T extends object ? keyof T & string : any)} */ var __pm_key;';
+
+// ------------------------------------------------------------ the props of a component another one uses
+
+const CONSTRUCTORS = { String: 'string', Number: 'number', Boolean: 'boolean', Array: 'any[]', Object: 'Record<string, any>', Function: '(...args: any[]) => any', Date: 'Date', Symbol: 'symbol', BigInt: 'bigint' };
+/** A runtime prop's type (String, [String, Number], { type: Number, required: true }) as a type: { type, required }. */
+function runtimeProp(value) {
+    const v = String(value ?? '').trim();
+    const one = (t) => CONSTRUCTORS[t.trim()] ?? 'any';
+    if (/^\[/.test(v)) return { type: v.slice(1, -1).split(',').map(one).join(' | ') || 'any', required: false };
+    if (/^\{/.test(v)) {
+        const type = /\btype\s*:\s*(\[[^\]]*\]|[A-Za-z_$][\w$]*)/.exec(v)?.[1];
+        return { type: type ? runtimeProp(type).type : 'any', required: /\brequired\s*:\s*true\b/.test(v) && !/\bdefault\s*:/.test(v) };
+    }
+    return { type: CONSTRUCTORS[v] ?? 'any', required: false };
+}
+/** An object literal's members at its top: [[key, value text]]. */
+function members(objectText) {
+    const inner = objectText.trim().replace(/^\{/, '').replace(/\}$/, '');
+    const out = [];
+    let depth = 0, quote = null, start = 0;
+    const push = (end) => {
+        const part = inner.slice(start, end).trim();
+        const m = /^(?:['"]?)([A-Za-z_$][\w$-]*)(?:['"]?)\s*(?:\??:\s*([\s\S]*))?$/.exec(part);
+        if (m) out.push([m[1], m[2] ?? m[1]]);
+        start = end + 1;
+    };
+    for (let i = 0; i < inner.length; i++) {
+        const c = inner[i];
+        if (quote) { if (c === '\\') i++; else if (c === quote) quote = null; continue; }
+        if (c === '"' || c === "'" || c === '`') quote = c;
+        else if ('{[('.includes(c)) depth++;
+        else if ('}])'.includes(c)) depth--;
+        else if ((c === ',' || c === ';' || c === '\n') && depth === 0) push(i);
+    }
+    push(inner.length);
+    return out.filter(([k]) => k);
+}
+
+/**
+ * The props a component declares, from its file's text: { type, required } with `type` an object type's text ({ label: string; count?: number })
+ * and `required` the names that must be given; null when it declares none that can be read. defineProps<T>() (T written there, or an
+ * interface or type of the file), defineProps({ ... }) and defineProps([...]) of a <script setup>, an options object's props.
+ */
+export function vueProps(text) {
+    const script = [...String(text).matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]).join('\n');
+    if (!script) return null;
+    const at = /\bdefineProps\s*/.exec(script);
+    let typeText = '', runtime = '';
+    if (at) {
+        const after = at.index + at[0].length;
+        typeText = bracketed(script, after, '<', '>').trim();
+        if (!typeText) runtime = bracketed(script, after, '(', ')').trim();
+        if (/^[A-Za-z_$][\w$]*$/.test(typeText)) {
+            const named = new RegExp(`\\b(?:interface\\s+${typeText}\\s*(?:extends[^{]*)?(?=\\{)|type\\s+${typeText}\\s*=\\s*(?=\\{))`).exec(script);
+            typeText = named ? bracketed(script, named.index + named[0].length, '{', '}') : '';
+            if (typeText) typeText = '{' + typeText + '}';
+        }
+    }
+    else {
+        const m = /\bprops\s*:\s*(?=[{[])/.exec(script.slice(script.search(/\bexport\s+default\b/) >= 0 ? script.search(/\bexport\s+default\b/) : 0));
+        if (m) {
+            const base = script.search(/\bexport\s+default\b/) >= 0 ? script.search(/\bexport\s+default\b/) : 0;
+            const from = base + m.index + m[0].length;
+            runtime = script[from] === '[' ? '[' + bracketed(script, from, '[', ']') + ']' : '{' + bracketed(script, from, '{', '}') + '}';
+        }
+    }
+    const props = [];
+    if (typeText.startsWith('{')) {
+        for (const [name, value] of members(typeText)) {
+            const optional = new RegExp(`(?:^|[{;,\\n])\\s*['"]?${name.replace(/\$/g, '\\$')}['"]?\\s*\\?\\s*:`).test(typeText);
+            props.push({ name, type: value === name ? 'any' : value.trim(), required: !optional });
+        }
+        // withDefaults(defineProps<...>(), { count: 1 }): a prop with a default need not be given
+        const defaults = /\bwithDefaults\s*\(/.exec(script);
+        if (defaults) {
+            const call = bracketed(script, defaults.index + defaults[0].length - 1, '(', ')');
+            const second = call.slice(call.lastIndexOf('{'));
+            for (const [name] of members(second)) for (const p of props) if (p.name === name) p.required = false;
+        }
+    }
+    else if (runtime.startsWith('[')) for (const m of runtime.matchAll(/['"]([\w$-]+)['"]/g)) props.push({ name: m[1], type: 'any', required: false });
+    else if (runtime.startsWith('{')) for (const [name, value] of members(runtime)) props.push({ name, ...runtimeProp(value === name ? '' : value) });
+    if (!props.length) return null;
+    return { type: '{ ' + props.map((p) => `${JSON.stringify(p.name)}${p.required ? '' : '?'}: ${p.type};`).join(' ') + ' }', required: props.filter((p) => p.required).map((p) => p.name) };
+}
+
+const camel = (s) => s.replace(/-([a-z0-9])/g, (m, c) => c.toUpperCase());
+const pascal = (s) => camel(s).replace(/^[a-z]/, (c) => c.toUpperCase());
+
+/** The components a script imports from .vue files: { Name: './Name.vue' } (default imports). */
+export function vueImports(text) {
+    const out = {};
+    const script = [...String(text).matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]).join('\n');
+    for (const m of script.matchAll(/\bimport\s+([A-Za-z_$][\w$]*)\s+from\s+(["'])([^"']+\.vue)\2/g)) out[m[1]] = m[3];
+    return out;
+}
+
+/**
+ * Where a component's markup uses the components it imports, and what it gives them: [{ component, from, tag: [start, end], attrs: [{ prop,
+ * value, bound, place: [start, end] }] }] (offsets in the file; a bound value is code, a plain one text; v-model gives modelValue).
+ */
+export function vueComponentUses(text) {
+    const imports = vueImports(text);
+    const names = Object.keys(imports);
+    const open = /<template\b([^>]*)>/i.exec(text);
+    const close = text.lastIndexOf('</template');
+    if (!names.length || !open || close < 0 || /\blang\s*=/.test(open[1])) return [];
+    const from = open.index + open[0].length;
+    const body = text.slice(from, close).replace(/<!--[\s\S]*?(?:-->|$)/g, (m) => ' '.repeat(m.length));
+    const uses = [];
+    for (const m of body.matchAll(/<([A-Za-z][\w-]*)((?:\s+(?:[^\s"'>/=]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*\/?>/g)) {
+        const component = names.find((n) => n === m[1] || n === pascal(m[1]));
+        if (!component) continue;
+        const tagAt = from + m.index + 1;
+        const attrs = [];
+        const attrsAt = from + m.index + 1 + m[1].length;
+        for (const a of m[2].matchAll(/([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
+            const name = a[1];
+            const value = a[2] ?? a[3] ?? a[4];
+            let prop = null, bound = false;
+            if (/^(?::|v-bind:)/.test(name)) { prop = name.replace(/^(?::|v-bind:)/, '').replace(/\.(?:prop|camel|attr)$/, ''); bound = true; }
+            else if (/^v-model(?::|$)/.test(name)) { prop = name.includes(':') ? name.slice(8).split('.')[0] : 'modelValue'; bound = true; }
+            else if (!/^(?:v-|@|#|ref$|key$|class$|style$|is$|slot$)/.test(name)) prop = name;
+            if (!prop || /[[\]]/.test(prop)) continue;
+            const start = attrsAt + a.index;
+            attrs.push({ prop: camel(prop), value: value ?? null, bound, place: [start, start + name.length] });
+        }
+        uses.push({ component, from: imports[component], tag: [tagAt, tagAt + m[1].length], attrs });
+    }
+    return uses;
+}
+
+/**
+ * The checks of the props a markup gives its components (`props`: the import's path -> vueProps of its file): `code`, lines for the end of
+ * the markup's document (each prop given, assigned to a value of the component's props' type), `places`, each line's place in the file (null
+ * for a line that only declares), and `missing`, the required props a use leaves out: [{ place, message }].
+ */
+export function vuePropChecks(text, props, ts) {
+    const code = [], places = [], missing = [];
+    vueComponentUses(text).forEach((use, k) => {
+        const declared = props?.[use.from];
+        if (!declared) return;
+        const known = new Set((declared.type.match(/"([^"]+)"\??:/g) ?? []).map((x) => x.replace(/"\??:$/, '').replace(/^"/, '')));
+        const given = new Set(use.attrs.map((a) => a.prop));
+        for (const name of declared.required) if (!given.has(name) && !use.attrs.some((a) => a.prop === 'vBind')) missing.push({ place: use.tag, message: `${use.component} needs the prop ${name}.` });
+        const checked = use.attrs.filter((a) => known.has(a.prop));
+        if (!checked.length) return;
+        code.push(ts ? `declare const __pm_c${k}: ${declared.type};` : `/** @type {${declared.type}} */ var __pm_c${k};`);
+        places.push(null);
+        for (const a of checked) {
+            const value = a.bound ? `(${a.value ?? 'true'})` : a.value === null ? 'true' : JSON.stringify(a.value);
+            code.push(`__pm_c${k}[${JSON.stringify(a.prop)}] = ${value};`);
+            places.push(a.place);
+        }
+    });
+    return { code, places, missing };
+}
+/** The line of the markup's document after which its props' checks follow (vuePropChecks' places are of the lines after it). */
+export const PROPS_AT = '//__pm_props';
+
+/**
  * The document of a Vue component's markup: blank but for its expressions, each written as ;(expr) at its own place, and after the
  * document's end the names they use, taken from the script's document (`module`, its file's name without the extension): a ref is its
- * value here, as Vue reads it in a template, and a prop is a name of its own.
+ * value here, as Vue reads it in a template, and a prop is a name of its own. A v-for's and a slot's names are declared there too (an item
+ * is its list's element), and with `props` (vuePropChecks) the props given to the components it uses are checked after PROPS_AT.
  */
-export function vueMarkupDocument(text, module, ts) {
+export function vueMarkupDocument(text, module, ts, props = null) {
     const out = blankOut(text).split('');
-    const spots = vueSpots(text);
+    const { list: bindings, declared } = vueBindings(text);
+    const spots = vueSpots(text, false, declared);
     for (const [a, z, at, shut] of spots) {
         out[at] = ';';
         out[at + 1] = '(';
         for (let i = a; i < z; i++) out[i] = text[i];
         out[shut] = ')';
     }
-    const names = [...new Set(spots.flatMap(([a, z]) => freeNames(text.slice(a, z))))].filter((n) => !n.startsWith('__pm_'));
+    const checks = props ? vuePropChecks(text, props, ts) : { code: [], places: [] };
+    const given = new Set(bindings.flatMap((b) => b.names.match(IDENT) ?? []));
+    const used = [...spots.map(([a, z]) => text.slice(a, z)), ...bindings.map((b) => b.source), ...checks.code.filter((c) => c.startsWith('__pm_c')).map((c) => c.slice(c.indexOf('=') + 1))];
+    const names = [...new Set(used.flatMap((c) => freeNames(c)))].filter((n) => !n.startsWith('__pm_') && !given.has(n));
     const values = ts
         ? 'type __pm_U<T> = 0 extends 1 & import("vue").Ref ? T : T extends import("vue").Ref<infer V> ? V : T; '
             + 'declare const __pm_v: { [K in keyof typeof __pm.__pm_s as 0 extends 1 & (typeof __pm.__pm_s)[K] ? never : K]: __pm_U<(typeof __pm.__pm_s)[K]> } & typeof __pm.__pm_p;'
         : 'const __pm_v = { ...__pm.__pm_p, ...__pm.__pm_s };';
     return out.join('') + `\n;import * as __pm from ${JSON.stringify('./' + module)}; ${values}\n`
-        + names.map((n) => `var ${n} = __pm_v.${n};`).join(' ') + `\n;(__pm_v.${MEMBERS_AT});\n`;
+        + names.map((n) => `var ${n} = __pm_v.${n};`).join(' ') + ` ${ts ? EACH_TS : EACH_JS} ${bindings.map((b) => bindingCode(b, ts)).join(' ')}`
+        + `\n;(__pm_v.${MEMBERS_AT});\n${PROPS_AT}\n${checks.code.join('\n')}\n`;
 }
 /** The word after which the markup's document lists every name the markup may use (asked for completion). */
 export const MEMBERS_AT = '__pm_all';
@@ -375,6 +591,8 @@ export function keepFinding(code, message, kind, inMarkup = false) {
     if (!Number.isFinite(n) || n < 2000) return true;
     if (kind !== 'vue' && kind !== 'svelte') return false;
     if ([6133, 6138, 6192, 6196, 6198, 6199, 6205].includes(n)) return false;
+    // an options object's computed that uses another one through this: TypeScript cannot tell its type, which Vue does not ask for
+    if (kind === 'vue' && [7022, 7023, 7024].includes(n)) return false;
     // Svelte: a store's $name (Cannot find name, perhaps with "Did you mean"), and the $: label TypeScript sees as not used
     if (kind === 'svelte' && (n === 2304 || n === 2552) && /^Cannot find name '\$\w+'/.test(String(message))) return false;
     if (kind === 'svelte' && n === 7028) return false;

@@ -108,6 +108,11 @@ function setupMcp(deps) {
           : name === 'start_debugger_session' ? ['MCP: debug', 'An AI agent connected over MCP wants to start this under the debugger:', String(args.configurationName ?? args.filePath ?? ''), 'Debug']
           : name === 'commit_changes' ? ['MCP: commit', 'An AI agent connected over MCP wants to commit to Git:', `${args.message}\n\n${args.paths ? String(args.paths) : 'Every changed file'}`, 'Commit']
           : name === 'checkout_git_branch' ? ['MCP: switch branch', 'An AI agent connected over MCP wants to switch the project to this branch:', String(args.name), 'Switch']
+          : name === 'apply_quick_fix' && /install/i.test(String(args.title)) ? ['MCP: install a package', 'An AI agent connected over MCP wants to carry out this quick fix, which installs a package into the project\'s interpreter:', `${args.title}\n\n${args.filePath}:${args.line}`, 'Install']
+          : name === 'git_pull' ? ['MCP: pull', 'An AI agent connected over MCP wants to pull into the current branch:', `git pull (${args.mode ?? 'merge'})`, 'Pull']
+          : name === 'git_push' ? ['MCP: push', 'An AI agent connected over MCP wants to push the current branch:', args.forceWithLease ? 'git push --force-with-lease' : 'git push', 'Push']
+          : name === 'git_merge' ? ['MCP: merge', 'An AI agent connected over MCP wants to merge this branch into the current one:', `${args.branch}${args.noFastForward ? ' (--no-ff)' : ''}`, 'Merge']
+          : name === 'git_abort' ? ['MCP: abort', 'An AI agent connected over MCP wants to give up the merge or rebase that stopped on conflicts:', 'git … --abort', 'Abort']
           : null;
         if (asked && !(await confirm(w, ...asked)))
           r = { text: `The person chose not to ${asked[3].toLowerCase()} it.`, isError: true };

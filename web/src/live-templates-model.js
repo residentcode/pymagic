@@ -66,7 +66,15 @@ export const EXPRESSIONS = [
     ['firstWord(name)', 'the first word of another place'], ['substringBefore(name, ".")', 'another place up to a text'],
     ['regularExpression(name, "search", "replacement")', 'another place with every match of a regular expression replaced ($1 is its first group)'],
     ['complete()', 'completion is offered when the place is reached'],
+    ['user()', 'the name of the computer\'s user'],
+    ['pyClassName()', 'the Python class the template is written in'], ['pyFunctionName()', 'the Python function or method the template is written in'],
+    ['jsClassName()', 'the JavaScript or TypeScript class the template is written in'], ['jsMethodName()', 'the JavaScript or TypeScript function or method the template is written in'],
+    ['className()', 'the class the template is written in, in any language'], ['methodName()', 'the function or method the template is written in, in any language'],
+    ['concat(date(), " ", user())', 'texts and the values above, one after another'],
 ];
+// the values a place's expression takes from where the template is written (contextAt): which one, and what the page shows for it
+const PLACE = { user: ['user', 'user'], pyClassName: ['className', 'MyClass'], className: ['className', 'MyClass'], jsClassName: ['className', 'MyClass'],
+    pyFunctionName: ['functionName', 'method'], jsMethodName: ['functionName', 'method'], methodName: ['functionName', 'method'] };
 // the functions that follow another place through a search and its replacement (the editor's ${1/search/replacement/flags}):
 // [search, replacement, flags, the same for the page's preview]
 const WORDS = (s) => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[\s_-]+/).filter(Boolean);
@@ -84,13 +92,13 @@ const FOLLOW = {
 /** A call's arguments: [{ name } or { text }] (names of places, "quoted" texts), or null when they are not that. */
 function argumentsOf(text) {
     const out = [];
-    const re = /\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([A-Za-z_]\w*))\s*(,|$)/y;
+    const re = /\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([A-Za-z_]\w*)(\(\s*\))?)\s*(,|$)/y;
     if (!text.trim()) return out;
     let m, at = 0;
     while (at < text.length && (m = (re.lastIndex = at, re.exec(text)))) {
-        out.push(m[3] ? { name: m[3] } : { text: (m[1] ?? m[2]).replace(/\\(["'])/g, '$1') });
+        out.push(m[3] ? (m[4] ? { call: m[3] } : { name: m[3] }) : { text: (m[1] ?? m[2]).replace(/\\(["'])/g, '$1') });
         at = re.lastIndex;
-        if (m[4] !== ',') return at >= text.length ? out : null;
+        if (m[5] !== ',') return at >= text.length ? out : null;
     }
     return null;
 }
@@ -100,13 +108,35 @@ const SAMPLE = {
     pascalcase: (s) => s.replace(/[_\-\s]+(\w)/g, (m, c) => c.toUpperCase()).replace(/^\w/, (c) => c.toUpperCase()),
 };
 
-/** An expression read: { snippet, sample } of a value, { transform, of } of one following another place, null for none or an unknown one. */
-function expression(expr) {
+/** A value that is the same wherever the place is reached (the date, the file's name, the user, the class): { snippet, sample }, else null. */
+function valueOf(name, ctx) {
+    if (PLACE[name]) {
+        const [key, sample] = PLACE[name];
+        const v = ctx?.[key] ?? '';
+        return { snippet: literal(v), sample: ctx ? v : sample };
+    }
+    const found = EXPRESSIONS.find(([form, , snippet, sample]) => snippet !== undefined && sample !== null && form.slice(0, form.indexOf('(')) === name);
+    return found ? { snippet: found[2], sample: found[3] } : null;
+}
+
+/**
+ * An expression read: { snippet, sample } of a value, { transform, of } of one following another place, null for none or an unknown one.
+ * `ctx` is where the template is written ({ user, className, functionName }); without it the page's samples are given.
+ */
+function expression(expr, ctx) {
     const e = (expr ?? '').trim();
     if (!e) return null;
     const wide = /^(\w+)\(([\s\S]*)\)$/.exec(e);
     const args = wide && argumentsOf(wide[2]);
     if (!args) return null;
+    if (PLACE[wide[1]]) return args.length ? null : valueOf(wide[1], ctx);
+    if (wide[1] === 'concat') {
+        // texts and values one after another (a place's name is not one: what is typed there is not known when the template is written)
+        const parts = args.map((a) => (a.text !== undefined ? { snippet: literal(a.text), sample: a.text } : a.call ? valueOf(a.call, ctx) : null));
+        if (!parts.length || parts.some((x) => !x)) return null;
+        return { snippet: parts.map((x) => x.snippet).join(''), sample: parts.map((x) => x.sample).join('') };
+    }
+    if (args.some((a) => a.call)) return null;
     const of = args[0]?.name;
     if (wide[1] === 'complete' || wide[1] === 'completeSmart') return args.length ? null : { complete: true };
     if (FOLLOW[wide[1]]) {
@@ -147,7 +177,7 @@ export function placesOf(body) {
  * (vars[name]: { expr, def, skip }) gives it another default, a value (the file's name, the date...) that is typed over or, with skip, just
  * written, or makes it follow another place. With <paramref name="plain"/> the text is given as it would be written, nothing typed.
  */
-export function fromNamedForm(text, vars = {}, plain = false, info = null) {
+export function fromNamedForm(text, vars = {}, plain = false, info = null, ctx = null) {
     const slash = (s) => s.replace(/\//g, '\\/');
     const order = [];
     const index = (name) => {
@@ -157,8 +187,8 @@ export function fromNamedForm(text, vars = {}, plain = false, info = null) {
     };
     const esc = plain ? (s) => s : literal;
     const shown = (name, seen = []) => {      // a place's text with nothing typed, for the plain form
-        const v = vars[name], e = expression(v?.expr);
-        if (e?.sample) return e.sample;
+        const v = vars[name], e = expression(v?.expr, ctx);
+        if (e?.sample !== undefined) return e.sample;
         if (e?.transform && !seen.includes(name)) return SAMPLE[e.transform](shown(e.of, [...seen, name]));
         if (e?.search && !seen.includes(name)) return e.change(shown(e.of, [...seen, name]));
         if (e?.complete) return v?.def || '';
@@ -173,7 +203,7 @@ export function fromNamedForm(text, vars = {}, plain = false, info = null) {
         else if (name === 'SELECTION') out += plain ? '' : '${TM_SELECTED_TEXT}';
         else if (plain) out += shown(name);
         else {
-            const v = vars[name], e = expression(v?.expr);
+            const v = vars[name], e = expression(v?.expr, ctx);
             if (e?.transform && e.of !== name) out += '${' + index(e.of) + '/(.*)/${1:/' + e.transform + '}/}';
             else if (e?.search && e.of !== name) out += '${' + index(e.of) + '/' + slash(e.search) + '/' + (e.format ? e.replace : slash(e.replace)) + '/' + e.flags + '}';
             else if (e?.complete) {
@@ -192,8 +222,52 @@ export function fromNamedForm(text, vars = {}, plain = false, info = null) {
 const indented = (body) => body.replace(/^( {4})+/gm, (m) => '\t'.repeat(m.length / 4));
 
 /** The snippet the editor inserts for a template's text: $name$ places when it has some, else the snippet it already is ($1, ${1:name}, $0). */
-export function toSnippet(body, vars) {
-    return HAS_NAMED.test(body) ? fromNamedForm(indented(body), vars ?? {}) : indented(body);
+export function toSnippet(body, vars, ctx = null) {
+    return HAS_NAMED.test(body) ? fromNamedForm(indented(body), vars ?? {}, false, null, ctx ?? {}) : indented(body);
+}
+
+/**
+ * Where a template is written: the class and the function (or method) around a line, read from the file's lines. Python by its indentation,
+ * the brace languages (JavaScript, TypeScript, PHP, Java...) by the braces still open before the place. { className, functionName }, '' for none.
+ */
+export function contextAt(lines, lineIndex, languageId, column = 1) {
+    const out = { className: '', functionName: '' };
+    if (languageId === 'python') {
+        const own = lines[lineIndex] ?? '';
+        let indent = own.trim() ? own.search(/\S/) : column - 1;
+        for (let i = lineIndex - 1; i >= 0 && indent > 0; i--) {
+            const line = lines[i];
+            if (!line.trim() || /^\s*#/.test(line)) continue;
+            const at = line.search(/\S/);
+            if (at >= indent) continue;
+            indent = at;
+            const def = /^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)/.exec(line);
+            const cls = /^\s*class\s+([A-Za-z_]\w*)/.exec(line);
+            if (def && !out.functionName && !out.className) out.functionName = def[1];
+            if (cls && !out.className) out.className = cls[1];
+        }
+        return out;
+    }
+    // the text before the place, strings and comments taken out, read backwards for each brace that is still open
+    const before = [...lines.slice(0, lineIndex), (lines[lineIndex] ?? '').slice(0, column - 1)].join('\n')
+        .replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, '').replace(/(["'`])(?:\\.|(?!\1)[^\\\n])*\1/g, '""');
+    let depth = 0;
+    for (let i = before.length - 1; i >= 0; i--) {
+        const c = before[i];
+        if (c === '}') depth++;
+        else if (c === '{') {
+            if (depth > 0) { depth--; continue; }
+            const head = before.slice(Math.max(0, before.lastIndexOf('\n', i - 1) - 200), i).replace(/\s+/g, ' ');
+            const cls = /\b(?:class|interface|trait|enum)\s+([A-Za-z_$][\w$]*)[^{;]*$/.exec(head);
+            if (cls) { out.className ||= cls[1]; continue; }
+            if (out.functionName || out.className) continue;
+            const fn = /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*\([^()]*\)[^{;]*$/.exec(head)
+                ?? /([A-Za-z_$][\w$]*)\s*[=:]\s*(?:async\s*)?(?:function\b[^{;]*|\([^()]*\)\s*=>\s*|[A-Za-z_$][\w$]*\s*=>\s*)$/.exec(head)
+                ?? /([A-Za-z_$][\w$]*)\s*\([^()]*\)\s*(?::\s*[^{;=]+)?$/.exec(head);
+            if (fn && !/^(if|for|while|switch|catch|with|return|function)$/.test(fn[1])) out.functionName = fn[1];
+        }
+    }
+    return out;
 }
 
 /** The places of a template (the numbers of its snippet's stops) where completion is to be offered: its variables' complete(). */

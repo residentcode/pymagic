@@ -49,9 +49,9 @@ public static class PhpLint
         }
         else if (remote is { } r)
         {
-            // over SSH there is no standard input to give: the text goes as base64 in the command (a file typed in an editor fits in it)
-            string b64 = Convert.ToBase64String(new UTF8Encoding(false).GetBytes(text));
-            var (_, o, e) = r.Target.Remote($"printf %s {SshTarget.Quote(b64)} | base64 -d | {SshTarget.Quote(r.Php)} -n -d display_errors=1 -l", 20_000);
+            // the text as ssh's standard input; PHP ends a lint that found an error with 255, which ssh's own failure is too, so the command
+            // ends with 0 itself (a connection that fails is still 255)
+            var (_, o, e) = r.Target.RemoteWithInput($"{SshTarget.Quote(r.Php)} -n -d display_errors=1 -l; true", text, 20_000);
             output = o + e;
         }
         else throw new ServiceException(sailSetting ? "PHP's syntax is not checked: Sail's container is not running (and there is no PHP on this computer)." : NoPhp);

@@ -398,7 +398,11 @@ export function setupMcpTools(deps) {
             if (l < 1 || l > m.getLineCount()) continue;
             const range = { start: { line: l - 1, character: 0 }, end: { line: l - 1, character: m.getLineMaxColumn(l) - 1 } };
             const found = await deps.lsp.request('textDocument/codeAction', { textDocument: { uri }, range, context: { diagnostics: [] } }).catch(() => null) ?? [];
-            for (const f of found) if (f.edit && !out.some((x) => x.line === l && x.title === f.title)) out.push({ line: l, title: f.title, edit: f.edit });
+            for (const f of found) {
+                if (out.some((x) => x.line === l && x.title === f.title)) continue;
+                if (f.edit) out.push({ line: l, title: f.title, edit: f.edit });
+                else if (f.command?.command) out.push({ line: l, title: f.title, command: { id: f.command.command, args: f.command.arguments ?? [] } });
+            }
         }
         return out;
     }
@@ -412,7 +416,7 @@ export function setupMcpTools(deps) {
         const out = [];
         for (const l of lines) {
             if (l < 1 || l > m.getLineCount()) continue;
-            for (const f of await codeActionsOf(m, l)) out.push({ line: l, title: f.title, edits: f.edits });
+            for (const f of await codeActionsOf(m, l)) out.push({ line: l, ...f });
         }
         return out;
     }
@@ -441,6 +445,14 @@ export function setupMcpTools(deps) {
         if (!res.ok) throw new Error(data?.error ?? data?.message ?? 'Git refused it.');
         return data;
     };
+    /** A pull's or merge's outcome: git's last lines, and the files to resolve when it stopped on conflicts. */
+    async function joined(r, done) {
+        const out = String(r?.output ?? '').trim().split('\n').slice(-12).join('\n');
+        if (!r?.conflicts) return say(out || done);
+        const op = await gitJson('/api/git/operation').catch(() => null);
+        const files = op?.conflicts ?? [];
+        return { text: `The ${r.operation ?? op?.operation ?? 'merge'} stopped on conflicts${files.length ? ' in: ' + files.join(', ') : ''}. They are resolved in PyMagic's Git tab (then Continue), or git_abort gives it up.${out ? '\n' + out : ''}`, isError: true };
+    }
     const STEPS = { CONTINUE: 'continue', STEP_OVER: 'next', STEP_INTO: 'stepIn', STEP_OUT: 'stepOut', PAUSE: 'pause' };
     const WHY = { breakpoint: 'at a breakpoint', step: 'after the step', pause: 'paused', exception: 'on an exception', data: 'on a changed value', entry: 'at its first line' };
     /** What a debug session is at, as text: where it is paused with its stack, or that it runs or has ended, and what it wrote. */
@@ -472,6 +484,13 @@ export function setupMcpTools(deps) {
             const wanted = String(a.title).trim().toLowerCase();
             const fix = fixes.find((f) => f.title.toLowerCase() === wanted) ?? fixes.find((f) => f.title.toLowerCase().includes(wanted));
             if (!fix) return { text: `No quick fix named "${a.title}" at ${r}:${a.line}${fixes.length ? ` (there: ${fixes.map((f) => f.title).join('; ')})` : ''}.`, isError: true };
+            if (fix.command) {
+                if (!deps.runCommand) return { text: "This window cannot run the fix's command.", isError: true };
+                // installing is asked first (desktop/mcp-main.js asks when the title says so): only a title that says it reaches the install
+                if (/install/i.test(fix.command.id) && !/install/i.test(String(a.title))) return { text: `"${fix.title}" installs a package: name it with its whole title.`, isError: true };
+                await deps.runCommand(fix.command.id, fix.command.args);
+                return say(`Ran "${fix.title}" (${fix.command.id}).`);
+            }
             if (fix.edits) return applyEdits(fix.edits, `Applied "${fix.title}" in: `);
             return applyWorkspaceEdit(fix.edit, `Applied "${fix.title}" in: `, 'The fix changed nothing.');
         },
@@ -558,6 +577,35 @@ export function setupMcpTools(deps) {
             const r = await gitJson('/api/git/commit', { message, paths });
             window.dispatchEvent(new Event('pymagic:saved'));
             return say(`Committed ${paths.length} file${paths.length === 1 ? '' : 's'} as ${String(r?.hash ?? '').slice(0, 10)}: ${paths.join(', ')}`);
+        },
+
+        // ---- Git: the remotes and joining branches, as the Git tab's Fetch, Pull, Push and Merge do
+        async git_fetch(a) {
+            const r = await gitJson('/api/git/action', { op: 'fetch', prune: true, ...(a.remote ? { remote: a.remote } : {}) });
+            window.dispatchEvent(new Event('pymagic:saved'));
+            return say(String(r?.output ?? '').trim() || 'Fetched; nothing was new.');
+        },
+        async git_pull(a) {
+            const r = await gitJson('/api/git/action', { op: 'pull', mode: a.mode ?? 'merge' });
+            window.dispatchEvent(new Event('pymagic:saved'));
+            return joined(r, 'Pulled.');
+        },
+        async git_push(a) {
+            const r = await gitJson('/api/git/action', { op: 'push', force: !!a.forceWithLease });
+            window.dispatchEvent(new Event('pymagic:saved'));
+            return say(String(r?.output ?? '').trim() || 'Pushed.');
+        },
+        async git_merge(a) {
+            const r = await gitJson('/api/git/action', { op: 'merge', branch: String(a.branch), noFf: !!a.noFastForward });
+            window.dispatchEvent(new Event('pymagic:saved'));
+            return joined(r, `Merged ${a.branch}.`);
+        },
+        async git_abort() {
+            const s = await gitJson('/api/git/operation');
+            if (!s?.operation) return { text: 'No merge, rebase, cherry-pick or revert is waiting.', isError: true };
+            await gitJson('/api/git/action', { op: 'abort' });
+            window.dispatchEvent(new Event('pymagic:saved'));
+            return say(`Gave up the ${s.operation}; the branch and the files are as they were before it.`);
         },
 
         // ---- the debugger: a session started, stepped, looked into and stopped

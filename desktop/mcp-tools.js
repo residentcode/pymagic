@@ -103,7 +103,7 @@ const TOOLS = [
     filePath: str('The file, from the project folder.'),
     line: int('Only this line, from 1.'),
   }, ['filePath'], reads),
-  tool('apply_quick_fix', 'Carries out a quick fix of a file\'s line (as get_quick_fixes names it) and saves what it changed.', {
+  tool('apply_quick_fix', 'Carries out a quick fix of a file\'s line (as get_quick_fixes names it) and saves what it changed; a fix that runs a command of PyMagic (Install package, Save to the dictionary, Ignore the rule) runs it. Installing a package is asked of the person first unless they chose not to be asked.', {
     filePath: str('The file, from the project folder.'),
     line: int('The line, from 1.'),
     title: str('The fix\'s title, or a part of it.'),
@@ -130,6 +130,20 @@ const TOOLS = [
     message: str('The commit message.'),
     paths: str('The files or folders to commit, from the project folder, separated by commas or line breaks; every changed file without it.'),
   }, ['message'], { destructiveHint: true }),
+  tool('git_fetch', 'Gets what is new on the remotes (git fetch --prune), changing no branch of the project.', {
+    remote: str('One remote (default: all of them).'),
+  }, [], { openWorldHint: true }),
+  tool('git_pull', 'Fetches and joins the upstream into the current branch, as PyMagic\'s Pull does; says when it stopped on conflicts (they are resolved in PyMagic\'s Git tab, or git_abort gives up). PyMagic asks the person first unless they chose not to be asked.', {
+    mode: { type: 'string', enum: ['merge', 'rebase', 'ff-only'], description: 'How to join: merge (the default), rebase, or fast-forward only.' },
+  }, [], { destructiveHint: true, openWorldHint: true }),
+  tool('git_push', 'Sends the current branch to its upstream (a branch without one is published to origin and tracks it). PyMagic asks the person first unless they chose not to be asked.', {
+    forceWithLease: bool('git push --force-with-lease (default false): overwrites the remote branch only if nobody else changed it since the last fetch.'),
+  }, [], { destructiveHint: true, openWorldHint: true }),
+  tool('git_merge', 'Joins a branch (a local one or a remote one like origin/main) into the current branch; says when it stopped on conflicts. PyMagic asks the person first unless they chose not to be asked.', {
+    branch: str('The branch to merge in.'),
+    noFastForward: bool('Always make a merge commit (git merge --no-ff; default false).'),
+  }, ['branch'], { destructiveHint: true }),
+  tool('git_abort', 'Gives up the merge, rebase, cherry-pick or revert that stopped on conflicts: the branch and the files go back to how they were before it. PyMagic asks the person first unless they chose not to be asked.', {}, [], { destructiveHint: true }),
   tool('start_debugger_session', 'Starts a run configuration, or a file, under PyMagic\'s debugger and waits for its first stop (a breakpoint, an exception) or its end; says where it is paused, with the stack and the output. PyMagic asks the person first unless they chose not to be asked.', {
     configurationName: str('The run configuration to debug (get_run_configurations lists them).'),
     filePath: str('Or a file to debug, from the project folder.'),

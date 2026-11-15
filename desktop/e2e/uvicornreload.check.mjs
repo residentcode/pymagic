@@ -1,10 +1,12 @@
 // Debugging a FastAPI run configuration (uvicorn --reload, on by default; a Starlette app, as FastAPI is one) in the built PyMagic.exe: uvicorn's reloader starts the server
 // as a process of multiprocessing's (spawn, not subprocess), and that process runs under the debugger too (pm_debug.py follow_children):
-// breakpoints in an async and in a plain endpoint stop, the request goes on after Resume, and Stop ends every process. Not here: the
-// restart after a change, which on Windows uvicorn does by a Ctrl+C to the server that does not reach it from an IDE's run (uvicorn#1972).
+// breakpoints in an async and in a plain endpoint stop, the request goes on after Resume; after a change of main.py uvicorn ends its server
+// (on Windows by a Ctrl+C, which pm_debug.py's windows_ctrl_c carries) and the new one stops at the breakpoint again. Stop ends every
+// process. Then a Run without the debugger: after a change the new server answers with it.
 // Run: node desktop/e2e/uvicornreload.check.mjs   (needs uv; Starlette and uvicorn are installed in the project's .venv)
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { launch, project, sleep } from './app.mjs';
@@ -91,9 +93,39 @@ try {
     await resume();
     assert.equal(await answer, '{"plain":1}');
 
+    // a change of the file: uvicorn ends its server and starts a new one, which stops at the breakpoint too
+    const change = (from, to) => writeFileSync(join(root, 'main.py'), readFileSync(join(root, 'main.py'), 'utf8').replace(from, to));
+    change("{'plain': x}", "{'plain again': x}");
+    let changed = false;
+    for (let i = 0; i < 60 && !changed; i++) {
+        await sleep(1000);
+        changed = /Started server process[\s\S]*Started server process/.test(await page.evaluate(`document.getElementById('output').innerText`));
+    }
+    assert.ok(changed, 'a new server process after the change');
+    await serving();
+    answer = get('/p/');
+    stop = await stopAt('the stop after the reload');
+    console.log('stopped after the reload:', stop);
+    assert.match(stop, /plain.*main\.py:14/);
+    await resume();
+    assert.equal(await answer, '{"plain again":1}');
+
     await page.evaluate(`${$('b-stop')}.click()`);
     for (let i = 0; i < 40 && pids().length; i++) await sleep(250);
     assert.deepEqual(pids(), [], 'Stop ends the reloader and its server process');
+
+    // Run, without the debugger: the change is served by the new server
+    await page.evaluate(`${$('b-run')}.click()`);
+    await serving();
+    assert.equal(await get('/p/'), '{"plain again":1}');
+    change("{'plain again': x}", "{'plain third': x}");
+    let third = '';
+    for (let i = 0; i < 40 && !third.includes('third'); i++) { await sleep(1000); third = await get('/p/'); }
+    console.log('Run after a change:', third);
+    assert.equal(third, '{"plain third":1}');
+    await page.evaluate(`${$('b-stop')}.click()`);
+    for (let i = 0; i < 40 && pids().length; i++) await sleep(250);
+    assert.deepEqual(pids(), [], 'Stop ends the Run too');
     console.log('OK');
 } catch (e) {
     console.log('output:', (await page.evaluate(`document.getElementById('output').innerText`)).slice(-3000));

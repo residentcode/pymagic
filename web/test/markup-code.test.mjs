@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const load = async (file) => import('data:text/javascript;base64,' + Buffer.from(readFileSync(new URL('../src/' + file, import.meta.url), 'utf8')).toString('base64'));
-const { embeddedDocument, withMarkupCode, componentPrelude, keepFinding } = await load('embedded-model.js');
+const { embeddedDocument, withMarkupCode, componentPrelude, keepFinding, vueBindings, vueProps, vuePropChecks, vueMarkupDocument, vueScriptDocument, PROPS_AT } = await load('embedded-model.js');
 
 const code = (text, kind) => withMarkupCode(text, embeddedDocument(text, 'javascript', 'component'), kind);
 /** The document's lines with something in them, trimmed. */
@@ -69,4 +69,67 @@ test('Svelte\'s $: values: typed by what they are given', () => {
     assert.match(p, /declare let \$store: any;/);
     assert.ok(!/var n =/.test(p));
     assert.ok(p.startsWith('\n;'));
+});
+
+const L = (...lines) => lines.join(String.fromCharCode(10));
+
+test('Vue: a v-for item is its list element, an index a number, a slot names any; a name given twice is left out', () => {
+    const text = L('<template>', '  <li v-for="(item, i) in list" :key="item.id">{{ item.nmae }} {{ i }}</li>', '  <b v-for="{ id } in list">{{ id }}</b>',
+        '  <S v-slot="{ row }">{{ row.x }}</S>', '  <p v-for="x in a">{{ x }}</p><p v-for="x in b">{{ x.y }}</p>', '</template>', '<script setup lang="ts">', 'const list = [{ id: 1 }]', '</script>');
+    const { list, declared } = vueBindings(text);
+    assert.deepEqual(list.map((b) => [b.kind, b.names, b.source]), [['for', 'item, i', 'list'], ['for', '{ id }', 'list'], ['slot', '{ row }', '']]);
+    assert.ok(!declared.has('x'));
+    const doc = vueMarkupDocument(text, 'A.vue.1', true);
+    assert.ok(doc.includes('var item = __pm_each((list)); var i = __pm_key((list));'));
+    assert.ok(doc.includes('var { id } = __pm_each((list));'));
+    assert.ok(doc.includes('var { row } = (0 as any);'));
+    assert.ok(doc.includes(';( item.nmae )'), 'an expression with a v-for name is checked now');
+    assert.ok(!doc.includes('x.y'), 'one with a name given twice is not');
+    assert.ok(doc.includes('var list = __pm_v.list;'));
+    assert.ok(!doc.includes('var item = __pm_v'));
+    // each expression still at its own place
+    assert.equal(doc.indexOf('item.nmae'), text.indexOf('item.nmae'));
+});
+
+test('Vue: the props a component declares', () => {
+    const typed = vueProps(L('<script setup lang="ts">', 'interface Props { label: string; count?: number }', 'defineProps<Props>()', '</script>'));
+    assert.deepEqual(typed, { type: '{ "label": string; "count"?: number; }', required: ['label'] });
+    const inline = vueProps(L('<script setup lang="ts">', "const p = withDefaults(defineProps<{ title: string, size: 'a' | 'b' }>(), { size: 'a' })", '</script>'));
+    assert.deepEqual(inline, { type: '{ "title": string; "size"?: ' + "'a' | 'b'" + '; }', required: ['title'] });
+    const runtime = vueProps(L('<script setup>', 'defineProps({ a: String, b: [String, Number], c: { type: Boolean, required: true }, d: { type: Number, required: true, default: 1 } })', '</script>'));
+    assert.deepEqual(runtime, { type: '{ "a"?: string; "b"?: string | number; "c": boolean; "d"?: number; }', required: ['c'] });
+    assert.deepEqual(vueProps(L('<script>', "export default { props: ['x', 'y'], data() { return {} } }", '</script>')), { type: '{ "x"?: any; "y"?: any; }', required: [] });
+    assert.equal(vueProps(L('<script setup>', 'const a = 1', '</script>')), null);
+    assert.equal(vueProps('<template><b/></template>'), null);
+});
+
+test('Vue: the props given to a component are checked against its own, a required one left out is told', () => {
+    const text = L('<script setup lang="ts">', "import Child from './Child.vue'", 'const n = 3', '</script>', '<template>',
+        '  <Child :label="n" count="2" class="c" @click="n++" title="free" />', '  <child v-model="n" />', '  <Other :label="n" />', '</template>');
+    const props = { './Child.vue': { type: '{ "label": string; "count"?: number; "modelValue"?: number; }', required: ['label'] } };
+    const checks = vuePropChecks(text, props, true);
+    assert.deepEqual(checks.code, ['declare const __pm_c0: { "label": string; "count"?: number; "modelValue"?: number; };', '__pm_c0["label"] = (n);', '__pm_c0["count"] = "2";',
+        'declare const __pm_c1: { "label": string; "count"?: number; "modelValue"?: number; };', '__pm_c1["modelValue"] = (n);']);
+    assert.equal(text.slice(...checks.places[1]), ':label');
+    assert.equal(text.slice(...checks.places[2]), 'count');
+    assert.deepEqual(checks.missing.map((x) => [text.slice(...x.place), x.message]), [['child', 'Child needs the prop label.']]);
+    const doc = vueMarkupDocument(text, 'A.vue.1', true, props);
+    assert.ok(doc.includes(PROPS_AT + String.fromCharCode(10) + checks.code.join(String.fromCharCode(10))));
+    // in a JavaScript component: the props' type as JSDoc
+    assert.match(vuePropChecks(text, props, false).code[0], /^[/][*][*] @type [{][{] "label": string;/);
+});
+
+test('Vue: an options object is given to __pm_options in as many characters, so its methods have this', () => {
+    const text = L('<script>', 'export default {', '  data() { return { total: 1 } },', '  methods: { up() { return this.total } },', '}', '</script>');
+    const doc = vueScriptDocument(text, embeddedDocument(text, 'javascript', 'component'), false);
+    const head = doc.slice(0, text.length);
+    assert.equal(head.length, text.length);
+    assert.ok(head.includes('let __pm_o=_o_({'));
+    assert.match(head, /\}\n\)/);
+    assert.equal(head.indexOf('this.total'), text.indexOf('this.total'));
+    assert.equal(head.split(String.fromCharCode(10)).length, text.split(String.fromCharCode(10)).length);
+    // export default defineComponent({ ... }) is left to the package's own types
+    const named = L('<script>', 'export default defineComponent({ data() { return {} } })', '</script>');
+    assert.ok(vueScriptDocument(named, embeddedDocument(named, 'javascript', 'component'), false).includes('const __pm_o = defineComponent('));
+    assert.ok(!keepFinding('7023', "'twice' implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions.", 'vue'));
 });

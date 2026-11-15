@@ -22,8 +22,8 @@ const matches = (selector, model) => {
 };
 
 /**
- * The quick fixes the providers of a model's language give for a line: [{ title, edits: [{ resource, range, text }] }]. Only the ones that
- * change text (a fix that only runs a command of the editor has nothing to carry out here).
+ * The quick fixes the providers of a model's language give for a line: [{ title, edits: [{ resource, range, text }] }], or, for one that only
+ * runs a command of the editor (Save to the dictionary, Ignore the rule), [{ title, command: { id, args } }]. Refactorings are left out.
  */
 export async function codeActionsOf(model, line) {
     const markers = monaco.editor.getModelMarkers({ resource: model.uri }).filter((m) => m.startLineNumber <= line && m.endLineNumber >= line);
@@ -39,8 +39,9 @@ export async function codeActionsOf(model, line) {
         for (let action of list?.actions ?? []) {
             if (!action.edit && provider.resolveCodeAction) { try { action = (await provider.resolveCodeAction(action, token)) ?? action; } catch { /* as it is */ } }
             const edits = (action.edit?.edits ?? []).filter((e) => e.resource && e.textEdit).map((e) => ({ resource: e.resource, range: e.textEdit.range, text: e.textEdit.text }));
-            if (!edits.length || action.disabled || out.some((x) => x.title === action.title)) continue;
-            out.push({ title: action.title, edits });
+            if (action.disabled || out.some((x) => x.title === action.title)) continue;
+            if (edits.length) out.push({ title: action.title, edits });
+            else if (action.command?.id && String(action.kind ?? 'quickfix').startsWith('quickfix')) out.push({ title: action.title, command: { id: action.command.id, args: action.command.arguments ?? [] } });
         }
         list?.dispose?.();
     }

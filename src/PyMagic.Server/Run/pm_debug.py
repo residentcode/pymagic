@@ -1518,6 +1518,73 @@ def follow_children(lead):
         mp_util.spawnv_passfds = spawnv_passfds
 
 
+CTRL_C_NAME = "pymagic-ctrl-c-%d"
+
+
+def windows_ctrl_c(serve):
+    """On Windows a program ends a child of its own with os.kill(pid, CTRL_C_EVENT) (uvicorn's reloader its server, at each change), a
+    Ctrl+C sent to the console they share, which a program PyMagic runs never gets (its console is not a terminal's). Here such a Ctrl+C
+    goes by a named event instead: a process that `serve`s one (every process this debugger follows) gets it as Ctrl+C (SIGINT), as from
+    a terminal; one that has none is ended (as uvicorn itself did before 0.29). Other signals, and Ctrl+C to this process, are as before."""
+    if sys.platform != "win32" or getattr(os.kill, "_pm_ctrl_c", False):
+        return
+    import ctypes
+    import signal
+    import _thread
+    from ctypes import wintypes
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenEventW.restype = k.CreateEventW.restype = k.OpenProcess.restype = wintypes.HANDLE
+    k.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    k.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k.SetEvent.argtypes = k.CloseHandle.argtypes = [wintypes.HANDLE]
+    k.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    k.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    original = os.kill
+    ctrl_c = getattr(signal, "CTRL_C_EVENT", 0)
+
+    def kill(pid, sig):
+        if sig == ctrl_c and pid not in (0, os.getpid()):
+            event = k.OpenEventW(0x0002, False, CTRL_C_NAME % pid)   # EVENT_MODIFY_STATE
+            if event:
+                k.SetEvent(event)
+                k.CloseHandle(event)
+                return
+            process = k.OpenProcess(0x0001, False, pid)               # PROCESS_TERMINATE
+            if process:
+                k.TerminateProcess(process, 0xC000013A)               # STATUS_CONTROL_C_EXIT, as a Ctrl+C ends a program
+                k.CloseHandle(process)
+                return
+        return original(pid, sig)
+    kill._pm_ctrl_c = True
+    os.kill = kill
+    if not serve:
+        return
+    event = k.CreateEventW(None, False, False, CTRL_C_NAME % os.getpid())
+    if not event:
+        return
+
+    def wait():
+        while k.WaitForSingleObject(event, 0xFFFFFFFF) == 0:
+            _thread.interrupt_main(signal.SIGINT)
+    threading.Thread(target=wait, daemon=True, name="pymagic-ctrl-c").start()
+
+
+def plain_main(argv):
+    """`pm_debug.py --plain -m module args` or `--plain script args`: the program run as python would, without the debugger, with only
+    windows_ctrl_c (a Run of uvicorn --reload: its reloader's Ctrl+C to its server then reaches it)."""
+    import runpy
+    windows_ctrl_c(serve=False)
+    if argv[:1] == ["-m"] and len(argv) > 1:
+        sys.argv = [argv[1]] + argv[2:]
+        sys.path[0] = os.getcwd()
+        runpy.run_module(argv[1], run_name="__main__", alter_sys=True)
+    elif argv:
+        sys.argv = argv
+        sys.path[0] = os.path.dirname(os.path.abspath(argv[0]))
+        runpy.run_path(argv[0], run_name="__main__")
+
+
 def follow_forks(dbg, host, port, token):
     """A child os.fork makes (multiprocessing's fork start method, a server's forked workers) is debugged as a process of its own:
     it connects to the host again, as a Python child does, with the breakpoints it had. Only the thread that forked is in it, so
@@ -1563,6 +1630,9 @@ def follow_forks(dbg, host, port, token):
 
 
 def main():
+    if sys.argv[1:2] == ["--plain"]:
+        plain_main(sys.argv[2:])
+        return
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--host", default="127.0.0.1", help="where the host listens (WSL and Docker reach it by another address)")
@@ -1594,6 +1664,7 @@ def main():
     lead = ["--port", str(options.port), "--host", options.host, "--token", options.token, "--root", options.root] + (["--all-code"] if options.all_code else [])
     follow_children(lead)
     follow_forks(dbg, options.host, options.port, options.token)
+    windows_ctrl_c(serve=True)
     if not options.child:
         os.chdir(options.root)
     if options.tests:
