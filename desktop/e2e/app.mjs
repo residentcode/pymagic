@@ -78,7 +78,7 @@ class Page {
 }
 
 /** Starts PyMagic.exe on `root`; resolves when its page has the editor. `appSettings`: the app's own settings.json (Settings > MCP Server's). */
-export async function launch(root, settings = null, appSettings = null, { keep = false } = {}) {
+export async function launch(root, settings = null, appSettings = null, { keep = false, env: more = {} } = {}) {
     if (!existsSync(EXE))
         throw new Error(`${EXE} is not built: run node desktop/package.mjs --no-installer first`);
     const port = await freePort();
@@ -92,7 +92,7 @@ export async function launch(root, settings = null, appSettings = null, { keep =
     // the test's windows open minimized, out of the person's way (PYMAGIC_E2E_SHOW=1 leaves them on screen); focus is emulated below, so
     // typing and clicks still reach the editor
     const minimized = !process.env.PYMAGIC_E2E_SHOW;
-    const env = { ...process.env, PYMAGIC_SETTINGS_FILE: join(profile, 'pymagic-settings.json'), ...(minimized ? { PYMAGIC_MINIMIZED: '1' } : {}) };
+    const env = { ...process.env, ...more, PYMAGIC_SETTINGS_FILE: join(profile, 'pymagic-settings.json'), ...(minimized ? { PYMAGIC_MINIMIZED: '1' } : {}) };
     const child = spawn(EXE, [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, root], { stdio: 'ignore', env });
     let target = null;
     for (let i = 0; i < 120 && !target; i++) {
