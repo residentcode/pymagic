@@ -526,6 +526,14 @@ function registerProviders() {
             }
         },
     });
+    // a right-click on text selected in a hover (a problem's message, a type): the editor would take it and show no menu, so it goes past the
+    // editor and the window's own menu gives Copy, as on any other selected text
+    document.addEventListener('contextmenu', (e) => {
+        const hover = e.target.closest?.('.monaco-hover');
+        const sel = document.getSelection();
+        if (hover && sel && !sel.isCollapsed && hover.contains(sel.anchorNode))
+            e.stopPropagation();
+    }, true);
     monaco.languages.registerHoverProvider([...CODE_LANGUAGES, 'php'], {
         async provideHover(model, position, token) {
             // stopped in the debugger on a value: its popup (run.js) shows it instead, as PyCharm's does

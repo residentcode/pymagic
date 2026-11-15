@@ -461,6 +461,7 @@ export function setupRun(deps) {
         head.oncontextmenu = (e) => {
             e.preventDefault();
             openMenu({ x: e.clientX, y: e.clientY }, [
+                ...copySelected(head),
                 ...valueItems(expr, v.value, editRef !== undefined ? () => editVariable(val, editRef, v, member) : null),
                 '-',
                 { label: 'Jump to source', key: 'F4', run: () => void jumpToDeclaration(v.name), disabled: !isName },
@@ -509,6 +510,12 @@ export function setupRun(deps) {
         await showFrame(selectedFrame);
     }
     /** What can be done with a value shown by the debugger (a variable, a member, a value at the end of a line). */
+    /** Copy of the text selected in a row (a part of its value, its name), first in the row's menu; none when nothing of it is selected. */
+    function copySelected(el) {
+        const sel = document.getSelection();
+        const text = sel && !sel.isCollapsed && (el.contains(sel.anchorNode) || el.contains(sel.focusNode)) ? String(sel) : '';
+        return text ? [{ label: 'Copy', key: 'Ctrl+C', run: () => void navigator.clipboard.writeText(text).then(() => toast('Copied'), () => toast('Could not copy')) }, '-'] : [];
+    }
     function valueItems(expr, shown, setValue = null) {
         return [
             { label: 'View value…', run: () => void viewValue(expr, shown) },
@@ -800,6 +807,7 @@ export function setupRun(deps) {
             row.oncontextmenu = (e) => {
                 e.preventDefault();
                 openMenu({ x: e.clientX, y: e.clientY }, [
+                    ...copySelected(row),
                     { label: 'Edit…', run: () => void editWatch(index) },
                     { label: 'Duplicate', run: () => changeWatches([...watches.slice(0, index + 1), { ...watch }, ...watches.slice(index + 1)]) },
                     { label: 'Move up', run: () => changeWatches(moveItem(watches, index, -1)), disabled: index === 0 },
