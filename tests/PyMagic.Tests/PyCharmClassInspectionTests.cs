@@ -86,4 +86,12 @@ public class PyCharmClassInspectionTests
         Assert.Contains("'d.is_open' is a function", always[0].Message);
         Assert.Contains("'ready()' is a coroutine", always[1].Message);
     }
+
+    [Fact]
+    public void AMethodThatTheInstancesHideIsNotAlwaysTrue()
+    {
+        // self.is_expired = False in __init__ hides the method of that name: the condition reads the stored bool
+        string code = "class Cookies:\n    def __init__(self):\n        self.is_expired = False\n\n    def is_expired(self) -> bool:\n        return True\n\n\nclass Child(Cookies): ...\n\n\nclass Door:\n    @property\n    def is_open(self) -> bool:\n        return True\n\n\ndef f(cookies: Cookies | None, c: Child, d: Door):\n    if not cookies or cookies.is_expired:\n        pass\n    if c.is_expired or d.is_open:\n        pass\n";
+        Assert.Equal("", Lines(Found(Make(code), "suspicious-boolean")));
+    }
 }

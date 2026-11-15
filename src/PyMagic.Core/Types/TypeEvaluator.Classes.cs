@@ -405,6 +405,10 @@ public sealed partial class TypeEvaluator
         return d;
     }
 
+    /// <summary>Whether an instance of the receiver's class (or a base) has `name` assigned on self in a method: that value hides a method of the name.</summary>
+    public bool AssignedOnSelf(PyType receiver, string name) =>
+        receiver.Members.Any(t => t is ClassType { IsInstance: true } c && Mro(c.Info).Any(e => e is ClassType ec && InstanceAttributes(ec.Info).ContainsKey(name)));
+
     static IEnumerable<FunctionDef> MethodsOf(IEnumerable<Stmt> body)
     {
         foreach (var s in body)

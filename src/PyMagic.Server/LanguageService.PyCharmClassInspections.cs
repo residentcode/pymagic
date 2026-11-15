@@ -312,7 +312,9 @@ public sealed partial class LanguageService
         };
         foreach (var e in Operands(test))
         {
-            if (e is NameExpr or AttributeExpr && ev.TypeOf(m, e) is FunctionType or OverloadedType)
+            // a method whose name the instances also set (self.is_expired = False in __init__): the stored value hides it, so it is no function
+            if (e is NameExpr or AttributeExpr && ev.TypeOf(m, e) is FunctionType or OverloadedType
+                && !(e is AttributeExpr ae && ev.AssignedOnSelf(ev.TypeOf(m, ae.Value), ae.Attr)))
                 return $"This condition is always true: '{m.Source[e.Start..e.End]}' is a function, not its result; call it";
             if (e is CallExpr && ev.TypeOf(m, e) is ClassType { Info.Name: "Coroutine" or "CoroutineType" })
                 return $"This condition is always true: '{m.Source[e.Start..e.End]}' is a coroutine; await it";
