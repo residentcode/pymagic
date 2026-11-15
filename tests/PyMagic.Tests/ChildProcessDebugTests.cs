@@ -92,4 +92,126 @@ public class ChildProcessDebugTests
             try { Directory.Delete(root, true); } catch (IOException) { }
         }
     }
+
+    // elsewhere than Windows: a child of os.fork, and multiprocessing's fork, forkserver and spawn (checked on Linux with 3.12 and 3.14)
+    const string Forks = "import os, multiprocessing as mp\n" +
+                         "def work(n):\n" +
+                         "    answer = n * 10\n" +
+                         "    return answer\n" +
+                         "if __name__ == '__main__':\n" +
+                         "    pid = os.fork()\n" +
+                         "    if pid == 0:\n" +
+                         "        print('forked', work(1), flush=True)\n" +
+                         "        os._exit(0)\n" +
+                         "    os.waitpid(pid, 0)\n" +
+                         "    for n, kind in ((2, 'fork'), (3, 'forkserver'), (4, 'spawn')):\n" +
+                         "        p = mp.get_context(kind).Process(target=work, args=(n,))\n" +
+                         "        p.start()\n" +
+                         "        p.join()\n" +
+                         "        print(kind, p.exitcode, flush=True)\n";
+
+    [Fact]
+    public void AForkedChildAndEachStartMethodsProcessStopAtTheirBreakpoints()
+    {
+        if (!HavePython || OperatingSystem.IsWindows()) return;
+        string root = Path.Combine(Path.GetTempPath(), "pm_fork_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "main.py"), Forks);
+        var events = new BlockingCollection<JsonNode>();
+        var seen = new List<JsonNode>();
+        JsonNode Next(Func<JsonNode, bool> match)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(60);
+            while (true)
+            {
+                var left = deadline - DateTime.UtcNow;
+                if (left <= TimeSpan.Zero || !events.TryTake(out var e, left))
+                    throw new AssertionException("timed out; saw: " + string.Join(" ", seen.Select(s => s.ToJsonString())));
+                seen.Add(e);
+                if (match(e)) return e;
+            }
+        }
+        try
+        {
+            using var session = new RunSession(events.Add);
+            session.StartWithBreakpoints(root, "main.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray> { ["main.py"] = new JsonArray(3) });
+            for (int round = 1; round <= 4; round++)
+            {
+                Assert.Equal(3, Next(e => e["type"]?.GetValue<string>() == "stopped")["frames"]![0]!["line"]!.GetValue<int>());
+                session.Handle(new JsonObject { ["type"] = "evaluate", ["id"] = round, ["frameId"] = 0, ["expression"] = "n" });
+                Assert.Equal(round.ToString(), Next(e => e["type"]?.GetValue<string>() == "evaluated" && e["id"]?.GetValue<int>() == round)["result"]!.GetValue<string>());
+                session.Handle(new JsonObject { ["type"] = "continue" });
+            }
+            Assert.Equal(0, Next(e => e["type"]?.GetValue<string>() == "exited")["code"]!.GetValue<int>());
+            string output = string.Concat(seen.Where(e => e["type"]?.GetValue<string>() == "output").Select(e => e["text"]?.GetValue<string>()));
+            Assert.Contains("forked 10", output);
+            Assert.Contains("spawn 0", output);
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch (IOException) { }
+        }
+    }
+
+    // multiprocessing's processes (uvicorn --reload's server, a pool's workers) are started without subprocess
+    const string Pool = "import multiprocessing as mp\n" +
+                        "from concurrent.futures import ProcessPoolExecutor\n" +
+                        "def work(n):\n" +
+                        "    answer = n * 10\n" +
+                        "    return answer\n" +
+                        "if __name__ == '__main__':\n" +
+                        "    p = mp.Process(target=work, args=(1,))\n" +
+                        "    p.start()\n" +
+                        "    p.join()\n" +
+                        "    with ProcessPoolExecutor(max_workers=1) as pool:\n" +
+                        "        print('pool', pool.submit(work, 2).result(), flush=True)\n" +
+                        "    print('parent done', p.exitcode, flush=True)\n";
+
+    [Fact]
+    public void AProcessOfMultiprocessingAndAPoolsWorkerStopAtTheirBreakpoints()
+    {
+        if (!HavePython) return;
+        string root = Path.Combine(Path.GetTempPath(), "pm_mp_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "main.py"), Pool);
+        var events = new BlockingCollection<JsonNode>();
+        var seen = new List<JsonNode>();
+        JsonNode Next(Func<JsonNode, bool> match)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(60);
+            while (true)
+            {
+                var left = deadline - DateTime.UtcNow;
+                if (left <= TimeSpan.Zero || !events.TryTake(out var e, left))
+                    throw new AssertionException("timed out; saw: " + string.Join(" ", seen.Select(s => s.ToJsonString())));
+                seen.Add(e);
+                if (match(e)) return e;
+            }
+        }
+        JsonNode Stopped() => Next(e => e["type"]?.GetValue<string>() == "stopped");
+        string Output() => string.Concat(seen.Where(e => e["type"]?.GetValue<string>() == "output").Select(e => e["text"]?.GetValue<string>()));
+        try
+        {
+            using var session = new RunSession(events.Add);
+            session.StartWithBreakpoints(root, "main.py", true, Array.Empty<string>(), new Dictionary<string, JsonArray> { ["main.py"] = new JsonArray(4) });
+
+            for (int round = 1; round <= 2; round++)
+            {
+                var stop = Stopped();
+                Assert.Equal(4, stop["frames"]![0]!["line"]!.GetValue<int>());
+                Assert.Equal("work", stop["frames"]![0]!["name"]!.GetValue<string>());
+                session.Handle(new JsonObject { ["type"] = "evaluate", ["id"] = round, ["frameId"] = 0, ["expression"] = "n" });
+                Assert.Equal(round.ToString(), Next(e => e["type"]?.GetValue<string>() == "evaluated" && e["id"]?.GetValue<int>() == round)["result"]!.GetValue<string>());
+                session.Handle(new JsonObject { ["type"] = "continue" });
+            }
+
+            Assert.Equal(0, Next(e => e["type"]?.GetValue<string>() == "exited")["code"]!.GetValue<int>());
+            Assert.Contains("pool 20", Output());
+            Assert.Contains("parent done 0", Output());
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch (IOException) { }
+        }
+    }
 }

@@ -1267,7 +1267,7 @@ class Debugger(bdb.Bdb):
 
     # ---------------------------------------------------------------- running the program
 
-    def run_script(self, path, script_args, package=None, add_folder=True, source=None):
+    def run_script(self, path, script_args, package=None, add_folder=True, source=None, spec=None):
         """Runs a file (or, with `source`, python -c's code, named "<string>") as the program's __main__."""
         if source is None:
             with open(path, "rb") as f:
@@ -1280,6 +1280,8 @@ class Debugger(bdb.Bdb):
         # (enum.global_enum, pickle, doctest) must not find this helper's
         main_module = types.ModuleType("__main__")
         main_module.__dict__.update({"__builtins__": builtins, "__package__": package, **({} if path == "<string>" else {"__file__": path})})
+        if spec is not None:
+            main_module.__spec__ = spec   # python -m's: multiprocessing's children import the module again by its name
         sys.modules["__main__"] = main_module
         globs = main_module.__dict__
 
@@ -1430,10 +1432,10 @@ def python_command(argv):
     code, its arguments); None for any other program, and for Python reading stdin or starting its prompt."""
     if not argv:
         return None
-    exe = os.fspath(argv[0])
+    exe = os.fsdecode(argv[0])   # multiprocessing gives the interpreter as bytes elsewhere than Windows
     if not PYTHON_NAME.match(os.path.basename(exe)) and os.path.normcase(os.path.abspath(exe)) != os.path.normcase(sys.executable):
         return None
-    words = [os.fspath(a) for a in argv]
+    words = [os.fsdecode(a) for a in argv]
     interpreter, i = [words[0]], 1
     while i < len(words):
         word = words[i]
@@ -1473,18 +1475,91 @@ def follow_children(lead):
     if getattr(original, "_pm_follows", False):
         return
 
-    def __init__(self, args, *rest, **kwargs):
+    def under_debugger(argv):
+        """The command again, with this helper between Python and what it runs; None when it is not one to follow."""
         try:
-            found = python_command(list(args)) if isinstance(args, (list, tuple)) and not kwargs.get("shell") and not kwargs.get("executable") else None
+            found = python_command(list(argv))
         except Exception:
-            found = None
-        if found is not None:
-            interpreter, kind, what, program_args = found
-            option = {"script": "--script", "-m": "--module", "-c": "--command"}[kind]
-            args = interpreter + [helper] + lead + ["--child", option, what, "--"] + program_args
+            return None
+        if found is None or (found[1] == "script" and os.path.normcase(os.path.abspath(found[2])) == os.path.normcase(helper)):
+            return None   # started under this helper already
+        interpreter, kind, what, program_args = found
+        if kind == "-c" and "resource_tracker" in what:
+            return None   # multiprocessing's own helper process, no code of the program's
+        option = {"script": "--script", "-m": "--module", "-c": "--command"}[kind]
+        return interpreter + [helper] + lead + ["--child", option, what, "--"] + program_args
+
+    def __init__(self, args, *rest, **kwargs):
+        if isinstance(args, (list, tuple)) and not kwargs.get("shell") and not kwargs.get("executable"):
+            args = under_debugger(args) or args
         original(self, args, *rest, **kwargs)
     __init__._pm_follows = True
     subprocess.Popen.__init__ = __init__
+
+    # multiprocessing starts its processes without subprocess (uvicorn --reload's server, a ProcessPoolExecutor's workers): on Windows
+    # by the command line spawn.get_command_line gives, elsewhere by util.spawnv_passfds (spawn's children and the forkserver)
+    try:
+        import multiprocessing.spawn as mp_spawn
+        import multiprocessing.util as mp_util
+    except Exception:
+        return
+    if sys.platform == "win32":
+        command_line = mp_spawn.get_command_line
+
+        def get_command_line(**kwds):
+            argv = command_line(**kwds)
+            return under_debugger(argv) or argv
+        mp_spawn.get_command_line = get_command_line
+    elif hasattr(mp_util, "spawnv_passfds"):
+        spawnv = mp_util.spawnv_passfds
+
+        def spawnv_passfds(path, args, passfds):
+            return spawnv(path, under_debugger(args) or args, passfds)
+        mp_util.spawnv_passfds = spawnv_passfds
+
+
+def follow_forks(dbg, host, port, token):
+    """A child os.fork makes (multiprocessing's fork start method, a server's forked workers) is debugged as a process of its own:
+    it connects to the host again, as a Python child does, with the breakpoints it had. Only the thread that forked is in it, so
+    what the other threads held (the channel's lock, a stop) starts afresh."""
+    if not hasattr(os, "register_at_fork"):
+        return
+
+    def in_child():
+        if dbg.detached:
+            return
+        # this hook is not the program's: untraced (its own lines would otherwise wait on the "suspend all" event it replaces)
+        sys.settrace(None)
+        sys._getframe().f_trace = None
+        try:
+            reconnect()
+        finally:
+            sys.settrace(dbg.trace_dispatch)
+
+    def reconnect():
+        try:
+            sock = socket.create_connection((host, port))
+        except OSError:
+            dbg.detach()
+            return
+        dbg.sock = sock
+        dbg.send_lock = threading.Lock()
+        dbg.stop_lock = threading.RLock()
+        dbg.commands = queue.Queue()
+        dbg.go = threading.Event()
+        resumed = threading.Event()
+        resumed.set()
+        dbg.resumed = resumed
+        dbg.stopped_ident = None
+        dbg.last_thread = None
+        dbg.stack = []
+        dbg.main_thread = threading.main_thread()
+        dbg.send({"type": "hello", "token": token, **({"name": os.environ["PYMAGIC_DEBUG_NAME"]} if os.environ.get("PYMAGIC_DEBUG_NAME") else {})})
+        reader = threading.Thread(target=dbg.read_loop, daemon=True, name="pymagic-debugger")
+        reader.start()
+        dbg.reader_ident = reader.ident
+        dbg.go.wait(15)
+    os.register_at_fork(after_in_child=in_child)
 
 
 def main():
@@ -1518,6 +1593,7 @@ def main():
 
     lead = ["--port", str(options.port), "--host", options.host, "--token", options.token, "--root", options.root] + (["--all-code"] if options.all_code else [])
     follow_children(lead)
+    follow_forks(dbg, options.host, options.port, options.token)
     if not options.child:
         os.chdir(options.root)
     if options.tests:
@@ -1547,7 +1623,7 @@ def main():
         if spec is None or not spec.origin or not os.path.isfile(spec.origin):
             print("No module named %s" % options.module, file=sys.stderr)
             sys.exit(1)
-        code = dbg.run_script(spec.origin, options.args, package=package or None, add_folder=False)
+        code = dbg.run_script(spec.origin, options.args, package=package or None, add_folder=False, spec=spec)
     else:
         code = dbg.run_script(os.path.abspath(options.script), options.args)
     sys.stdout.flush()
