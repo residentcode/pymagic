@@ -56,6 +56,9 @@ public class PyCharmShapeInspectionTests
         Assert.Contains("a folder without __init__.py", Found(svc2, uri2, "relative-import").Single().Message);
         var (svc3, _, uri3) = Make("from .helpers import x\n", "pkg/mod.py", ("pkg/__init__.py", ""), ("pkg/helpers.py", "x = 1\n"));
         Assert.Equal(0, Found(svc3, uri3, "relative-import").Count);
+        // a folder without __init__.py inside a real package (flask/sansio) is fine: it is imported through that package
+        var (svc4, _, uri4) = Make("from ..helpers import x\n", "pkg/inner/mod.py", ("pkg/__init__.py", ""), ("pkg/helpers.py", "x = 1\n"));
+        Assert.Equal(0, Found(svc4, uri4, "relative-import").Count);
     }
 
     [Fact]

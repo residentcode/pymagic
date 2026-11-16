@@ -452,6 +452,8 @@ public sealed partial class TypeEvaluator
     /// <summary>Declarations of one symbol combined into one type; overloaded defs become an OverloadedType.</summary>
     PyType CombineDeclarations(ModuleInfo m, IReadOnlyList<Declaration> decls)
     {
+        if (decls.Count > 1 && decls.Any(d => d.Kind is DeclKind.Class or DeclKind.Function))
+            decls = decls.Where(d => !IsStandInForFoundImport(m, d, decls)).ToList();
         var types = decls.Select(d => TypeOfDeclaration(m, d)).ToList();
         var overloads = types.OfType<FunctionType>().Where(f => (f.Info.Flags & FuncFlags.Overload) != 0).ToList();
         if (overloads.Count > 0)
@@ -701,6 +703,27 @@ public sealed partial class TypeEvaluator
         return t is UnknownType && IsGuardedByFallback(m, a) ? PyType.Never : t;
     }
 
+    /// <summary>
+    /// `try: from .socks_proxy import SOCKSProxy` / `except ImportError: class SOCKSProxy: ...`: the class or def in the handler only stands in
+    /// when an optional dependency is missing. When the import in the try is found, it is the name's type, as PyCharm has it; a stand-in
+    /// value (`= None`) stays, since the code checks for it.
+    /// </summary>
+    bool IsStandInForFoundImport(ModuleInfo m, Declaration d, IReadOnlyList<Declaration> decls)
+    {
+        if (d.Kind is not (DeclKind.Class or DeclKind.Function)) return false;
+        Node child = d.Node;
+        for (var p = m.ParentOf(child); p != null; child = p, p = m.ParentOf(p))
+        {
+            if (p is FunctionDef or ClassDef or Module) return false;
+            if (p is not ExceptHandler h || m.ParentOf(h) is not TryStmt t) continue;
+            bool catches = h.Type == null || h.Type is NameExpr { Name: "ImportError" or "ModuleNotFoundError" or "Exception" }
+                || h.Type is TupleExpr tu && tu.Items.Any(i => i is NameExpr { Name: "ImportError" or "ModuleNotFoundError" });
+            if (!catches) return false;
+            return decls.Any(o => o.Kind == DeclKind.Import && t.Body.Any(st => Contains(st, o.Node)) && ImportTypeOf(m, (ImportAlias)o.Node) is not (UnknownType or NeverType));
+        }
+        return false;
+    }
+
     /// <summary>An import in the body of a try whose ImportError handler binds the same name again.</summary>
     static bool IsGuardedByFallback(ModuleInfo m, ImportAlias a)
     {
@@ -732,6 +755,8 @@ public sealed partial class TypeEvaluator
             ImportFromStmt f => f.Names.Any(n => (n.AsName ?? n.Name) == name),
             AssignStmt asg => asg.Targets.Any(x => x is NameExpr nx && nx.Name == name),
             AnnAssignStmt ann => ann.Target is NameExpr nx && nx.Name == name,
+            ClassDef cd => cd.Name == name,
+            FunctionDef fd => fd.Name == name,
             _ => false,
         };
     }

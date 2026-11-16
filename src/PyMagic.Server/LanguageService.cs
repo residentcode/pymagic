@@ -472,6 +472,8 @@ public sealed partial class LanguageService
     {
         "unresolved-reference", "missing-attribute", "unresolved-import", "unresolved-import-name", "call-arguments", "argument-type",
         "return-type", "assignment-type", "unsupported-operand", "redeclared", "final-misuse", "final-reassignment", "typeddict-keys", "type-hints",
+        // what mypy reports on a def's own line (`def invoke(  # type: ignore`): an override it accepts, a return it cannot see
+        "method-override", "missing-return", "not-callable", "invalid-cast",
     };
 
     // ------------------------------------------------------------ node lookup

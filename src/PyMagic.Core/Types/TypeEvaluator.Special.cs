@@ -80,7 +80,7 @@ public sealed partial class TypeEvaluator
         return PyType.Union(parts);
     }
 
-    bool InheritsFrom(ClassInfo c, string qualifiedName) =>
+    public bool InheritsFrom(ClassInfo c, string qualifiedName) =>
         Mro(c).Any(e => e is ClassType ct && ct.Info.QualifiedName == qualifiedName);
 
     static bool HasExplicitMember(ClassInfo c, string name) =>

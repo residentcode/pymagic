@@ -905,9 +905,10 @@ public sealed partial class TypeEvaluator
             });
             inner = Pick(CallValue(withoutCls, args, callNode));
         }
-        else if (!unkInit && !unkNew && !data.HasUnknownBase && args.Count > 0 && !HasUnknownAncestor(cls.Info))
+        // `cls(*args, **kwargs)` may pass nothing: only an argument that is surely there is too many
+        else if (!unkInit && !unkNew && !data.HasUnknownBase && args.FirstOrDefault(a => a.Stars == 0) is { } extra && !HasUnknownAncestor(cls.Info))
             inner = new CallTarget(cls, PyType.Unknown, none,
-                new[] { new CallProblem(CallProblemKind.Arity, args[0].Node ?? callNode, $"'{cls.Info.Name}()' takes no arguments") });
+                new[] { new CallProblem(CallProblemKind.Arity, extra.Node ?? callNode, $"'{cls.Info.Name}()' takes no arguments") });
 
         PyType[] resultArgs;
         if (cls.Args.Count > 0) resultArgs = cls.Args.ToArray();
@@ -1414,14 +1415,16 @@ public sealed partial class TypeEvaluator
                     || (src is ClassType inst && FindMember(inst, "__call__", true, null, out _) != null);
 
             case ClassType { IsInstance: false } dc:
+                // a value annotated plain `type` (`exc_class.__mro__`'s items) is type[Any]: it may be the class wanted
+                if (src is ClassType { IsInstance: true, Args.Count: 0, Info.QualifiedName: "builtins.type" }) return true;
                 return src is ClassType { IsInstance: false } sc && IsSubclass(sc.Info, dc.Info);
 
             case ClassType dc:
             {
                 if (dc.Info.QualifiedName == "builtins.object") return true;
                 if (src is FunctionType or OverloadedType or SignatureType)
-                    return dc.Info.Name is "function" or "Callable" or "object";
-                if (src is ModuleType) return dc.Info.Name == "module";
+                    return dc.Info.Name is "function" or "Callable" or "object" or "Hashable";   // a function hashes by identity
+                if (src is ModuleType) return dc.Info.Name is "module" or "ModuleType" or "Hashable";   // types.ModuleType is the class of modules
                 if (src is not ClassType s) return true; // unknown shapes: do not complain
 
                 if (!s.IsInstance) return dc.Info.Name is "type" or "object" || IsProtocolSatisfiedByClassObject(dc);

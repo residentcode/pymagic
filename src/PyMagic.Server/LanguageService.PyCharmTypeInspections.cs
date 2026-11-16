@@ -48,7 +48,7 @@ public sealed partial class LanguageService
                     if (!KnownType(target) || !KnownType(value)) break;
                     if (SameType(ev, Widened(value), target))
                         yield return At(call, $"Unnecessary cast: the value is already '{target.Display()}'", "unnecessary-cast", FindingLevel.Weak);
-                    else if (!ev.IsAssignable(target, value) && !ev.IsAssignable(Widened(value), target) && Unrelated(target, Widened(value)))
+                    else if (!ev.IsAssignable(target, value) && !ev.IsAssignable(Widened(value), target) && Unrelated(ev, target, Widened(value)))
                         yield return At(call, $"Cast of '{Widened(value).Display()}' to '{target.Display()}': the types are unrelated", "invalid-cast");
                     break;
                 }
@@ -135,9 +135,18 @@ public sealed partial class LanguageService
     static bool SameType(TypeEvaluator ev, PyType a, PyType b) =>
         a.Equals(b) || a.Display() == b.Display() || ev.IsAssignable(a, b) && ev.IsAssignable(b, a) && a is not ClassType { Info.Name: "object" } && b is not ClassType { Info.Name: "object" };
 
-    /// <summary>Two classes neither of which derives from the other, where a value of one cannot be the other (protocols and unions are not judged).</summary>
-    static bool Unrelated(PyType a, PyType b) =>
-        a is ClassType { IsInstance: true } ca && b is ClassType { IsInstance: true } cb && ca.Info.Name != "object" && cb.Info.Name != "object";
+    /// <summary>
+    /// Two classes neither of which derives from the other, whatever their type arguments (list[Base] cast to list[Sub] is related), where a value
+    /// of one cannot be the other. typing's IO, TextIO, BinaryIO and the like are how code says that a wrapper behaves as a stream: a cast to
+    /// or from one is not judged, nor are protocols and unions.
+    /// </summary>
+    static bool Unrelated(TypeEvaluator ev, PyType a, PyType b) =>
+        a is ClassType { IsInstance: true } ca && b is ClassType { IsInstance: true } cb && ca.Info.Name != "object" && cb.Info.Name != "object"
+        && !Abstract(ev, ca.Info) && !Abstract(ev, cb.Info)
+        && !ev.InheritsFrom(ca.Info, cb.Info.QualifiedName) && !ev.InheritsFrom(cb.Info, ca.Info.QualifiedName);
+
+    static bool Abstract(TypeEvaluator ev, ClassInfo c) =>
+        c.Module.Name is "typing" or "typing_extensions" or "collections.abc" or "_typeshed" || ev.IsProtocol(c);
 
     /// <summary>The first ClassVar or Final anywhere in an annotation, or null.</summary>
     static string? QualifierIn(Expr annotation) =>

@@ -38,6 +38,9 @@ public class PyCharmTypeInspectionTests
         Assert.Equal("Cast of 'str' to 'int': the types are unrelated", Found(svc, "invalid-cast")[1].Message);
         var fix = svc.CodeActions(Uri, Found(svc, "unnecessary-cast")[0].Range).Single(a => a.Title == "Remove the cast");
         Assert.Equal("a", fix.Edit!.Changes[Uri].Single().NewText);
+        // a subclass named by a string, a wrapper said to be a stream, a list of the base said to hold one subclass: what the code knows
+        string more = "from typing import TextIO, cast\n\n\nclass A: ...\nclass B(A): ...\nclass Wrapper: ...\n\n\ndef f(a: A | None, w: Wrapper, items: list[A]):\n    if a is not None:\n        cast('B', a)\n    cast(TextIO, w)\n    cast(list[B], items)\n";
+        Assert.Equal("", Lines(Found(Make(more), "invalid-cast")));
     }
 
     [Fact]

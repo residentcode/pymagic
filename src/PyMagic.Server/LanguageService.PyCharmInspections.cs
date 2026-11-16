@@ -117,7 +117,11 @@ public sealed partial class LanguageService
     {
         if (m.Package.Length == 0)
             return "A relative import in a module that is not in a package: Python stops with \"attempted relative import with no known parent package\"";
-        if (Current().Workspace.GetModule(m.Package) is { Kind: ResolutionKind.NamespacePackage })
+        var ws = Current().Workspace;
+        // a folder without __init__.py inside a real package (flask/sansio) is imported through that package: its relative imports work
+        int dot = m.Package.LastIndexOf('.');
+        bool insidePackage = dot > 0 && ws.GetModule(m.Package[..dot]) is { Kind: not ResolutionKind.NamespacePackage };
+        if (!insidePackage && ws.GetModule(m.Package) is { Kind: ResolutionKind.NamespacePackage })
             return $"A relative import in '{m.Package}', a folder without __init__.py: it works only as a namespace package; add __init__.py";
         return null;
     }
