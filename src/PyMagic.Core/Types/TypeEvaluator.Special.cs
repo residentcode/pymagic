@@ -39,6 +39,47 @@ public sealed partial class TypeEvaluator
         return PyType.Union(result.Members.Where(t => !IsList(t)).ToList());
     }
 
+    /// <summary>
+    /// django-environ's `env('NAME', cast=..., default=...)`: untyped, so its body would give every type a cast can make. What it gives is the
+    /// cast's (the call's, or the scheme's: `environ.Env(DEBUG=(bool, False))`), else the default's type (its smart cast; a None default
+    /// adds None to the str), else the variable's str. Null when the call is not one or its cast is not a plain class.
+    /// </summary>
+    PyType? EnvironCall(ModuleInfo m, CallExpr call, PyType callee)
+    {
+        if (callee is not ClassType { IsInstance: true } env || !InheritsFrom(env.Info, "environ.environ.Env")) return null;
+        Expr? Arg(int position, string name) =>
+            call.Args.FirstOrDefault(a => a.Name == name)?.Value ?? (call.Args.Count > position && call.Args.Take(position + 1).All(a => a is { Name: null, Stars: 0 }) ? call.Args[position].Value : null);
+        if (call.Args.Any(a => a.Stars != 0) || Arg(0, "var") is not { } varExpr) return null;
+        Expr? cast = Arg(1, "cast"), dflt = Arg(2, "default");
+        if (cast == null && StringValue(varExpr) is string name && call.Func is NameExpr envName)
+        {
+            // the scheme the Env was made with: NAME=cast or NAME=(cast, default)
+            var made = AstChildren.Descendants(m.Ast).OfType<AssignStmt>()
+                .Where(a => a.Targets.Any(t => t is NameExpr n && n.Name == envName.Name) && a.Value is CallExpr)
+                .Select(a => (CallExpr)a.Value).LastOrDefault();
+            var entry = made?.Args.FirstOrDefault(a => a.Name == name)?.Value;
+            if (entry is TupleExpr { Items: [var c, ..] } tuple) { cast = c; if (tuple.Items.Count > 1) dflt ??= tuple.Items[1]; }
+            else if (entry != null) cast = entry;
+        }
+        var parts = new List<PyType>();
+        if (cast != null)
+        {
+            if (cast is ConstExpr { Kind: ConstKind.None }) cast = null;
+            else if (TypeOf(m, cast) is ClassType { IsInstance: false } castClass) parts.Add(castClass.Info.Name is "list" or "tuple" ? Inst(castClass.Info.Name, Inst("str")) : castClass.AsInstance());
+            else return null;
+        }
+        if (dflt != null)
+        {
+            var d = TypeOf(m, dflt);
+            if (IsNone(d)) parts.Add(NoneInstance);
+            else if (cast == null && d is ClassType { IsInstance: true } dc) parts.Add(dc.Widened());
+            else if (cast != null && d is ClassType { IsInstance: true } dc2) parts.Add(dc2.Widened());
+            else return null;
+        }
+        if (cast == null && (dflt == null || parts.All(IsNone))) parts.Insert(0, Inst("str"));
+        return PyType.Union(parts);
+    }
+
     bool InheritsFrom(ClassInfo c, string qualifiedName) =>
         Mro(c).Any(e => e is ClassType ct && ct.Info.QualifiedName == qualifiedName);
 

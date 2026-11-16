@@ -1160,6 +1160,8 @@ async function main() {
         await desktop.closeProject();
     };
     window.pymagic.closeProject = closeProject;
+    // the desktop app calls it when the window is closed: the unsaved files are written first
+    window.pymagic.saveBeforeClose = async () => { await common.saveAll(); return true; };
     window.pymagic.runCommand = (id) => runById(id, editor);
     runConfigs = setupRunConfigurations({ currentFile: () => currentRel });
     runHooks = setupRun({ ...common, root: info.root, scratches: info.scratches, runConfig: () => runConfigs.current(), runConfigByName: (name) => runConfigs.byName(name), showDiff: (...a) => git.showDiff(...a), askText: (...a) => explorer.askText(...a),

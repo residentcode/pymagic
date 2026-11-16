@@ -352,6 +352,15 @@ const minimized = process.env.PYMAGIC_MINIMIZED === '1';
 const windowOptions = (width, height) => ({ width, height, backgroundColor: '#0f111a', title: 'PyMagic', icon, autoHideMenuBar: true, ...(minimized ? { show: false } : {}),
   webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.js'), ...(minimized ? { backgroundThrottling: false } : {}) } });
 
+/** The page writes its unsaved files (at most 5 seconds); once done, the window may close without asking again. */
+function saveWindow(w) {
+  if (!w.saving) {
+    const save = w.win.isDestroyed() ? Promise.resolve() : w.win.webContents.executeJavaScript('window.pymagic?.saveBeforeClose?.()').catch(() => {});
+    w.saving = Promise.race([save, new Promise(r => setTimeout(r, 5000))]).finally(() => { w.saved = true; });
+  }
+  return w.saving;
+}
+
 function createWindow() {
   // the page has its own menu (the mark at the left of its command bar); the app's menu stays for its keys and shows with Alt
   const w = { win: new BrowserWindow(windowOptions(1400, 900)), host: null, port: 0, project: null };
@@ -367,6 +376,12 @@ function createWindow() {
     if (own) return { action: 'allow', overrideBrowserWindowOptions: windowOptions(1100, 800) };
     shell.openExternal(url);
     return { action: 'deny' };
+  });
+  // closing the window saves its files first, as PyCharm does on exit (the page has at most 5 seconds for it)
+  w.win.on('close', (e) => {
+    if (w.saved || w.win.webContents.isDestroyed()) return;
+    e.preventDefault();
+    saveWindow(w).then(() => { if (!w.win.isDestroyed()) w.win.close(); });
   });
   // its engine ends with it
   w.win.on('closed', () => { stopHost(w); windows.delete(w); });
@@ -593,5 +608,11 @@ app.on('web-contents-created', (_e, contents) => {
 
 app.on('window-all-closed', () => app.quit());
 const stopAll = () => { for (const w of windows) stopHost(w); };
-app.on('before-quit', stopAll);
+// quitting saves every window's files while their engines still run, then stops them
+app.on('before-quit', (e) => {
+  const unsaved = [...windows].filter(w => !w.saved);
+  if (unsaved.length === 0) { stopAll(); return; }
+  e.preventDefault();
+  Promise.all(unsaved.map(saveWindow)).then(() => app.quit());
+});
 process.on('exit', stopAll);
