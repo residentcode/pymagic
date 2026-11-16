@@ -67,6 +67,21 @@ public class UnionWithUnknownTests
     }
 
     [Fact]
+    public void AnAttributeOneMemberLacksFollowsTheUnionRule()
+    {
+        // p = Empty() before `for p in items`: after the loop p may still be the Empty, which has no text
+        string src = "class Empty:\n    pass\n\n\nclass Para:\n    text: str = ''\n\n\ndef f(items: list[Para]):\n    p = Empty()\n    for p in items:\n        p.text\n    p.text\n";
+        var ws = new Workspace();
+        var m = ws.AddModule("main", src);
+        var strict = ws.Evaluator.Inspect(m, true).Select(d => d.Message).ToList();
+        Assert.True(strict.Count == 1 && strict[0] == "Cannot find reference 'text' in 'Empty'", string.Join("; ", strict));
+        var lenient = new Workspace();
+        lenient.Evaluator.LenientUnions = true;
+        var m2 = lenient.AddModule("main", src);
+        Assert.Equal("", string.Join("; ", lenient.Evaluator.Inspect(m2, true).Select(d => d.Message)));
+    }
+
+    [Fact]
     public void ALoopCarriedVariableIsStillReported()
     {
         // the placeholder for a value that depends on itself is not an Unknown member: it leaves the union

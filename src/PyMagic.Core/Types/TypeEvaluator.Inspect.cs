@@ -114,6 +114,8 @@ public sealed partial class TypeEvaluator
         var found = recv.Members.OfType<ClassType>().Where(x => !res.Missing.Contains(x)).ToList();
         missing.RemoveAll(x => x is ClassType c && found.Any(f => f.Info.Name == c.Info.Name && ReferenceEquals(f.Info.Module, c.Info.Module) && f.IsInstance == c.IsInstance));
         if (missing.Count == 0) return;
+        // PyCharm's union rule before 2026.1 (Settings, "Check every member of a union" off): an attribute one member has is found
+        if (LenientUnions && recv.Members.Any(x => !res.Missing.Contains(x))) return;
         int start = attr.End - attr.Attr.Length;
         diags.Add(new Diagnostic(start, attr.Attr.Length,
             $"Cannot find reference '{attr.Attr}' in '{PyType.Union(missing)}'"));
