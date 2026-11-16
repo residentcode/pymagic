@@ -45,6 +45,16 @@ public class TypingCorpusTests
     }
 
     [Fact]
+    public void AClassmethodSubclassStaysACallableClassMethod()
+    {
+        // Django's classonlymethod (View.as_view): a classmethod whose __get__ refuses instances
+        var ws = new Workspace();
+        var m = ws.AddModule("main", "class classonlymethod(classmethod):\n    def __get__(self, instance, cls=None):\n        if instance is not None:\n            raise AttributeError('class only')\n        return super().__get__(instance, cls)\n\n\nclass View:\n    @classonlymethod\n    def as_view(cls, **initkwargs):\n        def view(request):\n            return cls()\n        return view\n\n\nclass ListView(View):\n    pass\n\n\nV = ListView.as_view(template_name='x.html')\n");
+        Assert.Equal("", string.Join(" | ", ws.Evaluator.Inspect(m).Select(d => d.Message)));
+        Assert.Equal("function view", ws.Evaluator.TypeOf(m, AstChildren.Descendants(m.Ast).OfType<AssignStmt>().Last().Value).Display());
+    }
+
+    [Fact]
     public void TypeIgnoreOnADefSilencesItsOverrideAndMissingReturn()
     {
         var svc = new LanguageService();

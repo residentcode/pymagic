@@ -125,7 +125,11 @@ public sealed record ClassType(ClassInfo Info, IReadOnlyList<PyType> Args, bool 
         if (IsInstance && Info.Name == "NoneType" && Info.Module.Name is "builtins" or "types") return "None";
         if (IsInstance && EnumMember != null) return $"{Info.Name}.{EnumMember}";
         if (IsInstance && LiteralValue != null) return $"Literal[{LiteralText(LiteralValue)}]";
-        if (TupleItems == null && Args.Count == 0) return IsInstance ? Info.Name : $"type[{Info.Name}]";   // the usual case, without a builder
+        if (TupleItems == null && Args.Count == 0)   // the usual case, without a builder
+        {
+            string name = Info.DisplayArgs is { } shown ? $"{Info.Name}[{shown}]" : Info.Name;
+            return IsInstance ? name : $"type[{name}]";
+        }
         var sb = new StringBuilder(Info.Name);
         if (TupleItems != null)
         {

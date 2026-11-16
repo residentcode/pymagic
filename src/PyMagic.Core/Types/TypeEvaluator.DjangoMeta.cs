@@ -23,7 +23,8 @@ public sealed partial class TypeEvaluator
             else
                 foreach (var entry in Mro(c))
                 {
-                    if (entry is not ClassType e || e.Info.Module.IsStub) continue;
+                    // Django's source or django-stubs: the class is told by its name and module either way
+                    if (entry is not ClassType e) continue;
                     string module = e.Info.Module.Name;
                     if (e.Info.Name is "ModelForm" or "BaseModelForm" && module.StartsWith("django.forms", StringComparison.Ordinal)) { role = DjangoClassRole.Form; break; }
                     if (e.Info.Name == "ModelSerializer" && module.StartsWith("rest_framework", StringComparison.Ordinal)) { role = DjangoClassRole.Serializer; break; }

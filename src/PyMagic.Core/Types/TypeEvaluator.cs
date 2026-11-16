@@ -131,6 +131,8 @@ public sealed partial class TypeEvaluator
     static string? DecoratorBaseName(ModuleInfo m, Expr d)
     {
         string? name = d switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => null };
+        // Django's classonlymethod (View.as_view) is a classmethod that refuses instances
+        if (name == "classonlymethod") return "classmethod";
         if (name == null || FlagDecorators.Contains(name) || d is not NameExpr ne) return name;
         return AliasedFlagName(m, ne, 3, new HashSet<Symbol>()) ?? name;
     }
@@ -144,7 +146,12 @@ public sealed partial class TypeEvaluator
             if (decl.Kind == DeclKind.Import && decl.Node is ImportAlias ia && m.ParentOf(ia) is ImportFromStmt)
             {
                 if (FlagDecorators.Contains(ia.Name)) return ia.Name;
+                if (ia.Name == "classonlymethod") return "classmethod";
             }
+            // a class of this module built on one (`class classonlymethod(classmethod)`) decorates as it does
+            else if (decl.Kind == DeclKind.Class && decl.Node is ClassDef cd
+                && cd.Bases.FirstOrDefault(b => b.Name == null && b.Value is NameExpr { Name: "classmethod" or "staticmethod" or "property" })?.Value is NameExpr baseName)
+                return baseName.Name;
             else if (decl.Kind == DeclKind.Variable && m.ParentOf(decl.Node) is AssignStmt { Targets.Count: 1 } a && ReferenceEquals(a.Targets[0], decl.Node))
             {
                 if (a.Value is AttributeExpr av && FlagDecorators.Contains(av.Attr)) return av.Attr;
@@ -167,6 +174,7 @@ public sealed partial class TypeEvaluator
             string? name = dec switch { CallExpr { Func: NameExpr cn } => cn.Name, CallExpr { Func: AttributeExpr ca } => ca.Attr, _ => DecoratorBaseName(m, dec) };
             if (name != null && FlagDecorators.Contains(name)) continue;
             if (name is "shared_task" or "task" && CeleryTask(m, dec) is { } task) { current = task; continue; }
+            if (name == "task" && DjangoTask(m, def, dec, current) is { } djangoTask) { current = djangoTask; continue; }
             var decType = TypeOf(m, dec);
             if (decType.IsDynamic || !(decType.Members.All(x => x is FunctionType { Info: var fi } && DeclaredReturn(fi) != null
                                                               || x is OverloadedType || x is ClassType { IsInstance: false } || x is SignatureType

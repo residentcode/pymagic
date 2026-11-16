@@ -661,7 +661,7 @@ public sealed partial class LanguageService
             case ClassType c when c.Info.Name == "tuple" && c.Info.Module.Name == "builtins" && c.Args.Count == 1:
                 return $"tuple[{FormatType(ev, c.Args[0], depth + 1)}, ...]";
             case ClassType c:
-                return c.Args.Count == 0 ? c.Info.Name
+                return c.Args.Count == 0 ? (c.Info.DisplayArgs is { } shown ? $"{c.Info.Name}[{shown}]" : c.Info.Name)
                     : $"{c.Info.Name}[{string.Join(", ", c.Args.Select(x => FormatType(ev, x, depth + 1)))}]";
             case UnionType u:
             {

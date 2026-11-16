@@ -17,6 +17,12 @@ public sealed class ClassInfo
         Name = name; Module = module; Node = node; Scope = scope;
     }
 
+    /// <summary>
+    /// What a class the engine makes shows in brackets after its name when it has no type arguments of its own: a Django queryset of one model
+    /// is `QuerySet[Book]`, its manager `Manager[Book]` (django-stubs write them so).
+    /// </summary>
+    public string? DisplayArgs { get; internal set; }
+
     string? _qualifiedName;
 
     /// <summary>`module.Class`, made once: the evaluator compares it on every call and assignment it checks.</summary>

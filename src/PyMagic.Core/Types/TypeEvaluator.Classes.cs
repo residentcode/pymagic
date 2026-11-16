@@ -718,6 +718,13 @@ public sealed partial class TypeEvaluator
         var hit = FindMember(c, name, instance, null, out bool unknownBase);
         if (hit != null)
         {
+            // Django's Choices.label gives self._label_, which its metaclass sets from the member's tuple: a str (or a lazy translation)
+            if (name == "label" && instance && hit.Owner.Info is { Name: "Choices", Module.Name: "django.db.models.enums", Module.IsStub: false })
+            {
+                types.Add(Inst("str"));
+                if (hit.ClassSymbol != null) decls.AddRange(hit.ClassSymbol.Declarations);
+                return;
+            }
             types.Add(BoundMember(hit, c, instance));
             if (hit.ClassSymbol != null) decls.AddRange(hit.ClassSymbol.Declarations);
             sites.AddRange(hit.InstanceAttrs.Select(a => (Node)a.Target));
@@ -725,7 +732,11 @@ public sealed partial class TypeEvaluator
         }
         // what Django's metaclass adds to a model (objects, DoesNotExist, id, reverse relations), and the project's settings
         if (IsDjangoModel(c.Info) && DjangoImplicitMember(c, name, instance) is { } djangoMember) { types.Add(djangoMember); return; }
+        // a model of django-stubs (User) gets the reverse relations the project's models give it (`user.orders`, `user.profile`)
+        if (instance && IsDjangoStubModelClass(c.Info) && DjangoReverseMember(c.Info, name) is { } reverseMember) { types.Add(reverseMember); return; }
         if (name == "objects" && !instance && DjangoStubManager(c) is { } stubManager) { types.Add(stubManager); return; }
+        // request.user / auser / session: set by the auth and session middleware, not declared by HttpRequest
+        if (instance && name is "user" or "auser" or "session" && DjangoRequestMember(c, name) is { } requestMember) { types.Add(requestMember); return; }
         if (instance && IsDjangoSettingsObject(c.Info) && DjangoSettingSymbol(name) is { } setting)
         {
             types.Add(TypeOfSymbol(setting));

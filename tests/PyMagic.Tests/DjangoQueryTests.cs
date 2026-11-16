@@ -35,10 +35,10 @@ public class DjangoQueryTests
         Assert.Equal(string.Join("\n", new[]
         {
             // author.book_set.filter(titel=...): the related manager's model is Book
-            "8: Cannot resolve keyword 'titel' into a field of Book. Choices are: pk, title, author, id",
+            "8: Cannot resolve keyword 'titel' into a field of Book. Choices are: pk, title, author, author_id, id",
             // Prefetch("bok_set"): prefetch walks attributes, so book_set is right and bok_set is not
             "11: Cannot find 'bok_set' on Author to prefetch: prefetch_related follows the relations of the model (book_set, a related_name), and Django raises AttributeError. Choices are: book_set",
-            "11: Cannot resolve keyword 'titel' into a field of Book. Choices are: pk, title, author, id",
+            "11: Cannot resolve keyword 'titel' into a field of Book. Choices are: pk, title, author, author_id, id",
             // OuterRef("pkk") of the inner query in `newest`: Subquery(newest) is used in Author's query
             "13: Cannot resolve 'pkk' into a field of Author, the model of the outer query OuterRef reads from. Choices are: pk, name, id, book",
         }), string.Join("\n", found));

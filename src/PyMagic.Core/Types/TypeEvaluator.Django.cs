@@ -37,11 +37,16 @@ public sealed partial class TypeEvaluator
         ["DateTimeField"] = "datetime", ["DateField"] = "date", ["TimeField"] = "time", ["DurationField"] = "timedelta",
         ["UUIDField"] = "uuid", ["BinaryField"] = "bytes", ["JSONField"] = "any", ["FileField"] = "any", ["ImageField"] = "any",
         ["ForeignKey"] = "foreign", ["OneToOneField"] = "one-to-one", ["ManyToManyField"] = "many-to-many",
+        // Django 5: a value the database computes (its output_field says what it is); Django 5.2: a primary key of several fields
+        ["GeneratedField"] = "generated", ["CompositePrimaryKey"] = "composite",
     };
 
     // ------------------------------------------------------------ recognising models and fields
 
-    /// <summary>A class that derives from Django's Model (real source; a stub describes its own attributes).</summary>
+    /// <summary>
+    /// A class of the project (or a library's source) that derives from Django's Model, whether Django's source or django-stubs describe it:
+    /// the stubs leave a model's fields, managers and relations to their mypy plugin, so they are read from the class body either way.
+    /// </summary>
     public bool IsDjangoModel(ClassInfo c)
     {
         if (_djangoModel.TryGetValue(c, out var known)) return known;
@@ -49,15 +54,19 @@ public sealed partial class TypeEvaluator
         bool result = false;
         if (!c.Module.IsStub)
             foreach (var entry in Mro(c))
-                if (entry is ClassType e && e.Info.Name == "Model" && e.Info.Module.Name.StartsWith("django.db.models", StringComparison.Ordinal) && !e.Info.Module.IsStub) { result = true; break; }
+                if (entry is ClassType e && e.Info.Name == "Model" && e.Info.Module.Name.StartsWith("django.db.models", StringComparison.Ordinal)) { result = true; break; }
         return _djangoModel[c] = result;
     }
 
+    /// <summary>A model django-stubs describe (`django.contrib.auth.models.User` of the stubs): its fields are typed there; relations to it are not.</summary>
+    bool IsDjangoStubModelClass(ClassInfo c) =>
+        c.Module.IsStub && IsDjangoInternal(c) && Mro(c).Any(e => e is ClassType { Info: { Name: "Model" } m } && m.Module.Name.StartsWith("django.db.models", StringComparison.Ordinal));
+
     static bool IsDjangoInternal(ClassInfo c) => c.Module.Name.StartsWith("django.", StringComparison.Ordinal) || c.Module.Name == "django";
 
+    /// <summary>What a field class of Django (its source or django-stubs) holds: "str", "foreign", ...; null for another class.</summary>
     string? DjangoFieldKind(ClassInfo fieldClass)
     {
-        if (fieldClass.Module.IsStub) return null;
         foreach (var entry in Mro(fieldClass))
             if (entry is ClassType e && IsDjangoInternal(e.Info) && DjangoFieldKinds.TryGetValue(e.Info.Name, out var kind)) return kind;
         return null;
@@ -167,6 +176,8 @@ public sealed partial class TypeEvaluator
             "uuid" => DjangoInstanceOf("uuid", "UUID") ?? PyType.Unknown,
             "foreign" or "one-to-one" => f.Target != null ? InstanceOfClass(f.Target) : PyType.Unknown,
             "many-to-many" => f.Target != null ? InstanceOfClass(DjangoManagerOf(f.Target, null, related: true)) : PyType.Unknown,
+            "generated" => GeneratedFieldType(f),
+            "composite" => CompositeKeyType(f),
             _ => PyType.Unknown,
         };
         if (f.Nullable && f.Kind != "many-to-many" && value is not UnknownType) value = PyType.Union(new[] { value, NoneInstance });
@@ -175,10 +186,35 @@ public sealed partial class TypeEvaluator
 
     ClassType InstanceOfClass(ClassInfo c) => new(c, ClassTypeParamsAsArgs(c), true);
 
+    /// <summary>GeneratedField(expression=..., output_field=models.DecimalField(...)): the value of its output field.</summary>
+    PyType GeneratedFieldType(DjangoField f)
+    {
+        if (f.Call.Args.FirstOrDefault(a => a.Name == "output_field")?.Value is not CallExpr { Func: var of }) return PyType.Unknown;
+        string? name = of switch { NameExpr n => n.Name, AttributeExpr a => a.Attr, _ => null };
+        return name != null && DjangoFieldKinds.TryGetValue(name, out var kind) && kind is not ("generated" or "composite" or "foreign" or "one-to-one" or "many-to-many")
+            ? DjangoValueType(f with { Kind = kind, Nullable = false })
+            : PyType.Unknown;
+    }
+
+    /// <summary>CompositePrimaryKey("order_id", "product_id"): pk is a tuple of those fields' values (a relation's `_id` its target's key).</summary>
+    PyType CompositeKeyType(DjangoField f)
+    {
+        var items = new List<PyType>();
+        foreach (var arg in f.Call.Args)
+        {
+            if (arg.Name != null || StringValue(arg.Value) is not { } name) return PyType.Unknown;
+            var fields = DjangoFieldsOf(f.Owner);
+            if (fields.FirstOrDefault(x => x.Name == name && x.Kind != "composite") is { } plain) items.Add(DjangoValueType(plain));
+            else if (name.EndsWith("_id") && fields.FirstOrDefault(x => x.Name == name[..^3] && x.Kind is "foreign" or "one-to-one") is { Target: { } target }) items.Add(DjangoPrimaryKeyType(target));
+            else items.Add(PyType.Unknown);
+        }
+        return TupleOf(items);
+    }
+
     /// <summary>The type of the primary key: the field that says primary_key=True, else the automatic integer `id`.</summary>
     PyType DjangoPrimaryKeyType(ClassInfo model)
     {
-        var pk = DjangoFieldsOf(model).FirstOrDefault(f => f.PrimaryKey);
+        var pk = DjangoFieldsOf(model).FirstOrDefault(f => f.PrimaryKey || f.Kind == "composite");
         if (pk == null) return Inst("int");
         return pk.Kind is "foreign" or "one-to-one" ? (pk.Target != null ? DjangoPrimaryKeyType(pk.Target) : PyType.Unknown) : DjangoValueType(pk);
     }
@@ -192,6 +228,38 @@ public sealed partial class TypeEvaluator
     };
 
     SignatureType Method(PyType returns) => new(AnyArguments, returns);
+
+    /// <summary>
+    /// `@task` / `@task(priority=10)` of django.tasks (Django 6.0): the backend's task class wraps the function, which Django's source picks at
+    /// run time. The function becomes a Task whose enqueue() gives a TaskResult, whose return_value is what the function returns; call() runs
+    /// it in place, and using() gives the same Task with other options.
+    /// </summary>
+    PyType? DjangoTask(ModuleInfo m, FunctionDef def, Expr dec, PyType fn)
+    {
+        var target = dec is CallExpr c ? c.Func : dec;
+        if (!TypeOf(m, target).Members.Any(x => x is FunctionType { Info: { Name: "task", Module: { Name: "django.tasks.base", IsStub: false } } })) return null;
+        if (_ws.GetModule("django.tasks.base") is not { IsStub: false } tasks
+            || FindModuleSymbol(tasks, "Task") is not { } taskSym || TypeOfSymbol(taskSym) is not ClassType { IsInstance: false } taskClass
+            || FindModuleSymbol(tasks, "TaskResult") is not { } resultSym || TypeOfSymbol(resultSym) is not ClassType { IsInstance: false } resultClass) return null;
+        // what the function gives; an async def's, once awaited
+        PyType value = fn is FunctionType f ? ReturnTypeOf(f) : PyType.Unknown;
+        if (def.IsAsync && value is ClassType { Info.Name: "Coroutine", Args.Count: 3 } co) value = co.Args[2];
+        var result = MakeSyntheticClass(m, "TaskResult", dec, resultClass, Array.Empty<(string, PyType)>());
+        AddSyntheticMember(result, "return_value", value);
+        var resultInstance = InstanceOfClass(result);
+        var task = MakeSyntheticClass(m, "Task", def, taskClass, Array.Empty<(string, PyType)>());
+        var taskInstance = InstanceOfClass(task);
+        SignatureType Async(PyType returns) => Method(TypingInst("Coroutine", PyType.Unknown, PyType.Unknown, returns));
+        AddSyntheticMember(task, "enqueue", Method(resultInstance));
+        AddSyntheticMember(task, "aenqueue", Async(resultInstance));
+        AddSyntheticMember(task, "get_result", Method(resultInstance));
+        AddSyntheticMember(task, "aget_result", Async(resultInstance));
+        AddSyntheticMember(task, "call", Method(value));
+        AddSyntheticMember(task, "acall", Async(value));
+        AddSyntheticMember(task, "using", Method(taskInstance));
+        AddSyntheticMember(task, "func", fn);
+        return taskInstance;
+    }
 
     void AddSyntheticMember(ClassInfo c, string name, PyType type)
     {
@@ -213,6 +281,7 @@ public sealed partial class TypeEvaluator
     {
         if (_djangoQuerySets.TryGetValue(model, out var existing)) return existing;
         var qs = NewSyntheticClass(model.Module, "QuerySet", null);
+        qs.DisplayArgs = model.Name;
         _djangoQuerySets[model] = qs;
         _djangoSyntheticModel[qs] = model;
         AddQuerySetMembers(qs, model, InstanceOfClass(qs));
@@ -256,16 +325,33 @@ public sealed partial class TypeEvaluator
         foreach (var name in new[] { "acount", "aupdate" }) AddSyntheticMember(target, name, Async(Inst("int")));
         foreach (var name in new[] { "aexists", "acontains" }) AddSyntheticMember(target, name, Async(Inst("bool")));
         AddSyntheticMember(target, "abulk_create", Async(Inst("list", modelInstance)));
-        // the rest of what a QuerySet offers; what they give is not a model (dicts, tuples, counts), so it is left unknown rather than guessed wrong
-        foreach (var name in new[]
-        {
-            "aggregate", "in_bulk", "bulk_update", "delete", "dates", "datetimes", "explain", "raw", "complex_filter", "contains",
-            "resolve_expression", "db_manager", "check",
-            "aaggregate", "adelete", "aiterator", "abulk_update", "ain_bulk", "aexplain",
-        }) AddSyntheticMember(target, name, Method(PyType.Unknown));
+        // what Django documents the rest to give: aggregate() a dict of the names asked for, in_bulk() the rows by key, delete() the counts
+        var aggregate = Inst("dict", Inst("str"), PyType.Any);
+        var inBulk = Inst("dict", PyType.Any, modelInstance);
+        var deleted = TupleOf(new PyType[] { Inst("int"), Inst("dict", Inst("str"), Inst("int")) });
+        AddSyntheticMember(target, "aggregate", Method(aggregate));
+        AddSyntheticMember(target, "aaggregate", Async(aggregate));
+        AddSyntheticMember(target, "in_bulk", Method(inBulk));
+        AddSyntheticMember(target, "ain_bulk", Async(inBulk));
+        AddSyntheticMember(target, "bulk_update", Method(Inst("int")));
+        AddSyntheticMember(target, "abulk_update", Async(Inst("int")));
+        AddSyntheticMember(target, "delete", Method(deleted));
+        AddSyntheticMember(target, "adelete", Async(deleted));
+        AddSyntheticMember(target, "explain", Method(Inst("str")));
+        AddSyntheticMember(target, "aexplain", Async(Inst("str")));
+        AddSyntheticMember(target, "contains", Method(Inst("bool")));
+        AddSyntheticMember(target, "aiterator", Method(TypingInst("AsyncIterator", element)));
+        // dates() / datetimes(): a queryset of the dates themselves
+        AddSyntheticMember(target, "dates", Method(DjangoInstanceOf("datetime", "date") is { } date ? InstanceOfClass(DjangoRowsQuerySetOf(model, date)) : PyType.Unknown));
+        AddSyntheticMember(target, "datetimes", Method(DjangoInstanceOf("datetime", "datetime") is { } dateTime ? InstanceOfClass(DjangoRowsQuerySetOf(model, dateTime)) : PyType.Unknown));
+        // Django 6.1: fetch_mode(FETCH_PEERS) gives the same queryset, fetching related rows its way
+        AddSyntheticMember(target, "fetch_mode", Method(qsInstance));
+        foreach (var name in new[] { "raw", "complex_filter", "resolve_expression", "db_manager", "check" }) AddSyntheticMember(target, name, Method(PyType.Unknown));
         // what values() and values_list() give depends on the call (DjangoSpecialCall); where it cannot be told it stays unknown
         foreach (var name in new[] { "values", "values_list" }) AddSyntheticMember(target, name, Method(PyType.Unknown));
-        foreach (var name in new[] { "query", "db", "ordered" }) AddSyntheticMember(target, name, PyType.Unknown);
+        foreach (var name in new[] { "query", "db" }) AddSyntheticMember(target, name, PyType.Unknown);
+        // ordered; Django 6.0's totally_ordered (an order that names a unique field, so every row has its place)
+        foreach (var name in new[] { "ordered", "totally_ordered" }) AddSyntheticMember(target, name, Inst("bool"));
     }
 
     /// <summary>`Manager[Model]`: the queryset methods too, since a manager passes them on. A custom manager class stays in the chain, so its own methods are found.</summary>
@@ -277,6 +363,7 @@ public sealed partial class TypeEvaluator
         // a manager made from a QuerySet class is called as Django calls it: ManagerFromTagQuerySet
         string managerName = baseManager == null ? (related ? "RelatedManager" : "Manager") : IsDjangoQuerySetClass(baseManager) ? "ManagerFrom" + baseManager.Name : baseManager.Name;
         var manager = NewSyntheticClass(model.Module, managerName, baseType);
+        manager.DisplayArgs = model.Name;
         _djangoManagers[key] = manager;
         _djangoSyntheticModel[manager] = model;
         AddQuerySetMembers(manager, model, InstanceOfClass(manager));
@@ -368,7 +455,7 @@ public sealed partial class TypeEvaluator
                 return new ClassType(DjangoExceptionsOf(info).Multiple, false);
             case "pk" when instance:
                 return DjangoPrimaryKeyType(info);
-            case "id" when instance && !DjangoFieldsOf(info).Any(f => f.PrimaryKey):
+            case "id" when instance && !DjangoFieldsOf(info).Any(f => f.PrimaryKey || f.Kind == "composite"):
                 return Inst("int");
             case "_meta":
                 return PyType.Unknown;
@@ -380,6 +467,12 @@ public sealed partial class TypeEvaluator
                 return f.Target != null ? DjangoPrimaryKeyType(f.Target) : PyType.Unknown;
             if (instance && f.HasChoices && name == $"get_{f.Name}_display") return Method(Inst("str"));
         }
+        return DjangoReverseMember(info, name);
+    }
+
+    /// <summary>`author.book_set` / a related_name: the related manager of the model that points here; a one-to-one, that model's row.</summary>
+    PyType? DjangoReverseMember(ClassInfo info, string name)
+    {
         foreach (var (reverse, source) in DjangoReverseOf(info))
             if (reverse == name)
                 return source.Kind == "one-to-one" ? InstanceOfClass(source.Owner) : InstanceOfClass(DjangoManagerOf(source.Owner, null, related: true));
@@ -416,7 +509,7 @@ public sealed partial class TypeEvaluator
         if (model.IsInstance)
         {
             yield return "pk";
-            if (!DjangoFieldsOf(info).Any(f => f.PrimaryKey)) yield return "id";
+            if (!DjangoFieldsOf(info).Any(f => f.PrimaryKey || f.Kind == "composite")) yield return "id";
             foreach (var f in DjangoFieldsOf(info))
             {
                 if (f.Kind is "foreign" or "one-to-one") yield return f.Name + "_id";
@@ -479,8 +572,13 @@ public sealed partial class TypeEvaluator
     public IReadOnlyList<string> DjangoQueryNames(ClassInfo model)
     {
         var names = new List<string> { "pk" };
-        foreach (var f in DjangoFieldsOf(model)) names.Add(f.Name);
-        if (!DjangoFieldsOf(model).Any(f => f.PrimaryKey)) names.Add("id");
+        foreach (var f in DjangoFieldsOf(model))
+        {
+            if (f.Name != "pk") names.Add(f.Name);
+            // filter(author_id=1): a relation's column name is a query name too
+            if (f.Kind is "foreign" or "one-to-one") names.Add(f.Name + "_id");
+        }
+        if (!DjangoFieldsOf(model).Any(f => f.PrimaryKey || f.Kind == "composite")) names.Add("id");
         foreach (var (reverse, source) in DjangoReverseOf(model)) names.Add(source.Kind == "many-to-many" || source.Kind == "foreign" ? (source.Call.Args.Any(a => a.Name == "related_query_name") ? reverse : reverse.EndsWith("_set") ? reverse[..^4] : reverse) : reverse);
         return names;
     }

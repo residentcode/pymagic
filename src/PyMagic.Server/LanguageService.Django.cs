@@ -507,7 +507,7 @@ public sealed partial class LanguageService
             if (QueryModelOf(snap, fullModule, call) is not { } model) continue;
             foreach (var arg in call.Args)
             {
-                if (arg.Name == null || arg.Name is "defaults" or "using") continue;
+                if (arg.Name == null || arg.Name is "defaults" or "create_defaults" or "using") continue;
                 if (CheckLookup(fev, model, arg.Name, allowLookups: LookupMethods.Contains(name)) is not { } bad) continue;
                 int start = arg.Start;
                 var finding = new Finding(start, arg.Name.Length, $"Cannot resolve keyword '{bad.Bad}' into a field of {model.Name}. Choices are: {string.Join(", ", bad.Choices.Take(12))}", "django-field", FindingLevel.Warning);

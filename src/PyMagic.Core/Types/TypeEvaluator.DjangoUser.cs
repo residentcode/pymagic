@@ -25,8 +25,9 @@ public sealed partial class TypeEvaluator
     /// <summary>One of Django's own models, from the way a relation names it (`"auth.User"`); null for any other name.</summary>
     ClassInfo? DjangoContribModel(string label)
     {
-        if (!DjangoContribModels.TryGetValue(label, out var where) || _ws.GetModule(where.Module) is not { IsStub: false } module) return null;
-        return FindModuleSymbol(module, where.Class) is { } sym && TypeOfSymbol(sym) is ClassType { IsInstance: false } ct && IsDjangoModel(ct.Info) ? ct.Info : null;
+        if (!DjangoContribModels.TryGetValue(label, out var where) || _ws.GetModule(where.Module) is not { } module) return null;
+        // Django's source, or django-stubs' description of the same model
+        return FindModuleSymbol(module, where.Class) is { } sym && TypeOfSymbol(sym) is ClassType { IsInstance: false } ct && (IsDjangoModel(ct.Info) || IsDjangoStubModelClass(ct.Info)) ? ct.Info : null;
     }
 
     /// <summary>
@@ -43,6 +44,32 @@ public sealed partial class TypeEvaluator
                     return DjangoProjectModels().FirstOrDefault(c => c.Name == name) ?? DjangoContribModel(label);
                 }
         return DjangoContribModel("auth.User");
+    }
+
+    /// <summary>
+    /// What Django's middleware sets on a request (django.http.HttpRequest declares none of it): `user`, the project's user model or an
+    /// AnonymousUser; `auser()`, the coroutine that gives it; `session`, a SessionBase. Null for another class or name.
+    /// </summary>
+    PyType? DjangoRequestMember(ClassType request, string name)
+    {
+        if (request.Info.Module.IsStub || !Mro(request.Info).Any(e => e is ClassType { Info: { Name: "HttpRequest", Module.Name: "django.http.request" } })) return null;
+        PyType User()
+        {
+            var types = new List<PyType>();
+            if (DjangoUserModel() is { } user) types.Add(InstanceOfClass(user));
+            if (_ws.GetModule("django.contrib.auth.models") is { IsStub: false } auth && FindModuleSymbol(auth, "AnonymousUser") is { } anon && TypeOfSymbol(anon) is ClassType { IsInstance: false } a)
+                types.Add(a.AsInstance());
+            return types.Count == 0 ? PyType.Unknown : PyType.Union(types);
+        }
+        switch (name)
+        {
+            case "user": return User();
+            case "auser": return Method(TypingClass("Coroutine") is { } co ? new ClassType(co.Info, new[] { PyType.Unknown, PyType.Unknown, User() }, true) : PyType.Unknown);
+            case "session":
+                return _ws.GetModule("django.contrib.sessions.backends.base") is { IsStub: false } sessions && FindModuleSymbol(sessions, "SessionBase") is { } sb
+                    && TypeOfSymbol(sb) is ClassType { IsInstance: false } s ? s.AsInstance() : PyType.Unknown;
+            default: return null;
+        }
     }
 
     // ------------------------------------------------------------ calls Django gives a meaning to
@@ -122,6 +149,7 @@ public sealed partial class TypeEvaluator
         var key = (model, row.Display());
         if (_djangoRowSets.TryGetValue(key, out var existing)) return existing;
         var qs = NewSyntheticClass(model.Module, "QuerySet", null);
+        qs.DisplayArgs = $"{model.Name}, {row.Display()}";
         _djangoRowSets[key] = qs;
         _djangoRowSetClasses.Add(qs);
         _djangoSyntheticModel[qs] = model;
