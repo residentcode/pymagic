@@ -128,11 +128,12 @@ public sealed partial class TypeEvaluator
             foreach (var entry in Mro(c.Info))
                 if (entry is ClassType e && !e.Info.Module.IsStub && !e.Info.Module.Name.StartsWith("rest_framework", StringComparison.Ordinal) && e.Info.Scope.Symbols.ContainsKey(name)) return null;
             var parts = DjangoViewParts(c.Info);
-            if (name == "get_object") return DjangoMetaModel(c.Info) is { } m ? Method(InstanceOfClass(m)) : null;
-            return parts.Serializer is { } s ? Method(InstanceOfClass(s)) : null;
+            if (name == "get_object") return DjangoMetaModel(c.Info) is { } m ? Def(InstanceOfClass(m)) : null;
+            return parts.Serializer is { } s ? Def(InstanceOfClass(s), StarArgs("args", PyType.Any), StarKwargs()) : null;
         }
         if (name is not ("instance" or "save") || role is not (DjangoClassRole.Form or DjangoClassRole.Serializer) || DjangoMetaModel(c.Info) is not { } model) return null;
         var inst = InstanceOfClass(model);
-        return name == "instance" ? inst : Method(inst);
+        // a form's save(commit=True), a serializer's save(**kwargs)
+        return name == "instance" ? inst : role == DjangoClassRole.Form ? Def(inst, Arg("commit", Inst("bool"), true)) : Def(inst, StarKwargs());
     }
 }

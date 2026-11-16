@@ -64,7 +64,7 @@ public sealed partial class TypeEvaluator
         switch (name)
         {
             case "user": return User();
-            case "auser": return Method(TypingClass("Coroutine") is { } co ? new ClassType(co.Info, new[] { PyType.Unknown, PyType.Unknown, User() }, true) : PyType.Unknown);
+            case "auser": return Def(TypingClass("Coroutine") is { } co ? new ClassType(co.Info, new[] { PyType.Unknown, PyType.Unknown, User() }, true) : PyType.Unknown);
             case "session":
                 return _ws.GetModule("django.contrib.sessions.backends.base") is { IsStub: false } sessions && FindModuleSymbol(sessions, "SessionBase") is { } sb
                     && TypeOfSymbol(sb) is ClassType { IsInstance: false } s ? s.AsInstance() : PyType.Unknown;
@@ -82,6 +82,11 @@ public sealed partial class TypeEvaluator
     {
         if (callee is FunctionType { Info: { Name: "get_user_model" } f } && f.Module.Name == "django.contrib.auth" && !f.Module.IsStub)
             return DjangoUserModel() is { } user ? new ClassType(user, false) : null;
+        // reverse() / reverse_lazy() build the URL from a resolver whose result Django's source does not describe: a str (a lazy one)
+        if (callee is FunctionType { Info: { Name: "reverse", Module: { Name: "django.urls.base", IsStub: false } } }) return Inst("str");
+        if (DjangoShortcut(m, call, callee) is { } shortcut) return shortcut;
+        if (DjangoQueryDictCall(m, call) is { } queryValue) return queryValue;
+        if (DjangoGenericViewCall(m, call) is { } viewResult) return viewResult;
         if (DjangoAdminQuerySet(m, call) is { } adminQuerySet) return adminQuerySet;
         if (DjangoManagerCall(m, call) is { } managerResult) return managerResult;
 
@@ -101,6 +106,38 @@ public sealed partial class TypeEvaluator
         var types = fields.Select(a => StringValue(a.Value) is { } path ? DjangoValuesType(model, path) : PyType.Unknown).ToList();
         PyType row = flat && types.Count == 1 ? types[0] : TupleOf(types);
         return InstanceOfClass(DjangoRowsQuerySetOf(model, row));
+    }
+
+    /// <summary>
+    /// django.shortcuts' get_object_or_404 / get_list_or_404 and their async forms: the model of what is passed (a model class, a manager or a
+    /// queryset), one row or a list of them. Django's source only says `queryset.get(...)` of a parameter, so the type comes from the argument.
+    /// </summary>
+    PyType? DjangoShortcut(ModuleInfo m, CallExpr call, PyType callee)
+    {
+        if (callee is not FunctionType { Info: { Name: "get_object_or_404" or "aget_object_or_404" or "get_list_or_404" or "aget_list_or_404" } f }
+            || f.Module.Name != "django.shortcuts" || f.Module.IsStub) return null;
+        if (call.Args.FirstOrDefault() is not { Name: null, Stars: 0 } first) return null;
+        var given = TypeOf(m, first.Value);
+        var model = given is ClassType { IsInstance: false } c && IsDjangoModel(c.Info) ? c.Info : DjangoModelOfQuery(given);
+        if (model == null) return null;
+        PyType result = f.Name.EndsWith("list_or_404") ? Inst("list", InstanceOfClass(model)) : InstanceOfClass(model);
+        return f.Name.StartsWith('a') ? TypingInst("Coroutine", PyType.Any, PyType.Any, result) : result;
+    }
+
+    /// <summary>
+    /// `request.GET.get("q")` and the like of a QueryDict (a MultiValueDict of strings): the last value, a str, or the default (None when none is given);
+    /// getlist() a list of the strings. Django's source picks `val[-1]` out of a list it does not describe.
+    /// </summary>
+    PyType? DjangoQueryDictCall(ModuleInfo m, CallExpr call)
+    {
+        if (call.Func is not AttributeExpr { Attr: "get" or "getlist" } access) return null;
+        if (TypeOf(m, access.Value) is not ClassType { IsInstance: true } receiver || receiver.Info.Module.IsStub
+            || !Mro(receiver.Info).Any(e => e is ClassType { Info: { Name: "QueryDict", Module.Name: "django.http.request" } })) return null;
+        var str = Inst("str");
+        var fallback = call.Args.Count > 1 && call.Args[1] is { Name: null or "default", Stars: 0 } d ? TypeOf(m, d.Value)
+            : call.Args.FirstOrDefault(a => a.Name == "default") is { } named ? TypeOf(m, named.Value) : null;
+        if (access.Attr == "getlist") return fallback == null ? Inst("list", str) : PyType.Union(new[] { Inst("list", str), fallback });
+        return PyType.Union(new[] { str, fallback ?? NoneInstance });
     }
 
     readonly Dictionary<(ClassInfo Model, string Keys), ClassInfo> _djangoValueRows = new();

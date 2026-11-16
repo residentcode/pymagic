@@ -115,7 +115,7 @@ public class DjangoProjectAppsTests
         string uri = DjangoFixture.Root + "front/views.py";
         Assert.Contains("Tag | None", svc.Hover(uri, new Position(4, 4))!.Contents.Value);
         Assert.Contains("Tag | None", svc.Hover(uri, new Position(5, 4))!.Contents.Value);
-        Assert.Contains("-> TagQuerySet", svc.Hover(uri, new Position(6, 4))!.Contents.Value);
+        Assert.Contains("() -> QuerySet[Tag]", svc.Hover(uri, new Position(6, 4))!.Contents.Value);
         Assert.True(svc.Diagnostics(uri).Any(d => d.Message.Contains("Cannot resolve keyword 'nmae' into a field of Tag")));
     }
 }

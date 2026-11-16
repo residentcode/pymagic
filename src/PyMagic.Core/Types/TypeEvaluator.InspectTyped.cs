@@ -153,6 +153,8 @@ public sealed partial class TypeEvaluator
         // a class may use the protected members of its own bases
         if (owner != null)
         {
+            // Django documents these of a model as its API (Model._meta, the Options API; _default_manager; instance._state)
+            if (name is "_meta" or "_default_manager" or "_base_manager" or "_state" && IsDjangoModel(owner)) return;
             for (var p = m.ParentOf(attr); p != null; p = m.ParentOf(p))
                 if (p is ClassDef cd && m.Semantics.ScopeOf(cd)?.Parent?.Symbols.GetValueOrDefault(cd.Name) is { } sym && TypeOfSymbol(sym) is ClassType { IsInstance: false } enclosing
                     && (ReferenceEquals(enclosing.Info, owner) || IsSubclass(enclosing.Info, owner) || IsSubclass(owner, enclosing.Info)))

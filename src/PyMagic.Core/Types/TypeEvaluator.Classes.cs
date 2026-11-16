@@ -714,8 +714,12 @@ public sealed partial class TypeEvaluator
             return;
         }
         if (name is "instance" or "save" or "get_object" or "get_serializer" && DjangoMetaMember(c, name, instance) is { } formMember) { types.Add(formMember); return; }
+        // self.request / self.object / self.object_list of a generic view, which Django only stores there
+        if (instance && name is "request" or "object" or "object_list" && DjangoGenericViewMember(c, name) is { } viewMember) { types.Add(viewMember); return; }
         if (name == "cleaned_data" && DjangoCleanedData(c, instance) is { } cleaned) { types.Add(cleaned); return; }
         var hit = FindMember(c, name, instance, null, out bool unknownBase);
+        // a QuerySet method read on a manager of the project (`self.filter()` in its methods): Django's, for the manager's model, unless the class has its own
+        if (instance && (hit == null || IsDjangoInternal(hit.Owner.Info)) && DjangoManagerSelfMember(c, name) is { } managerMember) { types.Add(managerMember); return; }
         if (hit != null)
         {
             // Django's Choices.label gives self._label_, which its metaclass sets from the member's tuple: a str (or a lazy translation)
@@ -725,7 +729,10 @@ public sealed partial class TypeEvaluator
                 if (hit.ClassSymbol != null) decls.AddRange(hit.ClassSymbol.Declarations);
                 return;
             }
-            types.Add(BoundMember(hit, c, instance));
+            var bound = BoundMember(hit, c, instance);
+            // a method of the project's QuerySet read through Book.objects / a queryset of Book: a queryset it returns is one of Book
+            if (instance && DjangoCustomQuerySetMethod(hit, c, bound) is { } custom) bound = custom;
+            types.Add(bound);
             if (hit.ClassSymbol != null) decls.AddRange(hit.ClassSymbol.Declarations);
             sites.AddRange(hit.InstanceAttrs.Select(a => (Node)a.Target));
             return;

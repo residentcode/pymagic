@@ -249,14 +249,19 @@ public sealed partial class TypeEvaluator
         var resultInstance = InstanceOfClass(result);
         var task = MakeSyntheticClass(m, "Task", def, taskClass, Array.Empty<(string, PyType)>());
         var taskInstance = InstanceOfClass(task);
-        SignatureType Async(PyType returns) => Method(TypingInst("Coroutine", PyType.Unknown, PyType.Unknown, returns));
-        AddSyntheticMember(task, "enqueue", Method(resultInstance));
-        AddSyntheticMember(task, "aenqueue", Async(resultInstance));
-        AddSyntheticMember(task, "get_result", Method(resultInstance));
-        AddSyntheticMember(task, "aget_result", Async(resultInstance));
-        AddSyntheticMember(task, "call", Method(value));
-        AddSyntheticMember(task, "acall", Async(value));
-        AddSyntheticMember(task, "using", Method(taskInstance));
+        // enqueue() and call() take what the function takes
+        var takes = fn is FunctionType ff ? ParametersOf(ff.Info).ToArray() : AnyArguments.ToArray();
+        SignatureType Async(SignatureType sync) => sync with { Return = TypingInst("Coroutine", PyType.Any, PyType.Any, sync.Return) };
+        var enqueue = Def(resultInstance, takes);
+        var getResult = Def(resultInstance, Arg("result_id", Inst("str")));
+        var call = Def(value, takes);
+        AddSyntheticMember(task, "enqueue", enqueue);
+        AddSyntheticMember(task, "aenqueue", Async(enqueue));
+        AddSyntheticMember(task, "get_result", getResult);
+        AddSyntheticMember(task, "aget_result", Async(getResult));
+        AddSyntheticMember(task, "call", call);
+        AddSyntheticMember(task, "acall", Async(call));
+        AddSyntheticMember(task, "using", Def(taskInstance, KwArg("priority", Inst("int")), KwArg("queue_name", Inst("str")), KwArg("run_after", PyType.Any), KwArg("backend", Inst("str"))));
         AddSyntheticMember(task, "func", fn);
         return taskInstance;
     }
@@ -280,7 +285,9 @@ public sealed partial class TypeEvaluator
     ClassInfo DjangoQuerySetOf(ClassInfo model)
     {
         if (_djangoQuerySets.TryGetValue(model, out var existing)) return existing;
-        var qs = NewSyntheticClass(model.Module, "QuerySet", null);
+        // a model whose manager is made from a QuerySet of the project (`objects = BookQuerySet.as_manager()`) has that class's methods on every queryset
+        var custom = DjangoCustomQuerySetOf(model);
+        var qs = NewSyntheticClass(model.Module, "QuerySet", custom == null ? null : new ClassType(custom, false));
         qs.DisplayArgs = model.Name;
         _djangoQuerySets[model] = qs;
         _djangoSyntheticModel[qs] = model;
@@ -288,6 +295,15 @@ public sealed partial class TypeEvaluator
         return qs;
     }
 
+    static ParamInfo Arg(string name, PyType type, bool hasDefault = false) => new(name, type, ParamCategory.Normal, hasDefault);
+    static ParamInfo KwArg(string name, PyType type) => new(name, type, ParamCategory.KeywordOnly, true);
+    static ParamInfo StarArgs(string name, PyType type) => new(name, type, ParamCategory.VarPositional, false);
+    static ParamInfo StarKwargs(string name = "kwargs") => new(name, PyType.Any, ParamCategory.VarKeyword, false);
+
+    /// <summary>A method with the parameters Django's own def has, shown by name in hovers and signature help.</summary>
+    static SignatureType Def(PyType returns, params ParamInfo[] ps) => new(ps, returns, Named: true);
+
+    /// <summary>The methods of QuerySet (and of a manager, which passes them on), each with the parameters of Django's def and what it gives.</summary>
     void AddQuerySetMembers(ClassInfo target, ClassInfo model, PyType self, PyType? rows = null)
     {
         var modelInstance = InstanceOfClass(model);
@@ -295,63 +311,79 @@ public sealed partial class TypeEvaluator
         var qsInstance = rows == null ? InstanceOfClass(DjangoQuerySetOf(model)) : self;
         var element = rows ?? modelInstance;
         var optionalModel = PyType.Union(new[] { element, NoneInstance });
-        foreach (var name in new[]
+        var str = Inst("str");
+        var boolean = Inst("bool");
+        var integer = Inst("int");
+        PyType Optional(PyType t) => PyType.Union(new[] { t, NoneInstance });
+        var fieldNames = TypingInst("Sequence", str);
+        var defaults = Optional(TypingInst("Mapping", str, PyType.Any));
+        var models = TypingInst("Iterable", modelInstance);
+        SignatureType Async(SignatureType sync) => sync with { Return = TypingInst("Coroutine", PyType.Any, PyType.Any, sync.Return) };
+        void Both(string name, SignatureType sync)
         {
-            "filter", "exclude", "order_by", "reverse", "distinct", "select_related", "prefetch_related", "annotate", "defer", "only", "using",
-            "select_for_update", "none", "alias", "extra", "union", "intersection", "difference",
-        }) AddSyntheticMember(target, name, Method(qsInstance));
-        AddSyntheticMember(target, "all", Method(qsInstance));
-        foreach (var name in new[] { "get", "earliest", "latest" }) AddSyntheticMember(target, name, Method(element));
-        AddSyntheticMember(target, "create", Method(modelInstance));
-        foreach (var name in new[] { "first", "last" }) AddSyntheticMember(target, name, Method(optionalModel));
-        foreach (var name in new[] { "get_or_create", "update_or_create" })
-            AddSyntheticMember(target, name, Method(TupleOf(new PyType[] { modelInstance, Inst("bool") })));
-        AddSyntheticMember(target, "count", Method(Inst("int")));
-        AddSyntheticMember(target, "update", Method(Inst("int")));
-        AddSyntheticMember(target, "exists", Method(Inst("bool")));
-        AddSyntheticMember(target, "bulk_create", Method(Inst("list", modelInstance)));
-        AddSyntheticMember(target, "__iter__", Method(TypingInst("Iterator", element)));
-        AddSyntheticMember(target, "__len__", Method(Inst("int")));
-        AddSyntheticMember(target, "__bool__", Method(Inst("bool")));
-        AddSyntheticMember(target, "model", new ClassType(model, false));
-        AddSyntheticMember(target, "iterator", Method(TypingInst("Iterator", element)));
-        // the async forms give the same, awaited: `await Book.objects.afirst()` is a Book | None
-        SignatureType Async(PyType returns) => Method(TypingInst("Coroutine", PyType.Unknown, PyType.Unknown, returns));
-        foreach (var name in new[] { "aget", "aearliest", "alatest" }) AddSyntheticMember(target, name, Async(element));
-        AddSyntheticMember(target, "acreate", Async(modelInstance));
-        foreach (var name in new[] { "afirst", "alast" }) AddSyntheticMember(target, name, Async(optionalModel));
-        foreach (var name in new[] { "aget_or_create", "aupdate_or_create" })
-            AddSyntheticMember(target, name, Async(TupleOf(new PyType[] { modelInstance, Inst("bool") })));
-        foreach (var name in new[] { "acount", "aupdate" }) AddSyntheticMember(target, name, Async(Inst("int")));
-        foreach (var name in new[] { "aexists", "acontains" }) AddSyntheticMember(target, name, Async(Inst("bool")));
-        AddSyntheticMember(target, "abulk_create", Async(Inst("list", modelInstance)));
-        // what Django documents the rest to give: aggregate() a dict of the names asked for, in_bulk() the rows by key, delete() the counts
-        var aggregate = Inst("dict", Inst("str"), PyType.Any);
-        var inBulk = Inst("dict", PyType.Any, modelInstance);
-        var deleted = TupleOf(new PyType[] { Inst("int"), Inst("dict", Inst("str"), Inst("int")) });
-        AddSyntheticMember(target, "aggregate", Method(aggregate));
-        AddSyntheticMember(target, "aaggregate", Async(aggregate));
-        AddSyntheticMember(target, "in_bulk", Method(inBulk));
-        AddSyntheticMember(target, "ain_bulk", Async(inBulk));
-        AddSyntheticMember(target, "bulk_update", Method(Inst("int")));
-        AddSyntheticMember(target, "abulk_update", Async(Inst("int")));
-        AddSyntheticMember(target, "delete", Method(deleted));
-        AddSyntheticMember(target, "adelete", Async(deleted));
-        AddSyntheticMember(target, "explain", Method(Inst("str")));
-        AddSyntheticMember(target, "aexplain", Async(Inst("str")));
-        AddSyntheticMember(target, "contains", Method(Inst("bool")));
-        AddSyntheticMember(target, "aiterator", Method(TypingInst("AsyncIterator", element)));
-        // dates() / datetimes(): a queryset of the dates themselves
-        AddSyntheticMember(target, "dates", Method(DjangoInstanceOf("datetime", "date") is { } date ? InstanceOfClass(DjangoRowsQuerySetOf(model, date)) : PyType.Unknown));
-        AddSyntheticMember(target, "datetimes", Method(DjangoInstanceOf("datetime", "datetime") is { } dateTime ? InstanceOfClass(DjangoRowsQuerySetOf(model, dateTime)) : PyType.Unknown));
+            AddSyntheticMember(target, name, sync);
+            AddSyntheticMember(target, "a" + name, Async(sync));
+        }
+
+        // filtering, ordering and the rest give the same kind of queryset
+        foreach (var name in new[] { "filter", "exclude", "annotate", "alias" }) AddSyntheticMember(target, name, Def(qsInstance, StarArgs("args", PyType.Any), StarKwargs()));
+        foreach (var name in new[] { "all", "none", "reverse" }) AddSyntheticMember(target, name, Def(qsInstance));
+        AddSyntheticMember(target, "order_by", Def(qsInstance, StarArgs("field_names", PyType.Any)));
+        AddSyntheticMember(target, "distinct", Def(qsInstance, StarArgs("field_names", PyType.Any)));
+        AddSyntheticMember(target, "select_related", Def(qsInstance, StarArgs("fields", PyType.Any)));
+        AddSyntheticMember(target, "prefetch_related", Def(qsInstance, StarArgs("lookups", PyType.Any)));
+        foreach (var name in new[] { "defer", "only" }) AddSyntheticMember(target, name, Def(qsInstance, StarArgs("fields", PyType.Any)));
+        AddSyntheticMember(target, "using", Def(qsInstance, Arg("alias", Optional(str))));
+        AddSyntheticMember(target, "select_for_update", Def(qsInstance, Arg("nowait", boolean, true), Arg("skip_locked", boolean, true), Arg("of", fieldNames, true), Arg("no_key", boolean, true)));
+        AddSyntheticMember(target, "extra", Def(qsInstance, Arg("select", PyType.Any, true), Arg("where", PyType.Any, true), Arg("params", PyType.Any, true),
+            Arg("tables", PyType.Any, true), Arg("order_by", PyType.Any, true), Arg("select_params", PyType.Any, true)));
+        AddSyntheticMember(target, "union", Def(qsInstance, StarArgs("other_qs", PyType.Any), KwArg("all", boolean)));
+        foreach (var name in new[] { "intersection", "difference" }) AddSyntheticMember(target, name, Def(qsInstance, StarArgs("other_qs", PyType.Any)));
+        AddSyntheticMember(target, "complex_filter", Def(qsInstance, Arg("filter_obj", PyType.Any)));
         // Django 6.1: fetch_mode(FETCH_PEERS) gives the same queryset, fetching related rows its way
-        AddSyntheticMember(target, "fetch_mode", Method(qsInstance));
-        foreach (var name in new[] { "raw", "complex_filter", "resolve_expression", "db_manager", "check" }) AddSyntheticMember(target, name, Method(PyType.Unknown));
+        AddSyntheticMember(target, "fetch_mode", Def(qsInstance, Arg("mode", PyType.Any)));
+
+        // the rows themselves; each has its async form, which gives the same once awaited (`await Book.objects.afirst()` is a Book | None)
+        Both("get", Def(element, StarArgs("args", PyType.Any), StarKwargs()));
+        foreach (var name in new[] { "earliest", "latest" }) Both(name, Def(element, StarArgs("fields", PyType.Any)));
+        foreach (var name in new[] { "first", "last" }) Both(name, Def(optionalModel));
+        Both("create", Def(modelInstance, StarKwargs()));
+        var createdOrNot = TupleOf(new PyType[] { modelInstance, boolean });
+        Both("get_or_create", Def(createdOrNot, Arg("defaults", defaults, true), StarKwargs()));
+        Both("update_or_create", Def(createdOrNot, Arg("defaults", defaults, true), Arg("create_defaults", defaults, true), StarKwargs()));
+        Both("count", Def(integer));
+        Both("exists", Def(boolean));
+        Both("contains", Def(boolean, Arg("obj", modelInstance)));
+        Both("update", Def(integer, StarKwargs()));
+        Both("bulk_create", Def(Inst("list", modelInstance), Arg("objs", models), Arg("batch_size", Optional(integer), true), Arg("ignore_conflicts", boolean, true),
+            Arg("update_conflicts", boolean, true), Arg("update_fields", Optional(fieldNames), true), Arg("unique_fields", Optional(fieldNames), true)));
+        Both("bulk_update", Def(integer, Arg("objs", models), Arg("fields", fieldNames), Arg("batch_size", Optional(integer), true)));
+        // what Django documents the rest to give: aggregate() a dict of the names asked for, in_bulk() the rows by key, delete() the counts
+        Both("aggregate", Def(Inst("dict", str, PyType.Any), StarArgs("args", PyType.Any), StarKwargs()));
+        Both("in_bulk", Def(Inst("dict", PyType.Any, modelInstance), Arg("id_list", Optional(TypingInst("Iterable", PyType.Any)), true), KwArg("field_name", str)));
+        Both("delete", Def(TupleOf(new PyType[] { integer, Inst("dict", str, integer) })));
+        Both("explain", Def(str, KwArg("format", Optional(str)), StarKwargs("options")));
+        AddSyntheticMember(target, "iterator", Def(TypingInst("Iterator", element), Arg("chunk_size", Optional(integer), true)));
+        AddSyntheticMember(target, "aiterator", Def(TypingInst("AsyncIterator", element), Arg("chunk_size", integer, true)));
+        AddSyntheticMember(target, "__iter__", Def(TypingInst("Iterator", element)));
+        AddSyntheticMember(target, "__aiter__", Def(TypingInst("AsyncIterator", element)));
+        AddSyntheticMember(target, "__len__", Def(integer));
+        AddSyntheticMember(target, "__bool__", Def(boolean));
+        AddSyntheticMember(target, "model", new ClassType(model, false));
+        // dates() / datetimes(): a queryset of the dates themselves
+        var order = Arg("order", str, true);
+        AddSyntheticMember(target, "dates", Def(DjangoInstanceOf("datetime", "date") is { } date ? InstanceOfClass(DjangoRowsQuerySetOf(model, date)) : PyType.Unknown,
+            Arg("field_name", str), Arg("kind", str), order));
+        AddSyntheticMember(target, "datetimes", Def(DjangoInstanceOf("datetime", "datetime") is { } dateTime ? InstanceOfClass(DjangoRowsQuerySetOf(model, dateTime)) : PyType.Unknown,
+            Arg("field_name", str), Arg("kind", str), order, Arg("tzinfo", PyType.Any, true)));
+        AddSyntheticMember(target, "raw", Def(PyType.Unknown, Arg("raw_query", str), Arg("params", PyType.Any, true), Arg("translations", PyType.Any, true), Arg("using", Optional(str), true)));
+        foreach (var name in new[] { "resolve_expression", "db_manager", "check" }) AddSyntheticMember(target, name, Method(PyType.Unknown));
         // what values() and values_list() give depends on the call (DjangoSpecialCall); where it cannot be told it stays unknown
-        foreach (var name in new[] { "values", "values_list" }) AddSyntheticMember(target, name, Method(PyType.Unknown));
+        AddSyntheticMember(target, "values", Def(PyType.Unknown, StarArgs("fields", PyType.Any), StarKwargs("expressions")));
+        AddSyntheticMember(target, "values_list", Def(PyType.Unknown, StarArgs("fields", PyType.Any), KwArg("flat", boolean), KwArg("named", boolean)));
         foreach (var name in new[] { "query", "db" }) AddSyntheticMember(target, name, PyType.Unknown);
         // ordered; Django 6.0's totally_ordered (an order that names a unique field, so every row has its place)
-        foreach (var name in new[] { "ordered", "totally_ordered" }) AddSyntheticMember(target, name, Inst("bool"));
+        foreach (var name in new[] { "ordered", "totally_ordered" }) AddSyntheticMember(target, name, boolean);
     }
 
     /// <summary>`Manager[Model]`: the queryset methods too, since a manager passes them on. A custom manager class stays in the chain, so its own methods are found.</summary>
@@ -367,9 +399,25 @@ public sealed partial class TypeEvaluator
         _djangoManagers[key] = manager;
         _djangoSyntheticModel[manager] = model;
         AddQuerySetMembers(manager, model, InstanceOfClass(manager));
-        AddSyntheticMember(manager, "get_queryset", Method(InstanceOfClass(DjangoQuerySetOf(model))));
+        AddSyntheticMember(manager, "get_queryset", Def(InstanceOfClass(DjangoQuerySetOf(model))));
         if (related)
-            foreach (var name in new[] { "add", "remove", "clear", "set" }) AddSyntheticMember(manager, name, Method(NoneInstance));
+        {
+            // add(*objs, bulk=True), remove(*objs, bulk=True), clear(), set(objs, *, bulk=True, clear=False) and their async forms (Django 4.2)
+            var boolean = Inst("bool");
+            var none = NoneInstance;
+            var objs = StarArgs("objs", PyType.Any);
+            foreach (var (name, sig) in new[]
+            {
+                ("add", Def(none, objs, KwArg("bulk", boolean), KwArg("through_defaults", PyType.Any))),
+                ("remove", Def(none, objs, KwArg("bulk", boolean))),
+                ("clear", Def(none, KwArg("bulk", boolean))),
+                ("set", Def(none, Arg("objs", TypingInst("Iterable", PyType.Any)), KwArg("bulk", boolean), KwArg("clear", boolean), KwArg("through_defaults", PyType.Any))),
+            })
+            {
+                AddSyntheticMember(manager, name, sig);
+                AddSyntheticMember(manager, "a" + name, sig with { Return = TypingInst("Coroutine", PyType.Any, PyType.Any, none) });
+            }
+        }
         return manager;
     }
 
@@ -453,19 +501,20 @@ public sealed partial class TypeEvaluator
                 return new ClassType(DjangoExceptionsOf(info).Does, false);
             case "MultipleObjectsReturned":
                 return new ClassType(DjangoExceptionsOf(info).Multiple, false);
+            // the Options the metaclass sets (`Book._meta.get_field("title")`)
+            case "_meta":
+                return DjangoInstanceOf("django.db.models.options", "Options") ?? PyType.Unknown;
             case "pk" when instance:
                 return DjangoPrimaryKeyType(info);
             case "id" when instance && !DjangoFieldsOf(info).Any(f => f.PrimaryKey || f.Kind == "composite"):
                 return Inst("int");
-            case "_meta":
-                return PyType.Unknown;
         }
 
         foreach (var f in DjangoFieldsOf(info))
         {
             if (instance && f.Kind is "foreign" or "one-to-one" && name == f.Name + "_id")
                 return f.Target != null ? DjangoPrimaryKeyType(f.Target) : PyType.Unknown;
-            if (instance && f.HasChoices && name == $"get_{f.Name}_display") return Method(Inst("str"));
+            if (instance && f.HasChoices && name == $"get_{f.Name}_display") return Def(Inst("str"));
         }
         return DjangoReverseMember(info, name);
     }

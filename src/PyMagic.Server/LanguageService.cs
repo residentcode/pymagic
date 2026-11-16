@@ -590,6 +590,9 @@ public sealed partial class LanguageService
             case FunctionType f: return FormatFunction(ev, name, f);
             // a decorated def whose parameters a ParamSpec kept (`@contextmanager def cm(x: int)`): those parameters, by name
             case SignatureType { Origin: not null, Params: { } ps } s: return FormatDef(ev, "def ", name, ps, s.Return);
+            // a method the engine adds (Django's QuerySet methods): written as its def, an async one with what it gives once awaited
+            case SignatureType { Named: true, Params: { } ps } s:
+                return s.Return is ClassType { Info.Name: "Coroutine", Args.Count: 3 } co ? FormatDef(ev, "async def ", name, ps, co.Args[2]) : FormatDef(ev, "def ", name, ps, s.Return);
             case OverloadedType o:
                 return FormatFunction(ev, name, o.Overloads[0]) + (o.Overloads.Count > 1 ? $"  # +{o.Overloads.Count - 1} overloads" : "");
             case ClassType { IsInstance: false } c: return FormatClassHeader(ev, c);

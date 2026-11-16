@@ -204,7 +204,8 @@ public sealed record FunctionType(FunctionInfo Info, bool BoundFirst, IReadOnlyD
 /// <summary>A callable described only by a signature, from Callable[[A], R] annotations.</summary>
 /// <param name="Spec">The ParamSpec of `Callable[P, R]` / `Callable[Concatenate[A, P], R]`: it stands for the parameters after Params.</param>
 /// <param name="Origin">The def a ParamSpec took these parameters from (`@deco def f`): bound like it when found on a class, and not part of equality.</param>
-public sealed record SignatureType(IReadOnlyList<ParamInfo>? Params, PyType Return, ParamSpecType? Spec = null, FunctionType? Origin = null) : PyType
+/// <param name="Named">The parameters are real ones, with names worth showing (a method the engine adds, as Django's QuerySet.filter), not a Callable's.</param>
+public sealed record SignatureType(IReadOnlyList<ParamInfo>? Params, PyType Return, ParamSpecType? Spec = null, FunctionType? Origin = null, bool Named = false) : PyType
 {
     public bool Equals(SignatureType? o) =>
         o != null && Return.Equals(o.Return) && (Params == null ? o.Params == null : o.Params != null && Params.SequenceEqual(o.Params))

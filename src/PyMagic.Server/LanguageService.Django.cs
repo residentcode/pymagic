@@ -339,8 +339,8 @@ public sealed partial class LanguageService
         "iso_year", "iso_week_day", "contained_by", "has_key", "has_keys", "has_any_keys",
     };
 
-    static readonly HashSet<string> LookupMethods = new(StringComparer.Ordinal) { "filter", "exclude", "get", "get_or_create", "update_or_create" };
-    static readonly HashSet<string> FieldOnlyMethods = new(StringComparer.Ordinal) { "create", "update", "bulk_create" };
+    static readonly HashSet<string> LookupMethods = new(StringComparer.Ordinal) { "filter", "exclude", "get", "get_or_create", "update_or_create", "aget", "aget_or_create", "aupdate_or_create" };
+    static readonly HashSet<string> FieldOnlyMethods = new(StringComparer.Ordinal) { "create", "update", "acreate", "aupdate" };
     /// <summary>Calls in a chain after which names may exist that are not fields.</summary>
     static readonly HashSet<string> NameAddingMethods = new(StringComparer.Ordinal) { "annotate", "alias", "extra", "values", "values_list", "raw", "aggregate", "union", "intersection", "difference" };
 
@@ -420,7 +420,9 @@ public sealed partial class LanguageService
             {
                 var field = ev.DjangoFieldNamed(current, part);
                 var next = ev.DjangoRelatedModel(current, part);
-                if (next != null && i < parts.Length - 1) { current = next; continue; }
+                // a relation followed by a field of its model goes on into that model; followed by a lookup (`author__in`, `author__isnull`) it is compared as a whole
+                if (next != null && i < parts.Length - 1 && !(allowLookups && QueryLookups.Contains(parts[i + 1]) && !ev.DjangoQueryNames(next).Contains(parts[i + 1])))
+                { current = next; continue; }
                 // a plain field (or a relation compared as a whole): what is left must be lookups
                 if (field?.Kind == "any") return null;
                 for (int j = i + 1; j < parts.Length; j++)

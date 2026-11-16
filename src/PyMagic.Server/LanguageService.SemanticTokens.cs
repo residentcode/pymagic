@@ -236,7 +236,8 @@ public sealed partial class LanguageService
         if (t is ModuleType) return (Tok.Namespace, TokMod.None);
         if (t is ClassType { IsInstance: false }) return (Tok.Class, TokMod.None);
         if (t is ClassType { EnumMember: not null }) return (Tok.EnumMember, TokMod.Readonly);
-        if (t is FunctionType or OverloadedType)
+        // a function, a method the engine adds (Django's `objects.filter`), or anything called (`qs.values()`, whose type the call decides)
+        if (t is FunctionType or OverloadedType or SignatureType || m.ParentOf(a) is CallExpr call && ReferenceEquals(call.Func, a))
             return (owner is ModuleType ? Tok.Function : Tok.Method, TokMod.None);
         if (owner is ClassType { IsInstance: false } oc && IsEnumClass(oc.Info, ev) && t is ClassType { IsInstance: true }) return (Tok.EnumMember, TokMod.Readonly);
         if (owner is UnknownType && t is UnknownType) return null;

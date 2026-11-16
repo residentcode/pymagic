@@ -65,6 +65,39 @@ public class DjangoSixTests
     }
 
     [Fact]
+    public void ManagerMethodsShowDjangosParameters()
+    {
+        const string code = "from .models import Product\n\n\nasync def run():\n    await Product.objects.aupdate_or_create(id='x', defaults={'stock': 1})\n    Product.objects.bulk_create([Product()], batch_size=10)\n    Product.objects.filter(stock=1).order_by('-stock').first()\n    Product.objects.get_or_create(id='x', defaults={'stock': 1}, bad=1)\n";
+        if (Open(code) is not var (svc, uri)) return;
+        string HoverAt(string name)
+        {
+            var hover = svc.Hover(uri, new LineMap(code).PositionOf(code.IndexOf(name, StringComparison.Ordinal) + 1));
+            return hover!.Contents.Value.Split('\n')[1];
+        }
+        Assert.Equal("async def aupdate_or_create(defaults: Mapping[str, Any] | None = ..., create_defaults: Mapping[str, Any] | None = ..., **kwargs: Any) -> tuple[Product, bool]", HoverAt("aupdate_or_create"));
+        Assert.Equal("def bulk_create(objs: Iterable[Product], batch_size: int | None = ..., ignore_conflicts: bool = ..., update_conflicts: bool = ..., update_fields: Sequence[str] | None = ..., unique_fields: Sequence[str] | None = ...) -> list[Product]", HoverAt("bulk_create"));
+        Assert.Equal("def first() -> Product | None", HoverAt("first"));
+        // only the unknown field is a problem: defaults is a parameter, not a lookup
+        Assert.Equal("Cannot resolve keyword 'bad' into a field of Product. Choices are: pk, id, category, category_id, price, stock, status, total, orderline",
+            string.Join(" / ", svc.Diagnostics(uri).Where(d => d.Severity <= 2).Select(d => d.Message)));
+        var help = svc.SignatureHelp(uri, new LineMap(code).PositionOf(code.IndexOf("batch_size", StringComparison.Ordinal)));
+        Assert.Equal(1, help!.ActiveParameter);
+        Assert.Contains("batch_size: int | None", help.Signatures[0].Label);
+        // the methods after `objects` are coloured as methods, as a def's are
+        var data = svc.SemanticTokens(uri);
+        var lines = code.Split('\n');
+        var kinds = new Dictionary<string, string>();
+        for (int i = 0, line = 0, ch = 0; i < data.Length; i += 5)
+        {
+            line += data[i];
+            ch = data[i] == 0 ? ch + data[i + 1] : data[i + 1];
+            kinds.TryAdd(lines[line].Substring(ch, data[i + 2]), LanguageService.SemanticTokenTypes[data[i + 3]]);
+        }
+        foreach (var name in new[] { "aupdate_or_create", "bulk_create", "filter", "order_by", "first", "get_or_create" }) Assert.Equal(name + ":method", name + ":" + kinds[name]);
+        Assert.Equal("property", kinds["objects"]);
+    }
+
+    [Fact]
     public void ATaskOfDjangoTasksEnqueuesAResultOfItsReturn()
     {
         const string code = "from django.tasks import task\n\n\n@task(priority=10)\ndef restock(product_id: str, amount: int) -> int:\n    return amount\n\n\ndef run():\n    queued = restock.enqueue('x', 1)\n    value = queued.return_value\n    status = queued.status\n    later = restock.using(priority=1)\n";
