@@ -279,7 +279,10 @@ public sealed partial class TypeEvaluator
             return Single(new CallTarget(callee, djangoResult, Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 
         var targets = CallValue(callee, args, call);
-        return new CallResolution(targets.Count == 0 ? PyType.Unknown : PyType.Union(targets.Select(t => t.Returns)), targets);
+        var returns = targets.Count == 0 ? PyType.Unknown : PyType.Union(targets.Select(t => t.Returns));
+        if (call.Func is AttributeExpr { Attr: "get" } bg && call.Args is [{ Name: null, Stars: 0 } bk, ..])
+            returns = Bs4SingleValue(TypeOf(m, bg.Value), bk.Value, returns);
+        return new CallResolution(returns, targets);
     }
 
     /// <summary><c>movie.get("year")</c> on a TypedDict: the field's type (or None / the default's type);
@@ -1109,7 +1112,7 @@ public sealed partial class TypeEvaluator
                     return PyType.Union(parts.Before.Skip(Math.Max(0, parts.Before.Count - (-i - parts.After.Count))).Prepend(parts.Item));
             }
             if (r is ClassType { IsInstance: true } inst)
-                return CallMethod(inst, "__getitem__", new[] { TypeOf(m, s.Index) }, out _) ?? PyType.Unknown;
+                return Bs4SingleValue(inst, s.Index, CallMethod(inst, "__getitem__", new[] { TypeOf(m, s.Index) }, out _) ?? PyType.Unknown);
             return PyType.Unknown;
         });
     }

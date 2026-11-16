@@ -429,6 +429,7 @@ public sealed partial class TypeEvaluator
     /// <summary>A field read through an instance gives its value, a manager read through the class gives a manager of this model.</summary>
     PyType? DjangoBoundMember(MemberHit hit, ClassType receiver, bool receiverIsInstance)
     {
+        if (receiverIsInstance && DjangoViewPlaceholder(hit, receiver)) return PyType.Unknown;
         if (hit.ClassSymbol == null || !IsDjangoModel(receiver.Info) || hit.Owner.Info.Name == "Model" && IsDjangoInternal(hit.Owner.Info)) return null;
         if (receiverIsInstance && DjangoFieldOf(hit.Owner.Info, hit.ClassSymbol) is { } field) return DjangoValueType(field);
         // `popular = TagQuerySet.as_manager()`: a manager of this model with the QuerySet's own methods
@@ -441,6 +442,18 @@ public sealed partial class TypeEvaluator
             return InstanceOfClass(DjangoManagerOf(receiver.Info, IsDjangoInternal(manager.Info) && manager.Info.Name is "Manager" or "BaseManager" ? null : manager.Info));
         }
         return null;
+    }
+
+    /// <summary>
+    /// `action = None` in a view of the project, unannotated and set nowhere else: a placeholder for `as_view(action='my-test')`, which
+    /// sets it on each instance (as_view takes only names the class has). Read through self it is whatever the URLconf gives, not None.
+    /// </summary>
+    bool DjangoViewPlaceholder(MemberHit hit, ClassType receiver)
+    {
+        if (hit.ClassSymbol is not { } sym || hit.InstanceAttrs.Count > 0 || IsDjangoInternal(hit.Owner.Info) || sym.Declarations.Count == 0) return false;
+        var m = hit.Owner.Info.Module;
+        if (!sym.Declarations.All(d => d.Kind == DeclKind.Variable && m.ParentOf(d.Node) is AssignStmt { Value: ConstExpr { Kind: ConstKind.None } })) return false;
+        return Mro(receiver.Info).Any(e => e is ClassType ec && ec.Info.Name == "View" && ec.Info.Module.Name is "django.views.generic.base" or "django.views.generic" or "django.views");
     }
 
     bool IsDjangoManagerClass(ClassInfo c)

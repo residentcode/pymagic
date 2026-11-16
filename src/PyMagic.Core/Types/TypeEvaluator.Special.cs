@@ -24,6 +24,21 @@ public sealed partial class TypeEvaluator
     readonly Dictionary<ClassInfo, bool> _isEnum = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<ClassInfo, List<(string Name, Expr? Value)>> _enumMembers = new(ReferenceEqualityComparer.Instance);
 
+    /// <summary>The attributes BeautifulSoup splits into a list of words (its HTMLTreeBuilder.DEFAULT_CDATA_LIST_ATTRIBUTES, any tag's).</summary>
+    static readonly HashSet<string> Bs4ListAttributes = new(StringComparer.OrdinalIgnoreCase) { "class", "rel", "rev", "accept-charset", "headers", "accesskey", "dropzone", "archive" };
+
+    /// <summary>
+    /// `tag.get("data-x")` and `tag["data-x"]` on a bs4 Tag: its stub gives `str | AttributeValueList` for any name, but only the
+    /// attributes BeautifulSoup splits (class, rel, ...) are ever a list; any other named in the code is a str.
+    /// </summary>
+    PyType Bs4SingleValue(PyType receiver, Expr key, PyType result)
+    {
+        static bool IsList(PyType t) => t is ClassType { Info.QualifiedName: "bs4.element.AttributeValueList" };
+        if (!result.Members.Any(IsList) || StringValue(key) is not string name || Bs4ListAttributes.Contains(name)) return result;
+        if (!receiver.Members.Any(r => r is ClassType { IsInstance: true } c && InheritsFrom(c.Info, "bs4.element.Tag"))) return result;
+        return PyType.Union(result.Members.Where(t => !IsList(t)).ToList());
+    }
+
     bool InheritsFrom(ClassInfo c, string qualifiedName) =>
         Mro(c).Any(e => e is ClassType ct && ct.Info.QualifiedName == qualifiedName);
 

@@ -880,6 +880,7 @@ async function forgetPath(rel) {
         loading.delete(key);
         relPathOf.delete(key);
         savedText.delete(path);
+        viewStates.delete(path);
         if (editor.getModel() === model)
             editor.setModel(null);
         for (const side of split?.editors() ?? [])
@@ -904,7 +905,14 @@ async function syncPyModels() {
         if (!wanted.has(key) && relPathOf.get(key)?.endsWith('.py'))
             await forgetPath(relPathOf.get(key));
 }
+/** Where each file was scrolled to, its cursor and folds (Monaco's view state), so that going back to it shows it as it was left. */
+const viewStates = new Map();
+function rememberView() {
+    if (currentRel && editor.getModel())
+        viewStates.set(currentRel, editor.saveViewState());
+}
 function showNothing() {
+    rememberView();
     currentRel = '';
     notebook?.hide();
     editor.setModel(null);
@@ -998,8 +1006,14 @@ async function openFile(rel, reveal, opts = {}) {
         toast(`${rel} cannot be shown here (binary or very large).`, true);
         return;
     }
+    if (editor.getModel() !== model) {
+        rememberView();
+        editor.setModel(model);
+        const view = viewStates.get(rel);
+        if (view && !reveal)
+            editor.restoreViewState(view);
+    }
     currentRel = rel;
-    editor.setModel(model);
     editor.updateOptions({ readOnly: false });
     if (rel.endsWith('.ipynb'))
         notebook?.show(rel, model);
