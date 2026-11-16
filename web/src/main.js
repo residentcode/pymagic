@@ -528,11 +528,20 @@ function registerProviders() {
     });
     // a right-click on text selected in a hover (a problem's message, a type): the editor would take it and show no menu, so it goes past the
     // editor and the window's own menu gives Copy, as on any other selected text
+    // A right-click on the rest of a hover (one that came up over lines just selected) is the editor's: its menu opens there, for the selection
     document.addEventListener('contextmenu', (e) => {
         const hover = e.target.closest?.('.monaco-hover');
+        if (!hover)
+            return;
         const sel = document.getSelection();
-        if (hover && sel && !sel.isCollapsed && hover.contains(sel.anchorNode))
-            e.stopPropagation();
+        e.stopPropagation();
+        if (sel && !sel.isCollapsed && hover.contains(sel.anchorNode))
+            return;
+        e.preventDefault();
+        const ed = [editor, ...(split?.editors() ?? [])].find((x) => x.getContainerDomNode().contains(hover)) ?? editor;
+        ed.getContribution('editor.contrib.contentHover')?._hideWidgets?.();   // Monaco's own way out of a hover (no public one)
+        ed.focus();
+        ed.getContribution('editor.contrib.contextmenu')?.showContextMenu({ x: e.clientX, y: e.clientY });
     }, true);
     monaco.languages.registerHoverProvider([...CODE_LANGUAGES, 'php'], {
         async provideHover(model, position, token) {
