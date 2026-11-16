@@ -336,7 +336,7 @@ export function setupTests(deps) {
     let lastIds = null;        // what the last run ran ([] for all), for Auto
     let shownRun = null;       // the run whose results the tree shows (the last one, or one picked from History)
     let history = [];
-    fetch('/api/file?path=' + encodeURIComponent(HISTORY)).then((r) => (r.ok ? r.json() : [])).then((h) => { history = Array.isArray(h) ? h : []; }).catch(() => { /* none yet */ });
+    fetch('/api/file?optional=1&path=' + encodeURIComponent(HISTORY)).then((r) => (r.status === 200 ? r.json() : [])).then((h) => { history = Array.isArray(h) ? h : []; }).catch(() => { /* none yet */ });
     function recordRun() {
         const results = [...byId.values()].filter((n) => n.children.length === 0 && n.result)
             .map((n) => ({ id: n.id, outcome: n.result.outcome, duration: n.result.duration ?? 0, message: n.result.message ?? '', traceback: n.result.traceback ?? '' }));

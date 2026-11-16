@@ -4,6 +4,7 @@
 import * as monaco from 'monaco-editor';
 import { settings, pluginsAtStart } from './settings';
 import { pluginOn } from './plugin-model.js';
+import { inGitRepository } from './git';
 import { lensSymbols, usagesText, inheritorsText, mainAuthor } from './codevision-model.js';
 export function setupCodeVision(deps) {
     const { lsp } = deps;
@@ -18,7 +19,8 @@ export function setupCodeVision(deps) {
             return [];   // Settings > Plugins: Git off, no authors
         const key = rel + '#' + (deps.savedText(rel)?.length ?? 0);
         if (!blames.has(key)) {
-            blames.set(key, fetch('/api/git/blame?path=' + encodeURIComponent(rel)).then((r) => (r.ok ? r.json() : [])).catch(() => []));
+            // outside a Git repository there are no authors: Git is not asked
+            blames.set(key, inGitRepository().then((inRepo) => !inRepo ? [] : fetch('/api/git/blame?path=' + encodeURIComponent(rel)).then((r) => (r.ok ? r.json() : [])).catch(() => [])));
         }
         return blames.get(key);
     }

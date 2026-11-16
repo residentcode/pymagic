@@ -92,6 +92,7 @@ select, input:not([type=checkbox]):not([type=radio]), textarea {
 select { padding-right: 4px; }
 select:hover, input:not([type=checkbox]):hover, textarea:hover { border-color: var(--line-strong); }
 select:focus, input:not([type=checkbox]):focus, textarea:focus, button:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--sel-soft); outline: none; }
+[role=button]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
 ::placeholder { color: var(--faint); }
 input[type=checkbox], input[type=radio] { accent-color: var(--accent); margin: 0 4px 0 0; vertical-align: -2px; }
 label { cursor: default; }
@@ -327,6 +328,10 @@ li.in-excluded { opacity: .55; }
 .pkrow.head, .prof-head { background: var(--panel); }
 
 #toolbar.compact .lbl-opt { display: none; }
+/* a narrow window: the interpreter's path and the run configuration's name give up width too, so Settings stays on screen */
+#toolbar.compact #interp { max-width: 150px; min-width: 0; }
+#toolbar.compact #run-config { max-width: 120px; }
+#toolbar.compact #interp-note { display: none; }
 #toolbar.compact button.optional { padding: 0; width: 30px; }
 @media (max-width: 900px) { #app { grid-template-columns: 48px 0 minmax(0, 1fr); } #sidebar { display: none; } #project, #branch-chip { display: none; } }
 #t-todo[data-count]::after { background: var(--line-strong) !important; }

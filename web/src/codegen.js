@@ -10,7 +10,7 @@ const FILE_TEMPLATES = '.pymagic/fileTemplates.json';
 /** The project's file templates (the defaults when it has none). */
 export async function fileTemplates() {
     try {
-        const res = await fetch('/api/file?path=' + encodeURIComponent(FILE_TEMPLATES));
+        const res = await fetch('/api/file?optional=1&path=' + encodeURIComponent(FILE_TEMPLATES));
         return readFileTemplates(res.ok ? await res.text() : '');
     }
     catch {

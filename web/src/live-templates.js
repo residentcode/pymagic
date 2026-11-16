@@ -20,7 +20,7 @@ const rebuild = () => { conf = cleanConf(settings().templates); templates = allT
 /** Reads the project's templates again: when the window opens, comes back to the front, and when the Templates page saves them. */
 async function readProject() {
     try {
-        const res = await fetch('/api/file?path=' + encodeURIComponent('.pymagic/snippets.json'));
+        const res = await fetch('/api/file?optional=1&path=' + encodeURIComponent('.pymagic/snippets.json'));
         project = projectTemplates(res.ok ? readSnippets(await res.text()) ?? [] : []);
     }
     catch { project = []; }

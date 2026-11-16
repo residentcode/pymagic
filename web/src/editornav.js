@@ -2,6 +2,7 @@
 // and end of a block, the last edits and the places recently visited, breadcrumbs, method separators, lens mode on the
 // scroll bar, context info, the type of an expression, a name's documentation on the web, and a RegExp checker.
 import * as monaco from 'monaco-editor';
+import { asButton } from './a11y.js';
 import { settings, onSettings } from './settings';
 import { openMenu } from './menu';
 import { toast } from './toast';
@@ -301,8 +302,10 @@ export function setupEditorNav(deps) {
             const span = document.createElement('span');
             span.className = 'crumb' + (i === parts.length - 1 ? ' file' : ' dir');
             span.textContent = p;
-            if (i === parts.length - 1)
+            if (i === parts.length - 1) {
                 span.onclick = () => void deps.reveal?.(rel);
+                asButton(span, { label: `Show ${p} in the project tree` });
+            }
             crumbs.append(span);
         });
         for (const d of path) {
@@ -311,6 +314,7 @@ export function setupEditorNav(deps) {
             span.textContent = d.name;
             span.title = `Line ${d.nameLine}; right-click for the definitions beside it`;
             span.onclick = () => go(editor, d.nameLine);
+            asButton(span, { label: `Go to ${d.name}, line ${d.nameLine}` });
             // the definitions at the same level (the methods of the same class), to jump to one
             span.oncontextmenu = async (e) => {
                 e.preventDefault();

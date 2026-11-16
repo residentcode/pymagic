@@ -142,6 +142,8 @@ export function setupExplorer(deps) {
     try { rootOpen = localStorage.getItem('pymagic.explorer.rootClosed') !== '1'; } catch { /* storage unavailable */ }
     window.addEventListener('pymagic:coverageTree', (e) => { coverage = e.detail; paint(); });
     list.tabIndex = 0;
+    list.setAttribute('role', 'tree');
+    list.setAttribute('aria-label', 'Project files');
 
     function remember() { try { localStorage.setItem('pymagic.explorer.open', JSON.stringify([...open])); } catch { /* storage unavailable */ } }
 
@@ -172,6 +174,9 @@ export function setupExplorer(deps) {
         const li = document.createElement('li');
         li.dataset.path = path;
         li.dataset.kind = isDir ? 'dir' : 'file';
+        li.setAttribute('role', 'treeitem');
+        li.setAttribute('aria-level', String(depth + 2));
+        if (isDir) li.setAttribute('aria-expanded', String(!!isOpen));
         li.style.paddingLeft = `${8 + depth * 14}px`;
         li.title = path;
         const twisty = document.createElement('span');
@@ -231,6 +236,9 @@ export function setupExplorer(deps) {
         li.dataset.path = '';
         li.dataset.kind = 'root';
         li.className = 'root';
+        li.setAttribute('role', 'treeitem');
+        li.setAttribute('aria-level', '1');
+        li.setAttribute('aria-expanded', String(rootOpen));
         li.style.paddingLeft = '8px';
         li.title = rootPath;
         const twisty = document.createElement('span');

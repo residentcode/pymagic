@@ -67,6 +67,12 @@ const ago = (seconds) => {
     return d === 0 ? 'today' : d === 1 ? 'yesterday' : d < 60 ? `${d}d ago` : d < 700 ? `${Math.round(d / 30)}mo ago` : `${Math.round(d / 365)}y ago`;
 };
 const agoIso = (iso) => ago(Date.parse(iso) / 1000);
+// whether the project is in a Git repository, once the first status is in (other modules ask before they call Git: no errors outside a repository)
+let repoKnown = null;
+let repoReady;
+const repoAnswer = new Promise((resolve) => { repoReady = resolve; });
+export async function inGitRepository() { await repoAnswer; return repoKnown; }
+
 export function setupGit(deps) {
     const { editor } = deps;
     let status = { available: false };
@@ -95,14 +101,19 @@ export function setupGit(deps) {
     // ------------------------------------------------------------------ status
     const enabled = deps.enabled !== false;   // Settings > Plugins: Git off, the project is treated as one without Git
     async function refresh() {
-        if (!enabled)
+        if (!enabled) {
+            repoKnown = false;
+            repoReady();
             return;
+        }
         try {
             status = await api('/api/git/status');
         }
         catch (e) {
             status = { available: false, reason: String(e.message ?? e) };
         }
+        repoKnown = !!status.available;
+        repoReady();
         lists = null;
         if (status.available) {
             try {
@@ -1009,6 +1020,8 @@ export function setupGit(deps) {
     }
     /** The branch list of the filter (every local and remote branch) and the names of the remotes for the badges. */
     async function fillLogBranches() {
+        if (!status.available)
+            return;
         try {
             const b = await api('/api/git/branches');
             const select = $('git-log-branch');
@@ -1337,6 +1350,8 @@ export function setupGit(deps) {
         await refresh();
     };
     // ------------------------------------------------------------------ wiring
+    if (!enabled)
+        void refresh();   // (only says that there is no repository to ask)
     if (!enabled)
         return { refresh, showDiff, attach, status: () => status, changelists: () => lists, unchecked: () => unchecked, partial: () => partial, commitList: () => commitList(lists, commitChoice) };
     $('t-git').onclick = () => { showTab('git'); void refresh(); };

@@ -147,7 +147,7 @@ export function setupBookmarks({ monaco, editor, openFile, relOf, revealInTree }
     defineCommand({ id: 'pymagic.bookmarks.previous', label: 'Previous bookmark', group: 'Navigate', keys: ['Shift+Alt+F2'], run: () => step(-1) });
     $('bm-clear').onclick = () => { for (const b of [...list]) remove(b); };
 
-    fetch('/api/file?path=' + encodeURIComponent(FILE)).then((r) => (r.ok ? r.json() : [])).then((stored) => {
+    fetch('/api/file?optional=1&path=' + encodeURIComponent(FILE)).then((r) => (r.status === 200 ? r.json() : [])).then((stored) => {
         if (Array.isArray(stored)) list = stored.filter((b) => b && typeof b.rel === 'string' && Number.isInteger(b.line)).map((b) => ({ rel: b.rel, line: b.line, text: String(b.text ?? ''), ...(b.dir === true ? { dir: true } : {}) }));
         paintModel();
         draw();

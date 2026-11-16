@@ -25,7 +25,7 @@ export function setupRunConfigurations({ currentFile }) {
         for (const fn of listeners) fn();
     };
 
-    const fetchJson = (file) => fetch('/api/file?path=' + encodeURIComponent(file)).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const fetchJson = (file) => fetch('/api/file?optional=1&path=' + encodeURIComponent(file)).then((r) => (r.status === 200 ? r.json() : null)).catch(() => null);
     ready = Promise.all([fetchJson(FILE), fetchJson(SHARED)]).then(async ([stored, shared]) => {
         const sharedList = read(shared).configurations.map((c) => ({ ...c, shared: true }));
         hadShared = sharedList.length > 0;

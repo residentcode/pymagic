@@ -238,7 +238,7 @@ const SPECIAL = {
         const paint = async () => {
             let modules = [];
             try {
-                const res = await fetch('/api/file?path=' + encodeURIComponent('.pymagic/ignored-imports.json'));
+                const res = await fetch('/api/file?optional=1&path=' + encodeURIComponent('.pymagic/ignored-imports.json'));
                 if (res.ok) { const data = JSON.parse(await res.text()); if (Array.isArray(data)) modules = data.filter((m) => typeof m === 'string'); }
             } catch { /* none, or not readable: shown as none */ }
             list.replaceChildren();

@@ -49,7 +49,12 @@ export function setupToolbarFit() {
 
     let frame = 0;
     const later = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(refit); };
-    new ResizeObserver(later).observe(bar);
+    const sizes = new ResizeObserver(later);
+    sizes.observe(bar);
+    // the fields whose width follows their text (the interpreter's path, the run configuration, the branch, the project) can grow after a fit
+    // without any change the observers below see; the window's own resize is listened to as well
+    for (const id of ['interp', 'run-config', 'branch-chip', 'project']) { const e = document.getElementById(id); if (e) sizes.observe(e); }
+    window.addEventListener('resize', later);
     // buttons that come and go (the steps while debugging, Pause), the interpreter's name, the branch: all change what the bar needs
     new MutationObserver(later).observe(bar, { subtree: true, attributes: true, attributeFilter: ['disabled'], childList: true, characterData: true });
     later();

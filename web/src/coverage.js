@@ -192,7 +192,7 @@ export function setupCoverage(deps) {
         if (names.length) data = mergeSuites(await Promise.all(names.map(suiteData)));
         else {
             const res = await fetch('/api/coverage');
-            data = res.ok ? await res.json() : null;
+            data = res.status === 200 ? await res.json() : null;
         }
         closePopup();
         paint();

@@ -12,7 +12,7 @@ export function setupRecent({ exists }) {
             fetch('/api/file?path=' + encodeURIComponent(FILE), { method: 'PUT', body: JSON.stringify(list) }).catch(() => { /* not remembered this time */ });
         }, 800);
     };
-    fetch('/api/file?path=' + encodeURIComponent(FILE)).then((r) => (r.ok ? r.json() : [])).then((stored) => {
+    fetch('/api/file?optional=1&path=' + encodeURIComponent(FILE)).then((r) => (r.status === 200 ? r.json() : [])).then((stored) => {
         if (Array.isArray(stored)) list = [...new Set([...list, ...stored.filter((f) => typeof f === 'string')])].slice(0, MAX);
     }).catch(() => { /* nothing remembered */ });
     return {

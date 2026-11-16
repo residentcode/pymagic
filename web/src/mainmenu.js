@@ -1,6 +1,7 @@
 // The main menu: the mark at the left of the command bar opens it. Every command PyMagic has is in it, with its key, grouped as File, Edit, View,
 // Navigate, Code, Run, Tools, Git and Help. A command is the editor's own action, a button the tool already has, or a function of its script.
 import { openMenu } from './menu';
+import { asButton } from './a11y.js';
 import { change, settings, pluginsAtStart } from './settings';
 import { toolOff, pluginOn, remoteKindsLeft } from './plugin-model';
 import { openSettings } from './settings-ui';
@@ -318,6 +319,7 @@ export function setupMainMenu({ editor, save, saveAll, reload, openFile, tabs, s
 
     if (desktop) {
         $('project').classList.add('clickable');
+        asButton($('project'), { label: 'Project: open folder, recent projects, close project' });
         $('project').onclick = async () => { await loadRecent(); openMenu($('project'), [
             { label: 'Open folder…', key: 'Ctrl+Shift+O', run: () => void desktop.openFolder() },
             '-',

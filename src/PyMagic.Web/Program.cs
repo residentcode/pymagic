@@ -93,7 +93,12 @@ app.Use(async (ctx, next) =>
     string? origin = ctx.Request.Headers.Origin.ToString();
     bool originOk = string.IsNullOrEmpty(origin)
         || (Uri.TryCreate(origin, UriKind.Absolute, out var o) && o.Scheme == "http" && Allowed(o.Authority));
-    if (!Allowed(ctx.Request.Host.Value ?? "") || !originOk)
+    // a GET from an <img> or <script> of another page carries no Origin; the browser still says where it comes from. Another program on
+    // 127.0.0.1 (another port) is "same-site", so only our own page ("same-origin") or a typed address / opened link ("none") pass;
+    // programs that are not browsers (the MCP bridge, the checks) send no such header
+    string fetchSite = ctx.Request.Headers["Sec-Fetch-Site"].ToString();
+    bool siteOk = fetchSite is "" or "same-origin" or "none";
+    if (!Allowed(ctx.Request.Host.Value ?? "") || !originOk || !siteOk)
     {
         ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
         await ctx.Response.WriteAsync("forbidden: requests must come from the PyMagic page itself");
@@ -595,11 +600,13 @@ app.MapGet("/api/tree/dir", (string path) =>
     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Results.Json(new { error = e.Message }, statusCode: 500); }
 });
 
-app.MapGet("/api/file", (string path) =>
+app.MapGet("/api/file", (string path, string? optional) =>
 {
     try
     {
         string full = ResolveInRoot(path);
+        // a file the page keeps for itself (.pymagic/bookmarks.json, …) that is not made yet: nothing, without an error in the console
+        if (optional is "1" or "true" && !File.Exists(full)) return Results.NoContent();
         var bytes = File.ReadAllBytes(full);
         // notebooks carry their images and tables inside the file, so they may be larger than source files
         if (bytes.Length > (full.EndsWith(".ipynb", StringComparison.OrdinalIgnoreCase) ? 60 : 5) * 1024 * 1024) return Results.StatusCode(413);
@@ -1845,7 +1852,7 @@ app.MapGet("/api/coverage/report", () =>
 app.MapGet("/api/coverage", () =>
 {
     string path = RunSession.CoveragePath(root);
-    if (!File.Exists(path)) return Results.NotFound();
+    if (!File.Exists(path)) return Results.NoContent();   // no run with coverage yet: nothing, not an error
     try
     {
         var data = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;

@@ -51,7 +51,7 @@ export function setupHttpClient(deps) {
     let part = 'body';     // body | headers | request
     const ENV_KEY = 'pymagic.http.env:' + deps.root;
 
-    const readText = (rel) => fetch('/api/file?path=' + encodeURIComponent(rel)).then((r) => (r.ok ? r.text() : null)).catch(() => null);
+    const readText = (rel) => fetch('/api/file?optional=1&path=' + encodeURIComponent(rel)).then((r) => (r.ok ? r.text() : null)).catch(() => null);
     const readJson = async (rel) => { const t = await readText(rel); try { return t ? JSON.parse(t) : null; } catch { toast(`${rel} is not valid JSON`); return null; } };
     const folderOf = (rel) => (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/') + 1) : '');
 

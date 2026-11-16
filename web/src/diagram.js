@@ -21,7 +21,7 @@ export function setupDiagrams(deps) {
     let direction = 'down';
     try { direction = localStorage.getItem('pymagic.diagramDirection') === 'across' ? 'across' : 'down'; } catch { /* the default */ }
     let notes = {};
-    fetch('/api/file?path=' + encodeURIComponent(NOTES)).then((r) => (r.ok ? r.json() : {})).then((n) => { notes = n && typeof n === 'object' ? n : {}; }).catch(() => { /* none */ });
+    fetch('/api/file?optional=1&path=' + encodeURIComponent(NOTES)).then((r) => (r.status === 200 ? r.json() : {})).then((n) => { notes = n && typeof n === 'object' ? n : {}; }).catch(() => { /* none */ });
     const saveNotes = () => fetch('/api/file?path=' + encodeURIComponent(NOTES), { method: 'PUT', body: JSON.stringify(notes, null, 2) }).catch(() => { /* kept for now */ });
 
     /** @param focus a model's name: only that model and the models joined to it by a relation either way. */

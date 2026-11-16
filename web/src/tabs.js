@@ -2,6 +2,7 @@
 // (most recently used first), dragging to reorder, pinned tabs that stay first and are not closed with the others, and a list of every tab
 // for a bar too narrow to show them. The editor split in two has one bar for each side; a tab dragged onto the other bar moves there.
 import { clampToGroup, dropIndex, moveBy, moveTo, pinFirst, staysPut } from './taborder';
+import { asButton } from './a11y.js';
 import { movedPath } from './explorer-model';
 import { openMenu } from './menu';
 import { settings } from './settings';
@@ -101,10 +102,12 @@ export function setupTabs(deps) {
                 close.classList.add('etab-pin');
                 close.append(pinIcon());
                 close.title = 'Pinned: click to unpin';
+                asButton(close, { label: `Unpin ${baseName(rel)}`, focusable: false });
                 close.onclick = (e) => { e.stopPropagation(); pin(rel, false); };
             } else {
                 close.textContent = '✕';
                 close.title = 'Close (Ctrl+W)';
+                asButton(close, { label: `Close ${baseName(rel)}`, focusable: false });
                 close.onclick = (e) => { e.stopPropagation(); void closeTab(rel); };
             }
             tab.append(name, close);
