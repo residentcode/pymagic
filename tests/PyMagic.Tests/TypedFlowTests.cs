@@ -149,9 +149,8 @@ public class TypedFlowTests
     public void TheCodeAfterAWithBlockWhoseExitReturnsBoolIsReachable()
     {
         Assert.Equal("", Flow(Suppress + "def f() -> int:\n    with Suppress():\n        return int('x')\n    return 0\n"));
-        // a name bound only in the body may be unbound after it
-        Assert.Equal("8: Local variable 'v' might be referenced before assignment",
-            Flow(Suppress + "def f():\n    with Suppress():\n        v = int('x')\n    print(v)\n"));
+        // a name bound in the body is taken as bound after it, as PyCharm does (the exit may swallow, but saying so on every read is noise)
+        Assert.Equal("", Flow(Suppress + "def f():\n    with Suppress():\n        v = int('x')\n    print(v)\n"));
     }
 
     [Fact]

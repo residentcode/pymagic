@@ -92,20 +92,27 @@ public sealed partial class LanguageService
                 return ev.TypeOf(m, e) is { } t && Certain(t) ? t : null;
             case NameExpr n when depth == 0:
             {
-                if (m.Semantics.Resolve(n) is not { } sym) return null;
-                var decls = (sym.Redirect ?? sym).Declarations;
-                if (decls.Count != 1) return null;
-                switch (decls[0].Node)
-                {
-                    case Parameter { Kind: ParamKind.Normal, Annotation: { } ann } p when SimpleAnnotation(ann) && p.Default is not ConstExpr { Kind: ConstKind.None }:
-                        return ev.AnnotatedType(m, ann) is ClassType { IsInstance: true } declared && Certain(declared) ? declared : null;
-                    case NameExpr target when m.ParentOf(target) is AssignStmt { Targets.Count: 1 } a && ReferenceEquals(a.Targets[0], target):
-                        return Reliable(m, a.Value, ev, 1);
-                    case NameExpr target2 when m.ParentOf(target2) is AnnAssignStmt aa && ReferenceEquals(aa.Target, target2) && SimpleAnnotation(aa.Annotation):
-                        return ev.AnnotatedType(m, aa.Annotation) is ClassType { IsInstance: true } declared2 && Certain(declared2) ? declared2 : null;
-                    default: return null;
-                }
+                // what the name is declared as, only while nothing narrowed it here (`backend: object` after `isinstance(backend, tuple)` is a tuple)
+                var declaredHere = DeclaredReliable(m, n, ev);
+                return declaredHere != null && ev.TypeOf(m, n).Equals(declaredHere) ? declaredHere : null;
             }
+            default: return null;
+        }
+    }
+
+    static PyType? DeclaredReliable(ModuleInfo m, NameExpr n, TypeEvaluator ev)
+    {
+        if (m.Semantics.Resolve(n) is not { } sym) return null;
+        var decls = (sym.Redirect ?? sym).Declarations;
+        if (decls.Count != 1) return null;
+        switch (decls[0].Node)
+        {
+            case Parameter { Kind: ParamKind.Normal, Annotation: { } ann } p when SimpleAnnotation(ann) && p.Default is not ConstExpr { Kind: ConstKind.None }:
+                return ev.AnnotatedType(m, ann) is ClassType { IsInstance: true } declared && Certain(declared) ? declared : null;
+            case NameExpr target when m.ParentOf(target) is AssignStmt { Targets.Count: 1 } a && ReferenceEquals(a.Targets[0], target):
+                return Reliable(m, a.Value, ev, 1);
+            case NameExpr target2 when m.ParentOf(target2) is AnnAssignStmt aa && ReferenceEquals(aa.Target, target2) && SimpleAnnotation(aa.Annotation):
+                return ev.AnnotatedType(m, aa.Annotation) is ClassType { IsInstance: true } declared2 && Certain(declared2) ? declared2 : null;
             default: return null;
         }
     }
@@ -144,7 +151,7 @@ public sealed partial class LanguageService
         var declared = ev.AnnotatedType(m, f.Returns);
         if (!Certain(declared) || declared is NeverType || declared.Members.Any(x => IsNone(x) || x is NeverType || x is ClassType { Info: { Name: "object", Module.Name: "builtins" } })) yield break;
         // a Protocol's methods are signatures
-        if (m.ParentOf(f) is ClassDef cd && ClassInfoOf(m, cd, ev) is { } info && ev.IsProtocol(info)) yield break;
+        if (m.ClassBodyOf(f) is ClassDef cd && ClassInfoOf(m, cd, ev) is { } info && ev.IsProtocol(info)) yield break;
         // the flow graph knows dead code after a return, a return in a finally block and calls that never return
         if (AlwaysExits(m, f.Body, ev) || !ev.EndReachable(m, f)) yield break;
         yield return new Finding(f.NameStart, f.Name.Length, $"Missing return statement: '{f.Name}' is declared to return '{declared}' but can end without returning", "missing-return", FindingLevel.Warning);

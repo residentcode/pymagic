@@ -123,7 +123,7 @@ public sealed partial class LanguageService
         ("byte-literal", "Python", "Non-ASCII character in a bytes literal", "Only ASCII characters are allowed in b'...'.", "error"),
         ("property-definition", "Python classes", "Property accessor of the wrong shape", "A getter, setter or deleter with the wrong parameters, or a getter that returns nothing.", "warning"),
         ("init-new-signature", "Python classes", "Incompatible __new__ and __init__", "A class whose __new__ and __init__ do not accept the same arguments.", "warning"),
-        ("docstring-parameter", "Python", "Unexpected parameter in docstring", "A parameter the docstring documents and the function does not have.", "warning"),
+        ("docstring-parameter", "Python", "Unexpected parameter in docstring", "A parameter the docstring documents and the function does not have.", "weak"),
         ("docstring-missing-parameter", "Python", "Missing parameter in docstring", "A parameter of the function a docstring that documents parameters leaves out.", "weak"),
         ("async-call", "Python", "Coroutine is not awaited", "A call of an async function whose result is dropped: the coroutine never runs.", "warning"),
         ("override-missing", "Python classes", "@override without a base method", "A method marked @override that no base class has.", "warning"),

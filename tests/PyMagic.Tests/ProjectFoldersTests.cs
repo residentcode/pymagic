@@ -53,4 +53,35 @@ public class ProjectFoldersTests
         }
         finally { ProjectFolders.Load(Path.Combine(dir, "gone")); Directory.Delete(dir, true); }
     }
+
+    [Fact]
+    public void AnEnvironmentOfAnyNameIsNotTheProjectsCode()
+    {
+        // `python -m venv myenv` / conda in the project: its packages are libraries, not the project's files (Problems, usages, tests, search)
+        string dir = Path.Combine(Path.GetTempPath(), "pm_envs_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "myenv", "Lib", "site-packages", "pkg"));
+        Directory.CreateDirectory(Path.Combine(dir, "condaenv", "conda-meta"));
+        Directory.CreateDirectory(Path.Combine(dir, "envelope"));
+        File.WriteAllText(Path.Combine(dir, "myenv", "pyvenv.cfg"), "home = C:\\Python313\n");
+        File.WriteAllText(Path.Combine(dir, "myenv", "Lib", "site-packages", "pkg", "x.py"), "from main import X\n");
+        File.WriteAllText(Path.Combine(dir, "condaenv", "y.py"), "from main import X\n");
+        File.WriteAllText(Path.Combine(dir, "envelope", "z.py"), "from main import X\n");
+        File.WriteAllText(Path.Combine(dir, "main.py"), "X = 1\n");
+        try
+        {
+            ProjectFolders.Load(dir);
+            Assert.True(ProjectFolders.IsIgnored(Path.Combine(dir, "myenv")));
+            Assert.True(ProjectFolders.IsIgnored(Path.Combine(dir, "condaenv")));
+            Assert.True(!ProjectFolders.IsIgnored(Path.Combine(dir, "envelope")));
+            Assert.True(ProjectFolders.IsInsideIgnored(Path.Combine(dir, "myenv", "Lib", "site-packages", "pkg", "x.py")));
+            Assert.True(!ProjectFolders.IsInsideIgnored(Path.Combine(dir, "envelope", "z.py")));
+            // only the project's own folder uses X: the environments' files are not searched for usages
+            var svc = new LanguageService();
+            svc.AddSourceRoot(dir);
+            string main = LanguageService.UriOfPath(Path.Combine(dir, "main.py"));
+            svc.Open(main, "X = 1\n", 1);
+            Assert.Equal(1, svc.FileUsages(main).Count);
+        }
+        finally { ProjectFolders.Load(Path.Combine(dir, "gone")); Directory.Delete(dir, true); }
+    }
 }

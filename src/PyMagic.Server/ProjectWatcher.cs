@@ -100,7 +100,7 @@ public sealed class ProjectWatcher : IDisposable
             }
         }
         if (NodeModulesOf(rel) is { } modules) NodePackagesTouched(modules);
-        if (rel.StartsWith("..", StringComparison.Ordinal) || Ignored(rel)) return;
+        if (rel.StartsWith("..", StringComparison.Ordinal) || Ignored(rel) || ProjectFolders.IsInsideIgnored(full)) return;   // an environment of any name too
         TellAll(kind + "|" + rel);
     }
 

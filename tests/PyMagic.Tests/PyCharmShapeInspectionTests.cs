@@ -45,6 +45,9 @@ public class PyCharmShapeInspectionTests
         Assert.Equal(2, nesting.Count);
         Assert.Equal("@classmethod is applied before @cache: @cache receives a classmethod object, not the function; put @classmethod on top", nesting[0].Message);
         Assert.Equal(10, nesting[0].Range.Start.Line);
+        // pydantic's validators take the classmethod object: `@field_validator(...)` over `@classmethod` is how its documentation writes them
+        var (svc2, _, uri2) = Make("from pydantic import BaseModel, field_validator\n\n\nclass M(BaseModel):\n    x: int\n\n    @field_validator('x')\n    @classmethod\n    def check(cls, v: int) -> int:\n        return v\n");
+        Assert.Equal(0, Found(svc2, uri2, "decorator-nesting").Count);
     }
 
     [Fact]

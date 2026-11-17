@@ -80,6 +80,7 @@ import { setupHistory } from './history';
 import { setupScratches } from './scratches';
 import { setupInjections } from './injection';
 import { setupSpelling } from './spell';
+import { isLibraryPath } from './spell-model';
 import { setupGrammar } from './grammar';
 import { setupMarkdownPreview } from './mdpreview';
 import { setupMarkdownTools } from './mdtools';
@@ -840,6 +841,16 @@ function markerTags(tags) {
 let editor;
 let runHooks = null;
 let currentRel = '';
+// the installed libraries' files the user chose to change anyway (tab menu > Allow editing), for this session
+const editableLibraries = new Set();
+/** A file of an installed library (.venv, site-packages, typeshed) is read only: an edit there is lost on the next install and changes every project using it. */
+function applyLibraryReadOnly(ed, rel) {
+    const locked = isLibraryPath(rel) && !editableLibraries.has(rel);
+    ed.updateOptions({
+        readOnly: locked,
+        readOnlyMessage: locked ? { value: 'This is an installed library\'s file. A change here is lost on the next install. To change it anyway, right-click its tab and choose **Allow editing**.' } : undefined,
+    });
+}
 function refreshDirty() {
     for (const li of Array.from($('files').children)) {
         const rel = li.dataset.path;
@@ -1023,7 +1034,7 @@ async function openFile(rel, reveal, opts = {}) {
             editor.restoreViewState(view);
     }
     currentRel = rel;
-    editor.updateOptions({ readOnly: false });
+    applyLibraryReadOnly(editor, rel);
     if (rel.endsWith('.ipynb'))
         notebook?.show(rel, model);
     else
@@ -1529,7 +1540,8 @@ async function main() {
         split: (rel) => split.open(rel, undefined, 'right'),
         splitDown: (rel) => split.open(rel, undefined, 'down'),
         renameFile: (rel) => explorer.rename(rel),
-        items: (rel) => fileActions.tabItems(rel),
+        // an installed library's file (.venv, site-packages): read only until Allow editing, as PyCharm guards non-project files
+        items: (rel) => [...(isLibraryPath(rel) && !editableLibraries.has(rel) ? [{ label: 'Allow editing', run: () => { editableLibraries.add(rel); if (currentRel === rel) applyLibraryReadOnly(editor, rel); } }] : []), ...fileActions.tabItems(rel)],
         detach: (rel) => editorNav.commands.detach(rel),
     });
     split = setupSplit({

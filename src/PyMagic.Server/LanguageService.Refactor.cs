@@ -297,10 +297,10 @@ public sealed partial class LanguageService
     static string SuggestMethodName(ModuleInfo m, Selection sel)
     {
         Node anchor = sel.Statements != null ? sel.Statements[0] : sel.Expression!;
-        bool method = EnclosingScopeNode(m, anchor) is FunctionDef f && m.ParentOf(f) is ClassDef;
+        bool method = EnclosingScopeNode(m, anchor) is FunctionDef f && m.ClassBodyOf(f) is ClassDef;
         string baseName = sel.Expression != null && sel.Statements == null ? Snake("compute_" + SuggestVariableName(m, sel.Expression)) : method ? "extracted_method" : "extracted_function";
         var taken = NamesVisibleAt(m, anchor);
-        if (EnclosingScopeNode(m, anchor) is FunctionDef { } owner && m.ParentOf(owner) is ClassDef cls && m.Semantics.ScopeOf(cls) is { } cs)
+        if (EnclosingScopeNode(m, anchor) is FunctionDef { } owner && m.ClassBodyOf(owner) is ClassDef cls && m.Semantics.ScopeOf(cls) is { } cs)
             foreach (var k in cs.Symbols.Keys) taken.Add(k);
         return Unique(baseName, taken);
     }

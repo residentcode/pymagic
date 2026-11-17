@@ -534,7 +534,7 @@ app.MapGet("/api/files", () =>
     {
         foreach (var f in Directory.EnumerateFiles(dir, "*.py")) list.Add(Path.GetRelativePath(root, f).Replace('\\', '/'));
         foreach (var d in Directory.EnumerateDirectories(dir))
-            if (!skip.Contains(Path.GetFileName(d)) && !ProjectFolders.IsExcluded(d)) Walk(d);
+            if (!skip.Contains(Path.GetFileName(d)) && !ProjectFolders.IsIgnored(d)) Walk(d);
     }
     Walk(root);
     list.Sort(StringComparer.Ordinal);
@@ -702,7 +702,7 @@ IEnumerable<(string Rel, string Text)> TrackedFiles()
             yield return (Path.GetRelativePath(root, f).Replace('\\', '/'), text);
         }
         foreach (var d in dirs)
-            if (!skip.Contains(Path.GetFileName(d)) && !d.EndsWith(".egg-info", StringComparison.OrdinalIgnoreCase) && !ProjectFolders.IsExcluded(d)) stack.Push(d);
+            if (!skip.Contains(Path.GetFileName(d)) && !d.EndsWith(".egg-info", StringComparison.OrdinalIgnoreCase) && !ProjectFolders.IsIgnored(d)) stack.Push(d);
     }
 }
 void AutoLabel(string name) { try { history.PutLabel(name, true, TrackedFiles()); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* the operation goes on without its label */ } }

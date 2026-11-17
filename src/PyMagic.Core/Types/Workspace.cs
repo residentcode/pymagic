@@ -85,6 +85,24 @@ public sealed class ModuleInfo
 
     readonly object _parentsGate = new();
 
+    /// <summary>
+    /// The class whose body holds this statement, through the compound statements between (`if TYPE_CHECKING:`, `if sys.version_info >= ...:`,
+    /// try, with, for, while, match), as Python runs them in the class body; null when a def, a lambda or the module comes first.
+    /// </summary>
+    public ClassDef? ClassBodyOf(Node n)
+    {
+        for (var p = ParentOf(n); p != null; p = ParentOf(p))
+        {
+            switch (p)
+            {
+                case ClassDef c: return c;
+                case IfStmt or TryStmt or ExceptHandler or WithStmt or ForStmt or WhileStmt or MatchStmt or MatchCase: continue;
+                default: return null;
+            }
+        }
+        return null;
+    }
+
     /// <summary>The node that contains this one. The table is built on first use, once, even when several analyses (each with its own evaluator) ask at the same time.</summary>
     public Node? ParentOf(Node n)
     {

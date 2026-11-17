@@ -96,8 +96,9 @@ public class StyleInspectionTests
     [Fact]
     public void WrongFirstArgumentOfSuper()
     {
-        Assert.Equal(1, Count("class A:\n    pass\n\n\nclass B(A):\n    def f(self):\n        super(A, self).f()\n", "super-arguments"));
-        Assert.Equal(0, Count("class A:\n    pass\n\n\nclass B(A):\n    def f(self):\n        super(B, self).f()\n        super().f()\n", "super-arguments"));
+        // a class B does not derive from is wrong; B itself or one of its bases is right (`super(A, self)` skips A's own method, as attrs does)
+        Assert.Equal(1, Count("class A:\n    pass\n\n\nclass C:\n    pass\n\n\nclass B(A):\n    def f(self):\n        super(C, self).f()\n", "super-arguments"));
+        Assert.Equal(0, Count("class A:\n    pass\n\n\nclass B(A):\n    def f(self):\n        super(B, self).f()\n        super(A, self).f()\n        super().f()\n", "super-arguments"));
     }
 
     // ------------------------------------------------------------ strings

@@ -164,6 +164,98 @@ public class TypingCorpusTests
     }
 
     [Fact]
+    public void AnAttributeAClassmethodSetsOnClsIsTheClasss()
+    {
+        // Django's TestCase.setUpTestData: `cls.author = ...`, then `self.author` in the tests
+        var ws = new Workspace();
+        var m = ws.AddModule("main",
+            "class Author:\n    pass\n\n\nclass Tests:\n    @classmethod\n    def setUpTestData(cls) -> None:\n        cls.author = Author()\n        cls.count = 3\n\n" +
+            "    def test_it(self) -> None:\n        A = self.author\n        B = type(self).count\n\n\nC = Tests.author\n");
+        string Of(string name) => ws.Evaluator.TypeOf(m, AstChildren.Descendants(m.Ast).OfType<AssignStmt>().First(a => a.Targets[0] is NameExpr { Name: var n } && n == name).Value).Display();
+        Assert.Equal("Author", Of("A"));
+        Assert.Equal("int", Of("B"));
+        Assert.Equal("Author", Of("C"));
+        Assert.Equal("", string.Join(" | ", ws.Evaluator.Inspect(m).Where(d => d.Message.StartsWith("Cannot find reference")).Select(d => d.Message)));
+    }
+
+    [Fact]
+    public void AnEmptyClassItsModuleFillsWithSetattrHasWhatItIsGiven()
+    {
+        // Django's `class Style: pass`, given SUCCESS, ERROR, ... by make_style() with setattr
+        var ws = new Workspace();
+        ws.AddModule("color", "class Style:\n    pass\n\n\ndef make_style():\n    style = Style()\n    for role in ('SUCCESS', 'ERROR'):\n        setattr(style, role, str)\n    return style\n\n\nclass Plain:\n    pass\n");
+        var m = ws.AddModule("main", "from color import Plain, Style\n\n\ndef run(s: Style, p: Plain) -> None:\n    s.SUCCESS('ok')\n    p.missing\n");
+        // a class that is not filled that way is still checked
+        Assert.Equal("Cannot find reference 'missing' in 'Plain'", string.Join(" | ", ws.Evaluator.Inspect(m).Where(d => d.Message.StartsWith("Cannot find reference")).Select(d => d.Message)));
+    }
+
+    [Fact]
+    public void OverloadsLikeAsyncioGatherPickByArityAndStarredArguments()
+    {
+        // typeshed's asyncio.gather: fixed-arity overloads first, then *args ones; coroutine arguments are Coroutine[Any, Any, T]
+        var ws = new Workspace();
+        var m = ws.AddModule("main",
+            "from collections.abc import Awaitable, Coroutine\nfrom typing import Any, Literal, TypeVar, overload\n\nT = TypeVar('T')\nT1 = TypeVar('T1')\nT2 = TypeVar('T2')\n\n\n" +
+            "@overload\ndef gather(a: Awaitable[T1], /, *, return_exceptions: Literal[False] = False) -> tuple[T1]: ...\n" +
+            "@overload\ndef gather(a: Awaitable[T1], b: Awaitable[T2], /, *, return_exceptions: Literal[False] = False) -> tuple[T1, T2]: ...\n" +
+            "@overload\ndef gather(*xs: Awaitable[T], return_exceptions: Literal[False] = False) -> list[T]: ...\n" +
+            "@overload\ndef gather(*xs: Awaitable[T], return_exceptions: bool) -> list[T | BaseException]: ...\n" +
+            "def gather(*xs: Any, return_exceptions: bool = False) -> Any: ...\n\n\n" +
+            "def one() -> Coroutine[Any, Any, str]: ...\n\n\n" +
+            "coros = [one(), one()]\nA = gather(one(), one())\nB = gather(*coros)\nC = gather(*(one() for _ in range(3)), return_exceptions=True)\nD = gather(one())\n");
+        string Of(string name) => ws.Evaluator.TypeOf(m, AstChildren.Descendants(m.Ast).OfType<AssignStmt>().First(a => a.Targets[0] is NameExpr { Name: var n } && n == name).Value).Display();
+        Assert.Equal("A:tuple[str, str] B:list[str] C:list[str | BaseException] D:tuple[str]", string.Join(" ", new[] { "A", "B", "C", "D" }.Select(n => n + ":" + Of(n))));
+    }
+
+    [Fact]
+    public void AValueSetInAWithBlockIsSetAfterItEvenWhenItsExitMaySwallow()
+    {
+        // anyio's `with CancelScope(): retval = await ...` then `else: future.set_result(retval)`; PyCharm does not count the exit swallowing
+        var ws = new Workspace();
+        var m = ws.AddModule("main",
+            "from contextlib import suppress\n\n\nclass Scope:\n    def __enter__(self) -> 'Scope':\n        return self\n\n    def __exit__(self, *a) -> bool:\n        return True\n\n\n" +
+            "def a() -> int:\n    try:\n        with Scope():\n            value = 1\n    except ValueError:\n        pass\n    else:\n        return value\n    return 0\n\n\n" +
+            "def b(d: dict[str, int]) -> int:\n    with suppress(KeyError):\n        v = d['x']\n    return v\n\n\n" +
+            "def c() -> None:\n    with Scope():\n        raise ValueError()\n    print('reached')\n\n\n" +
+            "def e(flag: bool) -> int:\n    if flag:\n        w = 1\n    return w\n");
+        var found = ws.Evaluator.FlowDiagnostics(m).Select(d => d.Message).ToList();
+        // only the read a path really skips; the line after a swallowed raise is reached
+        Assert.Equal("Local variable 'w' might be referenced before assignment", string.Join(" | ", found));
+    }
+
+    [Fact]
+    public void AClassBodyUnderAnIfIsStillTheClassBody()
+    {
+        // pydantic v1's `if TYPE_CHECKING: __fields__: ClassVar[...] = {}`, anyio's `if sys.version_info >= (3, 13): @classmethod def from_uri`
+        var svc = new PyMagic.Server.LanguageService();
+        svc.SourceRoots.Add("c:/proj");
+        const string uri = "file:///c:/proj/main.py";
+        svc.Open(uri, "import sys\nfrom typing import TYPE_CHECKING, ClassVar\n\n\nclass Model:\n    if TYPE_CHECKING:\n        fields: ClassVar[dict[str, int]] = {}\n\n" +
+            "    if sys.version_info >= (3, 13):\n        @classmethod\n        def make(cls) -> 'Model':\n            return cls()\n    else:\n        try:\n            @staticmethod\n            def other() -> int:\n                return 1\n        except ImportError:\n            pass\n\n\n" +
+            "def outside() -> None:\n    loose: ClassVar[int] = 1\n", 1);
+        var found = svc.Diagnostics(uri).Where(d => d.Code is "classvar" or "decorator-outside-class").Select(d => d.Range.Start.Line + 1 + ": " + d.Message).ToList();
+        // only the ClassVar in a function is out of place
+        Assert.Equal("23: ClassVar is allowed only in a class body", string.Join(" | ", found));
+    }
+
+    [Fact]
+    public void ValidLibraryIdiomsAreNotReported()
+    {
+        // attrs' super(TypeError, self), anyio's `except get_cancelled_exc_class():` before `except BaseException:`, urllib3's
+        // `__version__ = __version__` after importing it, anyio's `backend[0]` after `isinstance(backend, tuple)`
+        var svc = new PyMagic.Server.LanguageService();
+        svc.SourceRoots.Add("c:/proj");
+        svc.Open("file:///c:/proj/ver.py", "__version__ = '1'\n", 1);
+        const string uri = "file:///c:/proj/main.py";
+        svc.Open(uri, "from ver import __version__\n\n__version__ = __version__\n\n\ndef cancelled() -> type[BaseException]:\n    return KeyboardInterrupt\n\n\n" +
+            "class NotCallable(TypeError):\n    def __init__(self, msg: str) -> None:\n        super(TypeError, self).__init__(msg)\n\n\nclass Other:\n    def __init__(self) -> None:\n        super(NotCallable, self).__init__()\n\n\n" +
+            "def run(backend: object, n: int) -> None:\n    try:\n        pass\n    except cancelled():\n        pass\n    except BaseException:\n        raise\n    if isinstance(backend, tuple):\n        print(backend[0])\n    print(n[0])\n", 1);
+        var found = svc.Diagnostics(uri).Where(d => d.Severity <= 2).Select(d => d.Range.Start.Line + 1 + ": " + d.Message).ToList();
+        // what is left is wrong: a super() argument that is not a base, an int read as a sequence
+        Assert.Equal("17: Wrong first argument passed to 'super()' | 29: 'int' object is not subscriptable", string.Join(" | ", found));
+    }
+
+    [Fact]
     public void TypeIgnoreOnADefSilencesItsOverrideAndMissingReturn()
     {
         var svc = new LanguageService();

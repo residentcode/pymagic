@@ -15,9 +15,15 @@ public sealed partial class TypeEvaluator
     readonly HashSet<Instruction> _gatesActive = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<ScopeFlow, ScopeFlow> _typedFlows = new(ReferenceEqualityComparer.Instance);
     readonly HashSet<ScopeFlow> _typedFlowsActive = new(ReferenceEqualityComparer.Instance);
+    readonly Dictionary<ScopeFlow, ScopeFlow> _typedFlowsNoSwallow = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>Unreachable code and locals read before assignment, knowing which calls never return and which with blocks swallow exceptions.</summary>
-    public IReadOnlyList<Diagnostic> FlowDiagnostics(ModuleInfo m) => m.Flow.Analyse(s => TypedFlow(m, s));
+    /// <remarks>
+    /// Reads before assignment are looked for as if no with block swallowed an exception, as PyCharm does: a value set in
+    /// `with CancelScope():` or `with suppress(KeyError):` is taken as set after it (the block's own exit may swallow, but saying so
+    /// on every such read is noise PyCharm does not make). Unreachable code still knows which blocks swallow.
+    /// </remarks>
+    public IReadOnlyList<Diagnostic> FlowDiagnostics(ModuleInfo m) => m.Flow.Analyse(s => TypedFlow(m, s), s => TypedFlow(m, s, swallowing: false));
 
     /// <summary>Whether a function can run off the end of its body, knowing which calls never return and which with blocks swallow exceptions.</summary>
     public bool EndReachable(ModuleInfo m, FunctionDef f) =>
@@ -27,11 +33,12 @@ public sealed partial class TypeEvaluator
     /// The flow of a scope with every gate it reaches decided by types; the plain flow when none differs from what the
     /// graph assumes without types, or while this scope's gates are being decided.
     /// </summary>
-    internal ScopeFlow? TypedFlow(ModuleInfo m, Scope scope)
+    internal ScopeFlow? TypedFlow(ModuleInfo m, Scope scope, bool swallowing = true)
     {
         var flow = m.Flow.For(scope);
         if (flow == null || flow.Graph.Gates.Count == 0) return flow;
-        if (_typedFlows.TryGetValue(flow, out var typed)) return typed;
+        var cache = swallowing ? _typedFlows : _typedFlowsNoSwallow;
+        if (cache.TryGetValue(flow, out var typed)) return typed;
         if (!_typedFlowsActive.Add(flow)) return flow;
         try
         {
@@ -43,14 +50,14 @@ public sealed partial class TypeEvaluator
             {
                 bool more = false;
                 foreach (var g in flow.Graph.Gates)
-                    if (reachable[g.Id] && !decided.ContainsKey(g)) { decided[g] = GateBlocks(m, g); more = true; }
+                    if (reachable[g.Id] && !decided.ContainsKey(g)) { decided[g] = !swallowing && g.Kind == InstrKind.WithExit || GateBlocks(m, g); more = true; }
                 if (!more) break;
                 reachable = flow.Graph.ReachableWith(Blocks);
             }
             typed = decided.All(kv => kv.Value == ControlFlowGraph.BlocksWithoutTypes(kv.Key)) ? flow : flow.WithGates(Blocks);
         }
         finally { _typedFlowsActive.Remove(flow); }
-        if (_open.Count == 0) _typedFlows[flow] = typed;
+        if (_open.Count == 0) cache[flow] = typed;
         return typed;
     }
 

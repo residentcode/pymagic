@@ -64,7 +64,8 @@ public sealed partial class TypeEvaluator
         }
     }
 
-    static readonly System.Text.RegularExpressions.Regex TypeIgnore = new(@"#\s*type:\s*ignore\b", System.Text.RegularExpressions.RegexOptions.Compiled);
+    // `# type: ignore` (mypy, PyCharm) and `# pyright: ignore[...]` (pyright, which typed libraries such as pydantic write) silence their line alike
+    static readonly System.Text.RegularExpressions.Regex TypeIgnore = new(@"#\s*(?:type|pyright):\s*ignore\b", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>
     /// A `# type: ignore` comment on the line (`# type: ignore[arg-type]` too: as in PyCharm, the codes do not narrow it), or one at the top of
@@ -136,6 +137,12 @@ public sealed partial class TypeEvaluator
         switch (t)
         {
             case ClassType c when IsNone(c): return includeNone;
+            // an empty class its module fills with setattr (Django's `class Style: pass`, given SUCCESS, ERROR, ... by make_style): its
+            // attributes are made at run time, so a missing one is no evidence
+            case ClassType { IsInstance: true } c when IsSetattrNamespace(c.Info): return false;
+            // a mixin uses what the classes it is mixed into have (sqlparse's NameAliasMixin reads self.tokens): as PyCharm, a class named
+            // `...Mixin` is not told it lacks them
+            case ClassType { IsInstance: true } c when c.Info.Name.EndsWith("Mixin", StringComparison.Ordinal): return false;
             case ClassType c: return !c.Info.Module.IsBundledStub;
             case ModuleType mt:
                 if (!_dynamicNamespace.TryGetValue(mt.Module, out var dyn))
@@ -147,6 +154,11 @@ public sealed partial class TypeEvaluator
             default: return true;
         }
     }
+
+    /// <summary>A class with nothing in its body (pass, a docstring, ...) and no base but object, made in its own module, which calls setattr.</summary>
+    static bool IsSetattrNamespace(ClassInfo c) =>
+        !c.Module.IsStub && c.Node.Bases.Count == 0 && c.Node.Body.All(s => s is PassStmt || s is ExprStmt { Value: ConstExpr })
+        && c.Module.Source.Contains("setattr(", StringComparison.Ordinal) && c.Module.Source.Contains(c.Name + "()", StringComparison.Ordinal);
 
     /// <summary>True when the attribute expression is the target of an assignment/del, i.e. it defines rather than reads.</summary>
     static bool IsStoreTarget(ModuleInfo m, Expr e)

@@ -64,7 +64,7 @@ public static class Tailwind
             catch (UnauthorizedAccessException) { continue; }
             foreach (string f in files) yield return f;
             foreach (string d in dirs)
-                if (!Skipped.Contains(Path.GetFileName(d))) pending.Push(d);
+                if (!Skipped.Contains(Path.GetFileName(d)) && !ProjectFolders.IsIgnored(d)) pending.Push(d);
         }
     }
 }

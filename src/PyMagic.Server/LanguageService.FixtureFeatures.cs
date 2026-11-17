@@ -77,9 +77,17 @@ public sealed partial class LanguageService
         var uses = new List<FixtureUse>();
         foreach (var module in snap.Project)
             foreach (var use in FixtureUsesIn(module))
-                if (use.Name == def.Name && ResolveUse(snap, use).Def is { } d && ReferenceEquals(d.Def, def.Def)) uses.Add(use);
+                if (use.Name == def.Name && ResolveUse(snap, use).Def is { } d && SameFixture(d, def)) uses.Add(use);
         return uses;
     }
+
+    /// <summary>
+    /// One fixture, whichever snapshot it was read in: the Problems scan reads a file in a snapshot of its own, so the def found by a use may be
+    /// another parse of the same function. Its module (by name and file) and where it starts tell.
+    /// </summary>
+    static bool SameFixture(FixtureDef a, FixtureDef b) =>
+        ReferenceEquals(a.Def, b.Def)
+        || a.Module.Path != null && a.Def.Start == b.Def.Start && a.Def.Name == b.Def.Name && string.Equals(a.Module.Path, b.Module.Path, StringComparison.OrdinalIgnoreCase);
 
     Location? FixtureLocation(ModuleInfo m, int start, int end) =>
         UriOfModule(m) is { } uri ? new Location(uri, Lines(m).RangeOf(start, end)) : null;
@@ -179,7 +187,7 @@ public sealed partial class LanguageService
 
     /// <summary>True when a plugin module brings this fixture by importing it (`from .fixtures import db` in pytest_django.plugin).</summary>
     static bool DefinesThrough(Snapshot snap, ModuleInfo plugin, FixtureDef def) =>
-        snap.Fixtures.Resolver.DefinedIn(snap.Workspace, plugin, null).Any(f => ReferenceEquals(f.Def, def.Def));
+        snap.Fixtures.Resolver.DefinedIn(snap.Workspace, plugin, null).Any(f => SameFixture(f, def));
 
     Hover? FixtureHover(Snapshot snap, ModuleInfo m, int offset)
     {

@@ -287,7 +287,7 @@ public static class Schemas
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
             }
-            foreach (string d in dirs) if (!Skipped.Contains(Path.GetFileName(d))) pending.Push(d);
+            foreach (string d in dirs) if (!Skipped.Contains(Path.GetFileName(d)) && !ProjectFolders.IsIgnored(d)) pending.Push(d);
         }
         return found;
     }

@@ -23,7 +23,10 @@ public sealed partial class LanguageService
     {
         var defs = FixtureDefsIn(m).Where(d => !d.Autouse && !FixtureModel.IsPluginFixture(d.Name)).ToList();
         if (defs.Count == 0 || FixturesOf(ev.Workspace) is null) yield break;
+        // the uses are looked for where this module is: the editor's snapshot has the open files (and what they import), the Problems scan
+        // reads every file of the project in the full one, so a file that is not open is not missing its own tests
         var snap = Current();
+        if (!snap.Project.Any(x => ReferenceEquals(x, m))) snap = Full();
         // names pytest hands out at run time: no use of a fixture can be ruled out
         if (snap.Project.Any(x => !x.IsStub && (x.Source.Contains("pytest_generate_tests", StringComparison.Ordinal) || x.Source.Contains("getfixturevalue(") && !FixtureModel.StringRequests(x).Any()))) yield break;
         // a decorator of a library may ask for a fixture where the project cannot see it (matplotlib's @image_comparison(baseline_images=...)
@@ -103,7 +106,7 @@ public sealed partial class LanguageService
         {
             int mocks = FixtureModel.PatchInjected(m, f);
             if (mocks == 0 || f.Params.Any(p => p.Kind == ParamKind.VarArgs)) continue;
-            bool method = m.ParentOf(f) is ClassDef && !f.Decorators.Any(d => DecoratorName(d) == "staticmethod");
+            bool method = m.ClassBodyOf(f) is ClassDef && !f.Decorators.Any(d => DecoratorName(d) == "staticmethod");
             int takes = f.Params.Count(p => p.Kind == ParamKind.Normal) - (method ? 1 : 0);
             if (takes >= mocks) continue;
             yield return new Finding(f.NameStart, f.Name.Length,

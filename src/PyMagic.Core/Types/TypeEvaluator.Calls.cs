@@ -630,6 +630,13 @@ public sealed partial class TypeEvaluator
             SolveVariadic((TypeVarTupleType)variadic.Type, args.Any(a => a.Stars == 1) ? null : variadicArgs.Select(a => a.Type()).ToList(), solved);
         foreach (var (arg, param) in map)
         {
+            // `f(*coros)`: each item fills the parameter, so its type variables are solved from what the iterable yields (`gather(*coros)`
+            // is a list of what the coroutines give)
+            if (param != null && arg.Stars == 1 && !ReferenceEquals(param, variadic) && IterElement(arg.Type()) is var item && item is not UnknownType)
+            {
+                Unify(param.Type, item, solved);
+                continue;
+            }
             if (param == null || arg.Stars != 0 || ReferenceEquals(param, variadic)) continue;
             var at = arg.Type();
             evaluated.Add((arg, param, at));
@@ -778,13 +785,18 @@ public sealed partial class TypeEvaluator
         return pick;
     }
 
+    // an Any a declaration writes inside a type (`Coroutine[Any, Any, str]`, what every async def gives) is a type that was said; only an unknown
+    // there, or an Any for the whole argument, makes the overload a guess (otherwise every asyncio.gather(coro, ...) came out Unknown)
     static bool PartlyUnknown(PyType t, int depth) => depth < 4 && t switch
     {
+        UnknownType { Explicit: true } when depth > 0 => false,
         UnknownType => true,
         UnionType u => u.MemberList.Any(x => PartlyUnknown(x, depth + 1)),
         ClassType c => c.Args.Any(x => PartlyUnknown(x, depth + 1)) || (c.TupleItems?.Any(x => PartlyUnknown(x, depth + 1)) ?? false),
         _ => false,
     };
+
+    bool TakesVarArgs(FunctionType f) => ParametersOf(f.Info).Any(p => p.Category == ParamCategory.VarPositional);
 
     /// <summary>
     /// Calls every overload; <paramref name="pick"/> is the first that takes the arguments as they are. A plain str or bool
@@ -794,6 +806,18 @@ public sealed partial class TypeEvaluator
     {
         var targets = new List<CallTarget>();
         pick = null;
+        // `gather(*coros)`: a starred argument whose length is not known fills a *args, not a fixed count of parameters; the overloads that
+        // take *args come first then (as pyright and PyCharm pick), the others only when none of those takes the call
+        bool unknownLength = args.Any(a => a.Stars == 1 && !(a.Type() is ClassType sc && TupleItemsOf(sc) != null));
+        if (unknownLength && o.Overloads.Any(TakesVarArgs))
+        {
+            foreach (var f in o.Overloads.Where(TakesVarArgs))
+            {
+                var loose = new List<CallProblem>();
+                var t = CallFunction(f, args, callNode, loose);
+                if (t.Problems.Count == 0 && loose.Count == 0) { pick = t; targets.Add(t); return targets; }
+            }
+        }
         foreach (var f in o.Overloads)
         {
             var loose = new List<CallProblem>();

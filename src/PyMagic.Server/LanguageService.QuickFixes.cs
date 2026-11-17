@@ -340,8 +340,8 @@ public sealed partial class LanguageService
     {
         FunctionDef? method = null;
         for (var p = m.ParentOf(name); p != null; p = m.ParentOf(p))
-            if (p is FunctionDef f && m.ParentOf(f) is ClassDef) { method = f; break; }
-        if (method == null || m.ParentOf(method) is not ClassDef cls) return;
+            if (p is FunctionDef f && m.ClassBodyOf(f) is ClassDef) { method = f; break; }
+        if (method == null || m.ClassBodyOf(method) is not ClassDef cls) return;
         if (method.Decorators.Any(d => d is NameExpr { Name: "staticmethod" })) return;
         var first = method.Params.FirstOrDefault(p => p.Kind == ParamKind.Normal);
         if (first == null) return;

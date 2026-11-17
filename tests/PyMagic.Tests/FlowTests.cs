@@ -92,9 +92,12 @@ public class FlowTests
     [Fact]
     public void HandlerCanSeeBothStatesOfVariableAssignedInTry()
     {
+        // x = g() binds only when g() returned: if the handler runs, it raised before the binding (x is still 0)
         const string src = "def f():\n    x = 0\n    try:\n        x = g()\n    except E:\n        return x\n";
-        var r = Reach(Load(src), "x");
-        Assert.Equal("2,4", Lines(src, r));
+        Assert.Equal("2", Lines(src, Reach(Load(src), "x")));
+        // a statement after the binding may raise too: then the handler sees either value
+        const string later = "def f():\n    x = 0\n    try:\n        x = g()\n        h()\n    except E:\n        return x\n";
+        Assert.Equal("2,4", Lines(later, Reach(Load(later), "x")));
     }
 
     [Fact]

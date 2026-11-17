@@ -114,7 +114,7 @@ public sealed partial class LanguageService
             case "missing-super-init":
             {
                 var own = AstChildren.Descendants(m.Ast).OfType<FunctionDef>().FirstOrDefault(f => f.NameStart == start);
-                if (own == null || m.ParentOf(own) is not ClassDef cd || ClassInfoOf(m, cd, snap.Workspace.Evaluator) is not { } info) break;
+                if (own == null || m.ClassBodyOf(own) is not ClassDef cd || ClassInfoOf(m, cd, snap.Workspace.Evaluator) is not { } info) break;
                 if (SuperInitMissing(m, cd, info, snap.Workspace.Evaluator) is not { } baseClass) break;
                 if (BodyStart(m, own) is not { } spot) break;
                 add("Add a call to super().__init__()", true, new[] { new Edit(spot.At, spot.At, $"{spot.Indent}{SuperInitCall(baseClass, own)}\n") });

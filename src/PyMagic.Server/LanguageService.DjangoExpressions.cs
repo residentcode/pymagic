@@ -41,7 +41,7 @@ public sealed partial class LanguageService
             {
                 case CallExpr { Func: AttributeExpr } c when CalleeName(c) is { } name && QueryAroundMethods.Contains(name):
                     return QueryModelOf(ev, m, c);
-                case ClassDef { Name: "Meta" } when m.ParentOf(n) is ClassDef outer:
+                case ClassDef { Name: "Meta" } when m.ClassBodyOf(n) is ClassDef outer:
                     return ClassInfoOf(m, outer, ev) is { } info && ev.DjangoRoleOf(info) == DjangoClassRole.Model ? info : null;
                 case FunctionDef or LambdaExpr or ClassDef:
                     return null;

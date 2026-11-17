@@ -59,7 +59,7 @@ public static class Databases
                     if (Extensions.Contains(System.IO.Path.GetExtension(f), StringComparer.OrdinalIgnoreCase) && IsSqlite(f)) Add(f, false);
                 if (depth < 6)
                     foreach (var d in Directory.EnumerateDirectories(dir))
-                        if (!Skipped.Contains(System.IO.Path.GetFileName(d)) && !ProjectFolders.IsExcluded(d)) stack.Push((d, depth + 1));
+                        if (!Skipped.Contains(System.IO.Path.GetFileName(d)) && !ProjectFolders.IsIgnored(d)) stack.Push((d, depth + 1));
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }

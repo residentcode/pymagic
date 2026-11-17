@@ -324,7 +324,7 @@ public sealed partial class LanguageService
     /// <summary>A field without a default moves above the first field that has one (its trailing comment goes along).</summary>
     void MoveFieldFix(ModuleInfo m, AnnAssignStmt field, Action<string, bool, Edit[]> add)
     {
-        if (m.ParentOf(field) is not ClassDef cd || field.Target is not NameExpr name) return;
+        if (m.ClassBodyOf(field) is not ClassDef cd || field.Target is not NameExpr name) return;
         var firstDefault = cd.Body.TakeWhile(s => !ReferenceEquals(s, field)).OfType<AnnAssignStmt>().FirstOrDefault(a => a.Value != null && a.Target is NameExpr);
         if (firstDefault == null) return;   // the default comes from a base class
         string text = m.Source;

@@ -343,7 +343,9 @@ public sealed partial class TypeEvaluator
             var classes = new List<ClassInfo>();
             foreach (var e in exprs)
             {
-                if (TypeOf(m, e) is ClassType { IsInstance: false } ct) classes.Add(ct.Info);
+                // only a class the clause names (`except ValueError`, `except errors.Timeout`): one a call gives (anyio's
+                // `except get_cancelled_exc_class():`, declared `type[BaseException]`) is whatever it is at run time, not all of that type
+                if (e is NameExpr or AttributeExpr && TypeOf(m, e) is ClassType { IsInstance: false } ct) classes.Add(ct.Info);
                 NotAnException(m, e, "Exceptions must derive from BaseException", diags, classObject: true);
             }
             foreach (var cls in classes)

@@ -29,7 +29,7 @@ public sealed partial class LanguageService
                     string owner = m.Name;
                     Node at = (Node?)s.Call ?? AstChildren.Descendants(m.Ast).OfType<AssignStmt>().FirstOrDefault(a => a.Start <= s.Start && s.End <= a.End) ?? (Node)m.Ast;
                     for (var p = m.ParentOf(at); p != null; p = m.ParentOf(p))
-                        if (p is FunctionDef f) { owner = f.Name; if (m.ParentOf(f) is ClassDef c) owner = c.Name + "." + f.Name; break; }
+                        if (p is FunctionDef f) { owner = f.Name; if (m.ClassBodyOf(f) is ClassDef c) owner = c.Name + "." + f.Name; break; }
                         else if (p is ClassDef c2) { owner = c2.Name; break; }
                     links.Add(new TemplateLink(0, $"{owner} ({m.Name})", UriOfModule(m) ?? "", Lines(m).RangeOf(s.Start, s.Start).Start.Line));
                 }

@@ -343,7 +343,9 @@ public static class CodeInspections
         if (!SameReference(a.Targets[0], a.Value)) return false;
         if (a.Targets[0] is not NameExpr name) return true;
         var scope = m.Semantics.InnermostScopeAt(a.Start);
-        return scope.Kind != ScopeKind.Class && scope.Symbols.TryGetValue(name.Name, out var sym) && sym.Declarations.Count > 1;
+        if (scope.Kind == ScopeKind.Class || !scope.Symbols.TryGetValue(name.Name, out var sym) || sym.Declarations.Count <= 1) return false;
+        // `__version__ = __version__` after importing it: the module re-exports the name (an idiom of urllib3 and others), not a no-op
+        return !(scope.Kind == ScopeKind.Module && sym.Declarations.Any(d => d.Kind == DeclKind.Import));
     }
 
     static bool SameReference(Expr a, Expr b) => (a, b) switch

@@ -84,6 +84,56 @@ public static class ProjectFolders
         return false;
     }
 
+    /// <summary>The folders no walk over the project's own code goes into: tools' caches, version control, installed code.</summary>
+    public static readonly IReadOnlySet<string> NeverProjectCode = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ".git", ".hg", ".svn", "__pycache__", "node_modules", ".venv", "venv", ".conda", "env", "virtualenv", ".tox", ".nox",
+        ".mypy_cache", ".pytest_cache", ".ruff_cache", "site-packages", "dist-packages", ".pymagic", ".idea", ".vs",
+    };
+
+    /// <summary>
+    /// Whether a folder of the project is not the project's own code: one of <see cref="NeverProjectCode"/>, a Python environment whatever it is
+    /// called (`myenv`, `.venv313`: it has a pyvenv.cfg, or conda-meta), or one marked as excluded. Every walk over the project's files asks this
+    /// (analysis, Problems, TODO, tests, Find in Files, Go to Symbol), so installed code is left out the same way everywhere, as in PyCharm.
+    /// </summary>
+    public static bool IsIgnored(string dir)
+    {
+        string name = Path.GetFileName(dir.TrimEnd('\\', '/'));
+        if (NeverProjectCode.Contains(name)) return true;
+        try
+        {
+            if (File.Exists(Path.Combine(dir, "pyvenv.cfg")) || Directory.Exists(Path.Combine(dir, "conda-meta"))) return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { }
+        return IsExcluded(dir);
+    }
+
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> IgnoredDirs = new(StringComparer.OrdinalIgnoreCase);   // folders known to be left out
+
+    /// <summary>
+    /// Whether a file or folder lies in a folder <see cref="IsIgnored"/> leaves out, looking at each folder between it and the project folder (the
+    /// answer per folder is remembered: a pip install into an environment touches thousands of files under it).
+    /// </summary>
+    public static bool IsInsideIgnored(string path)
+    {
+        string? dir = Path.GetDirectoryName(Path.GetFullPath(path));
+        string? root = _root;
+        while (dir != null && (root == null || dir.Length > root.Length))
+        {
+            // only a yes is remembered: a venv being made has its folder before its pyvenv.cfg
+            if (IgnoredDirs.ContainsKey(dir)) return true;
+            if (NeverProjectCode.Contains(Path.GetFileName(dir)) || IsEnvironment(dir)) { IgnoredDirs[dir] = true; return true; }
+            dir = Path.GetDirectoryName(dir);
+        }
+        return IsExcluded(Path.GetDirectoryName(path) ?? path);
+    }
+
+    static bool IsEnvironment(string dir)
+    {
+        try { return File.Exists(Path.Combine(dir, "pyvenv.cfg")) || Directory.Exists(Path.Combine(dir, "conda-meta")); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
+    }
+
     /// <summary>The full paths of the folders marked as sources roots, or as test sources.</summary>
     public static IEnumerable<string> SourceRoots => _root == null ? Array.Empty<string>() : _marks.Sources.Select(p => Path.Combine(_root, p));
     public static IEnumerable<string> TestRoots => _root == null ? Array.Empty<string>() : _marks.Tests.Select(p => Path.Combine(_root, p));

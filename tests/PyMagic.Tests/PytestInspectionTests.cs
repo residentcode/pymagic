@@ -29,6 +29,28 @@ public class PytestInspectionTests
     }
 
     [Fact]
+    public void TheProblemsScanSeesTheTestsOfAFileThatIsNotOpen()
+    {
+        // the Problems panel reads every file of the project, none of them open: a fixture its own module's tests ask for is used
+        string dir = Path.Combine(Path.GetTempPath(), "pm_fixscan_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "pkg", "tests"));
+        File.WriteAllText(Path.Combine(dir, "pkg", "__init__.py"), "");
+        File.WriteAllText(Path.Combine(dir, "pkg", "tests", "__init__.py"), "");
+        File.WriteAllText(Path.Combine(dir, "pkg", "tests", "test_q.py"),
+            "import pytest\n\n\n@pytest.fixture\ndef quote() -> int:\n    return 1\n\n\n@pytest.fixture\ndef spare() -> int:\n    return 2\n\n\ndef test_quote(quote: int) -> None:\n    assert quote\n");
+        File.WriteAllText(Path.Combine(dir, "main.py"), "X = 1\n");
+        try
+        {
+            var svc = new LanguageService();
+            svc.AddSourceRoot(dir);
+            svc.Open(LanguageService.UriOfPath(Path.Combine(dir, "main.py")), "X = 1\n", 1);
+            var unused = svc.Problems(4, 500, 1).Where(p => p.Code == "fixture-unused").Select(p => p.Message).ToList();
+            Assert.Equal("Fixture 'spare' is not requested by any test or fixture", string.Join(" | ", unused));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void NothingIsSaidWhenFixturesAreHandedOutAtRunTime()
     {
         var svc = Project(("conftest.py", Conftest + "\n\ndef pytest_generate_tests(metafunc):\n    pass\n"), ("test_a.py", "def test_x(user):\n    pass\n"));

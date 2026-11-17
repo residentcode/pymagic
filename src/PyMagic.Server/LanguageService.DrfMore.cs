@@ -26,7 +26,7 @@ public sealed partial class LanguageService
     /// </summary>
     PyType? SerializerParameterType(Workspace ws, ModuleInfo m, Parameter p)
     {
-        if (m.IsStub || p.Name is not ("instance" or "validated_data" or "attrs") || m.ParentOf(p) is not FunctionDef f || m.ParentOf(f) is not ClassDef cd) return null;
+        if (m.IsStub || p.Name is not ("instance" or "validated_data" or "attrs") || m.ParentOf(p) is not FunctionDef f || m.ClassBodyOf(f) is not ClassDef cd) return null;
         var ev = ws.Evaluator;
         if (ClassInfoOf(m, cd, ev) is not { } info || !IsSerializerClass(ev, info) || IsDjangoInternalModule(info.Module)) return null;
         if (p.Name == "instance" && f.Name is "to_representation" or "update")

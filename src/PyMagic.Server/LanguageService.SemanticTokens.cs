@@ -50,7 +50,7 @@ public sealed partial class LanguageService
                 case FunctionDef fd:
                 {
                     foreach (var d in fd.Decorators) DecoratorTokens(d, Add);
-                    bool method = m.ParentOf(fd) is ClassDef;
+                    bool method = m.ClassBodyOf(fd) is ClassDef;
                     bool isStatic = fd.Decorators.Any(d => DecoratorName(d) == "staticmethod");
                     var mods = TokMod.Declaration | (fd.IsAsync ? TokMod.Async : 0) | (isStatic ? TokMod.Static : 0);
                     Add(fd.NameStart, fd.Name.Length, method ? Tok.Method : Tok.Function, mods);
@@ -194,7 +194,7 @@ public sealed partial class LanguageService
             switch (decl.Kind)
             {
                 case DeclKind.Class: return (ClassInfoOfDecl(m, ev, sym) is { } c && IsEnumClass(c, ev) ? Tok.Enum : Tok.Class, TokMod.None);
-                case DeclKind.Function: return (decl.Node is FunctionDef fd && m.ParentOf(fd) is ClassDef ? Tok.Method : Tok.Function, decl.Node is FunctionDef { IsAsync: true } ? TokMod.Async : TokMod.None);
+                case DeclKind.Function: return (decl.Node is FunctionDef fd && m.ClassBodyOf(fd) is ClassDef ? Tok.Method : Tok.Function, decl.Node is FunctionDef { IsAsync: true } ? TokMod.Async : TokMod.None);
                 case DeclKind.Parameter: return (n.Name is "self" or "cls" && IsReceiver(m, decl.Node) ? Tok.SelfParameter : Tok.Parameter, TokMod.None);
                 case DeclKind.TypeParam: return (Tok.TypeParameter, TokMod.None);
                 case DeclKind.TypeAlias: return (Tok.Class, TokMod.None);
@@ -224,7 +224,7 @@ public sealed partial class LanguageService
     {
         for (var p = m.ParentOf(paramNode); p != null; p = m.ParentOf(p))
             if (p is FunctionDef fd)
-                return fd.Params.Count > 0 && fd.Params[0].Start == paramNode.Start && m.ParentOf(fd) is ClassDef && !fd.Decorators.Any(d => DecoratorName(d) == "staticmethod");
+                return fd.Params.Count > 0 && fd.Params[0].Start == paramNode.Start && m.ClassBodyOf(fd) is ClassDef && !fd.Decorators.Any(d => DecoratorName(d) == "staticmethod");
         return false;
     }
 

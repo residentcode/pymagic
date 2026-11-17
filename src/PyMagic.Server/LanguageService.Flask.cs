@@ -18,7 +18,7 @@ public sealed partial class LanguageService
     IEnumerable<Finding> FlaskResponseFindings(ModuleInfo m, TypeEvaluator ev, RouteDef r)
     {
         var def = r.Def;
-        if (!r.Flask || m.ParentOf(def) is ClassDef || HasYield(def.Body) || IsStubBody(def.Body)) yield break;
+        if (!r.Flask || m.ClassBodyOf(def) is ClassDef || HasYield(def.Body) || IsStubBody(def.Body)) yield break;
         var returns = AstChildren.Descendants(def).OfType<ReturnStmt>().Where(x => OwnerFunction(m, x) == def).ToList();
         bool anyValue = returns.Any(x => x.Value != null && x.Value is not ConstExpr { Kind: ConstKind.None });
         bool fallsOff = !AlwaysExits(m, def.Body, ev);
@@ -38,7 +38,7 @@ public sealed partial class LanguageService
     IEnumerable<Finding> FlaskReturnFindings(ModuleInfo m, TypeEvaluator ev, RouteDef r)
     {
         var def = r.Def;
-        if (!r.Flask || m.ParentOf(def) is ClassDef || HasYield(def.Body)) yield break;
+        if (!r.Flask || m.ClassBodyOf(def) is ClassDef || HasYield(def.Body)) yield break;
         foreach (var ret in AstChildren.Descendants(def).OfType<ReturnStmt>().Where(x => OwnerFunction(m, x) == def && x.Value != null))
         {
             var value = ret.Value!;

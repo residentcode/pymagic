@@ -87,7 +87,7 @@ public sealed partial class LanguageService
                     break;
                 case AnnAssignStmt ann:
                 {
-                    bool inClass = m.ParentOf(ann) is ClassDef;
+                    bool inClass = m.ClassBodyOf(ann) is ClassDef;
                     string? head = TypingName(ann.Annotation is SubscriptExpr hs ? hs.Value : ann.Annotation);
                     if (head == "ClassVar" && !inClass)
                         yield return At(ann.Annotation, "ClassVar is allowed only in a class body", "classvar");

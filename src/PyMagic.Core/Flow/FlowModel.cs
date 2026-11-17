@@ -46,7 +46,8 @@ public sealed class FlowModel
 
     /// <summary>Warnings for locals read before assignment in functions, and for unreachable statements.</summary>
     /// <param name="flowOf">The flow to report on for a scope, when types say more about it (see TypeEvaluator.FlowDiagnostics).</param>
-    public IReadOnlyList<Diagnostic> Analyse(Func<Scope, ScopeFlow?>? flowOf = null)
+    /// <param name="unboundFlowOf">The flow to look for unbound reads in, when it differs (see TypeEvaluator.FlowDiagnostics).</param>
+    public IReadOnlyList<Diagnostic> Analyse(Func<Scope, ScopeFlow?>? flowOf = null, Func<Scope, ScopeFlow?>? unboundFlowOf = null)
     {
         var diags = new List<Diagnostic>();
         void Walk(Scope s)
@@ -57,7 +58,7 @@ public sealed class FlowModel
                 foreach (var st in flow.UnreachableStatements())
                     diags.Add(new Diagnostic(st.Start, Math.Max(st.End - st.Start, 1), "Unreachable code"));
                 if (s.Kind is ScopeKind.Function or ScopeKind.Lambda)
-                    foreach (var (use, definitely) in flow.UnboundUses())
+                    foreach (var (use, definitely) in (unboundFlowOf?.Invoke(s) ?? flow).UnboundUses())
                         diags.Add(new Diagnostic(use.Start, use.End - use.Start, definitely
                             ? $"Local variable '{use.Name}' referenced before assignment"
                             : $"Local variable '{use.Name}' might be referenced before assignment"));

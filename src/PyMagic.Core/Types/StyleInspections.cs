@@ -120,7 +120,8 @@ public static class StyleInspections
                         Add(found, at >= 0 ? at : g.Start, name.Length, $"Global variable '{name}' is undefined at the module level", "global-undefined", FindingLevel.Warning);
                     }
                     break;
-                case CallExpr { Func: NameExpr { Name: "super" }, Args: { Count: 2 } sargs } sup when sargs[0].Value is NameExpr first && EnclosingClass(c.M, sup) is { } owner && owner.Name != first.Name:
+                case CallExpr { Func: NameExpr { Name: "super" }, Args: { Count: 2 } sargs } sup when sargs[0].Value is NameExpr first && EnclosingClass(c.M, sup) is { } owner && owner.Name != first.Name
+                                                                                                    && !SuperArgumentIsAncestor(c, owner, first):
                     Add(found, first.Start, first.End - first.Start, "Wrong first argument passed to 'super()'", "super-arguments", FindingLevel.Warning);
                     break;
                 case ImportStmt { Names.Count: > 1 } imp:
@@ -139,6 +140,22 @@ public static class StyleInspections
         for (var p = m.ParentOf(n); p != null; p = m.ParentOf(p))
             if (p is FunctionDef or LambdaExpr) return true;
         return false;
+    }
+
+    /// <summary>
+    /// `super(TypeError, self)` in a class deriving from TypeError: a base of the class is a right first argument (it skips that base's own
+    /// method, as attrs' NotCallableError does). With types any class of the MRO counts, and one whose class is not known is not reported;
+    /// without them, a name among the class's bases.
+    /// </summary>
+    static bool SuperArgumentIsAncestor(Context c, ClassDef owner, NameExpr first)
+    {
+        if (owner.Bases.Any(b => b.Name == null && b.Value is NameExpr bn && bn.Name == first.Name || b.Value is AttributeExpr ba && ba.Attr == first.Name)) return true;
+        // `super(cls, cls)` in a metaclass, `super(klass, self)`: a variable is whatever class it holds at run time, not judged here
+        if (c.M.Semantics.Resolve(first) is { } sym && (sym.Redirect ?? sym).Declarations.Any(d => d.Kind is not (DeclKind.Class or DeclKind.Import))) return true;
+        if (c.Ev is not { } ev) return false;
+        if (ev.TypeOf(c.M, first) is not ClassType { IsInstance: false } named) return true;
+        var info = ev.ClassOf(c.M, owner);
+        return ev.MroOf(info).Any(e => e is ClassType ec && ReferenceEquals(ec.Info, named.Info)) || ev.MroOf(info).Any(e => e is not ClassType);
     }
 
     static ClassDef? EnclosingClass(ModuleInfo m, Node n)

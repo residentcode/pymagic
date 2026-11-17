@@ -489,9 +489,11 @@ internal sealed class CfgBuilder
         VisitStmts(x.Body);
         var bodyEnd = _cur;
 
-        // Any point in the body may raise, so the handlers can be entered from anywhere in it.
+        // Any point in the body may raise, so the handlers can be entered from anywhere in it - but not just after a binding: binding is the
+        // last thing its statement does, so the state after it reaches a handler only through what runs next in the body (a raise point of
+        // its own). `try: text = text.decode() except UnicodeDecodeError: text.decode(...)` sees text unchanged in the handler.
         var raisePoints = new List<Instruction>(pre);
-        for (int i = start; i < _instrs.Count; i++) raisePoints.Add(_instrs[i]);
+        for (int i = start; i < _instrs.Count; i++) if (_instrs[i].Kind != InstrKind.Write) raisePoints.Add(_instrs[i]);
 
         var handlerEnds = new List<Instruction>();
         if (x.Handlers.Count > 0)
@@ -520,7 +522,7 @@ internal sealed class CfgBuilder
         // The finally block runs on the normal path and again on the path where an exception propagates.
         // Building it twice keeps the exceptional path from "falling through" to the code after the try.
         var excSources = new List<Instruction>(pre);
-        for (int i = start; i < _instrs.Count; i++) excSources.Add(_instrs[i]);
+        for (int i = start; i < _instrs.Count; i++) if (_instrs[i].Kind != InstrKind.Write) excSources.Add(_instrs[i]);
 
         _cur = normalEnd;
         VisitStmts(x.Finally);

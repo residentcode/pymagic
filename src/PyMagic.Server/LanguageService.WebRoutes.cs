@@ -333,7 +333,7 @@ public sealed partial class LanguageService
                     if (!def.Params.Any(p => p.Name == name))
                         findings.Add(new Finding(r.PathStart + at, name.Length, $"Path parameter '{name}' is not a parameter of {def.Name}()", "route-path-parameter", r.Flask ? FindingLevel.Warning : FindingLevel.Weak));
 
-            if (r.Flask && !takesAny && m.ParentOf(def) is not ClassDef && def.Decorators.All(d => d is CallExpr { Func: AttributeExpr { Attr: "route" or "get" or "post" or "put" or "delete" or "patch" } }))
+            if (r.Flask && !takesAny && m.ClassBodyOf(def) is not ClassDef && def.Decorators.All(d => d is CallExpr { Func: AttributeExpr { Attr: "route" or "get" or "post" or "put" or "delete" or "patch" } }))
             {
                 var inPath = local.Where(x => ReferenceEquals(x.Def, def)).SelectMany(PathParameters).Select(p => p.Name).ToHashSet();
                 foreach (var p in def.Params)

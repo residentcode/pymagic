@@ -310,7 +310,7 @@ public sealed partial class LanguageService
                 catch (IOException) { continue; }
                 catch (UnauthorizedAccessException) { continue; }
                 foreach (var f in files) if (seen.Add(System.IO.Path.GetFullPath(f))) yield return f;
-                foreach (var d in subdirs) if (!SkippedDirectories.Contains(System.IO.Path.GetFileName(d)) && !ProjectFolders.IsExcluded(d)) stack.Push(d);
+                foreach (var d in subdirs) if (!SkippedDirectories.Contains(System.IO.Path.GetFileName(d)) && !ProjectFolders.IsIgnored(d)) stack.Push(d);
             }
         }
     }
@@ -474,6 +474,8 @@ public sealed partial class LanguageService
         "return-type", "assignment-type", "unsupported-operand", "redeclared", "final-misuse", "final-reassignment", "typeddict-keys", "type-hints",
         // what mypy reports on a def's own line (`def invoke(  # type: ignore`): an override it accepts, a return it cannot see
         "method-override", "missing-return", "not-callable", "invalid-cast",
+        // the rest a type checker says about classes and values (fastapi's `class Param(FieldInfo):  # type: ignore[misc]` on a @final base)
+        "final-override", "init-new-signature", "super-arguments", "not-subscriptable", "not-iterable", "classvar", "unimplemented-abstract",
     };
 
     // ------------------------------------------------------------ node lookup

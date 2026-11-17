@@ -70,7 +70,7 @@ public sealed partial class LanguageService
     {
         if (m.IsStub || m.ParentOf(p) is not FunctionDef f) return null;
         var ev = ws.Evaluator;
-        if (m.ParentOf(f) is ClassDef cd)
+        if (m.ClassBodyOf(f) is ClassDef cd)
         {
             if (p.Name is not ("obj" or "instance") || ClassInfoOf(m, cd, ev) is not { } info) return null;
             return ev.DjangoAdminModel(info) is { } model ? new ClassType(model, Array.Empty<PyType>(), true) : null;
@@ -118,7 +118,7 @@ public sealed partial class LanguageService
             }
             break;
         }
-        if (assign == null || m.ParentOf(assign) is not ClassDef cd) return null;
+        if (assign == null || m.ClassBodyOf(assign) is not ClassDef cd) return null;
         string attr = ((NameExpr)assign.Targets[0]).Name;
 
         bool inMeta = cd.Name == "Meta";
@@ -166,7 +166,7 @@ public sealed partial class LanguageService
         Node? scope = compare;
         while (scope != null && scope is not FunctionDef) scope = m.ParentOf(scope);
         if (scope is not FunctionDef f || !f.Name.StartsWith("formfield_for_", StringComparison.Ordinal) || f.Params.Count < 2 || f.Params[1].Name != fieldParam) return null;
-        if (m.ParentOf(f) is not ClassDef cd || ClassInfoOf(m, cd, ev) is not { } owner) return null;
+        if (m.ClassBodyOf(f) is not ClassDef cd || ClassInfoOf(m, cd, ev) is not { } owner) return null;
         var role = ev.DjangoRoleOf(owner);
         if (role is not (DjangoClassRole.Admin or DjangoClassRole.Inline)) return null;
         var model = admins.GetValueOrDefault(owner) ?? ev.DjangoAdminModel(owner);

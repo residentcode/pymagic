@@ -440,7 +440,7 @@ public static class MoreInspections
         bool takesKeywords = f.Params.Any(p => p.Kind == ParamKind.KwArgs);   // a documented keyword may be read from **kwargs
         foreach (var (name, offset) in documented)
             if (!names.Contains(name) && !takesKeywords)
-                found.Add(new Finding(doc.Start + offset, name.Length, $"Unexpected parameter '{name}' in docstring", "docstring-parameter", FindingLevel.Warning));
+                found.Add(new Finding(doc.Start + offset, name.Length, $"Unexpected parameter '{name}' in docstring", "docstring-parameter", FindingLevel.Weak));
 
         var seen = new HashSet<string>(documented.Select(d => d.Name), StringComparer.Ordinal);
         foreach (var p in f.Params.Where(p => p.Kind == ParamKind.Normal).Skip(method ? 1 : 0))

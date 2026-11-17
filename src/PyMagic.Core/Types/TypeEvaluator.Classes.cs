@@ -393,7 +393,9 @@ public sealed partial class TypeEvaluator
         foreach (var fd in MethodsOf(c.Node.Body))
         {
             var fi = FunctionOf(m, fd);
-            if (fi.IsStatic || fi.IsClassMethod) continue;
+            // `cls.x = ...` in a classmethod (Django's setUpTestData, a registry filled once) sets a class attribute: kept with the instance
+            // attributes, marked by its method, and found through the class too
+            if (fi.IsStatic) continue;
             var selfParam = fd.Params.FirstOrDefault(p => p.Kind == ParamKind.Normal);
             if (selfParam == null) continue;
             foreach (var target in AssignedAttributes(fd.Body, selfParam.Name))
@@ -519,7 +521,8 @@ public sealed partial class TypeEvaluator
             Symbol? sym = null;
             if (entry.Info.Scope.Symbols.TryGetValue(name, out var s) && (s.Redirect ?? s).Declarations.Count > 0) sym = s.Redirect ?? s;
             IReadOnlyList<InstanceAttr> inst = Array.Empty<InstanceAttr>();
-            if (instanceAccess && InstanceAttributes(entry.Info).TryGetValue(name, out var list)) inst = list;
+            if (InstanceAttributes(entry.Info).TryGetValue(name, out var list))
+                inst = instanceAccess ? list : list.Where(a => a.Method.IsClassMethod).ToList();
             bool slot = instanceAccess && sym == null && inst.Count == 0 && SlotsOf(entry.Info).Contains(name);
             if (sym != null || inst.Count > 0 || slot)
                 return new MemberHit((ClassType)Substitute(entry, map), sym, inst);

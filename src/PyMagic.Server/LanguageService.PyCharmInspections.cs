@@ -33,7 +33,7 @@ public sealed partial class LanguageService
                     break;
                 case FunctionDef fd:
                 {
-                    bool inClass = m.ParentOf(fd) is ClassDef;
+                    bool inClass = m.ClassBodyOf(fd) is ClassDef;
                     for (int i = 0; i < fd.Decorators.Count; i++)
                     {
                         string? name = DecoratorName(fd.Decorators[i]);
@@ -41,7 +41,10 @@ public sealed partial class LanguageService
                         var d = fd.Decorators[i];
                         if (!inClass)
                             yield return At(d.Start, d.End - d.Start, $"@{name} is used outside a class: it only makes a method of a function defined in a class body", "decorator-outside-class", FindingLevel.Warning);
-                        else if (i > 0 && DecoratorName(fd.Decorators[i - 1]) is { } outer && outer is not ("abstractmethod" or "override" or "overload"))
+                        // only wrappers that need the function itself (a property over a classmethod went in Python 3.13; a cache cannot call a
+                        // classmethod object); other decorators (pydantic's @field_validator, SQLAlchemy's @declared_attr, ...) are made to take the
+                        // classmethod object, as their documentation writes them
+                        else if (i > 0 && DecoratorName(fd.Decorators[i - 1]) is { } outer && outer is "property" or "cached_property" or "cache" or "lru_cache")
                             yield return At(d.Start, d.End - d.Start, $"@{name} is applied before @{outer}: @{outer} receives a {name} object, not the function; put @{name} on top", "decorator-nesting", FindingLevel.Warning);
                     }
                     break;
@@ -75,7 +78,7 @@ public sealed partial class LanguageService
         // type hints (off by default): every parameter but self / cls, and the return
         foreach (var fd in AstChildren.Descendants(m.Ast).OfType<FunctionDef>())
         {
-            bool method = m.ParentOf(fd) is ClassDef && !fd.Decorators.Any(d => DecoratorName(d) == "staticmethod");
+            bool method = m.ClassBodyOf(fd) is ClassDef && !fd.Decorators.Any(d => DecoratorName(d) == "staticmethod");
             var missing = fd.Params.Where((p, i) => p.Kind is ParamKind.Normal or ParamKind.VarArgs or ParamKind.KwArgs && p.Annotation == null && !(method && i == 0))
                 .Select(p => p.Name).ToList();
             bool noReturn = fd.Returns == null && fd.Name != "__init__";
@@ -93,7 +96,7 @@ public sealed partial class LanguageService
         {
             if (node is ClassDef cd && !cd.Name.StartsWith('_')) yield return (cd, cd.Body, cd.NameStart, cd.Name.Length, "class");
             else if (node is FunctionDef fd && !fd.Name.StartsWith('_') && m.ParentOf(fd) is Module or ClassDef)
-                yield return (fd, fd.Body, fd.NameStart, fd.Name.Length, m.ParentOf(fd) is ClassDef ? "method" : "function");
+                yield return (fd, fd.Body, fd.NameStart, fd.Name.Length, m.ClassBodyOf(fd) is ClassDef ? "method" : "function");
         }
     }
 

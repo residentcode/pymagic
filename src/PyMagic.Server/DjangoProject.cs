@@ -202,7 +202,7 @@ public sealed record DjangoProject(bool Found, string? Manage, string? SettingsM
                     foreach (var sub in Directory.EnumerateDirectories(dir).OrderBy(s => s, StringComparer.OrdinalIgnoreCase))
                     {
                         string name = System.IO.Path.GetFileName(sub);
-                        if (!Skipped.Contains(name) && !name.StartsWith('.') && !name.EndsWith(".egg-info", StringComparison.Ordinal)) next.Add(sub);
+                        if (!Skipped.Contains(name) && !ProjectFolders.IsIgnored(sub) && !name.StartsWith('.') && !name.EndsWith(".egg-info", StringComparison.Ordinal)) next.Add(sub);
                     }
                 }
                 catch (UnauthorizedAccessException) { }

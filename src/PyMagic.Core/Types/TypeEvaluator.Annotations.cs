@@ -83,6 +83,8 @@ public sealed partial class TypeEvaluator
         {
             switch (t)
             {
+                // the value of `type[X]` in an alias (AnnotationToValue): type[X] again
+                case ClassType { IsInstance: false, Info: { Name: "type", Module.Name: "builtins" }, Args: [var held] }: return TypeOfClassObject(held);
                 case ClassType { IsInstance: false } c: return c.AsInstance();
                 case TypeVarType or ParamSpecType or TypeVarTupleType: return t;
                 case SpecialFormType f:
@@ -125,7 +127,16 @@ public sealed partial class TypeEvaluator
     }
 
     /// <summary>The annotation form back to a value: instances of classes become the class object (for `Alias = list[int]`).</summary>
-    PyType AnnotationToValue(PyType ann) => MapMembers(ann, t => t is ClassType { IsInstance: true } c ? c.AsClassObject() : t);
+    /// <remarks>
+    /// `type[X]` (a class object in the annotation form) becomes `type` holding X, so that read back as an annotation it is type[X] again, not X:
+    /// pydantic's `TypeModelOrEnum = Union[Type['BaseModel'], Type[Enum]]` stays a union of classes.
+    /// </remarks>
+    PyType AnnotationToValue(PyType ann) => MapMembers(ann, t => t switch
+    {
+        ClassType { IsInstance: true } c => c.AsClassObject(),
+        ClassType { IsInstance: false } k when !IsClassOfAny(k) && BuiltinClass("type") is { } typeClass => new ClassType(typeClass.Info, new PyType[] { k.AsInstance() }, false),
+        _ => t,
+    });
 
     PyType AnnotationSubscript(ModuleInfo m, SubscriptExpr sub, Scope? lookup, bool deferred = false)
     {
