@@ -66,6 +66,15 @@ test('which files, and replacements written like the word', () => {
     assert.equal(spellKind('README.md'), 'text');
     assert.equal(spellKind('notes.TXT'), 'text');
     assert.equal(spellKind('a.js'), null);
+    // installed code is left alone: django-stubs' `urlconf` and `viewname` are not the project's typos
+    assert.equal(spellKind('.venv/Lib/site-packages/django-stubs/urls/base.pyi'), null);
+    assert.equal(spellKind('venv/lib/python3.13/site-packages/x.py'), null);
+    assert.equal(spellKind('C:\\Python313\\Lib\\site-packages\\a.py'), null);
+    assert.equal(spellKind('typeshed/stdlib/os/__init__.pyi'), null);
+    assert.equal(spellKind('node_modules/pkg/README.md'), null);
+    // a folder of the project that only starts like one is still the project's
+    assert.equal(spellKind('envelope/a.py'), 'python');
+    assert.equal(spellKind('src/venvs_helper.py'), 'python');
     assert.equal(likeOriginal('Recieve', 'receive'), 'Receive');
     assert.equal(likeOriginal('RECIEVE', 'receive'), 'RECEIVE');
     assert.equal(likeOriginal('recieve', 'receive'), 'receive');

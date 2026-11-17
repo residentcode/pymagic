@@ -108,9 +108,16 @@ export function textWords(text) {
 /** The kind of file whose words are checked, by its name: 'python', 'text', or null. */
 export function spellKind(rel) {
     const name = rel.toLowerCase();
+    // installed code (an environment, site-packages, typeshed, node_modules) is not the project's to spell: PyCharm leaves libraries alone too
+    if (isLibraryPath(name)) return null;
     if (/\.pyi?$/.test(name)) return 'python';
     if (/\.(md|markdown|rst|txt)$/.test(name)) return 'text';
     return null;
+}
+
+/** Whether a project-relative path (or an absolute one) is inside installed code rather than the project's own: an environment, site-packages, typeshed, node_modules. */
+export function isLibraryPath(path) {
+    return /(^|[\\/])(\.venv|venv|env|\.conda|\.tox|\.nox|site-packages|dist-packages|typeshed|node_modules)([\\/]|$)/i.test(path);
 }
 
 /** A replacement written like the word it replaces: `Recieve` becomes `Receive`, `RECIEVE` stays shouting. */
