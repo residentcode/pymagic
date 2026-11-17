@@ -272,6 +272,16 @@ public sealed partial class TypeEvaluator
             && call.Args.FirstOrDefault() is { Name: null, Stars: 0, Value: ConstExpr tvName })
             return Single(new CallTarget(callee, TypeVarFromCall(m, call, tvName), Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
 
+        // `UserId = NewType("UserId", int)`: a class of that name derived from the type (websockets' Subprotocol), so it is a type in annotations and
+        // `UserId(5)` makes one, as PyCharm and the type checkers read it
+        static bool IsNewType(PyType t) => t is ClassType { IsInstance: false } c && c.Info.QualifiedName is "typing.NewType" or "typing_extensions.NewType"
+            || t is FunctionType { Info: { Name: "NewType" } nf } && nf.Module.Name is "typing" or "typing_extensions";
+        if (IsNewType(callee) && call.Args is [{ Name: null, Stars: 0 } newName, { Name: null, Stars: 0 } newBase, ..]
+            && StringValue(newName.Value) is { } typeName && Annotation(m, newBase.Value, null) is ClassType { IsInstance: true } baseInstance
+            && baseInstance.AsClassObject() is ClassType baseClass)
+            return Single(new CallTarget(callee, new ClassType(MakeSyntheticClass(m, typeName, call, baseClass, Array.Empty<(string, PyType)>()), false),
+                Array.Empty<ArgumentMapping>(), Array.Empty<CallProblem>()));
+
         if (TypedDictGet(m, call) is PyType tdGet)
             return Single(new CallTarget(callee, tdGet, Array.Empty<ArgumentMapping>(), TypedDictSetdefaultProblems(m, call, tdGet)));
 
@@ -1059,6 +1069,8 @@ public sealed partial class TypeEvaluator
         return results.Count == 0 ? PyType.Unknown : PyType.Union(results);
     }
 
+    int _iterDepth;
+
     /// <summary>Type of the items produced by iterating a value.</summary>
     public PyType IterElement(PyType iterable) => MapMembers(iterable, t =>
     {
@@ -1071,12 +1083,32 @@ public sealed partial class TypeEvaluator
         {
             var next = CallMethod(it, "__next__", Array.Empty<PyType>(), out _);
             if (next != null) return next;
+            // an __iter__ declared to give an Iterable (rich's Renderables): what iterating that gives
+            if (_iterDepth < 4 && it is ClassType { IsInstance: true } itc && !itc.Equals(c) && FindMember(itc, "__iter__", true, null, out _) != null)
+            {
+                _iterDepth++;
+                try { return IterElement(it); }
+                finally { _iterDepth--; }
+            }
         }
         return CallMethod(c, "__getitem__", new[] { Inst("int") }, out _) ?? PyType.Unknown;
     });
 
-    PyType ContextEnterType(PyType manager) =>
-        MapMembers(manager, t => CallMethod(t, "__enter__", Array.Empty<PyType>(), out _) ?? PyType.Unknown);
+    /// <summary>What `async for x in it` gives: the awaited result of `__aiter__().__anext__()`.</summary>
+    public PyType AsyncIterElement(PyType iterable) => MapMembers(iterable, t =>
+    {
+        if (t is not ClassType { IsInstance: true } c) return t is UnknownType ? t : PyType.Unknown;
+        var it = CallMethod(c, "__aiter__", Array.Empty<PyType>(), out _);
+        if (it == null) return PyType.Unknown;
+        var next = CallMethod(it, "__anext__", Array.Empty<PyType>(), out _);
+        return next == null ? PyType.Unknown : AwaitedType(next);
+    });
+
+    /// <summary>What `with cm as x` binds: `__enter__()`, or the awaited `__aenter__()` of `async with`.</summary>
+    PyType ContextEnterType(PyType manager, bool isAsync = false) =>
+        MapMembers(manager, t => isAsync
+            ? (CallMethod(t, "__aenter__", Array.Empty<PyType>(), out _) is { } entered ? AwaitedType(entered) : PyType.Unknown)
+            : CallMethod(t, "__enter__", Array.Empty<PyType>(), out _) ?? PyType.Unknown);
 
     PyType TypeOfSubscript(ModuleInfo m, SubscriptExpr s)
     {

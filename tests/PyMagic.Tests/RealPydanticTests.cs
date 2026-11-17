@@ -12,7 +12,6 @@ public class RealPydanticTests
         var candidates = new[]
         {
             Environment.GetEnvironmentVariable("PYMAGIC_REAL_SITE"),
-            Path.Combine(Environment.GetEnvironmentVariable("USERPROFILE") ?? "", ".unsloth", "studio", "unsloth_studio", "Lib", "site-packages"),
         };
         return candidates.FirstOrDefault(c => !string.IsNullOrEmpty(c) && File.Exists(Path.Combine(c, "pydantic", "__init__.py")));
     }

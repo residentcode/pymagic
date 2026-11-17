@@ -108,6 +108,8 @@ public sealed partial class TypeEvaluator
                         _ => PyType.Unknown,
                     };
                 case ClassType { IsInstance: true } inst when IsNone(inst): return inst;
+                // an alias of a callable type (`ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]`): its value is the type the subscript spelled
+                case SignatureType { Origin: null } s: return s;
                 default: return PyType.Unknown;
             }
         });

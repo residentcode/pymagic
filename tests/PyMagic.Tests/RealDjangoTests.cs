@@ -7,14 +7,11 @@ public class RealDjangoTests
 {
     internal static readonly string? Site = FindSite();
 
+    /// <summary>Only the site-packages PYMAGIC_DJANGO_SITE names (a Django made for the tests, in %TEMP%); never a folder found on its own, such as a project of the user's.</summary>
     static string? FindSite()
     {
-        var candidates = new[]
-        {
-            Environment.GetEnvironmentVariable("PYMAGIC_DJANGO_SITE"),
-            Path.Combine(Environment.GetEnvironmentVariable("USERPROFILE") ?? "", "PycharmProjects", "django_chat", ".venv", "Lib", "site-packages"),
-        };
-        return candidates.FirstOrDefault(c => !string.IsNullOrEmpty(c) && File.Exists(Path.Combine(c, "django", "db", "models", "__init__.py")));
+        string? site = Environment.GetEnvironmentVariable("PYMAGIC_DJANGO_SITE");
+        return !string.IsNullOrEmpty(site) && File.Exists(Path.Combine(site, "django", "db", "models", "__init__.py")) ? site : null;
     }
 
     const string Models =

@@ -312,6 +312,9 @@ public sealed partial class TypeEvaluator
             // `a and b` is a where a is falsy, else b: `flag and x` with a bool flag is False or x
             case BinaryExpr { Op: "and" } b: return PyType.Union(Truthiness(TypeOf(m, b.Left), false), TypeOf(m, b.Right));
             case BinaryExpr { Op: "or" } b: return PyType.Union(WithoutNone(TypeOf(m, b.Left)), TypeOf(m, b.Right));
+            // `A | B | None` of classes at run time (an alias value, isinstance's argument): the union of those types, not typeshed's opaque UnionType
+            case BinaryExpr { Op: "|" } u when TypeOf(m, u.Left) is var ul && TypeOf(m, u.Right) is var ur && IsTypeForm(ul) && IsTypeForm(ur):
+                return PyType.Union(ul, ur);
             case BinaryExpr b: return BinaryOp(TypeOf(m, b.Left), b.Op, TypeOf(m, b.Right));
 
             case UnaryExpr { Op: "not" }: return Inst("bool");
@@ -504,6 +507,10 @@ public sealed partial class TypeEvaluator
         return null;
     }
 
+    /// <summary>A value that stands for a type: a class object, None, a callable or special form (each member of a union so).</summary>
+    bool IsTypeForm(PyType t) => t.Members.Count > 0 && t.Members.All(x => x is ClassType { IsInstance: false } or SignatureType { Origin: null } or SpecialFormType
+        || x is ClassType { IsInstance: true } i && IsNone(i));
+
     PyType TypeOfDeclaration(ModuleInfo m, Declaration d) => _cache.TryGetValue(d, out var known) ? known : DeclarationTypeMemo(m, d);
 
     PyType DeclarationTypeMemo(ModuleInfo m, Declaration d) => Memo(d, () =>
@@ -522,6 +529,9 @@ public sealed partial class TypeEvaluator
             case DeclKind.Variable: return d.Node is Expr target ? InferTargetType(m, target) : PyType.Unknown;
             case DeclKind.Import: return ImportType(m, (ImportAlias)d.Node);
             case DeclKind.TypeParam: return TypeParamType((TypeParam)d.Node);
+            // PEP 695 `type NDArray[S: np.generic] = np.ndarray[Shape, np.dtype[S]]`: the value as a type (its own parameters stay type variables,
+            // which a subscript at the use site fills in), held as the value an alias assignment would hold
+            case DeclKind.TypeAlias when d.Node is TypeAliasStmt alias: return AnnotationToValue(Annotation(m, alias.Value, null, deferred: true));
             case DeclKind.MatchCapture: return PatternBindingType(m, d);
             case DeclKind.ExceptionVar:
             {
@@ -636,14 +646,15 @@ public sealed partial class TypeEvaluator
                         ? AnnotationToValue(Annotation(m, an.Value, null)) : TypeOf(m, an.Value);
                 return AnnotationType(m, an.Annotation);
 
+            // `async for` / `async with` go through __aiter__/__anext__ and __aenter__, awaited
             case ForStmt f when ReferenceEquals(f.Target, child):
-                return Destructure(m, IterElement(TypeOf(m, f.Iter)), (Expr)child, target);
+                return Destructure(m, f.IsAsync ? AsyncIterElement(TypeOf(m, f.Iter)) : IterElement(TypeOf(m, f.Iter)), (Expr)child, target);
 
             case Comprehension c when ReferenceEquals(c.Target, child):
-                return Destructure(m, IterElement(TypeOf(m, c.Iter)), (Expr)child, target);
+                return Destructure(m, c.IsAsync ? AsyncIterElement(TypeOf(m, c.Iter)) : IterElement(TypeOf(m, c.Iter)), (Expr)child, target);
 
             case WithItem w when ReferenceEquals(w.Target, child):
-                return Destructure(m, ContextEnterType(TypeOf(m, w.Context)), (Expr)child, target);
+                return Destructure(m, ContextEnterType(TypeOf(m, w.Context), m.ParentOf(w) is WithStmt { IsAsync: true }), (Expr)child, target);
 
             case NamedExpr ne when ReferenceEquals(ne.Target, target):
                 return TypeOf(m, ne.Value);

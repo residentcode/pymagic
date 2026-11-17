@@ -41,6 +41,16 @@ var interpreters = new InterpreterManager(root);
 var lspInboxes = new ConcurrentDictionary<BlockingCollection<JsonNode?>, byte>();
 interpreters.Changed += chosen =>
 {
+    Reconfigure(chosen);
+    // the stubs of its compiled modules (made once, then only what changed); the sessions read the libraries again when there are new ones
+    if (chosen != null) RefreshSkeletons(chosen);
+};
+void RefreshSkeletons(PythonInterpreter chosen) => Task.Run(async () =>
+{
+    if (await Skeletons.RefreshAsync(chosen) && interpreters.Current?.Path == chosen.Path) Reconfigure(interpreters.Current);
+});
+void Reconfigure(PythonInterpreter? chosen)
+{
     // every open editor session follows the new interpreter (its libraries and version change what the code means)
     foreach (var inbox in lspInboxes.Keys)
         try
@@ -52,7 +62,7 @@ interpreters.Changed += chosen =>
             });
         }
         catch (InvalidOperationException) { /* the session just ended */ }
-};
+}
 Task.Run(() =>
 {
     try { if (python != null) interpreters.Select(python, save: false); else interpreters.InitializeDefault(); }
@@ -762,7 +772,12 @@ var projectWatcher = new ProjectWatcher(root);
 app.Lifetime.ApplicationStopping.Register(projectWatcher.Dispose);
 // packages installed or removed by something else than the Packages panel (uv add, uv sync, pip install in the terminal): the engine has read the
 // interpreter again, and the page refreshes the Packages panel and the markers of requirements files and pyproject.toml
-interpreters.PackagesChanged += now => projectWatcher.Announce("packages", now.Label);
+interpreters.PackagesChanged += now =>
+{
+    projectWatcher.Announce("packages", now.Label);
+    // a package installed from outside may bring compiled modules: their stubs, then the sessions read the libraries again
+    RefreshSkeletons(now);
+};
 // a .venv made in the project (uv sync, uv venv, python -m venv in the terminal) becomes its interpreter when it had none of its own; the page is told
 projectWatcher.EnvironmentMade += name => Task.Run(() =>
 {

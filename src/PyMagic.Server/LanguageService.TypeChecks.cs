@@ -21,8 +21,8 @@ public sealed partial class LanguageService
                 FunctionDef f => MissingReturn(m, f, ev),
                 ReturnStmt r => ReturnMismatch(m, r, ev),
                 AnnAssignStmt a => AnnotatedMismatch(m, a, ev),
-                ForStmt f => NotIterable(m, f.Iter, ev),
-                Comprehension c => NotIterable(m, c.Iter, ev),
+                ForStmt f => NotIterable(m, f.Iter, ev, f.IsAsync),
+                Comprehension c => NotIterable(m, c.Iter, ev, c.IsAsync),
                 SubscriptExpr s => NotSubscriptable(m, s, ev),
                 BinaryExpr b => UnsupportedOperand(m, b, ev),
                 _ => Array.Empty<Finding>(),
@@ -206,9 +206,16 @@ public sealed partial class LanguageService
 
     static string NameOf(ClassType c) => c.Info.Name;
 
-    IEnumerable<Finding> NotIterable(ModuleInfo m, Expr iter, TypeEvaluator ev)
+    IEnumerable<Finding> NotIterable(ModuleInfo m, Expr iter, TypeEvaluator ev, bool isAsync = false)
     {
         if (PlainInstance(Reliable(m, iter, ev)) is not { } c) yield break;
+        // `async for` takes what has __aiter__
+        if (isAsync)
+        {
+            if (ev.AttributeType(c, "__aiter__").Missing.Count == 0 || ev.AttributeType(c, "__aiter__").Declarations.Count > 0) yield break;
+            yield return new Finding(iter.Start, Math.Max(iter.End - iter.Start, 1), $"'{NameOf(c)}' object is not an async iterable", "not-iterable", FindingLevel.Warning);
+            yield break;
+        }
         if (ev.AttributeType(c, "__iter__").Missing.Count == 0 || ev.AttributeType(c, "__getitem__").Missing.Count == 0) yield break;
         if (ev.AttributeType(c, "__iter__").Declarations.Count > 0) yield break;
         yield return new Finding(iter.Start, Math.Max(iter.End - iter.Start, 1), $"'{NameOf(c)}' object is not iterable", "not-iterable", FindingLevel.Warning);

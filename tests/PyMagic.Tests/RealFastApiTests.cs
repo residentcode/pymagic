@@ -12,7 +12,6 @@ public class RealFastApiTests
         var candidates = new[]
         {
             Environment.GetEnvironmentVariable("PYMAGIC_FASTAPI_SITE"),
-            Path.Combine(Environment.GetEnvironmentVariable("USERPROFILE") ?? "", ".unsloth", "studio", "unsloth_studio", "Lib", "site-packages"),
         };
         return candidates.FirstOrDefault(c => !string.IsNullOrEmpty(c) && File.Exists(Path.Combine(c, "fastapi", "__init__.py")) && File.Exists(Path.Combine(c, "pydantic", "__init__.py")));
     }

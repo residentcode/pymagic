@@ -119,7 +119,8 @@ public class PluginFixtureTests
 
     // ------------------------------------------------------------ the plugins installed on this machine
 
-    static readonly string? Unsloth = new[] { Path.Combine(Environment.GetEnvironmentVariable("USERPROFILE") ?? "", ".unsloth", "studio", "unsloth_studio", "Lib", "site-packages") }
+    static readonly string? Unsloth = new[] { Environment.GetEnvironmentVariable("PYMAGIC_REAL_SITE") ?? "" }   // a site-packages made for the tests in %TEMP%; never one of the user's own
+       
         .FirstOrDefault(p => File.Exists(Path.Combine(p, "anyio", "pytest_plugin.py")) && File.Exists(Path.Combine(p, "faker", "contrib", "pytest", "plugin.py")));
 
     /// <summary>anyio and Faker register `anyio.pytest_plugin` and `faker.contrib.pytest.plugin`; their fixtures are found there. Skipped where they are not installed.</summary>

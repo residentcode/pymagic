@@ -536,7 +536,7 @@ public sealed partial class TypeEvaluator
         if (receiver is ClassType modelReceiver && DjangoBoundMember(hit, modelReceiver, receiverIsInstance) is { } fromDjango) return fromDjango;
         PyType? classLevel = hit.ClassSymbol != null ? TypeOfSymbol(hit.ClassSymbol) : null;
         if (classLevel != null && hit.ClassSymbol != null && IsStrongSymbol(hit.Owner.Info.Module, hit.ClassSymbol))
-            return ThroughDescriptor(BindMember(classLevel, hit.Owner, receiver, receiverIsInstance), hit.ClassSymbol, receiver, receiverIsInstance);
+            return ThroughDescriptor(BindMember(classLevel, hit.Owner, receiver, receiverIsInstance), hit.ClassSymbol, receiver, receiverIsInstance, hit.Owner.Info.Module);
 
         // `self.x: T = ...` declares the attribute: other assignments are checked against T, not unioned into it
         var annotated = hit.InstanceAttrs.Where(ia => ia.Module.ParentOf(ia.Target) is AnnAssignStmt an && ReferenceEquals(an.Target, ia.Target)).ToList();
@@ -544,7 +544,7 @@ public sealed partial class TypeEvaluator
             return PyType.Union(annotated.Select(ia => BindMember(TypeOfTarget(ia.Module, ia.Target), hit.Owner, receiver, receiverIsInstance, bindFunctions: false)).ToList());
 
         var parts = new List<PyType>();
-        if (classLevel != null) parts.Add(ThroughDescriptor(BindMember(classLevel, hit.Owner, receiver, receiverIsInstance), hit.ClassSymbol!, receiver, receiverIsInstance));
+        if (classLevel != null) parts.Add(ThroughDescriptor(BindMember(classLevel, hit.Owner, receiver, receiverIsInstance), hit.ClassSymbol!, receiver, receiverIsInstance, hit.Owner.Info.Module));
         foreach (var ia in hit.InstanceAttrs)
             parts.Add(BindMember(TypeOfTarget(ia.Module, ia.Target), hit.Owner, receiver, receiverIsInstance, bindFunctions: false));
         return parts.Count == 0 ? PyType.Unknown : PyType.Union(parts);
@@ -555,14 +555,25 @@ public sealed partial class TypeEvaluator
     /// `__get__` returns for that access (`instance` the receiver, or None through the class), as in PyCharm. Only variables of the class body count:
     /// functions, properties and nested classes are bound as before.
     /// </summary>
-    PyType ThroughDescriptor(PyType value, Symbol symbol, PyType receiver, bool receiverIsInstance)
+    /// <remarks>
+    /// A def made into a descriptor by a decorator class of its own (`@classproperty`, `@cached`, `@lazy` — a hand-made property) is read the same
+    /// way; when that `__get__` says nothing of what it gives (`return self.fget.__get__(None, owner)()`), it is what the wrapped def returns.
+    /// </remarks>
+    PyType ThroughDescriptor(PyType value, Symbol symbol, PyType receiver, bool receiverIsInstance, ModuleInfo? owner = null)
     {
-        if (receiver is not ClassType rc || !symbol.Declarations.All(d => d.Kind == DeclKind.Variable)) return value;
+        if (receiver is not ClassType rc) return value;
+        var def = symbol.Declarations.Count == 1 && symbol.Declarations[0] is { Kind: DeclKind.Function, Node: FunctionDef { Decorators.Count: > 0 } fd } ? fd : null;
+        if (def == null && !symbol.Declarations.All(d => d.Kind == DeclKind.Variable)) return value;
         if (!value.Members.Any(v => v is ClassType { IsInstance: true } vc && !IsNone(vc) && FindMember(vc, "__get__", true, null, out _) != null)) return value;
         var args = new PyType[] { receiverIsInstance ? rc : NoneInstance, rc.AsClassObject() };
-        return MapMembers(value, v => v is ClassType { IsInstance: true } vc && !IsNone(vc) && FindMember(vc, "__get__", true, null, out _) != null
-            ? CallMethod(vc, "__get__", args, out _) ?? v
-            : v);
+        return MapMembers(value, v =>
+        {
+            if (v is not ClassType { IsInstance: true } vc || IsNone(vc) || FindMember(vc, "__get__", true, null, out _) == null) return v;
+            var got = CallMethod(vc, "__get__", args, out _);
+            if (def != null && owner != null && got is null or UnknownType)
+                return ReturnTypeOf(new FunctionType(FunctionOf(owner, def), true));
+            return got ?? v;
+        });
     }
 
     /// <summary>An overload whose first parameter has no annotation, or one the receiver is assignable to.</summary>
@@ -631,12 +642,32 @@ public sealed partial class TypeEvaluator
 
     PyType BindFunction(FunctionType f, IReadOnlyDictionary<string, PyType> subst, bool receiverIsInstance, bool allowProperty = true)
     {
-        var merged = MergeSubst(f.Subst, subst);
+        var merged = MergeSubst(f.Subst, ReceiverTypeVar(f, subst, receiverIsInstance) is { } own ? MergeSubst(subst, own) : subst);
         if (f.Info.IsStatic) return f with { Subst = merged };
         if (f.Info.IsClassMethod) return f with { BoundFirst = true, Subst = merged };
         if (allowProperty && f.Info.IsProperty && (f.Info.Flags & FuncFlags.PropertySetter) == 0)
             return receiverIsInstance ? ReturnTypeOf(f with { BoundFirst = true, Subst = merged }) : f;
         return receiverIsInstance ? f with { BoundFirst = true, Subst = merged } : f with { Subst = merged };
+    }
+
+    /// <summary>
+    /// A type variable the method's first parameter is annotated with (`def __aenter__(self: T) -> T`, `def create(cls: type[T]) -> T`, as httpx and
+    /// SQLAlchemy write them): the receiver is what it stands for, so the method gives the receiver's own type. Null when there is none.
+    /// </summary>
+    IReadOnlyDictionary<string, PyType>? ReceiverTypeVar(FunctionType f, IReadOnlyDictionary<string, PyType> subst, bool receiverIsInstance)
+    {
+        if (f.Info.IsStatic || f.Info.Node is not FunctionDef { Params: [{ Annotation: { } ann }, ..] } || !subst.TryGetValue("Self", out var self) || self is UnknownType) return null;
+        if (!f.Info.IsClassMethod && !receiverIsInstance) return null;
+        var declared = AnnotationType(f.Info.Module, ann);
+        string? name = declared switch
+        {
+            // type[T] is held as the type variable "type[T]" (TypeOfClassObject): the class is the receiver's, T its instance
+            TypeVarType { Name: var n } when f.Info.IsClassMethod && n.StartsWith("type[", StringComparison.Ordinal) => n[5..^1],
+            TypeVarType tv when !f.Info.IsClassMethod => tv.Name,
+            _ => null,
+        };
+        if (name == null || name == "Self") return null;
+        return new Dictionary<string, PyType> { [name] = self, [$"type[{name}]"] = self is ClassType sc ? sc.AsClassObject() : PyType.Unknown };
     }
 
     // ------------------------------------------------------------ attribute access

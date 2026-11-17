@@ -9,7 +9,8 @@ namespace PyMagic.Tests;
 /// </summary>
 public class PytestOptionsTests
 {
-    static readonly string? Site = new[] { Path.Combine(Environment.GetEnvironmentVariable("USERPROFILE") ?? "", ".unsloth", "studio", "unsloth_studio", "Lib", "site-packages") }
+    static readonly string? Site = new[] { Environment.GetEnvironmentVariable("PYMAGIC_REAL_SITE") ?? "" }   // a site-packages made for the tests in %TEMP%; never one of the user's own
+       
         .FirstOrDefault(p => File.Exists(Path.Combine(p, "_pytest", "fixtures.py")) && File.Exists(Path.Combine(p, "anyio", "pytest_plugin.py")));
 
     sealed record Rig(LanguageService Svc, string Dir)

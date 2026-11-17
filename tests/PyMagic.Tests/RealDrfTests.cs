@@ -5,12 +5,13 @@ namespace PyMagic.Tests;
 /// <summary>Django REST framework as the real package describes itself (item 127). Skipped where Django or djangorestframework is not installed.</summary>
 public class RealDrfTests
 {
-    static readonly string? DjangoSite = Find("PYMAGIC_DJANGO_SITE", Path.Combine("PycharmProjects", "django_chat", ".venv", "Lib", "site-packages"), Path.Combine("django", "db", "models", "__init__.py"));
+    static readonly string? DjangoSite = Find("PYMAGIC_DJANGO_SITE", null, Path.Combine("django", "db", "models", "__init__.py"));
     static readonly string? DrfSite = Find("PYMAGIC_DRF_SITE", null, Path.Combine("rest_framework", "viewsets.py"));
 
     static string? Find(string variable, string? underProfile, string marker)
     {
-        var candidates = new[] { Environment.GetEnvironmentVariable(variable), underProfile == null ? null : Path.Combine(Environment.GetEnvironmentVariable("USERPROFILE") ?? "", underProfile) };
+        // only what the variable names (a site-packages made for the tests in %TEMP%), never a folder of the user's
+        var candidates = new[] { Environment.GetEnvironmentVariable(variable) };
         return candidates.FirstOrDefault(c => !string.IsNullOrEmpty(c) && File.Exists(Path.Combine(c, marker)));
     }
 

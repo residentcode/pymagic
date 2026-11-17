@@ -55,6 +55,115 @@ public class TypingCorpusTests
     }
 
     [Fact]
+    public void AsyncWithAndAsyncForUseTheAsyncProtocol()
+    {
+        // niquests.AsyncSession: __enter__ refuses (NoReturn), __aenter__ gives the session; an async iterable without __iter__
+        var ws = new Workspace();
+        var m = ws.AddModule("main",
+            "from typing import NoReturn\n\n\nclass Session:\n    def __enter__(self) -> NoReturn:\n        raise SyntaxError('use async with')\n\n    async def __aenter__(self) -> 'Session':\n        return self\n\n    async def __aexit__(self, *a) -> None: ...\n\n    async def post(self, url: str) -> int: ...\n\n\n" +
+            "class Rows:\n    def __aiter__(self) -> 'Rows':\n        return self\n\n    async def __anext__(self) -> str: ...\n\n\n" +
+            "async def run():\n    async with Session() as s:\n        A = s\n        B = await s.post('x')\n    async for row in Rows():\n        C = row\n    D = [r async for r in Rows()]\n    with open('f') as f:\n        E = f\n");
+        string Of(string name) => ws.Evaluator.TypeOf(m, AstChildren.Descendants(m.Ast).OfType<AssignStmt>().First(a => a.Targets[0] is NameExpr { Name: var n } && n == name).Value).Display();
+        Assert.Equal("Session", Of("A"));
+        Assert.Equal("int", Of("B"));
+        Assert.Equal("str", Of("C"));
+        Assert.Equal("list[str]", Of("D"));
+        Assert.True(Of("E") != "Never", Of("E"));
+        Assert.Equal("", string.Join(" | ", ws.Evaluator.Inspect(m).Where(d => d.Message.Contains("iterable")).Select(d => d.Message)));
+    }
+
+    [Fact]
+    public void ADefWrappedByAHandMadeDescriptorReadsAsWhatItReturns()
+    {
+        // keyring's classproperty, aiohttp's reify, a lazy attribute: a decorator class with __get__ that says nothing of what it gives
+        var ws = new Workspace();
+        var m = ws.AddModule("main",
+            "class classproperty:\n    def __init__(self, fget):\n        self.fget = classmethod(fget)\n\n    def __get__(self, instance, owner=None):\n        return self.fget.__get__(None, owner)()\n\n\n" +
+            "class lazy:\n    def __init__(self, func):\n        self.func = func\n\n    def __get__(self, obj, cls):\n        return self.func(obj)\n\n\n" +
+            "class typed:\n    def __init__(self, func):\n        self.func = func\n\n    def __get__(self, obj, cls) -> int:\n        return 1\n\n\n" +
+            "class Backend:\n    @classproperty\n    def priority(cls) -> float:\n        return 1.0\n\n    @lazy\n    def name(self) -> str:\n        return 'x'\n\n    @typed\n    def size(self) -> str:\n        return 'x'\n\n\n" +
+            "A = Backend().priority\nB = Backend.priority\nC = Backend().name\nD = Backend().size\n");
+        string Of(string name) => ws.Evaluator.TypeOf(m, AstChildren.Descendants(m.Ast).OfType<AssignStmt>().First(a => a.Targets[0] is NameExpr { Name: var n } && n == name).Value).Display();
+        Assert.Equal("float", Of("A"));
+        Assert.Equal("float", Of("B"));
+        Assert.Equal("str", Of("C"));
+        // a __get__ that says what it gives is believed
+        Assert.Equal("int", Of("D"));
+    }
+
+    [Fact]
+    public void AnAliasOfACallableIsThatCallableInAnnotations()
+    {
+        // starlette's ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]], fastapi's build_middleware_stack() -> ASGIApp
+        var ws = new Workspace();
+        var m = ws.AddModule("main",
+            "import typing\nfrom typing import Callable\n\nHandler = typing.Callable[[int], str]\nNested = Callable[[Handler], str]\n\n\n" +
+            "def make() -> Handler: ...\ndef wrap() -> Nested: ...\n\n\nA = make()\nB = wrap()\nC = make()(1)\n");
+        string Of(string name) => ws.Evaluator.TypeOf(m, AstChildren.Descendants(m.Ast).OfType<AssignStmt>().First(a => a.Targets[0] is NameExpr { Name: var n } && n == name).Value).Display();
+        Assert.Equal("(int) -> str", Of("A"));
+        Assert.Equal("((int) -> str) -> str", Of("B"));
+        Assert.Equal("str", Of("C"));
+    }
+
+    [Fact]
+    public void RuntimeUnionsPep695AliasesAndAnIterableIterAreTypes()
+    {
+        // uvicorn's `ASGIReceiveEvent = (A | B | ...)`, numpy's `type NDArray[S: np.generic] = np.ndarray[...]`, rich's `def __iter__(self) -> Iterable[...]`
+        var ws = new Workspace();
+        var m = ws.AddModule("main",
+            "from typing import Iterable, TypedDict\n\n\nclass A(TypedDict):\n    type: str\n\n\nclass B(TypedDict):\n    size: int\n\n\n" +
+            "Event = (\n    A\n    | B\n)\nMaybe = A | None\n\ntype Arr[S: int] = list[S]\ntype Pair[K, V] = dict[K, V]\n\n\n" +
+            "class Bag:\n    def __iter__(self) -> Iterable[str]: ...\n\n\n" +
+            "def f1() -> Event: ...\ndef f2() -> Maybe: ...\ndef f3() -> Arr[bool]: ...\ndef f4() -> Pair[str, int]: ...\n\n\n" +
+            "P = f1()\nQ = f2()\nR = f3()\nS = f4()\nfor item in Bag():\n    T = item\nU = 1 | 2\n");
+        string Of(string name) => ws.Evaluator.TypeOf(m, AstChildren.Descendants(m.Ast).OfType<AssignStmt>().First(a => a.Targets[0] is NameExpr { Name: var n } && n == name).Value).Display();
+        Assert.Equal("A | B", Of("P"));
+        Assert.Equal("A | None", Of("Q"));
+        Assert.Equal("list[bool]", Of("R"));
+        Assert.Equal("dict[str, int]", Of("S"));
+        Assert.Equal("str", Of("T"));
+        // `|` of values is still the operator
+        Assert.Equal("int", Of("U"));
+    }
+
+    [Fact]
+    public void ASelfTypedByATypeVarIsTheReceiver()
+    {
+        // httpx's `async def __aenter__(self: T) -> T`, SQLAlchemy's and pydantic v1's `def create(cls: type[T]) -> T`
+        var ws = new Workspace();
+        var m = ws.AddModule("main",
+            "import typing\nfrom typing import TypeVar\n\nT = typing.TypeVar('T', bound='Client')\nM = TypeVar('M')\n\n\n" +
+            "class Client:\n    async def __aenter__(self: T) -> T:\n        return self\n\n    async def __aexit__(self, *a) -> None: ...\n\n    def __enter__(self: T) -> T:\n        return self\n\n    def __exit__(self, *a) -> None: ...\n\n" +
+            "    def copy(self: M) -> list[M]: ...\n\n    @classmethod\n    def create(cls: type[M]) -> M: ...\n\n\nclass AsyncClient(Client):\n    pass\n\n\n" +
+            "async def run():\n    async with AsyncClient() as a:\n        A = a\n    with Client() as b:\n        B = b\n    C = AsyncClient().copy()\n    D = AsyncClient.create()\n    E = AsyncClient().create()\n");
+        string Of(string name) => ws.Evaluator.TypeOf(m, AstChildren.Descendants(m.Ast).OfType<AssignStmt>().First(a => a.Targets[0] is NameExpr { Name: var n } && n == name).Value).Display();
+        Assert.Equal("A:AsyncClient B:Client C:list[AsyncClient] D:AsyncClient E:AsyncClient", string.Join(" ", new[] { "A", "B", "C", "D", "E" }.Select(n => n + ":" + Of(n))));
+        Assert.Equal("AsyncClient", Of("A"));
+        Assert.Equal("Client", Of("B"));
+        Assert.Equal("list[AsyncClient]", Of("C"));
+        Assert.Equal("AsyncClient", Of("D"));
+        Assert.Equal("AsyncClient", Of("E"));
+    }
+
+    [Fact]
+    public void ANewTypeIsAClassOfItsName()
+    {
+        // websockets' `Subprotocol = NewType("Subprotocol", str)`, used in annotations and called to make one
+        var svc = new PyMagic.Server.LanguageService();
+        svc.SourceRoots.Add("c:/proj");
+        const string uri = "file:///c:/proj/main.py";
+        svc.Open(uri, "from typing import NewType, Optional\n\nUserId = NewType('UserId', int)\n\n\ndef find(user: UserId) -> Optional[UserId]: ...\ndef takes_int(n: int) -> None: ...\n\n\n" +
+            "A = UserId(5)\nB = find(A)\ntakes_int(A)\n", 1);
+        var ws = new Workspace();
+        var m = ws.AddModule("main", "from typing import NewType, Optional\n\nUserId = NewType('UserId', int)\n\n\ndef find(user: UserId) -> Optional[UserId]: ...\n\n\nA = UserId(5)\nB = find(A)\n");
+        string Of(string name) => ws.Evaluator.TypeOf(m, AstChildren.Descendants(m.Ast).OfType<AssignStmt>().First(a => a.Targets[0] is NameExpr { Name: var n } && n == name).Value).Display();
+        Assert.Equal("UserId", Of("A"));
+        Assert.Equal("UserId | None", Of("B"));
+        // it is an int where an int is asked for
+        Assert.Equal("", string.Join(" | ", svc.Diagnostics(uri).Where(d => d.Code == "argument-type").Select(d => d.Message)));
+    }
+
+    [Fact]
     public void TypeIgnoreOnADefSilencesItsOverrideAndMissingReturn()
     {
         var svc = new LanguageService();

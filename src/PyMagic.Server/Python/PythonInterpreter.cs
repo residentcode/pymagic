@@ -78,6 +78,8 @@ public sealed record PythonInterpreter(
         foreach (var p in SitePackages) Add(p);
         foreach (var p in SysPath) Add(p);
         if (includeStdlib && Stdlib != null && Directory.Exists(Stdlib) && seen.Add(Norm(Stdlib))) roots.Add(Norm(Stdlib));
+        // last: the stubs PyMagic made of the compiled modules of its packages (Skeletons), found only where nothing above has the module
+        if (Target.IsLocal && Skeletons.DirFor(Path) is var skeletons && Directory.Exists(skeletons) && seen.Add(Norm(skeletons))) roots.Add(Norm(skeletons));
         return roots;
     }
 }

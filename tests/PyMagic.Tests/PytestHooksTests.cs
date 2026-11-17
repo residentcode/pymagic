@@ -9,7 +9,8 @@ public class PytestHooksTests
     const string Conftest = Root + "conftest.py";
     const string TestA = Root + "test_a.py";
 
-    static readonly string? Site = new[] { Path.Combine(Environment.GetEnvironmentVariable("USERPROFILE") ?? "", ".unsloth", "studio", "unsloth_studio", "Lib", "site-packages") }
+    static readonly string? Site = new[] { Environment.GetEnvironmentVariable("PYMAGIC_REAL_SITE") ?? "" }   // a site-packages made for the tests in %TEMP%; never one of the user's own
+       
         .FirstOrDefault(p => File.Exists(Path.Combine(p, "_pytest", "fixtures.py")));
 
     static LanguageService Project(params (string Uri, string Text)[] files)

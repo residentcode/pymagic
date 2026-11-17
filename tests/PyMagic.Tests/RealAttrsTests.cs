@@ -12,7 +12,6 @@ public class RealAttrsTests
         var candidates = new[]
         {
             Environment.GetEnvironmentVariable("PYMAGIC_REAL_SITE"),
-            Path.Combine(Environment.GetEnvironmentVariable("USERPROFILE") ?? "", ".unsloth", "studio", "unsloth_studio", "Lib", "site-packages"),
         };
         return candidates.FirstOrDefault(c => !string.IsNullOrEmpty(c) && File.Exists(Path.Combine(c, "attr", "__init__.pyi")) && File.Exists(Path.Combine(c, "attrs", "__init__.pyi")));
     }
