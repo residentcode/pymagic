@@ -1,3 +1,7 @@
 # The sample projects the tests read keep the line ends they were written with, whatever core.autocrlf says:
 # the tests find text and line numbers in them.
 tests/PyMagic.Tests/Projects/** text eol=lf
+
+# cmd finds labels (goto, call :x) reliably only in CRLF files: batch files are checked out with CRLF on every PC
+*.cmd text eol=crlf
+*.bat text eol=crlf
