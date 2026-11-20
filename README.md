@@ -52,7 +52,7 @@ PyMagic runs on Windows 10 and 11 (x64). There are two ways to get it.
 
 `PyMagic-web.cmd` (or `start.ps1`) runs the same editor in a browser tab instead of the app window.
 
-**Make a copy that needs nothing installed**: build it as in [Build the app](#build-the-app). Then run the installer
+**Make a copy that needs nothing installed**: double-click `Build.cmd`, or build it as in [Build the app](#build-the-app). Then run the installer
 `desktop\out\PyMagic-Setup-0.1.0.exe`, which installs PyMagic for all users in `C:\Program Files\PyMagic` (Windows asks for an administrator's approval), with a Start menu entry and, if you leave its box ticked, a desktop shortcut. Or copy the
 folder `desktop\out\PyMagic-win32-x64` to any Windows PC and start `PyMagic.exe` in it.
 
@@ -81,6 +81,9 @@ dotnet run --project src/PyMagic.Web -- --root examples/demo
 ```
 
 ### Build the app
+
+On a new PC, double-click `Build.cmd` (or run `Build.cmd --no-installer` for the app folder only). It checks for the .NET 9 SDK and
+Node.js 20 or later, offers to install what is missing with winget, installs the npm packages and runs the build below. By hand:
 
 ```bash
 node desktop/package.mjs
