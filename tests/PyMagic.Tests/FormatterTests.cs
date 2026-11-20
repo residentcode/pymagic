@@ -188,7 +188,7 @@ print('same' if not bad else chr(10).join(bad))
 
     static string RepoFile(string relative)
     {
-        for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
+        foreach (var d in TestRepo.Ancestors())
         {
             string candidate = Path.Combine(d.FullName, relative);
             if (File.Exists(candidate)) return candidate;

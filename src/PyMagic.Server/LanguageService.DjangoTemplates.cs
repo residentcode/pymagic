@@ -686,7 +686,7 @@ public sealed partial class LanguageService
             string filter = at.Chain[0];
             var custom = TagLibrariesOf(a.Snap).Select(l => (l, ok: l.Filters.TryGetValue(filter, out var def), def)).FirstOrDefault(x => x.ok);
             var locs = new List<Location>();
-            if (custom.ok && FixtureLocation(custom.l.Module, custom.def.NameStart, custom.def.NameStart + custom.def.Name.Length) is { } l) locs.Add(l);
+            if (custom is { ok: true, def: { } fdef } && FixtureLocation(custom.l.Module, fdef.NameStart, fdef.NameStart + fdef.Name.Length) is { } l) locs.Add(l);
             string doc = FilterDocs.GetValueOrDefault(filter) ?? (custom.ok ? $"Custom filter from the `{custom.l.Name}` library." : "");
             return doc.Length == 0 && locs.Count == 0 ? null : new TemplateTarget(Code("(filter) " + filter) + "\n\n" + doc, at.Start, at.End, locs);
         }

@@ -169,7 +169,8 @@ internal sealed class FixtureResolver
         {
             if (current.ParentOf(node) is not ImportFromStmt { IsStar: false } from) return null;
             var tm = ws.GetModule(Workspace.AbsoluteName(current, from.Level, from.Module) ?? "");
-            var sym = tm == null ? null : ws.Evaluator.FindModuleSymbol(tm, node.Name);
+            if (tm == null) return null;
+            var sym = ws.Evaluator.FindModuleSymbol(tm, node.Name);
             if (sym == null) return null;
             sym = sym.Redirect ?? sym;
             var owner = ws.ModuleOf(sym) ?? tm;

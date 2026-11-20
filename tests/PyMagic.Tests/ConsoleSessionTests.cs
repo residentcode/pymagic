@@ -5,6 +5,7 @@ using PyMagic.Server;
 namespace PyMagic.Tests;
 
 /// <summary>The real console of the Terminal panel (item 137): a Windows pseudo console. Skipped where there is none.</summary>
+[System.Runtime.Versioning.SupportedOSPlatform("windows")]
 public class ConsoleSessionTests
 {
     static Dictionary<string, string?> CurrentEnvironment()

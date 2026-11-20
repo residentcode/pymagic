@@ -350,7 +350,7 @@ export function vueBindings(text) {
             const f = /^\s*([\s\S]*?)\s+(?:in|of)\s+([\s\S]+?)\s*$/.exec(m[3]);
             if (f) list.push({ kind: 'for', names: f[1].replace(/^\(([\s\S]*)\)$/, '$1').trim(), source: f[2] });
         }
-        else list.push({ kind: 'slot', names: m[3].trim(), source: '' });
+        else list.push({ kind: 'slot', names: m[3].trim(), source: '', at: open.index + open[0].length + m.index + m[0].length - m[3].length - 1 });
     }
     const count = new Map();
     for (const b of list) for (const n of b.names.match(IDENT) ?? []) count.set(n, (count.get(n) ?? 0) + 1);
@@ -359,9 +359,10 @@ export function vueBindings(text) {
 }
 
 /** A v-for's or a slot's names as declarations of the markup's document: an item is its list's element, an index or key what it is, a slot's any. */
-function bindingCode(b, ts) {
+function bindingCode(b, ts, slotVars) {
     const any = ts ? '(0 as any)' : '/** @type {any} */ (0)';
-    if (b.kind === 'slot') return `var ${b.names} = ${any};`;
+    // a slot whose component says what it gives: of that type (vuePropChecks' __pm_s), else any
+    if (b.kind === 'slot') return `var ${b.names} = ${slotVars?.get(b.at) ?? any};`;
     if (/^[{[]/.test(b.names)) return `var ${b.names} = __pm_each((${b.source}));`;
     const [item, key, index] = b.names.split(',').map((x) => x.trim());
     return [item && `var ${item} = __pm_each((${b.source}));`, key && `var ${key} = __pm_key((${b.source}));`, index && `var ${index} = 0;`].filter(Boolean).join(' ');
@@ -385,27 +386,131 @@ function runtimeProp(value) {
     }
     return { type: CONSTRUCTORS[v] ?? 'any', required: false };
 }
-/** An object literal's members at its top: [[key, value text]]. */
-function members(objectText) {
+/** An object literal's or object type's parts at its top, as written (split at , ; and line ends outside brackets and quotes). */
+function topParts(objectText) {
     const inner = objectText.trim().replace(/^\{/, '').replace(/\}$/, '');
     const out = [];
-    let depth = 0, quote = null, start = 0;
-    const push = (end) => {
-        const part = inner.slice(start, end).trim();
-        const m = /^(?:['"]?)([A-Za-z_$][\w$-]*)(?:['"]?)\s*(?:\??:\s*([\s\S]*))?$/.exec(part);
-        if (m) out.push([m[1], m[2] ?? m[1]]);
-        start = end + 1;
-    };
+    // (a type's arguments are bracketed too, Record<string, number>: a < right after a name opens them, a comparison's `a > 0` does not)
+    let depth = 0, angles = 0, quote = null, start = 0;
+    const push = (end) => { const part = inner.slice(start, end).trim(); if (part) out.push(part); start = end + 1; };
     for (let i = 0; i < inner.length; i++) {
         const c = inner[i];
         if (quote) { if (c === '\\') i++; else if (c === quote) quote = null; continue; }
         if (c === '"' || c === "'" || c === '`') quote = c;
+        else if (c === '=' && inner[i + 1] === '>') i++;      // (an arrow is not a closing bracket)
         else if ('{[('.includes(c)) depth++;
         else if ('}])'.includes(c)) depth--;
-        else if ((c === ',' || c === ';' || c === '\n') && depth === 0) push(i);
+        else if (c === '<' && /[\w$]/.test(inner[i - 1] ?? '')) angles++;
+        else if (c === '>' && angles > 0) angles--;
+        else if ((c === ',' || c === ';' || c === '\n') && depth === 0 && angles === 0) push(i);
     }
     push(inner.length);
+    return out;
+}
+/** An object literal's members at its top: [[key, value text]]. */
+function members(objectText) {
+    const out = [];
+    for (const part of topParts(objectText)) {
+        const m = /^(?:['"]?)([A-Za-z_$][\w$-]*)(?:['"]?)\s*(?:\??:\s*([\s\S]*))?$/.exec(part);
+        if (m) out.push([m[1], m[2] ?? m[1]]);
+    }
     return out.filter(([k]) => k);
+}
+
+/** A type a script names (`defineEmits<Emits>()`): the body of its interface or object type, as `{ … }`, or ''. */
+function namedObjectType(script, name) {
+    if (!/^[A-Za-z_$][\w$]*$/.test(name)) return name;
+    const named = new RegExp(`\\b(?:interface\\s+${name}\\s*(?:extends[^{]*)?(?=\\{)|type\\s+${name}\\s*=\\s*(?=\\{))`).exec(script);
+    const body = named ? bracketed(script, named.index + named[0].length, '{', '}') : '';
+    return body ? '{' + body + '}' : '';
+}
+
+/** The text of a parameter list after its first parameter: `e: 'save', id: number` -> `id: number`. */
+const afterFirst = (params) => { const parts = topParts('{' + params + '}'); return parts.slice(1).join(', '); };
+
+/**
+ * The events a component's script says it emits: [{ name, fn }] with `fn` the type of a handler for it ((id: number) => any), or null when
+ * it says only the name. defineEmits<{ (e: 'save', id: number): void }>(), defineEmits<{ save: [id: number] }>() (an interface or type of the
+ * file too), defineEmits(['save']), defineEmits({ save: (id: number) => true }), and an options object's `emits`.
+ */
+function vueEmits(script) {
+    const at = /\bdefineEmits\s*/.exec(script);
+    let typeText = '', runtime = '';
+    if (at) {
+        const after = at.index + at[0].length;
+        typeText = bracketed(script, after, '<', '>').trim();
+        if (!typeText) runtime = bracketed(script, after, '(', ')').trim();
+        typeText = namedObjectType(script, typeText);
+    }
+    else {
+        const base = Math.max(0, script.search(/\bexport\s+default\b/));
+        const m = /\bemits\s*:\s*(?=[{[])/.exec(script.slice(base));
+        if (m) {
+            const from = base + m.index + m[0].length;
+            runtime = script[from] === '[' ? '[' + bracketed(script, from, '[', ']') + ']' : '{' + bracketed(script, from, '{', '}') + '}';
+        }
+    }
+    const out = [];
+    if (typeText.startsWith('{')) {
+        for (const part of topParts(typeText)) {
+            // a call signature: (e: 'save', id: number): void
+            const call = /^\(\s*[A-Za-z_$][\w$]*\s*:\s*(['"])([^'"]+)\1/.exec(part);
+            if (call) { out.push({ name: call[2], fn: `(${afterFirst(bracketed(part, 0, '(', ')'))}) => any` }); continue; }
+            // a named tuple: save: [id: number]
+            const named = /^['"]?([A-Za-z_$][\w$:-]*)['"]?\??\s*:\s*(\[[\s\S]*\])$/.exec(part);
+            if (named) out.push({ name: named[1], fn: `(...args: ${named[2]}) => any` });
+        }
+    }
+    else if (runtime.startsWith('[')) for (const m of runtime.matchAll(/['"]([\w$:-]+)['"]/g)) out.push({ name: m[1], fn: null });
+    else if (runtime.startsWith('{')) {
+        for (const [name, value] of members(runtime)) {
+            const v = value.trim();
+            const params = /^(?:async\s+)?\(/.test(v) ? bracketed(v, v.indexOf('('), '(', ')') : /^function\b/.test(v) ? bracketed(v, v.indexOf('('), '(', ')') : null;
+            // a validator's parameters without types say nothing of them (JavaScript): only the event's name is known
+            out.push({ name, fn: params !== null && /:/.test(params) ? `(${params}) => any` : null });
+        }
+    }
+    return out;
+}
+
+/**
+ * The slots a component has: [{ name, type }] with `type` the props it gives its slot's content ({ "item": any; "label": string; }).
+ * defineSlots<{ default(props: { msg: string }): any }>() when the script says so; else the <slot> tags of its template, whose bound
+ * props are any (their values are the child's) and plain ones text. A slot given v-bind="…" may give anything: its type is null.
+ */
+function vueSlots(text, script) {
+    const at = /\bdefineSlots\s*/.exec(script);
+    if (at) {
+        const typeText = namedObjectType(script, bracketed(script, at.index + at[0].length, '<', '>').trim());
+        const out = [];
+        for (const part of topParts(typeText)) {
+            const m = /^['"]?([A-Za-z_$][\w$-]*)['"]?\??\s*(?::\s*)?(?=\()/.exec(part);
+            if (!m) continue;
+            const params = bracketed(part, m[0].length, '(', ')');
+            const colon = topParts('{' + params + '}')[0]?.match(/^[A-Za-z_$][\w$]*\??\s*:\s*([\s\S]*)$/);
+            out.push({ name: m[1], type: colon ? colon[1].trim() : '{}' });
+        }
+        return out;
+    }
+    const open = /<template\b([^>]*)>/i.exec(text);
+    const close = text.lastIndexOf('</template');
+    if (!open || close < 0) return [];
+    const body = text.slice(open.index + open[0].length, close).replace(/<!--[\s\S]*?(?:-->|$)/g, '');
+    const out = [];
+    for (const m of body.matchAll(/<slot\b((?:\s+[^\s"'>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*\/?>/g)) {
+        let name = 'default', open = false;
+        const props = [];
+        for (const a of m[1].matchAll(/([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
+            const attr = a[1];
+            if (attr === 'name') name = a[2] ?? a[3] ?? a[4] ?? 'default';
+            else if (attr === 'v-bind') open = true;
+            else if (/^(?::|v-bind:)/.test(attr)) props.push(`${JSON.stringify(camel(attr.replace(/^(?::|v-bind:)/, '')))}: any;`);
+            else if (!/^(?:v-|@|#)/.test(attr)) props.push(`${JSON.stringify(camel(attr))}: string;`);
+        }
+        if (out.some((s) => s.name === name)) continue;
+        out.push({ name, type: open ? null : props.length ? '{ ' + props.join(' ') + ' }' : '{}' });
+    }
+    return out;
 }
 
 /**
@@ -414,19 +519,15 @@ function members(objectText) {
  * interface or type of the file), defineProps({ ... }) and defineProps([...]) of a <script setup>, an options object's props.
  */
 export function vueProps(text) {
+    // (a component without a script may still have slots)
     const script = [...String(text).matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]).join('\n');
-    if (!script) return null;
     const at = /\bdefineProps\s*/.exec(script);
     let typeText = '', runtime = '';
     if (at) {
         const after = at.index + at[0].length;
         typeText = bracketed(script, after, '<', '>').trim();
         if (!typeText) runtime = bracketed(script, after, '(', ')').trim();
-        if (/^[A-Za-z_$][\w$]*$/.test(typeText)) {
-            const named = new RegExp(`\\b(?:interface\\s+${typeText}\\s*(?:extends[^{]*)?(?=\\{)|type\\s+${typeText}\\s*=\\s*(?=\\{))`).exec(script);
-            typeText = named ? bracketed(script, named.index + named[0].length, '{', '}') : '';
-            if (typeText) typeText = '{' + typeText + '}';
-        }
+        typeText = namedObjectType(script, typeText);
     }
     else {
         const m = /\bprops\s*:\s*(?=[{[])/.exec(script.slice(script.search(/\bexport\s+default\b/) >= 0 ? script.search(/\bexport\s+default\b/) : 0));
@@ -452,9 +553,11 @@ export function vueProps(text) {
     }
     else if (runtime.startsWith('[')) for (const m of runtime.matchAll(/['"]([\w$-]+)['"]/g)) props.push({ name: m[1], type: 'any', required: false });
     else if (runtime.startsWith('{')) for (const [name, value] of members(runtime)) props.push({ name, ...runtimeProp(value === name ? '' : value) });
-    if (!props.length) return null;
+    // what it emits and the props of its slots, checked at the components that use it as its props are
+    const emits = vueEmits(script), slots = vueSlots(String(text), script);
+    if (!props.length && !emits.length && !slots.length) return null;
     return { type: '{ ' + props.map((p) => `${JSON.stringify(p.name)}${p.required ? '' : '?'}: ${p.type};`).join(' ') + ' }', required: props.filter((p) => p.required).map((p) => p.name),
-        ...typeNamesOf(script) };
+        emits, slots, ...typeNamesOf(script) };
 }
 
 /**
@@ -516,7 +619,8 @@ function typeForUse(declared, from, ts, ns) {
         return inside && locals.some((l) => l.name === name) ? name : names.get(name);
     });
     const decls = locals.length ? [`declare namespace ${ns} { ${locals.map((l) => 'export ' + rewrite(l.text, true).replace(/\s*\n\s*/g, ' ')).join(' ')} }`] : [];
-    return { type: rewrite(declared.type), decls };
+    // (the emits' and slots' types name the same types: `rewrite` gives them as the markup's document reads them)
+    return { type: rewrite(declared.type), decls, rewrite: (text) => rewrite(text).replace(/\s*\n\s*/g, ' ') };
 }
 
 const camel = (s) => s.replace(/-([a-z0-9])/g, (m, c) => c.toUpperCase());
@@ -547,11 +651,14 @@ export function vueComponentUses(text) {
         const component = names.find((n) => n === m[1] || n === pascal(m[1]));
         if (!component) continue;
         const tagAt = from + m.index + 1;
-        const attrs = [];
+        const attrs = [], events = [];
         const attrsAt = from + m.index + 1 + m[1].length;
         for (const a of m[2].matchAll(/([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
             const name = a[1];
             const value = a[2] ?? a[3] ?? a[4];
+            // @save="onSave" (v-on:save): a handler of the event, its modifiers left out
+            const on = /^(?:@|v-on:)([\w:-]+)/.exec(name);
+            if (on && value !== undefined && value.trim()) { const start = attrsAt + a.index; events.push({ event: on[1], value, place: [start, start + name.length] }); continue; }
             let prop = null, bound = false;
             if (/^(?::|v-bind:)/.test(name)) { prop = name.replace(/^(?::|v-bind:)/, '').replace(/\.(?:prop|camel|attr)$/, ''); bound = true; }
             else if (/^v-model(?::|$)/.test(name)) { prop = name.includes(':') ? name.slice(8).split('.')[0] : 'modelValue'; bound = true; }
@@ -560,10 +667,50 @@ export function vueComponentUses(text) {
             const start = attrsAt + a.index;
             attrs.push({ prop: camel(prop), value: value ?? null, bound, place: [start, start + name.length] });
         }
-        uses.push({ component, from: imports[component], tag: [tagAt, tagAt + m[1].length], attrs });
+        uses.push({ component, from: imports[component], tag: [tagAt, tagAt + m[1].length], attrs, events });
     }
     return uses;
 }
+
+const VOID_TAGS = new Set('area base br col embed hr img input link meta source track wbr'.split(' '));
+
+/**
+ * The slots a markup fills with names of its own: [{ component, from, slot, names, value: [start, end] }]: v-slot="{ item }" on a component
+ * (its default slot, or v-slot:name), and <template #name="{ item }"> (v-slot:name) right inside one. `value` is the names' place in the file.
+ */
+export function vueSlotUses(text) {
+    const imports = vueImports(text);
+    const names = Object.keys(imports);
+    const open = /<template\b([^>]*)>/i.exec(text);
+    const close = text.lastIndexOf('</template');
+    if (!names.length || !open || close < 0 || /\blang\s*=/.test(open[1])) return [];
+    const from = open.index + open[0].length;
+    const body = text.slice(from, close).replace(/<!--[\s\S]*?(?:-->|$)/g, (m) => ' '.repeat(m.length));
+    const componentOf = (tag) => names.find((n) => n === tag || n === pascal(tag));
+    const stack = [], out = [];
+    for (const m of body.matchAll(/<(\/?)([A-Za-z][\w-]*)((?:\s+[^\s"'>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*(\/?)>/g)) {
+        const [, closing, tag, attrs, selfClosing] = m;
+        if (closing) {
+            const at = stack.lastIndexOf(tag);
+            if (at >= 0) stack.length = at;
+            continue;
+        }
+        const owner = componentOf(tag) ?? (tag === 'template' ? componentOf(stack[stack.length - 1] ?? '') : undefined);
+        if (owner) {
+            const attrsAt = from + m.index + 1 + tag.length;
+            for (const a of attrs.matchAll(/(v-slot(?::([\w-]+))?|#([\w-]+))\s*=\s*(["'])([\s\S]*?)\4/g)) {
+                const start = attrsAt + a.index + a[0].length - a[5].length - 1;
+                out.push({ component: owner, from: imports[owner], slot: a[2] ?? a[3] ?? 'default', names: a[5].trim(), value: [start, start + a[5].length] });
+            }
+        }
+        if (!selfClosing && !VOID_TAGS.has(tag.toLowerCase())) stack.push(tag);
+    }
+    return out;
+}
+
+/** A handler as Vue reads it: a function's name or path (onSave, store.save) or a function, called with the event's arguments, else a statement. */
+const isHandlerValue = (v) => /^\s*[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*|\[[^\]]+\])*\s*$/.test(v)
+    || /^\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/.test(v) || /^\s*(?:async\s+)?function\b/.test(v);
 
 /**
  * The checks of the props a markup gives its components (`props`: the import's path -> vueProps of its file): `code`, lines for the end of
@@ -572,6 +719,19 @@ export function vueComponentUses(text) {
  */
 export function vuePropChecks(text, props, ts) {
     const code = [], places = [], missing = [];
+    const line = (c, place = null) => { code.push(c); places.push(place); };
+    // (a slot's type is read by the names the markup declares before these lines: a var, which a const used before it could not be)
+    const declare = (name, type, kind = 'const') => line(ts ? `declare ${kind} ${name}: ${type};` : `/** @type {${type}} */ var ${name};`);
+    // the types each component's names are read with, made once per component (its namespace of local types included)
+    const forUse = new Map();
+    const typesOf = (from, declared) => {
+        if (!forUse.has(from)) {
+            const t = typeForUse(declared, from, ts, `__pm_t${forUse.size}`);
+            for (const d of t.decls) line(d);
+            forUse.set(from, t);
+        }
+        return forUse.get(from);
+    };
     vueComponentUses(text).forEach((use, k) => {
         const declared = props?.[use.from];
         if (!declared) return;
@@ -579,18 +739,40 @@ export function vuePropChecks(text, props, ts) {
         const given = new Set(use.attrs.map((a) => a.prop));
         for (const name of declared.required) if (!given.has(name) && !use.attrs.some((a) => a.prop === 'vBind')) missing.push({ place: use.tag, message: `${use.component} needs the prop ${name}.` });
         const checked = use.attrs.filter((a) => known.has(a.prop));
-        if (!checked.length) return;
-        const { type, decls } = typeForUse(declared, use.from, ts, `__pm_t${k}`);
-        for (const d of decls) { code.push(d); places.push(null); }
-        code.push(ts ? `declare const __pm_c${k}: ${type};` : `/** @type {${type}} */ var __pm_c${k};`);
-        places.push(null);
-        for (const a of checked) {
-            const value = a.bound ? `(${a.value ?? 'true'})` : a.value === null ? 'true' : JSON.stringify(a.value);
-            code.push(`__pm_c${k}[${JSON.stringify(a.prop)}] = ${value};`);
-            places.push(a.place);
+        if (checked.length) {
+            const { type } = typesOf(use.from, declared);
+            declare(`__pm_c${k}`, type);
+            for (const a of checked) {
+                const value = a.bound ? `(${a.value ?? 'true'})` : a.value === null ? 'true' : JSON.stringify(a.value);
+                line(`__pm_c${k}[${JSON.stringify(a.prop)}] = ${value};`, a.place);
+            }
+        }
+        // a handler of an event the component says it emits with typed arguments: a function is given them (it must take them), a statement
+        // has them as $event. An event it does not name falls through to its root element, as Vue does: nothing is told of it
+        const typed = (declared.emits ?? []).filter((e) => e.fn);
+        const handled = use.events.map((e) => ({ ...e, emit: typed.find((d) => camel(d.name) === camel(e.event)) })).filter((e) => e.emit);
+        if (handled.length) {
+            const { rewrite } = typesOf(use.from, declared);
+            declare(`__pm_c${k}e`, `{ ${typed.map((e) => `${JSON.stringify(e.name)}: ${rewrite(e.fn)};`).join(' ')} }`);
+            for (const e of handled) {
+                const value = e.value.replace(/\s*\n\s*/g, ' ').trim();
+                const handler = isHandlerValue(value) ? `(${value})` : `(...__pm_a) => { var $event = __pm_a[0]; ${value} }`;
+                line(`__pm_c${k}e[${JSON.stringify(e.emit.name)}] = ${handler};`, e.place);
+            }
         }
     });
-    return { code, places, missing };
+    // the names a slot's content takes: of the type its component gives them, and one it does not give is told
+    const slotVars = new Map();
+    vueSlotUses(text).forEach((use, j) => {
+        const declared = props?.[use.from];
+        const slot = declared?.slots?.find((s) => s.name === use.slot);
+        if (!slot?.type) return;
+        const { rewrite } = typesOf(use.from, declared);
+        declare(`__pm_s${j}`, rewrite(slot.type), 'var');
+        slotVars.set(use.value[0], `__pm_s${j}`);
+        if (/^[{[]/.test(use.names)) line(`void ((__pm_x = __pm_s${j}) => { var ${use.names.replace(/\s*\n\s*/g, ' ')} = __pm_x; });`, use.value);
+    });
+    return { code, places, missing, slotVars };
 }
 /** The line of the markup's document after which its props' checks follow (vuePropChecks' places are of the lines after it). */
 export const PROPS_AT = '//__pm_props';
@@ -611,16 +793,17 @@ export function vueMarkupDocument(text, module, ts, props = null) {
         for (let i = a; i < z; i++) out[i] = text[i];
         out[shut] = ')';
     }
-    const checks = props ? vuePropChecks(text, props, ts) : { code: [], places: [] };
+    const checks = props ? vuePropChecks(text, props, ts) : { code: [], places: [], slotVars: new Map() };
     const given = new Set(bindings.flatMap((b) => b.names.match(IDENT) ?? []));
     const used = [...spots.map(([a, z]) => text.slice(a, z)), ...bindings.map((b) => b.source), ...checks.code.filter((c) => c.startsWith('__pm_c')).map((c) => c.slice(c.indexOf('=') + 1))];
-    const names = [...new Set(used.flatMap((c) => freeNames(c)))].filter((n) => !n.startsWith('__pm_') && !given.has(n));
+    // ($event is a handler's own: its argument)
+    const names = [...new Set(used.flatMap((c) => freeNames(c)))].filter((n) => !n.startsWith('__pm_') && !given.has(n) && n !== '$event');
     const values = ts
         ? 'type __pm_U<T> = 0 extends 1 & import("vue").Ref ? T : T extends import("vue").Ref<infer V> ? V : T; '
             + 'declare const __pm_v: { [K in keyof typeof __pm.__pm_s as 0 extends 1 & (typeof __pm.__pm_s)[K] ? never : K]: __pm_U<(typeof __pm.__pm_s)[K]> } & typeof __pm.__pm_p;'
         : 'const __pm_v = { ...__pm.__pm_p, ...__pm.__pm_s };';
     return out.join('') + `\n;import * as __pm from ${JSON.stringify('./' + module)}; ${values}\n`
-        + names.map((n) => `var ${n} = __pm_v.${n};`).join(' ') + ` ${ts ? EACH_TS : EACH_JS} ${bindings.map((b) => bindingCode(b, ts)).join(' ')}`
+        + names.map((n) => `var ${n} = __pm_v.${n};`).join(' ') + ` ${ts ? EACH_TS : EACH_JS} ${bindings.map((b) => bindingCode(b, ts, checks.slotVars)).join(' ')}`
         + `\n;(__pm_v.${MEMBERS_AT});\n${PROPS_AT}\n${checks.code.join('\n')}\n`;
 }
 /** The word after which the markup's document lists every name the markup may use (asked for completion). */

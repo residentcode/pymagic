@@ -23,7 +23,6 @@ public sealed partial class LanguageService
         bool Covers(Node n) => n.Start <= rs && re <= n.End;
         // the innermost nodes that contain the cursor, innermost first
         var around = all.Where(Covers).OrderBy(n => n.End - n.Start).ToList();
-        T? Nearest<T>() where T : Node => around.OfType<T>().FirstOrDefault();
         string Indent(int offset) { int ls = LineStart(text, offset), i = ls; while (i < text.Length && text[i] is ' ' or '\t') i++; return text[ls..i]; }
         string UnitOf(Stmt s, IReadOnlyList<Stmt> body) => body.Count > 0 && Indent(body[0].Start).Length > Indent(s.Start).Length ? Indent(body[0].Start)[Indent(s.Start).Length..] : "    ";
         FString(m, around, text, Slice, add);

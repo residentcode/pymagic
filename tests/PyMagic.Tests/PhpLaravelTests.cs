@@ -65,8 +65,9 @@ public class PhpLaravelTests
     public void ALaravelProjectIsToldWithItsVersionAndItsArtisanCommands()
     {
         if (Php is not { } php || LaravelDir is not { } dir) return;
-        var info = PhpTools.Laravel(dir)!;
+        var info = PhpTools.Laravel(dir);
         Assert.True(info != null, "a Laravel project");
+        if (info == null) return;
         Assert.True(System.Text.RegularExpressions.Regex.IsMatch(info["version"]!.GetValue<string>(), @"^\d+\.\d+\.\d+$"), info.ToJsonString());
         Assert.Contains("routes/web.php", info["routes"]!.ToJsonString());
         Assert.True(PhpTools.Laravel(Path.GetTempPath()) == null, "a folder that is not one");

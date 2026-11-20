@@ -60,8 +60,10 @@ public static class Spelling
     static readonly Dictionary<string, string[]> Suggested = new();
 
     /// <summary>Runs on a thread of its own with a single-threaded apartment, as COM objects of the checker expect; null when it fails.</summary>
-    static T? OnApartment<T>(Func<T> work) where T : class
+    static T? OnApartment<T>(Func<T?> work) where T : class
     {
+        // (the checker is Windows' own: elsewhere there is none)
+        if (!OperatingSystem.IsWindows()) return null;
         T? result = null;
         var thread = new Thread(() =>
         {
@@ -76,6 +78,7 @@ public static class Spelling
 
     static ISpellChecker? Checker(string language)
     {
+        if (!OperatingSystem.IsWindows()) return null;
         var type = Type.GetTypeFromCLSID(FactoryClass);
         if (type == null || Activator.CreateInstance(type) is not ISpellCheckerFactory factory) return null;
         return factory.IsSupported(language) ? factory.CreateSpellChecker(language) : null;

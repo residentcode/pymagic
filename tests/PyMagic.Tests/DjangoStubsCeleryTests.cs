@@ -170,7 +170,7 @@ public class DjangoStubsCeleryTests
         var svc = Service(("shop/__init__.py", ""),
             ("shop/tools.py", "from celery import shared_task\n\n\n@shared_task\ndef send_to_admin(subject, message):\n    return subject\n\n\ndef plain():\n    pass\n"));
         // the full typeshed, as PyCharm's is on most machines: its `function` class is what a miss on a def is reported against
-        for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
+        foreach (var d in TestRepo.Ancestors())
             if (File.Exists(Path.Combine(d.FullName, "typeshed", "stdlib", "VERSIONS"))) { svc.TypeshedPath = Path.Combine(d.FullName, "typeshed"); break; }
         HoverAt(svc, "from shop import tools\n\ntools.send_to_admin.de|lay('a', 'b')\ntools.plain.delay()\n");
         Assert.Equal("Cannot find reference 'delay' in 'function'", string.Join(" / ", Problems(svc).Where(p => p.StartsWith("Cannot find"))));

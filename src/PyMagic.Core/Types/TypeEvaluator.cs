@@ -60,7 +60,7 @@ public sealed partial class TypeEvaluator
         get
         {
             // typeshed defines NoneType in `types`; the bundled builtins stub defines it directly
-            var c = BuiltinClass("NoneType") ?? ModuleClass(_typesClasses, _ws.GetModule("types"), "NoneType");
+            var c = BuiltinClass("NoneType") ?? (_ws.GetModule("types") is { } types ? ModuleClass(_typesClasses, types, "NoneType") : null);
             return c == null ? PyType.Unknown : new ClassType(c.Info, Array.Empty<PyType>(), true);
         }
     }

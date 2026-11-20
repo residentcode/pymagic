@@ -155,10 +155,11 @@ public sealed class SshTarget : ExecutionTarget
 
     static string Short(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToLowerInvariant())))[..10].ToLowerInvariant();
 
-    string Local => Path.GetFullPath(Project ?? DefaultProject ?? Path.GetTempPath());
+    // (not "Local": that is ExecutionTarget.Local, the target of this computer)
+    string LocalProject => Path.GetFullPath(Project ?? DefaultProject ?? Path.GetTempPath());
 
     /// <summary>Where the project is on the remote machine.</summary>
-    public string ProjectDir => RemoteDir ?? $"{Home}/.pymagic/projects/{Short(Local)}";
+    public string ProjectDir => RemoteDir ?? $"{Home}/.pymagic/projects/{Short(LocalProject)}";
 
     // folders shared besides the project (helper scripts), in the order they were first needed
     readonly List<string> _mounts = new();
@@ -276,15 +277,15 @@ public sealed class SshTarget : ExecutionTarget
             return full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? at + "/" + full[prefix.Length..].Replace('\\', '/') : null;
         }
         foreach (var m in _mounts) if (Under(m, RemoteMount(m)) is { } mounted) return mounted;
-        return Under(Local, ProjectDir) ?? hostPath;
+        return Under(LocalProject, ProjectDir) ?? hostPath;
     }
 
     public override string ToHost(string targetPath)
     {
         if (!targetPath.StartsWith('/')) return targetPath;
         string project = ProjectDir;
-        if (targetPath == project) return Local;
-        if (targetPath.StartsWith(project + "/", StringComparison.Ordinal)) return Path.Combine(Local, targetPath[(project.Length + 1)..].Replace('/', Path.DirectorySeparatorChar));
+        if (targetPath == project) return LocalProject;
+        if (targetPath.StartsWith(project + "/", StringComparison.Ordinal)) return Path.Combine(LocalProject, targetPath[(project.Length + 1)..].Replace('/', Path.DirectorySeparatorChar));
         foreach (var m in _mounts)
         {
             string remote = RemoteMount(m);
@@ -356,7 +357,7 @@ public sealed class SshTarget : ExecutionTarget
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(recordFile)!);
-            File.WriteAllText(recordFile, new JsonObject(Files(Local, SkippedFolders).Select(f => KeyValuePair.Create(f.Rel, (JsonNode?)JsonValue.Create($"{f.Size}|{f.Ticks}")))).ToJsonString());
+            File.WriteAllText(recordFile, new JsonObject(Files(LocalProject, SkippedFolders).Select(f => KeyValuePair.Create(f.Rel, (JsonNode?)JsonValue.Create($"{f.Size}|{f.Ticks}")))).ToJsonString());
         }
         catch (IOException) { /* the first copy sends everything */ }
     }
@@ -379,7 +380,7 @@ public sealed class SshTarget : ExecutionTarget
             foreach (var m in mounts.Select(Path.GetFullPath))
                 if (!_mounts.Contains(m, StringComparer.OrdinalIgnoreCase)) _mounts.Add(m);
 
-        Sync(Local, ProjectDir, SkippedFolders, progress, "the project");
+        Sync(LocalProject, ProjectDir, SkippedFolders, progress, "the project");
         foreach (var m in _mounts) Sync(m, RemoteMount(m), null, null, "helpers");
     }
 

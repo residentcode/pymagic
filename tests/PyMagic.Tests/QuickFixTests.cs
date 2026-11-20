@@ -36,6 +36,7 @@ public class QuickFixTests
         var all = Actions(src, others);
         var a = all.FirstOrDefault(x => x.Title.StartsWith(title));
         if (a == null) throw new AssertionException($"no action '{title}'; offered: {string.Join(" | ", all.Select(x => x.Title))}");
+        if (a.Edit == null) throw new AssertionException($"the action '{a.Title}' has no edit");
         return Apply(src, a.Edit, Main);
     }
 
@@ -192,7 +193,7 @@ public class QuickFixTests
         var opt = all.Single(a => a.Title == "Optimize imports");
         Assert.Equal(LanguageService.OrganizeImportsKind, opt.Kind);
         // the unused ones go and the rest is sorted into sections (standard library first)
-        Assert.Equal("import sys\n\nfrom a import c\nprint(c, sys)\n", Apply(src, opt.Edit, Main));
+        Assert.Equal("import sys\n\nfrom a import c\nprint(c, sys)\n", Apply(src, opt.Edit!, Main));
     }
 
     [Fact]

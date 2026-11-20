@@ -7,7 +7,7 @@ public class BundledTypeshedTests
 {
     static string? Bundled()
     {
-        for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
+        foreach (var d in TestRepo.Ancestors())
         {
             string candidate = Path.Combine(d.FullName, "typeshed");
             if (File.Exists(Path.Combine(candidate, "stdlib", "VERSIONS"))) return candidate;

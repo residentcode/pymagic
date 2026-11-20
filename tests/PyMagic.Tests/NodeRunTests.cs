@@ -239,7 +239,7 @@ public class NodeRunTests
     /// <summary>esbuild of the page's packages (web/node_modules), to compile TypeScript with a source map as tsc does; null without it.</summary>
     static string? Esbuild()
     {
-        for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
+        foreach (var d in TestRepo.Ancestors())
         {
             string candidate = Path.Combine(d.FullName, "web", "node_modules", "esbuild");
             if (File.Exists(Path.Combine(candidate, "package.json"))) return candidate;

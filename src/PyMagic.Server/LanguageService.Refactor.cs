@@ -462,8 +462,7 @@ public sealed partial class LanguageService
         int idx = 0;
         Stmt? last = null;
         if (body.Count > 0 && body[0] is ExprStmt { Value: ConstExpr { Kind: ConstKind.Str } }) { last = body[0]; idx = 1; }
-        bool imports = false;
-        for (; idx < body.Count && body[idx] is ImportStmt or ImportFromStmt; idx++) { last = body[idx]; imports = true; }
+        for (; idx < body.Count && body[idx] is ImportStmt or ImportFromStmt; idx++) last = body[idx];
         if (last == null) return (0, line + nl);
 
         int at = LineEndInclusive(text, last.End);

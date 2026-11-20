@@ -63,7 +63,8 @@ void Reconfigure(PythonInterpreter? chosen)
         }
         catch (InvalidOperationException) { /* the session just ended */ }
 }
-Task.Run(() =>
+// (in the background: the page opens while the interpreters are found)
+_ = Task.Run(() =>
 {
     try { if (python != null) interpreters.Select(python, save: false); else interpreters.InitializeDefault(); }
     catch (ServiceException e) { Console.Error.WriteLine(e.Message); }
@@ -342,7 +343,7 @@ app.MapPut("/api/http-globals", async (HttpRequest req) =>
 
 // Deployment: servers the project is uploaded to (a folder, FTP or SFTP), and upload, download, compare and sync
 object ServerJson(DeployServer sv) => new { id = sv.Id, name = sv.Name, type = sv.Type, host = sv.Host, port = sv.Port, user = sv.User, root = sv.Root, keyFile = sv.KeyFile, uploadOnSave = sv.UploadOnSave, mappings = sv.Mappings, excluded = sv.Excluded, hostKey = sv.HostKey, deleteOnDelete = sv.DeleteOnDelete, implicitTls = sv.ImplicitTls, hasPassword = DeployStore.PasswordOf(root, sv.Id).Length > 0, hasPassphrase = DeployStore.PassphraseOf(root, sv.Id).Length > 0 };
-IResult DeployFail(Exception e) => Results.Json(new { error = e is ServiceException ? e.Message : e is System.Net.WebException we && we.Response is System.Net.FtpWebResponse fr ? fr.StatusDescription.Trim() : e.Message });
+IResult DeployFail(Exception e) => Results.Json(new { error = e is ServiceException ? e.Message : e is System.Net.WebException we && we.Response is System.Net.FtpWebResponse fr ? (fr.StatusDescription?.Trim() ?? e.Message) : e.Message });
 string BrowsePath(DeployServer sv, string path) => sv.Type == "folder" ? path.Trim('/') : string.Join("/", new[] { sv.Root.Trim('/'), path.Trim('/') }.Where(x => x.Length > 0));
 var deployLog = new List<object>();
 void DeployNote(string server, string path, bool ok, string? error) { lock (deployLog) { deployLog.Add(new { time = DateTime.UtcNow.ToString("o"), server, path, ok, error }); if (deployLog.Count > 100) deployLog.RemoveAt(0); } }
@@ -1381,14 +1382,14 @@ app.MapPost("/api/interpreter/remote", async (HttpRequest req) =>
     if (name.Length == 0 || name.Contains('|') || py.Contains('|') || py.StartsWith('-')) return Results.BadRequest(new { error = "give the distribution or image, and the interpreter in it" });
     if (Plugins.OfTarget(kind) is { } off && !Plugins.On(off)) return Results.BadRequest(new { error = $"{PluginName(off)} is switched off in Settings > Plugins" });
     string identity = body?["identity"]?.GetValue<string>()?.Trim() ?? "", knownHosts = body?["knownHosts"]?.GetValue<string>()?.Trim() ?? "";
-    ExecutionTarget target = kind switch
+    ExecutionTarget? target = kind switch
     {
         "wsl" => new WslTarget(name),
         "docker" => new DockerTarget(name),
         "container" => ContainerTarget.FromHead(name + (body?["composeDir"]?.GetValue<string>()?.Trim() is { Length: > 0 } cdir ? "?w=" + cdir : "")),
         "compose" => ComposeTarget.FromHead(name + ComposeOptions(body)),
         "ssh" => SshTarget.FromHead(name + (identity.Length > 0 || knownHosts.Length > 0 ? "?" + string.Join("&", new[] { identity.Length > 0 ? "i=" + identity : "", knownHosts.Length > 0 ? "kh=" + knownHosts : "" }.Where(x => x.Length > 0)) : ""))!,
-        _ => null!,
+        _ => null,
     };
     if (target == null) return Results.BadRequest(new { error = kind == "ssh" ? "that is not an address: write user@host or user@host:port" : kind == "compose" ? "give the name of a service of the compose file" : "the kind is wsl, docker, container, compose or ssh" });
     try { return Results.Json(Describe(await Task.Run(() => interpreters.AddRemote(target, py)))); }
@@ -1833,7 +1834,8 @@ app.MapGet("/api/django/help", async (string? command) =>
     string key = (interpreters.Current?.Path ?? "") + "|" + System.Text.Json.JsonSerializer.Serialize(DjangoConfig.Current) + "|" + (command ?? "--commands");   // another configuration asks again
     if (djangoHelp.TryGetValue(key, out var cached)) return Results.Text(cached);
     string manage = Path.Combine(root, project.Manage);
-    var psi = new System.Diagnostics.ProcessStartInfo(interpreters.Current?.Python ?? python) { WorkingDirectory = Path.GetDirectoryName(manage)!, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+    if ((interpreters.Current?.Python ?? python) is not { } exe) return Results.BadRequest(new { error = "no Python interpreter is chosen" });
+    var psi = new System.Diagnostics.ProcessStartInfo(exe) { WorkingDirectory = Path.GetDirectoryName(manage)!, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
     psi.ArgumentList.Add(manage);
     psi.ArgumentList.Add("help");
     psi.ArgumentList.Add(command ?? "--commands");

@@ -166,7 +166,8 @@ export function setupEmbedded() {
                 const range = ([a, z]) => { const s = owner.getPositionAt(a), e = owner.getPositionAt(z); return { startLineNumber: s.lineNumber, startColumn: s.column, endLineNumber: e.lineNumber, endColumn: e.column }; };
                 for (const x of monaco.editor.getModelMarkers({ resource: h.markup.uri, owner: h.markup.getLanguageId() })) {
                     const place = at > 0 ? h.checks.places[x.startLineNumber - at - 1] : null;
-                    if (!place || ![2322, 2820, 2741].includes(Number(typeof x.code === 'object' && x.code ? x.code.value : x.code))) continue;
+                    // a value of the wrong type (a prop's, a handler's), a name a slot does not give (2339), an event's argument a statement uses wrongly
+                    if (!place || ![2322, 2820, 2741, 2339, 2345, 2554].includes(Number(typeof x.code === 'object' && x.code ? x.code.value : x.code))) continue;
                     markers.push({ ...x, ...range(place), source: h.js.getLanguageId() });
                 }
                 for (const miss of h.checks.missing) markers.push({ ...range(miss.place), severity: monaco.MarkerSeverity.Warning, message: miss.message, source: 'vue' });

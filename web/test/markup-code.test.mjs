@@ -150,3 +150,55 @@ test('Vue: a prop whose type the component imports or declares itself is checked
     // in JavaScript: the imports as import("…") too, the component's own types as they are
     assert.equal(vuePropChecks(parent, { './widgets/Child.vue': props }, false).code[0].includes('namespace'), false);
 });
+
+test('Vue: what a component says it emits, in each way it can say it', () => {
+    const ev = (script) => vueProps(L('<script setup lang="ts">', script, '</script>'))?.emits;
+    assert.deepEqual(ev("defineEmits<{ (e: 'save', id: number, name?: string): void; (e: 'close'): void }>()"),
+        [{ name: 'save', fn: '(id: number, name?: string) => any' }, { name: 'close', fn: '() => any' }]);
+    assert.deepEqual(ev("const emit = defineEmits<{ save: [id: number]; 'update-item': [] }>()"),
+        [{ name: 'save', fn: '(...args: [id: number]) => any' }, { name: 'update-item', fn: '(...args: []) => any' }]);
+    assert.deepEqual(ev("interface Emits { (e: 'pick', item: Item): void }\ndefineEmits<Emits>()"), [{ name: 'pick', fn: '(item: Item) => any' }]);
+    assert.deepEqual(ev("defineEmits(['save', 'close'])"), [{ name: 'save', fn: null }, { name: 'close', fn: null }]);
+    assert.deepEqual(ev('defineEmits({ save: (id: number) => id > 0, close: null })'), [{ name: 'save', fn: '(id: number) => any' }, { name: 'close', fn: null }]);
+    assert.deepEqual(vueProps(L('<script>', "export default { emits: ['done'], data() { return {} } }", '</script>')).emits, [{ name: 'done', fn: null }]);
+});
+
+test('Vue: the slots a component has, from defineSlots or its <slot> tags', () => {
+    const typed = vueProps(L('<script setup lang="ts">', 'defineSlots<{ default(props: { msg: string }): any; row: (props: { item: Item; index: number }) => any; empty(): any }>()', '</script>'));
+    assert.deepEqual(typed.slots, [{ name: 'default', type: '{ msg: string }' }, { name: 'row', type: '{ item: Item; index: number }' }, { name: 'empty', type: '{}' }]);
+    // no script at all: the template's slots
+    const tags = vueProps(L('<template>', '  <ul><li v-for="it in items"><slot name="item" :item="it" :index="i" label="x" /></li></ul>', '  <slot />', '  <slot name="open" v-bind="all" />', '</template>'));
+    assert.deepEqual(tags.slots, [{ name: 'item', type: '{ "item": any; "index": any; "label": string; }' }, { name: 'default', type: '{}' }, { name: 'open', type: null }]);
+    assert.equal(tags.type, '{  }');
+});
+
+test('Vue: a handler of an event is checked against what the component emits, a slot\'s names against what it gives', () => {
+    const child = { type: '{  }', required: [], refs: {}, locals: [{ name: 'Row', text: 'interface Row { id: number }' }],
+        emits: [{ name: 'save', fn: '(id: number) => any' }, { name: 'pick', fn: '(row: Row) => any' }, { name: 'close', fn: null }],
+        slots: [{ name: 'default', type: '{ row: Row; index: number }' }, { name: 'footer', type: '{ total: number }' }, { name: 'any', type: null }] };
+    const text = L('<script setup lang="ts">', "import Grid from './Grid.vue'", 'function onSave(id: string) {}', 'let n = 0', '</script>', '<template>',
+        '  <Grid @save="onSave" @pick.once="(r) => r.id" @close="n++" @click="n++" v-slot="{ row, idx }">{{ row.id }}', '    <template #footer="{ total }">{{ total }}</template>',
+        '    <template #any="{ x }">{{ x }}</template>', '  </Grid>', '  <grid @save="save($event)" />', '</template>');
+    const checks = vuePropChecks(text, { './Grid.vue': child }, true);
+    assert.deepEqual(checks.code, [
+        'declare namespace __pm_t0 { export interface Row { id: number } }',
+        'declare const __pm_c0e: { "save": (id: number) => any; "pick": (row: __pm_t0.Row) => any; };',
+        '__pm_c0e["save"] = (onSave);',
+        '__pm_c0e["pick"] = ((r) => r.id);',
+        'declare const __pm_c1e: { "save": (id: number) => any; "pick": (row: __pm_t0.Row) => any; };',
+        '__pm_c1e["save"] = (...__pm_a) => { var $event = __pm_a[0]; save($event) };',
+        'declare var __pm_s0: { row: __pm_t0.Row; index: number };',
+        'void ((__pm_x = __pm_s0) => { var { row, idx } = __pm_x; });',
+        'declare var __pm_s1: { total: number };',
+        'void ((__pm_x = __pm_s1) => { var { total } = __pm_x; });',
+    ]);
+    assert.equal(text.slice(...checks.places[2]), '@save');
+    assert.equal(text.slice(...checks.places[7]), '{ row, idx }');
+    // the slot's names are of its type where the markup reads them; one with no type stays any
+    const doc = vueMarkupDocument(text, 'A.vue.1', true, { './Grid.vue': child });
+    assert.ok(doc.includes('var { row, idx } = __pm_s0;'), doc);
+    assert.ok(doc.includes('var { total } = __pm_s1;'));
+    assert.ok(doc.includes('var { x } = (0 as any);'));
+    assert.ok(!doc.includes('__pm_v.$event'));
+    assert.ok(doc.includes('var save = __pm_v.save;'));
+});

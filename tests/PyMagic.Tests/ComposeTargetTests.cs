@@ -215,14 +215,14 @@ public class ComposeTargetTests
             Assert.Equal(Path.Combine(dir, "docker-compose.yml"), ComposeTarget.FindFile(dir));
             string[]? asked = null;
             var fromDocker = ComposeTarget.Services(dir, null, a => { asked = a; return "web\ndb\nfrom-include\n"; });
-            Assert.Equal(string.Join(",", new[] { "compose", "config", "--services" }), string.Join(",", asked));
+            Assert.Equal(string.Join(",", new[] { "compose", "config", "--services" }), string.Join(",", asked ?? []));
             Assert.Equal(string.Join(",", new[] { "web", "db", "from-include" }), string.Join(",", fromDocker));
             // docker missing or failing: the file is read here
             Assert.Equal(string.Join(",", new[] { "web", "db", "worker-1", "cache.v2" }), string.Join(",", ComposeTarget.Services(dir, null, _ => null)));
             Assert.Equal(string.Join(",", new[] { "web", "db", "worker-1", "cache.v2" }), string.Join(",", ComposeTarget.Services(dir, null, _ => throw new System.ComponentModel.Win32Exception())));
             File.WriteAllText(Path.Combine(dir, "other.yml"), "services:\n  only:\n    image: x\n");
             Assert.Equal(string.Join(",", new[] { "only" }), string.Join(",", ComposeTarget.Services(dir, "other.yml", a => { asked = a; return null; })));
-            Assert.Equal(string.Join(",", new[] { "compose", "-f", "other.yml", "config", "--services" }), string.Join(",", asked));
+            Assert.Equal(string.Join(",", new[] { "compose", "-f", "other.yml", "config", "--services" }), string.Join(",", asked ?? []));
             Assert.Equal("", string.Join(",", ComposeTarget.Services(dir, "missing.yml", _ => "x\n")));
         }
         finally { Directory.Delete(dir, true); }

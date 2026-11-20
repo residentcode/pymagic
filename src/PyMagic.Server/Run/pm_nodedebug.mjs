@@ -493,13 +493,24 @@ class Session {
         await this.cdp('Debugger.setInstrumentationBreakpoint', { instrumentation: 'beforeScriptWithSourceMapExecution' }).catch(() => {});
         await this.applyExceptions();
         if (muted) await this.cdp('Debugger.setBreakpointsActive', { active: false });
+        this.settingUp = true;
         for (const { file } of breakpoints.values()) await this.applyBreakpoints(file);
+        this.settingUp = false;
         await this.tellBreaks();
         // a page's workers and its frames of other sites are targets of their own, reached through it: each waits until its breakpoints are set
         // (a frame that waits answers it only once it runs: the run is asked for after it, not after its answer; the browser keeps the order)
         const auto = this.info.browser ? this.cdp('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }).catch(() => {}) : null;
         await this.cdp('Runtime.runIfWaitingForDebugger');
         await auto;
+        // a tab opened at an address (a link's target="_blank", window.open(url), a tab opened by hand): Edge and Chrome load its page
+        // without waiting, though they say it waits, and a script with a breakpoint may run before the breakpoint is set. It is loaded once
+        // more, now that they are. Only a new tab the browser said waits: one that was open before the debugger came is never reloaded;
+        // and a script loaded but not run yet stops at its breakpoint now, so the page is reloaded only when no stop came
+        // (seen in NodeRunTests' tab, under load: tab.js parsed before its breakpoint was set, and never stopped at)
+        if (this.loadedEarly && this.info.waiting && this.info.kind === 'page' && !this.reloaded) {
+            this.reloaded = true;
+            setTimeout(() => { if (!this.stoppedOnce && !this.ended) this.cdp('Page.reload').catch(() => {}); }, 500);
+        }
     }
 
     open() {
@@ -534,7 +545,7 @@ class Session {
     get socket() { return this.parent ? this.parent.socket : this.ws; }
 
     /** A target the browser or a page attached (a tab, a frame of another site, a worker): debugged as the page is, through its connection. */
-    async attachChild({ sessionId, targetInfo }) {
+    async attachChild({ sessionId, targetInfo, waitingForDebugger }) {
         const kind = targetInfo?.type ?? 'other';
         // the browser's own (its extensions' pages and workers, its settings pages) are not the app's
         if (!['page', 'iframe', 'worker', 'shared_worker', 'service_worker'].includes(kind) || /^(chrome-extension|edge|chrome|devtools|extension):/i.test(targetInfo?.url ?? '')) {
@@ -548,7 +559,7 @@ class Session {
         }
         const first = kind === 'page' && !firstPageSeen;
         if (first) firstPageSeen = true;
-        const s = new Session({ pid: sessionId, browser: true, kind, url: targetInfo.url, first, targetId: targetInfo.targetId });
+        const s = new Session({ pid: sessionId, browser: true, kind, url: targetInfo.url, first, targetId: targetInfo.targetId, waiting: !!waitingForDebugger });
         s.parent = this;
         s.sessionId = sessionId;
         flat.set(sessionId, s);
@@ -650,6 +661,8 @@ class Session {
                 try {
                     const r = await this.cdp('Debugger.setBreakpointByUrl', { lineNumber: line - 1, urlRegex: this.info.browser ? servedUrlRegex(file) : urlRegexFor(file), condition: conditionOf(spec) });
                     ids.push(r.breakpointId);
+                    // a script of a page that should be waiting is there already: it may have run past this line (setup reloads the page)
+                    if (this.settingUp && r.locations?.length) this.loadedEarly = true;
                     if (spec.hitCondition) this.bpMeta.set(r.breakpointId, { hit: hitOf(spec.hitCondition), hits: 0 });
                 }
                 catch { /* a line the script does not have */ }
@@ -678,6 +691,7 @@ class Session {
             await this.cdp('Debugger.resume').catch(() => {});
             return;
         }
+        this.stoppedOnce = true;
         // the preload's stop before a module with a source map runs: its breakpoints set through its map, and on
         // (told by what it leaves in the process: the file it is about to run)
         const top = params.callFrames?.[0];

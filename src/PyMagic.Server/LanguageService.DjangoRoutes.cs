@@ -227,9 +227,9 @@ public sealed partial class LanguageService
 
     static IEnumerable<string> NamesIn(ModuleInfo module, Expr e) => e switch
     {
-        ListExpr l => l.Items.Select(i => FixtureModel.StringValue(i)).Where(s => s != null)!,
-        TupleExpr t => t.Items.Select(i => FixtureModel.StringValue(i)).Where(s => s != null)!,
-        DictExpr d => d.Keys.Select(i => i is { } k ? FixtureModel.StringValue(k) : null).Where(s => s != null)!,
+        ListExpr l => l.Items.Select(i => FixtureModel.StringValue(i)).OfType<string>(),
+        TupleExpr t => t.Items.Select(i => FixtureModel.StringValue(i)).OfType<string>(),
+        DictExpr d => d.Keys.Select(i => i is { } k ? FixtureModel.StringValue(k) : null).OfType<string>(),
         _ => Array.Empty<string>(),
     };
 

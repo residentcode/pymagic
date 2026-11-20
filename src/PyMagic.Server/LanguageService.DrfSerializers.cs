@@ -61,8 +61,8 @@ public sealed partial class LanguageService
         var stmt = meta.Body.OfType<AssignStmt>().FirstOrDefault(a => a.Targets.Count == 1 && a.Targets[0] is NameExpr n && n.Name == name);
         var items = stmt?.Value switch { ListExpr l => l.Items, TupleExpr t => t.Items, _ => null };
         if (items == null) return null;
-        var names = items.Select(i => FixtureModel.StringValue(i)).ToList();
-        return names.Any(n => n == null) ? null : names!;
+        var names = items.Select(i => FixtureModel.StringValue(i)).OfType<string>().ToList();
+        return names.Count == items.Count ? names : null;
     }
 
     /// <summary>What an attribute of a model instance is: the model it reaches and whether it holds many (a manager), or neither; null when the model has no such attribute.</summary>

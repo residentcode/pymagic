@@ -28,7 +28,7 @@ public class WebScriptTests
 
     static string RepoDir(string relative)
     {
-        for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
+        foreach (var d in TestRepo.Ancestors())
         {
             string candidate = Path.Combine(d.FullName, relative);
             if (Directory.Exists(candidate)) return candidate;
