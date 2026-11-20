@@ -43,6 +43,11 @@ public sealed partial class TypeEvaluator
         switch (e)
         {
             // under `from __future__ import annotations` (and in stubs) a name means its symbol, a class bound later included, as a quoted one does
+            // a class's method named as the type it gives (pandas' `def tzinfo(self) -> tzinfo | None`): a function is never a type, and
+            // the def binds its name only after its annotations are read, so the name is the enclosing scope's (or a builtin)
+            case NameExpr n when lookup == null && m.Semantics.ReferenceOf(n)?.Symbol is { Scope.Kind: ScopeKind.Class, Declarations: { Count: > 0 } decls } own
+                                 && decls.All(d => d.Kind == DeclKind.Function):
+                return own.Scope.Parent?.Lookup(n.Name) is { } outer ? TypeOfSymbol(outer) : BuiltinNameType(n.Name);
             case NameExpr n when lookup == null && deferred && (m.PostponedAnnotations || m.IsStub) && m.Semantics.ReferenceOf(n)?.Symbol is { } sym:
                 return TypeOfSymbol(sym);
             case NameExpr n when lookup == null: return TypeOf(m, n);

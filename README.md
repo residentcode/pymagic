@@ -92,7 +92,7 @@ node desktop/package.mjs
 It needs internet the first time, for Electron, the .NET runtime package, the installer tools and the model of full line completion
 (Qwen2.5-Coder 0.5B, 531 MB, fetched once into `models/` by `models/fetch.mjs` and checked against its SHA-256; it is not in git). It builds
 `desktop\out\PyMagic-win32-x64\PyMagic.exe` (about 1.1 GB, with Electron, the .NET runtime and the model inside) and the installer
-`desktop\out\PyMagic-Setup-0.1.0.exe` (about 150 MB). `--no-installer` builds the folder only. Close any PyMagic.exe started from
+`desktop\out\PyMagic-Setup-0.1.0.exe` (about 700 MB, the completion model included). `--no-installer` builds the folder only. Close any PyMagic.exe started from
 `desktop\out` first: Windows keeps that folder locked while it runs.
 
 ### Tests

@@ -5,3 +5,5 @@ tests/PyMagic.Tests/Projects/** text eol=lf
 # cmd finds labels (goto, call :x) reliably only in CRLF files: batch files are checked out with CRLF on every PC
 *.cmd text eol=crlf
 *.bat text eol=crlf
+# npm writes its lock files with LF: kept so, a build does not show them as changed
+package-lock.json text eol=lf

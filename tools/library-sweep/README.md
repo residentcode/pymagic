@@ -21,3 +21,10 @@ Some Unknowns are expected:
 On 2026-11-17, 2,543 usages over 88 packages went from 82 Unknowns to 31. These fixes did it: `async with` / `async for`, `self: T -> T`
 and `cls: type[T] -> T`, Callable aliases, `A | B` aliases, PEP 695 `type` aliases, `NewType`, decorator classes with `__get__`, and an `__iter__`
 declared to give an Iterable.
+
+On 2026-11-20, two more were fixed: a method named like the type it gives (pandas' `def tzinfo(self) -> tzinfo | None`), whose annotation
+names the enclosing scope's class, not the method. That leaves 28, all expected:
+- 21 are class type variables with nothing to solve them (dnspython's btree, anyio's streams, psycopg's `Row`, werkzeug's `LocalStack`, ...).
+- 4 come from packages that are not installed: kombu's Azure client and pydantic's mypy plugin.
+- 1 is Authlib: typeshed's stub wins over the source, as in PyCharm, and it leaves `get_server_jwks` unannotated.
+- 2 are psycopg cursors iterated (`for row in cursor`): `__iter__` gives `Self`, and its `__next__` gives the unsolved `Row`.

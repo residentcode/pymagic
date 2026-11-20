@@ -66,11 +66,12 @@ public static class GrpcRequests
     static byte[] Frames(IEnumerable<byte[]> messages, string? encoding = null)
     {
         using var ms = new MemoryStream();
+        // one buffer for every message's length: a stackalloc inside the loop would grow the stack with each message of a long stream
+        Span<byte> len = stackalloc byte[4];
         foreach (var plain in messages)
         {
             var m = encoding == null ? plain : Compress(plain, encoding);
             ms.WriteByte(encoding == null ? (byte)0 : (byte)1);
-            Span<byte> len = stackalloc byte[4];
             BinaryPrimitives.WriteUInt32BigEndian(len, (uint)m.Length);
             ms.Write(len);
             ms.Write(m);
